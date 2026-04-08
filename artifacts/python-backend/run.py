@@ -1,7 +1,25 @@
 import os
 import sys
+import subprocess
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
+def _ensure_spacy_model() -> None:
+    """Download en_core_web_sm if it is not already installed."""
+    try:
+        import spacy
+        spacy.load("en_core_web_sm")
+    except OSError:
+        print("[startup] Downloading spaCy model en_core_web_sm …")
+        subprocess.run(
+            [sys.executable, "-m", "spacy", "download", "en_core_web_sm",
+             "--break-system-packages"],
+            check=False,
+        )
+
+
+_ensure_spacy_model()
 
 import uvicorn
 
