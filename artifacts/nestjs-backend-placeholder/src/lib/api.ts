@@ -293,4 +293,19 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify({ from, message }),
     }),
+
+  telegramStatus:     () => fetchApi<Record<string, unknown>>("/telegram/status"),
+  telegramMessages:   () => fetchApi<WhatsAppMessage[]>("/telegram/messages"),
+  telegramTest:       (text: string) =>
+    fetchApi<{ text: string; response: string; timestamp: string }>("/telegram/test", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ text }),
+    }),
+  telegramSetWebhook: (url: string) =>
+    fetchApi<{ success: boolean; description: string; webhookUrl: string }>("/telegram/set-webhook", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ url }),
+    }),
 };
