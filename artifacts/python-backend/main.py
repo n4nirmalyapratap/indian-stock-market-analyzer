@@ -17,6 +17,7 @@ from app.routes.nlp import router as nlp_router
 from app.routes.analytics import router as analytics_router
 from app.routes.telegram import router as telegram_router, get_service as get_telegram_service
 from app.routes.universe import router as universe_router
+from app.routes.hydra import router as hydra_router
 
 logger = logging.getLogger("telegram-poller")
 
@@ -151,3 +152,4 @@ app.include_router(nlp_router,       prefix="/api")
 app.include_router(analytics_router, prefix="/api")
 app.include_router(telegram_router,  prefix="/api")
 app.include_router(universe_router,  prefix="/api")
+app.include_router(hydra_router,     prefix="/api")

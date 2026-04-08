@@ -9,8 +9,9 @@ import Patterns from "@/pages/Patterns";
 import Scanners from "@/pages/Scanners";
 import WhatsAppBot from "@/pages/WhatsAppBot";
 import TelegramBot from "@/pages/TelegramBot";
+import HydraAlpha from "@/pages/HydraAlpha";
 import NotFound from "@/pages/not-found";
-import { LayoutDashboard, BarChart3, Search, Scan, Filter, MessageCircle, TrendingUp, Send } from "lucide-react";
+import { LayoutDashboard, BarChart3, Search, Scan, Filter, MessageCircle, TrendingUp, Send, Brain } from "lucide-react";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -24,6 +25,7 @@ const NAV = [
   { path: "/scanners", label: "Scanners", icon: Filter },
   { path: "/whatsapp", label: "WhatsApp Bot", icon: MessageCircle },
   { path: "/telegram", label: "Telegram Bot", icon: Send },
+  { path: "/hydra", label: "Hydra-Alpha", icon: Brain },
 ];
 
 function Layout({ children }: { children: React.ReactNode }) {
@@ -99,6 +101,7 @@ function Router() {
         <Route path="/scanners" component={Scanners} />
         <Route path="/whatsapp" component={WhatsAppBot} />
         <Route path="/telegram" component={TelegramBot} />
+        <Route path="/hydra" component={HydraAlpha} />
         <Route component={NotFound} />
       </Switch>
     </Layout>
