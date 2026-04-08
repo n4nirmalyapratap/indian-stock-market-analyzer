@@ -1,4 +1,7 @@
 import os
+import asyncio
+import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,18 +14,60 @@ from app.routes.scanners import router as scanners_router
 from app.routes.whatsapp import router as whatsapp_router
 from app.routes.nlp import router as nlp_router
 from app.routes.analytics import router as analytics_router
-from app.routes.telegram import router as telegram_router
+from app.routes.telegram import router as telegram_router, get_service as get_telegram_service
+
+logger = logging.getLogger("telegram-poller")
+
+
+async def _telegram_polling_loop() -> None:
+    """Long-poll Telegram getUpdates in the background."""
+    svc = get_telegram_service()
+    if not svc.configured:
+        logger.info("TELEGRAM_BOT_TOKEN not set — polling disabled.")
+        return
+
+    # Remove any existing webhook so polling works
+    await svc.delete_webhook()
+    logger.info("Telegram polling started (@%s)", (await svc.get_bot_info()).get("username", "?"))
+
+    offset = 0
+    while True:
+        try:
+            updates, offset = await svc.get_updates(offset=offset, timeout=25)
+            for update in updates:
+                asyncio.create_task(svc.process_update(update))
+        except asyncio.CancelledError:
+            logger.info("Telegram polling stopped.")
+            break
+        except Exception as e:
+            logger.warning("Telegram polling error: %s — retrying in 5s", e)
+            await asyncio.sleep(5)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    poll_task = asyncio.create_task(_telegram_polling_loop())
+    try:
+        yield
+    finally:
+        poll_task.cancel()
+        try:
+            await poll_task
+        except asyncio.CancelledError:
+            pass
+
 
 app = FastAPI(
     title="Indian Stock Market Analyzer — Python Backend",
     description=(
         "FastAPI backend for NSE sector rotation, stock analysis, chart patterns, "
-        "custom scanners, NLP natural-language queries, and deep analytics."
+        "custom scanners, NLP natural-language queries, analytics, and Telegram bot."
     ),
-    version="2.0.0",
+    version="2.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
