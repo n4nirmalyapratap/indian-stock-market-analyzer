@@ -19,13 +19,13 @@ const queryClient = new QueryClient({
 
 const NAV = [
   { path: "/", label: "Dashboard", icon: LayoutDashboard },
-  { path: "/sectors", label: "Sectors", icon: BarChart3 },
+  { path: "/sectors", label: "Market Sectors", icon: BarChart3 },
   { path: "/stocks", label: "Stock Lookup", icon: Search },
   { path: "/patterns", label: "Patterns", icon: Scan },
   { path: "/scanners", label: "Scanners", icon: Filter },
   { path: "/whatsapp", label: "WhatsApp Bot", icon: MessageCircle },
   { path: "/telegram", label: "Telegram Bot", icon: Send },
-  { path: "/hydra", label: "Hydra-Alpha", icon: Brain },
+  { path: "/hydra", label: "AI Analyzer", icon: Brain },
 ];
 
 function Layout({ children }: { children: React.ReactNode }) {

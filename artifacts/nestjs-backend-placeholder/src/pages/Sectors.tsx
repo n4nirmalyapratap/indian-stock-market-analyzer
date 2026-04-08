@@ -207,8 +207,8 @@ function StrengthMatrix({ sectors }: { sectors: any[] }) {
                     </div>
                     <MomentumBar value={s.momentum?.composite ?? 0} />
                     <div className="flex gap-3 mt-1.5 text-xs text-gray-500">
-                      <span title="Relative Strength vs Nifty 50">RS {fmt(s.momentum?.rs)}%</span>
-                      <span title="6-month Rate of Change">ROC {fmt(s.momentum?.roc_6m)}%</span>
+                      <span title="Market Strength vs Nifty 50 — higher is better">Strength {fmt(s.momentum?.rs)}%</span>
+                      <span title="6-Month Price Change">6M Change {fmt(s.momentum?.roc_6m)}%</span>
                       <span title="% stocks above 200-day SMA" className="ml-auto">
                         {s.momentum?.pct_above_200?.toFixed(0) ?? "—"}% &gt;200SMA
                       </span>
@@ -480,9 +480,9 @@ export default function Sectors() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Sector Rotation Intelligence</h1>
+        <h1 className="text-2xl font-bold text-gray-900">Market Sector Analysis</h1>
         <p className="text-sm text-gray-500 mt-0.5">
-          Hybrid 3-Phase Algorithm — Macro Assessment · Quantitative Momentum · Portfolio Strategy
+          Which industry groups are leading the market — with strength scores, trend signals, and a suggested portfolio strategy
         </p>
       </div>
 
@@ -492,7 +492,7 @@ export default function Sectors() {
             <div key={i} className="h-48 bg-gray-100 animate-pulse rounded-2xl" />
           ))}
           <p className="text-center text-sm text-gray-400 animate-pulse">
-            Computing momentum scores — fetching 6-month history for all sectors…
+            Analysing all market sectors — fetching 6-month price history…
           </p>
         </div>
       ) : (
@@ -514,8 +514,8 @@ export default function Sectors() {
 
           {rotation && (
             <p className="text-center text-xs text-gray-400 pb-2">
-              Scores computed at {new Date(rotation.timestamp).toLocaleString("en-IN")} ·
-              Cached 4 h · Weighted: RS 40% | Breadth(200SMA) 25% | 6m ROC 20% | Volume 15%
+              Scores updated at {new Date(rotation.timestamp).toLocaleString("en-IN")} ·
+              Refreshes every 4 hours · Score formula: Market Strength 40% | Stocks Above 200-day Average 25% | 6-Month Price Change 20% | Volume 15%
             </p>
           )}
         </>
