@@ -426,6 +426,74 @@ class TelegramService:
         except Exception:
             return f"⚠️ Could not get entry data for *{symbol}*."
 
+    async def _sector_signal_reply(self, sector: str, signal: str) -> str:
+        """Return bullish/bearish stocks within a specific sector."""
+        try:
+            from ..lib.universe import SECTOR_SYMBOLS
+            sector_stocks = set(SECTOR_SYMBOLS.get(sector, []))
+            emoji = "📈" if signal == "CALL" else "📉"
+            bias  = "Bullish" if signal == "CALL" else "Bearish"
+
+            # 1) Try pattern scan results first (fast, cached)
+            result = await self.patterns.get_patterns()
+            all_pats = result.get("patterns", [])
+            sector_pats = [
+                p for p in all_pats
+                if p.get("symbol") in sector_stocks and p.get("signal") == signal
+            ]
+            if sector_pats:
+                lines = [f"{emoji} *{bias} stocks in {sector}* ({len(sector_pats)} found)\n"]
+                for p in sector_pats[:10]:
+                    conf = p.get("confidence", 0)
+                    lines.append(f"  • *{p['symbol']}* — {_safe(p.get('pattern','?'))} ({conf:.0f}%)")
+                lines.append("\nType a symbol for full analysis, e.g. /analyze RELIANCE")
+                return "\n".join(lines)
+
+            # 2) Fallback: fetch a sample of sector stocks in parallel, filter by pChange
+            import asyncio
+            sample = list(sector_stocks)[:15]   # limit to avoid being slow
+
+            async def _get(sym: str):
+                try:
+                    return await asyncio.wait_for(
+                        self.stocks.get_stock_details(sym), timeout=3.0
+                    )
+                except Exception:
+                    return None
+
+            results = await asyncio.gather(*[_get(s) for s in sample])
+            stock_data = [r for r in results if r and r.get("lastPrice")]
+
+            if signal == "CALL":
+                filtered = sorted(
+                    [s for s in stock_data if (s.get("pChange") or 0) > 0],
+                    key=lambda x: x.get("pChange", 0), reverse=True
+                )
+            else:
+                filtered = sorted(
+                    [s for s in stock_data if (s.get("pChange") or 0) < 0],
+                    key=lambda x: x.get("pChange", 0)
+                )
+
+            if filtered:
+                lines = [f"{emoji} *{bias} stocks in {sector}*\n"]
+                for s in filtered[:8]:
+                    sym = s.get("symbol", "?")
+                    pc  = _fmt_pct(s.get("pChange", 0))
+                    ta  = s.get("technicalAnalysis") or {}
+                    trend = _safe(ta.get("trend", ""))
+                    hint  = f" ({trend})" if trend else ""
+                    lines.append(f"  • *{sym}* {pc}{hint}")
+                lines.append("\nType a symbol for full analysis, e.g. /analyze TCS")
+                return "\n".join(lines)
+
+            return (
+                f"{emoji} No strong *{bias.lower()}* signals found in *{sector}* right now.\n"
+                f"Run /scan to refresh pattern data."
+            )
+        except Exception as e:
+            return f"⚠️ Could not fetch sector signals: {e}"
+
     async def _patterns_reply(self) -> str:
         try:
             result = await self.patterns.get_patterns()
@@ -500,6 +568,11 @@ class TelegramService:
             stocks  = parsed["stocks"]
             sectors = parsed["sectors"]
             signal  = parsed["signal"]
+
+            # ── PRIORITY: Sector + Signal combo ──────────────────────────────
+            # e.g. "which IT stocks are bullish", "pharma bearish stocks"
+            if sectors and signal:
+                return await self._sector_signal_reply(sectors[0], signal)
 
             # ── Help ────────────────────────────────────────────────────────
             if intent == "help":

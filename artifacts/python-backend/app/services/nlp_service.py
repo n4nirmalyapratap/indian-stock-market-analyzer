@@ -256,6 +256,17 @@ INTENT_WORDS: dict[str, list[str]] = {
 SIGNAL_WORDS = {
     "bullish": "CALL", "bearish": "PUT", "call": "CALL", "put": "PUT",
     "oversold": "CALL", "overbought": "PUT",
+    "buy": "CALL", "positive": "CALL", "uptrend": "CALL", "gaining": "CALL",
+    "sell": "PUT", "negative": "PUT", "downtrend": "PUT", "falling": "PUT",
+    "green": "CALL", "red": "PUT",
+}
+
+# Fuzzy variants for common typos → canonical signal word
+_SIGNAL_FUZZY: dict[str, str] = {
+    "bulish": "bullish", "bullsh": "bullish", "bullsih": "bullish", "bulllish": "bullish",
+    "bulsih": "bullish", "bullissh": "bullish", "builsh": "bullish",
+    "bearsih": "bearish", "bearsh": "bearish", "beerish": "bearish", "bearissh": "bearish",
+    "bearich": "bearish", "bearsish": "bearish",
 }
 
 # Regex: looks like an NSE symbol — all caps/digits/hyphen, 2-15 chars
@@ -361,10 +372,33 @@ class NlpService:
 
         signal = None
         lower = text.lower()
+        words_in_text = set(re.findall(r"\b\w+\b", lower))
+
+        # Exact signal word match
         for word, sig in SIGNAL_WORDS.items():
-            if word in lower:
+            if word in words_in_text:
                 signal = sig
                 break
+
+        # Fuzzy typo correction ("bulish" → "bullish" → CALL)
+        if signal is None:
+            for word in words_in_text:
+                canonical = _SIGNAL_FUZZY.get(word)
+                if canonical:
+                    signal = SIGNAL_WORDS.get(canonical)
+                    break
+
+        # difflib fallback for unknown typos (cutoff 0.82 to avoid false positives)
+        if signal is None:
+            from difflib import get_close_matches
+            signal_keys = list(SIGNAL_WORDS.keys())
+            for word in words_in_text:
+                if len(word) >= 4:
+                    matches = get_close_matches(word, signal_keys, n=1, cutoff=0.82)
+                    if matches:
+                        signal = SIGNAL_WORDS[matches[0]]
+                        break
+
         return {"stocks": stocks, "sectors": sectors, "signal": signal}
 
     def parse(self, text: str) -> dict:
