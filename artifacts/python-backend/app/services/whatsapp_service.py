@@ -10,6 +10,13 @@ if TYPE_CHECKING:
 
 MAX_LOG = 200
 _message_log: list[dict] = []
+
+
+def _safe(v) -> str:
+    """Replace underscores with spaces so WhatsApp bold/italic markers aren't broken."""
+    return str(v).replace("_", " ") if v is not None else "N/A"
+
+
 _bot_enabled = True
 _session_qr: Optional[str] = None
 _session_status = "DISCONNECTED"
@@ -122,10 +129,15 @@ class WhatsappService:
 
     async def _nlp_route(self, text: str) -> str:
         parsed = self.nlp.parse(text)
-        intent = parsed["intent"]
+        intent  = parsed["intent"]
         stocks  = parsed["stocks"]
         sectors = parsed["sectors"]
         signal  = parsed["signal"]
+
+        # ── PRIORITY: sector + signal combo ──────────────────────────────────
+        # "which IT stocks are going down", "bearish pharma", "bank stocks rising"
+        if sectors and signal:
+            return await self._sector_signal_reply(sectors[0], signal)
 
         if intent == "help":
             return self._help()
@@ -148,6 +160,8 @@ class WhatsappService:
         elif intent == "rotation_query":
             return await self._fetch_rotation()
         elif intent == "pattern_scan":
+            if stocks:
+                return await self._analyze_stock(stocks[0])
             if signal:
                 d = await self.patterns.get_patterns(signal=signal)
             else:
@@ -155,10 +169,10 @@ class WhatsappService:
             patterns_list = d.get("patterns") or []
             if not patterns_list:
                 return "No patterns detected. Try !scan to refresh."
-            lines = [f"*Chart Patterns ({intent})*"]
+            lines = [f"*Chart Patterns*"]
             for p in patterns_list[:8]:
                 sig_icon = "🟢" if p["signal"] == "CALL" else "🔴"
-                lines.append(f"{sig_icon} {p['symbol']} — {p['pattern']} ({p['confidence']}%)")
+                lines.append(f"{sig_icon} {p['symbol']} — {_safe(p['pattern'])} ({p['confidence']}%)")
             return "\n".join(lines)
         elif intent == "scanner_run":
             all_s = self.scanners.get_all_scanners()
@@ -172,12 +186,80 @@ class WhatsappService:
                 return await self._run_scanner(matched["id"])
             return self._list_scanners()
         else:
-            # Generic fallback for analytics / unknown
+            # last resort: if it looks like a stock symbol, analyze it
+            upper = text.upper().strip()
+            if 2 <= len(upper) <= 15 and upper.replace("-", "").isalnum():
+                return await self._analyze_stock(upper)
             return (
                 "I understood your request but couldn't find specific data.\n"
                 "Try: !sectors, !rotation, !patterns, !analyze <SYMBOL>\n"
                 "Or ask naturally: 'show IT sector', 'where to invest?'"
             )
+
+    async def _sector_signal_reply(self, sector: str, signal: str) -> str:
+        """Return bullish/bearish stocks in a specific sector."""
+        import asyncio
+        from ..lib.universe import SECTOR_SYMBOLS
+        sector_stocks = set(SECTOR_SYMBOLS.get(sector, []))
+        emoji = "📈" if signal == "CALL" else "📉"
+        bias  = "Bullish" if signal == "CALL" else "Bearish"
+
+        # 1) Check cached pattern scan results first
+        result = await self.patterns.get_patterns()
+        all_pats = result.get("patterns", [])
+        sector_pats = [
+            p for p in all_pats
+            if p.get("symbol") in sector_stocks and p.get("signal") == signal
+        ]
+        if sector_pats:
+            lines = [f"{emoji} *{bias} stocks in {sector}* ({len(sector_pats)} found)\n"]
+            for p in sector_pats[:10]:
+                lines.append(f"  • *{p['symbol']}* — {_safe(p.get('pattern', '?'))} ({p.get('confidence', 0):.0f}%)")
+            lines.append("\nType: !analyze <SYMBOL> for full details")
+            return "\n".join(lines)
+
+        # 2) Parallel-fetch sample of sector stocks, filter by today's price direction
+        sample = list(sector_stocks)[:15]
+
+        async def _get(sym: str):
+            try:
+                return await asyncio.wait_for(
+                    self.stocks.get_stock_details(sym), timeout=3.0
+                )
+            except Exception:
+                return None
+
+        results = await asyncio.gather(*[_get(s) for s in sample])
+        stock_data = [r for r in results if r and r.get("lastPrice")]
+
+        if signal == "CALL":
+            filtered = sorted(
+                [s for s in stock_data if (s.get("pChange") or 0) > 0],
+                key=lambda x: x.get("pChange", 0), reverse=True
+            )
+        else:
+            filtered = sorted(
+                [s for s in stock_data if (s.get("pChange") or 0) < 0],
+                key=lambda x: x.get("pChange", 0)
+            )
+
+        if filtered:
+            lines = [f"{emoji} *{bias} stocks in {sector}*\n"]
+            for s in filtered[:8]:
+                sym   = s.get("symbol", "?")
+                pc    = s.get("pChange", 0)
+                sign  = "+" if pc >= 0 else ""
+                ta    = s.get("technicalAnalysis") or {}
+                trend = _safe(ta.get("trend", ""))
+                hint  = f" ({trend})" if trend else ""
+                lines.append(f"  • *{sym}* {sign}{pc:.2f}%{hint}")
+            lines.append("\nType: !analyze <SYMBOL> for full details")
+            return "\n".join(lines)
+
+        return (
+            f"{emoji} No strong *{bias.lower()}* signals found in *{sector}* right now.\n"
+            f"Try !scan to refresh pattern data."
+        )
 
     # ── Response formatters ───────────────────────────────────────────────────
 
@@ -253,9 +335,9 @@ class WhatsappService:
         msg += f"📊 Change: {'+' if pchange > 0 else ''}{pchange:.2f}%\n"
         if ta:
             msg += "\n*Technical Analysis:*\n"
-            msg += f"• Trend: {ta['trend']}\n"
-            msg += f"• RSI(14): {ta['rsi']:.1f} — {ta['rsiZone']}\n"
-            msg += f"• MACD: {ta['macd']['crossover']}\n"
+            msg += f"• Trend: {_safe(ta.get('trend', 'N/A'))}\n"
+            msg += f"• RSI(14): {ta['rsi']:.1f} — {_safe(ta.get('rsiZone', ''))}\n"
+            msg += f"• MACD: {_safe((ta.get('macd') or {}).get('crossover', 'N/A'))}\n"
             if ta.get("nearestSupport"):
                 msg += f"• Support: ₹{ta['nearestSupport']:.2f}\n"
             if ta.get("nearestResistance"):
@@ -322,7 +404,7 @@ class WhatsappService:
         er = d.get("entryRecommendation")
         if not er:
             return f"Unable to generate entry signal for {symbol}"
-        msg = f"🎯 *Entry Signal: {symbol}*\n\n*Signal:* {er['entryCall']}\n*Confidence:* {er['confidence']}\n"
+        msg = f"🎯 *Entry Signal: {symbol}*\n\n*Signal:* {_safe(er.get('entryCall','N/A'))}\n*Confidence:* {er.get('confidence','N/A')}\n"
         if er.get("targetPrice"):
             msg += f"*Target:* ₹{er['targetPrice']:.2f}\n"
         if er.get("stopLoss"):
