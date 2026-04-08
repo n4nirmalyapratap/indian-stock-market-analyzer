@@ -254,12 +254,35 @@ INTENT_WORDS: dict[str, list[str]] = {
 }
 
 SIGNAL_WORDS = {
-    "bullish": "CALL", "bearish": "PUT", "call": "CALL", "put": "PUT",
+    # Directional — bullish
+    "bullish": "CALL", "call": "CALL", "buy": "CALL",
+    "positive": "CALL", "uptrend": "CALL", "gaining": "CALL",
+    "up": "CALL", "upward": "CALL", "rising": "CALL", "rise": "CALL",
+    "rally": "CALL", "rallying": "CALL", "surging": "CALL", "surge": "CALL",
+    "climbing": "CALL", "strong": "CALL", "strength": "CALL",
+    "green": "CALL", "advancing": "CALL", "outperforming": "CALL",
+    "breakout": "CALL", "momentum": "CALL",
+    # Directional — bearish
+    "bearish": "PUT", "put": "PUT", "sell": "PUT",
+    "negative": "PUT", "downtrend": "PUT", "falling": "PUT",
+    "down": "PUT", "downward": "PUT", "declining": "PUT", "decline": "PUT",
+    "dropping": "PUT", "drop": "PUT", "dipping": "PUT", "dip": "PUT",
+    "weak": "PUT", "weakness": "PUT", "crash": "PUT", "crashing": "PUT",
+    "red": "PUT", "losing": "PUT", "underperforming": "PUT",
+    "breakdown": "PUT", "correction": "PUT", "correcting": "PUT",
+    "lower": "PUT", "tumbling": "PUT", "slipping": "PUT",
+    # RSI
     "oversold": "CALL", "overbought": "PUT",
-    "buy": "CALL", "positive": "CALL", "uptrend": "CALL", "gaining": "CALL",
-    "sell": "PUT", "negative": "PUT", "downtrend": "PUT", "falling": "PUT",
-    "green": "CALL", "red": "PUT",
 }
+
+# Multi-word signal phrases checked against the full lowercased text
+_SIGNAL_PHRASES: list[tuple[str, str]] = [
+    ("going up", "CALL"), ("going higher", "CALL"), ("headed up", "CALL"),
+    ("moving up", "CALL"), ("trending up", "CALL"), ("on the rise", "CALL"),
+    ("going down", "PUT"), ("going lower", "PUT"), ("headed down", "PUT"),
+    ("moving down", "PUT"), ("trending down", "PUT"), ("on the fall", "PUT"),
+    ("selling off", "PUT"), ("under pressure", "PUT"),
+]
 
 # Fuzzy variants for common typos → canonical signal word
 _SIGNAL_FUZZY: dict[str, str] = {
@@ -374,13 +397,20 @@ class NlpService:
         lower = text.lower()
         words_in_text = set(re.findall(r"\b\w+\b", lower))
 
-        # Exact signal word match
-        for word, sig in SIGNAL_WORDS.items():
-            if word in words_in_text:
+        # Tier-0: multi-word phrase match ("going down", "on the rise" …)
+        for phrase, sig in _SIGNAL_PHRASES:
+            if phrase in lower:
                 signal = sig
                 break
 
-        # Fuzzy typo correction ("bulish" → "bullish" → CALL)
+        # Tier-1: exact single-word match
+        if signal is None:
+            for word, sig in SIGNAL_WORDS.items():
+                if word in words_in_text:
+                    signal = sig
+                    break
+
+        # Tier-2: fuzzy typo correction ("bulish" → "bullish" → CALL)
         if signal is None:
             for word in words_in_text:
                 canonical = _SIGNAL_FUZZY.get(word)
@@ -388,7 +418,7 @@ class NlpService:
                     signal = SIGNAL_WORDS.get(canonical)
                     break
 
-        # difflib fallback for unknown typos (cutoff 0.82 to avoid false positives)
+        # Tier-3: difflib fallback for unknown typos (cutoff 0.82 to avoid false positives)
         if signal is None:
             from difflib import get_close_matches
             signal_keys = list(SIGNAL_WORDS.keys())
