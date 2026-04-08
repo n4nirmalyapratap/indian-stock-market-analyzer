@@ -24,6 +24,19 @@ NestJS Backend         (NestJS, port 3001)    ← WhatsApp bot + separate API
 
 ---
 
+## Folder Structure
+
+```
+artifacts/
+  api-server/                  ← Express backend (port 8080) — stock data API
+  nestjs-backend/              ← NestJS backend (port 3001) — WhatsApp bot
+  nestjs-backend-placeholder/  ← Vite + React frontend (port 3002) — main UI
+  mockup-sandbox/              ← Replit canvas tool (managed by artifact system)
+lib/
+  api-zod/                     ← Zod schemas (used by api-server health check)
+scripts/                       ← Utility scripts
+```
+
 ## Stack
 
 - **Monorepo**: pnpm workspaces
