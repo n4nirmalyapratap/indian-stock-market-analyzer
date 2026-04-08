@@ -18,6 +18,17 @@ from . import hydra_forecast_service as forecast
 
 logger = logging.getLogger(__name__)
 
+# ── Words that look like NSE tickers but are not ───────────────────────────────
+_SYMBOL_STOPWORDS = {
+    "BACKTEST", "PAIR", "PAIRS", "FORECAST", "PREDICT", "ANALYZE", "ANALYSE",
+    "ANALYSIS", "SENTIMENT", "SIGNAL", "SCAN", "FIND", "RISK", "VAR", "WHAT",
+    "THE", "AND", "FOR", "WITH", "GIVE", "SHOW", "TELL", "WILL", "IS", "ARE",
+    "OF", "IN", "AT", "TO", "ON", "BY", "AS", "LAST", "NEXT", "GET", "RUN",
+    "DAY", "DAYS", "WEEK", "WEEKS", "MONTH", "MONTHS", "YEAR", "CALCULATE",
+    "SIMULATE", "HISTORICAL", "HISTORY", "PORTFOLIO", "STOCK", "STOCKS", "NSE",
+    "NIFTY", "INDEX", "BETWEEN", "VS", "OR", "NOT", "ALL", "MY", "ME", "DO",
+}
+
 # ── Known NSE large caps for quick resolution ──────────────────────────────────
 NSE_POPULAR = {
     "reliance": "RELIANCE", "tcs": "TCS", "infosys": "INFY", "infy": "INFY",
@@ -42,14 +53,16 @@ AGENT_DESCRIPTIONS = [
         "keywords": ["forecast", "predict", "price target", "where will", "next week", "next month", "future", "will it go", "target"],
     },
     {
-        "name": "pairs",
-        "description": "Find cointegrated pairs of stocks using the Engle-Granger test and analyze their OU spread signals",
-        "keywords": ["pairs", "cointegrated", "pair", "spread", "arbitrage", "OU", "ornstein", "mean revert"],
-    },
-    {
+        # backtest MUST appear before pairs — "backtest X Y pair" matches both;
+        # putting backtest first ensures it wins the tie when scores are equal
         "name": "backtest",
         "description": "Run an event-driven backtest of a pairs trading strategy with realistic slippage and commissions",
         "keywords": ["backtest", "historical", "simulate", "performance", "sharpe", "drawdown", "test strategy"],
+    },
+    {
+        "name": "pairs",
+        "description": "Find cointegrated pairs of stocks using the Engle-Granger test and analyze their OU spread signals",
+        "keywords": ["pairs", "cointegrated", "pair", "spread", "arbitrage", "OU", "ornstein", "mean revert"],
     },
     {
         "name": "var",
@@ -64,14 +77,24 @@ AGENT_DESCRIPTIONS = [
 ]
 
 
+def _extract_symbols(text: str) -> list[str]:
+    """
+    Extract NSE ticker symbols from free-form text.
+    Filters out stopwords and common English words so 'BACKTEST', 'PAIR' etc.
+    are never treated as stock tickers.
+    """
+    candidates = re.findall(r'\b([A-Z]{2,10})\b', text.upper())
+    return [c for c in candidates if c not in _SYMBOL_STOPWORDS]
+
+
 def _resolve_symbol(text: str) -> str | None:
-    """Try to resolve a ticker symbol from free-form text."""
+    """Try to resolve a single ticker symbol from free-form text."""
     lower = text.lower()
     for name, sym in NSE_POPULAR.items():
         if name in lower:
             return sym
-    m = re.search(r'\b([A-Z]{2,10})\b', text.upper())
-    return m.group(1) if m else None
+    syms = _extract_symbols(text)
+    return syms[0] if syms else None
 
 
 def _route_intent(query: str) -> str:
@@ -115,20 +138,19 @@ class HydraEngine:
 
         logger.info("Query: %r → intent=%s symbol=%s", user_query, intent, symbol)
 
+        syms = _extract_symbols(user_query)  # stopword-filtered symbol list
+
         if intent == "forecast":
             return await self._run_forecast(symbol or "RELIANCE", horizon, user_query)
         elif intent == "pairs":
-            syms = re.findall(r'\b([A-Z]{2,10})\b', user_query.upper())
             if len(syms) >= 2:
                 return await self._run_pair_analysis(syms[0], syms[1])
             return await self._run_pair_scan(user_query)
         elif intent == "backtest":
-            syms = re.findall(r'\b([A-Z]{2,10})\b', user_query.upper())
             if len(syms) >= 2:
                 return await self._run_backtest(syms[0], syms[1])
-            return {"error": "Please specify two symbols for backtesting, e.g. 'backtest RELIANCE TCS'"}
+            return {"error": "Please specify two symbols for backtesting, e.g. 'Backtest RELIANCE TCS'"}
         elif intent == "var":
-            syms = re.findall(r'\b([A-Z]{2,10})\b', user_query.upper())
             if syms:
                 return await self._run_var(syms[:5])
             return await self._run_var(["RELIANCE", "TCS", "HDFCBANK"])
