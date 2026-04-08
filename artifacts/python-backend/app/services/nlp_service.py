@@ -139,7 +139,8 @@ COMPANY_TO_SYMBOL: dict[str, str] = {
     "WELSPUN": "WELSPUNLIV", "TRIDENT": "TRIDENT", "VARDHMAN": "VARDHMAN",
     "BALRAMPUR CHINI": "BALRAMCHIN", "RENUKA": "RENUKA", "TRIVENI": "TRIVENI",
     "DHANUKA": "DHANUKA", "RALLIS": "RALLIS", "PRAJ": "PRAJIND",
-    "GRANULES": "GRANULES", "LAURUS": "LAURUS", "SUVEN": "SUVEN",
+    "GRANULES": "GRANULES", "LAURUS": "LAURUSLABS", "LAURUS LABS": "LAURUSLABS",
+    "LAURUSLABS": "LAURUSLABS", "SUVEN": "SUVEN",
     "JB CHEMICALS": "JBCHEPHARM", "SEQUENT": "SEQUENT",
     "KALYAN JEWELLERS": "KALYAN", "SENCO": "SENCO",
     "IIFL": "IIFL", "360 ONE": "360ONE", "ANAND RATHI": "ANANDRAT",
@@ -190,42 +191,65 @@ COMPANY_TO_SYMBOL: dict[str, str] = {
     "WELCORP": "WELCORP", "MANALIPETC": "MANALIPETC",
 }
 
-INTENT_PATTERNS: dict[str, list[str]] = {
+# Multi-word phrase patterns (high weight — 2+ points each)
+INTENT_PHRASES: dict[str, list[str]] = {
     "help": [
-        "help", "commands", "what can you do", "guide", "menu",
-        "what can i ask", "how to use", "instructions",
+        "what can you do", "how to use", "what can i ask",
+        "show commands", "show menu",
     ],
     "stock_analysis": [
-        "analyze", "analysis", "tell me about", "stock price", "price of",
-        "how is", "what about", "show me", "check", "performance of",
-        "fundamentals", "technical", "chart", "trend", "rsi", "macd",
-        "entry", "exit", "buy", "sell", "recommendation",
+        "tell me about", "stock price", "price of", "performance of",
+        "should i buy", "should i sell", "is it good", "worth buying",
+        "entry point", "exit point", "buy or sell",
     ],
     "sector_query": [
-        "sector", "sectors", "index", "nifty", "industry",
-        "banking sector", "it sector", "pharma sector", "fmcg sector",
-        "metal sector", "realty sector", "auto sector", "which sector",
-        "sector performance",
+        "sector performance", "which sector", "banking sector", "it sector",
+        "pharma sector", "fmcg sector", "metal sector", "all sectors",
     ],
     "rotation_query": [
-        "rotation", "focus", "where to invest", "where to buy", "money flowing",
-        "outperforming", "underperforming", "best sector", "top sector",
-        "breadth", "advance decline", "market phase",
+        "where to invest", "where to buy", "where should i invest",
+        "what to buy", "money flowing", "best sector to invest",
+        "outperforming sector", "underperforming sector",
+        "market phase", "advance decline", "market breadth",
+    ],
+    "pattern_scan": [
+        "bullish pattern", "bearish pattern", "call signal", "put signal",
+        "morning star", "evening star", "candlestick pattern",
+    ],
+    "scanner_run": [
+        "golden cross", "volume spike", "run scanner", "run screen",
+        "screen stocks", "filter stocks",
+    ],
+    "analytics": [
+        "top movers", "top gainers", "top losers", "market data",
+        "breadth history", "pattern stats",
+    ],
+}
+
+# Individual word patterns (lower weight — 1 point each)
+INTENT_WORDS: dict[str, list[str]] = {
+    "help": ["help", "commands", "guide", "menu", "instructions"],
+    "stock_analysis": [
+        "analyze", "analysis", "technical", "fundamental",
+        "chart", "trend", "rsi", "macd", "ema", "recommendation",
+    ],
+    "sector_query": ["sector", "sectors", "index", "industry", "nifty"],
+    "rotation_query": [
+        "invest", "investment", "rotation", "focus",
+        "outperform", "outperforming", "underperform",
+        "opportunity", "opportunities",
     ],
     "pattern_scan": [
         "pattern", "patterns", "candlestick", "signal", "signals",
-        "call signal", "put signal", "bullish pattern", "bearish pattern",
-        "hammer", "doji", "engulfing", "morning star", "evening star",
-        "scan pattern", "detect",
+        "bullish", "bearish", "hammer", "doji", "engulfing", "detect",
     ],
     "scanner_run": [
-        "scanner", "screen", "screener", "filter", "screen stocks",
-        "golden cross", "breakout", "oversold", "momentum", "volume spike",
-        "run scanner", "run screen",
+        "scanner", "screen", "screener", "filter",
+        "breakout", "oversold", "momentum",
     ],
     "analytics": [
-        "correlation", "breadth history", "heatmap", "top movers", "gainers",
-        "losers", "pattern stats", "statistics", "analytics", "market data",
+        "heatmap", "gainers", "losers", "movers",
+        "correlation", "analytics", "statistics",
     ],
 }
 
@@ -274,19 +298,31 @@ class NlpService:
 
     def _classify_intent(self, text: str) -> str:
         lower = text.lower()
-        scores: dict[str, float] = {intent: 0.0 for intent in INTENT_PATTERNS}
-        for intent, keywords in INTENT_PATTERNS.items():
-            for kw in keywords:
-                if kw in lower:
-                    scores[intent] += 1.0 + (len(kw.split()) - 1) * 0.5
-        # Single-token that looks like an NSE symbol → stock analysis
+        all_intents = set(INTENT_PHRASES) | set(INTENT_WORDS)
+        scores: dict[str, float] = {intent: 0.0 for intent in all_intents}
+
+        # Pass 1: multi-word phrase matching (2.0 pts + 0.5 per extra word)
+        for intent, phrases in INTENT_PHRASES.items():
+            for phrase in phrases:
+                if phrase in lower:
+                    scores[intent] += 2.0 + (len(phrase.split()) - 1) * 0.5
+
+        # Pass 2: individual word matching (1.0 pt each, word-boundary aware)
+        words_in_text = set(re.findall(r"\b\w+\b", lower))
+        for intent, words in INTENT_WORDS.items():
+            for word in words:
+                if word in words_in_text:
+                    scores[intent] += 1.0
+
+        # Boost: single token that IS a known NSE symbol → stock_analysis
         clean = lower.strip()
         upper = clean.upper()
         if re.match(r"^[a-z0-9&-]{2,15}$", clean):
             if upper in _ALL_SYMBOLS_SET or upper in COMPANY_TO_SYMBOL:
                 scores["stock_analysis"] += 3.0
+
         best_intent = max(scores, key=lambda k: scores[k])
-        return best_intent if scores[best_intent] > 0 else "stock_analysis"
+        return best_intent if scores[best_intent] > 0 else "rotation_query"
 
     def _extract_entities(self, text: str) -> dict:
         nlp = self._load()
