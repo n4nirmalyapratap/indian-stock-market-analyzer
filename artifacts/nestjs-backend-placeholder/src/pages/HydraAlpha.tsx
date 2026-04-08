@@ -104,7 +104,7 @@ function SupervisorTab() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "hydra",
-      text: "Hydra-Alpha Engine online. I can forecast stock prices, discover cointegrated pairs, run backtests, calculate Value at Risk, and analyze sentiment. What would you like to analyze?",
+      text: "Hi! I'm your AI Stock Analyzer. I can forecast where a stock price might go, find two stocks that move together, test trading strategies on past data, and measure your portfolio risk. What would you like to explore?",
       time: new Date().toLocaleTimeString(),
     }
   ]);
@@ -321,16 +321,16 @@ function PairsTab() {
       {/* Pair analyzer */}
       <div className="bg-white rounded-xl border border-gray-200 p-5">
         <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-          <Target className="w-4 h-4 text-purple-600" /> Cointegration Analyzer (Engle-Granger)
+          <Target className="w-4 h-4 text-purple-600" /> Stock Pair Analyzer
         </h3>
         <div className="flex flex-wrap gap-2 items-end">
           <div>
-            <label className="text-xs text-gray-500">Symbol A</label>
+            <label className="text-xs text-gray-500">Stock A (NSE symbol)</label>
             <input className="block mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm w-32 uppercase focus:ring-2 focus:ring-purple-400 focus:outline-none"
               value={symA} onChange={e => setSymA(e.target.value.toUpperCase())} />
           </div>
           <div>
-            <label className="text-xs text-gray-500">Symbol B</label>
+            <label className="text-xs text-gray-500">Stock B (NSE symbol)</label>
             <input className="block mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm w-32 uppercase focus:ring-2 focus:ring-purple-400 focus:outline-none"
               value={symB} onChange={e => setSymB(e.target.value.toUpperCase())} />
           </div>
@@ -346,19 +346,19 @@ function PairsTab() {
         {result && !result.error && (
           <div className="mt-4 space-y-4">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <Metric label="p-value (EG test)" value={fmtN(result.cointegrationPValue, 4)}
-                sub={result.isCointegrated ? "✅ Cointegrated (p<0.05)" : "⚠️ Not cointegrated"} color={result.isCointegrated ? "text-green-700" : "text-amber-600"} />
-              <Metric label="Hedge Ratio (β)" value={fmtN(result.hedgeRatio, 4)} sub="OLS regression" />
-              <Metric label="Correlation" value={fmtN(result.correlation, 3)} sub="Pearson r" />
-              <Metric label="Half-Life" value={`${fmtN(ou?.halfLife, 1)}d`} sub="Mean reversion time" />
+              <Metric label="Pair Match Score" value={fmtN(result.cointegrationPValue, 4)}
+                sub={result.isCointegrated ? "✅ Good pair — they move together" : "⚠️ These stocks don't reliably move together"} color={result.isCointegrated ? "text-green-700" : "text-amber-600"} />
+              <Metric label="Position Ratio" value={fmtN(result.hedgeRatio, 4)} sub="How much of Stock B per Stock A" />
+              <Metric label="Correlation" value={fmtN(result.correlation, 3)} sub="How closely they move together (1 = identical)" />
+              <Metric label="Recovery Time" value={`${fmtN(ou?.halfLife, 1)}d`} sub="Days until prices realign after diverging" />
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <Metric label="OU Mean (μ)" value={fmtN(ou?.mu, 4)} sub="Long-run equilibrium" />
-              <Metric label="OU Speed (θ)" value={fmtN(ou?.theta, 4)} sub="Reversion speed" />
-              <Metric label="OU Volatility (σ)" value={fmtN(ou?.sigma, 4)} sub="Spread volatility" />
+              <Metric label="Average Gap" value={fmtN(ou?.mu, 4)} sub="Normal price difference between the two stocks" />
+              <Metric label="Pull-Back Speed" value={fmtN(ou?.theta, 4)} sub="How quickly prices snap back to normal" />
+              <Metric label="Gap Volatility" value={fmtN(ou?.sigma, 4)} sub="Typical day-to-day gap swings" />
               <div className="bg-gray-50 rounded-lg p-3 text-center">
-                <p className="text-xs text-gray-500 mb-1">Z-Score</p>
+                <p className="text-xs text-gray-500 mb-1">Gap Score (how far from normal)</p>
                 <Gauge value={zScore} min={-4} max={4} label={`${fmtN(zScore, 2)}σ`} />
               </div>
             </div>
@@ -475,12 +475,12 @@ function BacktestTab() {
     <div className="space-y-5">
       <div className="bg-white rounded-xl border border-gray-200 p-5">
         <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
-          <Play className="w-4 h-4 text-green-600" /> Event-Driven Pairs Backtest
+          <Play className="w-4 h-4 text-green-600" /> Historical Strategy Test
         </h3>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
-          {[["Symbol A", symA, setSymA], ["Symbol B", symB, setSymB],
-            ["Capital (₹)", capital, setCapital],
-            ["Entry Z-score", entryZ, setEntryZ], ["Exit Z-score", exitZ, setExitZ]
+          {[["Stock A", symA, setSymA], ["Stock B", symB, setSymB],
+            ["Starting Capital (₹)", capital, setCapital],
+            ["Entry Gap (how wide before trading)", entryZ, setEntryZ], ["Exit Gap (how close before closing)", exitZ, setExitZ]
           ].map(([label, val, setter]: any) => (
             <div key={label}>
               <label className="text-xs text-gray-500">{label}</label>
@@ -491,8 +491,7 @@ function BacktestTab() {
         </div>
         <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 mb-4 text-xs text-blue-700">
           <Info className="w-3 h-3 inline mr-1" />
-          Event-driven engine with realistic slippage (5bps) and ₹20/trade commission. 
-          Processes data chronologically — no lookahead bias.
+          Tests the strategy on real past prices, simulating actual trade costs (₹20/trade + 0.05% slippage). Results show exactly how the strategy would have performed.
         </div>
         <button onClick={run} disabled={loading}
           className="px-5 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 transition flex items-center gap-2">
@@ -508,25 +507,25 @@ function BacktestTab() {
       {m && (
         <div className="space-y-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <MetricCard label="Total Return" value={`${fmt(m.totalReturnPct)}%`}
+            <MetricCard label="Total Profit / Loss" value={`${fmt(m.totalReturnPct)}%`}
               color={m.totalReturnPct >= 0 ? "text-green-700" : "text-red-700"} icon={<TrendingUp className="w-4 h-4" />} />
-            <MetricCard label="Ann. Sharpe" value={fmtN(m.annSharpe, 2)}
+            <MetricCard label="Risk-Adjusted Return" value={fmtN(m.annSharpe, 2)}
               color={m.annSharpe >= 1 ? "text-green-700" : m.annSharpe >= 0 ? "text-amber-600" : "text-red-700"} icon={<Activity className="w-4 h-4" />} />
-            <MetricCard label="Max Drawdown" value={`-${fmtN(m.maxDrawdownPct, 1)}%`} color="text-red-600" icon={<TrendingDown className="w-4 h-4" />} />
-            <MetricCard label="Win Rate" value={`${fmtN(m.winRatePct, 1)}%`}
+            <MetricCard label="Biggest Loss Period" value={`-${fmtN(m.maxDrawdownPct, 1)}%`} color="text-red-600" icon={<TrendingDown className="w-4 h-4" />} />
+            <MetricCard label="Winning Trades" value={`${fmtN(m.winRatePct, 1)}%`}
               color={m.winRatePct >= 50 ? "text-green-700" : "text-red-700"} icon={<Target className="w-4 h-4" />} />
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <Metric label="Total Trades" value={m.totalTrades} />
-            <Metric label="Initial Capital" value={fmtINR(m.initialEquity)} />
-            <Metric label="Final Equity" value={fmtINR(m.finalEquity)} />
-            <Metric label="Trading Days" value={result.totalDays} />
+            <Metric label="No. of Trades" value={m.totalTrades} />
+            <Metric label="Starting Amount" value={fmtINR(m.initialEquity)} />
+            <Metric label="Ending Value" value={fmtINR(m.finalEquity)} />
+            <Metric label="Days Tested" value={result.totalDays} />
           </div>
 
           {equity?.length > 2 && (
             <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <p className="text-xs text-gray-500 mb-2">Equity Curve</p>
+              <p className="text-xs text-gray-500 mb-2">Portfolio Growth Chart</p>
               <Sparkline data={equity}
                 color={m.totalReturnPct >= 0 ? "#16a34a" : "#dc2626"}
                 width={Math.min(700, window.innerWidth - 100)}
@@ -597,18 +596,18 @@ function VaRTab() {
     <div className="space-y-5">
       <div className="bg-white rounded-xl border border-gray-200 p-5">
         <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
-          <Shield className="w-4 h-4 text-red-600" /> Historical Simulation VaR
+          <Shield className="w-4 h-4 text-red-600" /> Portfolio Risk Calculator
         </h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           <div className="col-span-2 md:col-span-4">
-            <label className="text-xs text-gray-500">Symbols (comma-separated, equal weight)</label>
+            <label className="text-xs text-gray-500">Stocks to include (comma-separated NSE symbols)</label>
             <input className="block mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm w-full focus:ring-2 focus:ring-red-400 focus:outline-none uppercase"
               value={symbols} onChange={e => setSymbols(e.target.value)} />
           </div>
           {[
-            ["Confidence", confidence, setConfidence, "e.g. 0.95"],
-            ["Horizon (days)", horizon, setHorizon, "1, 5, 10…"],
-            ["Portfolio Value (₹)", portVal, setPortVal, "e.g. 1000000"],
+            ["Confidence Level (0.95 = 95%)", confidence, setConfidence, "e.g. 0.95"],
+            ["Days Ahead", horizon, setHorizon, "1, 5, 10…"],
+            ["Total Investment (₹)", portVal, setPortVal, "e.g. 1000000"],
           ].map(([label, val, setter, placeholder]: any) => (
             <div key={label}>
               <label className="text-xs text-gray-500">{label}</label>
@@ -619,7 +618,7 @@ function VaRTab() {
         </div>
         <div className="bg-red-50 border border-red-100 rounded-lg p-3 mb-4 text-xs text-red-700">
           <AlertTriangle className="w-3 h-3 inline mr-1" />
-          Non-parametric historical simulation — captures fat tails. No normal distribution assumption.
+          Based on real historical price data — shows the worst losses that actually happened, not just theoretical ones.
         </div>
         <button onClick={calculate} disabled={loading}
           className="px-5 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 disabled:opacity-50 transition flex items-center gap-2">
@@ -633,19 +632,19 @@ function VaRTab() {
       {r && !r.error && (
         <div className="space-y-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <MetricCard label={`${(r.confidence * 100).toFixed(0)}% VaR`}
+            <MetricCard label={`Worst-Case Daily Loss (${(r.confidence * 100).toFixed(0)}%)`}
               value={`${fmtN(r.portfolioVarPct, 2)}%`} color="text-red-700" icon={<Shield className="w-4 h-4" />} />
-            <MetricCard label="CVaR (Expected Shortfall)"
+            <MetricCard label="Average Loss on Bad Days"
               value={`${fmtN(r.portfolioCvarPct, 2)}%`} color="text-red-800" icon={<AlertTriangle className="w-4 h-4" />} />
-            <MetricCard label="VaR (₹)"
+            <MetricCard label="Max Loss in Rupees (₹)"
               value={fmtINR(r.portfolioVarAbs)} color="text-orange-700" icon={<TrendingDown className="w-4 h-4" />} />
-            <MetricCard label="Ann. Volatility"
+            <MetricCard label="Annual Price Swings"
               value={`${fmtN(r.portfolioVolatility, 2)}%`} color="text-amber-700" icon={<Activity className="w-4 h-4" />} />
           </div>
 
           {dist && (
             <div className="bg-white rounded-xl border border-gray-200 p-5">
-              <p className="text-sm font-semibold text-gray-700 mb-3">Return Distribution (Percentiles)</p>
+              <p className="text-sm font-semibold text-gray-700 mb-3">Daily Return Range (Historical)</p>
               <div className="flex items-end gap-2 h-20">
                 {Object.entries(dist).map(([k, v]: any) => {
                   const pct = Math.max(5, Math.min(95, 50 + v * 500));
@@ -668,7 +667,7 @@ function VaRTab() {
 
           {r.breakdown?.length > 0 && (
             <div className="bg-white rounded-xl border border-gray-200 p-5">
-              <p className="text-sm font-semibold text-gray-700 mb-3">Individual Risk Breakdown</p>
+              <p className="text-sm font-semibold text-gray-700 mb-3">Risk per Stock</p>
               <div className="space-y-2">
                 {r.breakdown.map((b: any) => (
                   <div key={b.symbol} className="flex items-center gap-3">
@@ -716,16 +715,16 @@ function ForecastTab() {
     <div className="space-y-5">
       <div className="bg-white rounded-xl border border-gray-200 p-5">
         <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
-          <Brain className="w-4 h-4 text-indigo-600" /> TFT-Inspired Probabilistic Forecast
+          <Brain className="w-4 h-4 text-indigo-600" /> AI Price Forecast
         </h3>
         <div className="flex gap-3 items-end flex-wrap">
           <div>
-            <label className="text-xs text-gray-500">Symbol</label>
+            <label className="text-xs text-gray-500">Stock Symbol (e.g. RELIANCE)</label>
             <input className="block mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm w-36 uppercase focus:ring-2 focus:ring-indigo-400 focus:outline-none"
               value={symbol} onChange={e => setSymbol(e.target.value.toUpperCase())} />
           </div>
           <div>
-            <label className="text-xs text-gray-500">Horizon (days)</label>
+            <label className="text-xs text-gray-500">Days to Forecast</label>
             <input className="block mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm w-28 focus:ring-2 focus:ring-indigo-400 focus:outline-none"
               value={horizon} onChange={e => setHorizon(e.target.value)} type="number" min={1} max={30} />
           </div>
@@ -736,8 +735,7 @@ function ForecastTab() {
           </button>
         </div>
         <p className="text-xs text-gray-400 mt-3">
-          Features: OHLCV · RSI · MACD · Bollinger · Momentum (5/20d) · Volume Z-score · VADER Sentiment.
-          Ensemble: EWM + Momentum + Mean-Reversion, dynamically weighted by RSI context.
+          Uses price trends, momentum, trading volume, and market sentiment to generate three scenarios: pessimistic, most likely, and optimistic.
         </p>
       </div>
 
@@ -747,23 +745,23 @@ function ForecastTab() {
         <div className="space-y-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <MetricCard label="Latest Price" value={`₹${r.latestPrice?.toFixed(2)}`} icon={<BarChart3 className="w-4 h-4" />} />
-            <MetricCard label={`${r.horizonDays}d P50 (Base)`}
+            <MetricCard label={`${r.horizonDays}-Day Target Price`}
               value={`₹${r.p50?.[r.p50.length - 1]?.toFixed(2)}`} icon={<Target className="w-4 h-4" />} />
-            <MetricCard label="Expected Return" value={`${fmt(r.expectedReturn)}%`}
+            <MetricCard label="Estimated Gain / Loss" value={`${fmt(r.expectedReturn)}%`}
               color={r.expectedReturn >= 0 ? "text-green-700" : "text-red-700"} icon={<TrendingUp className="w-4 h-4" />} />
             <MetricCard label="Direction" value={<SignalBadge signal={r.direction} />} icon={<Zap className="w-4 h-4" />} />
           </div>
 
           <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <p className="text-sm font-semibold text-gray-700 mb-3">Probabilistic Price Path</p>
+            <p className="text-sm font-semibold text-gray-700 mb-3">Price Forecast — 3 Scenarios</p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-xs text-gray-500 border-b">
                     <th className="text-left pb-2">Date</th>
-                    <th className="text-right pb-2 text-red-600">P10 (Bear)</th>
-                    <th className="text-right pb-2 text-indigo-600">P50 (Base)</th>
-                    <th className="text-right pb-2 text-green-600">P90 (Bull)</th>
+                    <th className="text-right pb-2 text-red-600">Pessimistic</th>
+                    <th className="text-right pb-2 text-indigo-600">Most Likely</th>
+                    <th className="text-right pb-2 text-green-600">Optimistic</th>
                     <th className="text-right pb-2">Range</th>
                   </tr>
                 </thead>
@@ -797,7 +795,7 @@ function ForecastTab() {
 
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <p className="text-xs font-semibold text-gray-600 mb-3">Feature Importance</p>
+              <p className="text-xs font-semibold text-gray-600 mb-3">What Drives This Forecast</p>
               <div className="space-y-2">
                 {Object.entries(r.featureImportance || {}).map(([k, v]: any) => (
                   <div key={k} className="flex items-center gap-2">
@@ -811,7 +809,7 @@ function ForecastTab() {
               </div>
             </div>
             <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <p className="text-xs font-semibold text-gray-600 mb-3">Model Indicators</p>
+              <p className="text-xs font-semibold text-gray-600 mb-3">Technical Signals Used</p>
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between"><span className="text-gray-500">RSI (14)</span><span className="font-medium">{r.rsi}</span></div>
                 <div className="flex justify-between"><span className="text-gray-500">Daily Volatility</span><span className="font-medium">{r.dailyVolPct}%</span></div>
@@ -853,11 +851,11 @@ function MetricCard({ label, value, color = "text-gray-800", icon }: any) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 const TABS: { id: Tab; label: string; icon: any; description: string }[] = [
-  { id: "supervisor", label: "Supervisor",  icon: Brain,    description: "Natural language query router" },
-  { id: "pairs",      label: "Pairs Trader",icon: Target,   description: "Cointegration + OU signals" },
-  { id: "backtest",   label: "Backtest",    icon: Play,     description: "Event-driven engine" },
-  { id: "var",        label: "Risk / VaR",  icon: Shield,   description: "Historical simulation" },
-  { id: "forecast",   label: "Forecast",    icon: TrendingUp, description: "TFT-inspired P10/P50/P90" },
+  { id: "supervisor", label: "Ask AI",         icon: Brain,      description: "Ask anything about stocks in plain English" },
+  { id: "pairs",      label: "Paired Stocks",  icon: Target,     description: "Find two stocks that move together" },
+  { id: "backtest",   label: "Test Strategy",  icon: Play,       description: "See how a strategy performed in the past" },
+  { id: "var",        label: "Portfolio Risk", icon: Shield,     description: "See potential losses before they happen" },
+  { id: "forecast",   label: "Price Forecast", icon: TrendingUp, description: "See where a stock price might go" },
 ];
 
 export default function HydraAlpha() {
@@ -879,14 +877,13 @@ export default function HydraAlpha() {
                 <Brain className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h1 className="text-2xl font-bold">Hydra-Alpha Engine</h1>
-                <p className="text-indigo-300 text-sm">BlackRock Aladdin-Inspired Quantitative Analysis Platform</p>
+                <h1 className="text-2xl font-bold">AI Stock Analyzer</h1>
+                <p className="text-indigo-300 text-sm">Professional-Grade Stock Analysis — Made Simple</p>
               </div>
             </div>
             <p className="text-indigo-200 text-sm mt-2 max-w-2xl">
-              Multi-module federated architecture: Supervisor Agent → Expert Agents (Pairs Trader, 
-              Event-Driven Backtester, Historical VaR, TFT Forecaster, VADER Sentiment). 
-              Powered by Engle-Granger cointegration, Ornstein-Uhlenbeck process, and statistical ensemble forecasting.
+              Ask questions in plain English · Find related stock pairs · Test strategies on real past data · 
+              Measure portfolio risk · Get probabilistic price forecasts with bear, base, and bull scenarios.
             </p>
           </div>
           {status && (
@@ -907,7 +904,7 @@ export default function HydraAlpha() {
 
         {/* Module pills */}
         <div className="flex flex-wrap gap-2 mt-4">
-          {["OHLCV DB", "VADER NLP", "Engle-Granger", "OU Process", "Event-Driven BT", "Hist. VaR", "TFT Ensemble"].map(m => (
+          {["Price Database", "Sentiment Scoring", "Pair Analysis", "Mean Reversion", "Strategy Tester", "Risk Calculator", "Price Forecast"].map(m => (
             <span key={m} className="text-xs bg-white/10 text-indigo-200 px-2.5 py-0.5 rounded-full">{m}</span>
           ))}
         </div>
