@@ -12,6 +12,7 @@ from ..services.patterns_service import PatternsService
 from ..services.scanners_service import ScannersService
 from ..services.nse_service import NseService
 from ..services.yahoo_service import YahooService
+from ..lib.universe import SECTOR_SYMBOLS
 
 router = APIRouter(prefix="/nlp", tags=["nlp"])
 
@@ -30,17 +31,25 @@ async def nlp_query(body: dict[str, Any]):
     if not text:
         return JSONResponse(status_code=400, content={"error": "query field is required"})
 
-    parsed = _nlp.parse(text)
+    # Guard NLP parsing — OSError if spaCy model missing, etc.
+    try:
+        parsed = _nlp.parse(text)
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"NLP parsing failed: {exc}. Please try again later."},
+        )
+
     intent = parsed["intent"]
-    stocks = parsed["stocks"]
+    stocks  = parsed["stocks"]
     sectors = parsed["sectors"]
     signal  = parsed["signal"]
 
     result: dict[str, Any] = {
-        "query": text,
+        "query":  text,
         "parsed": parsed,
         "intent": intent,
-        "data": None,
+        "data":   None,
     }
 
     try:
@@ -65,7 +74,6 @@ async def nlp_query(body: dict[str, Any]):
                 if len(stocks) > 1:
                     result["otherSymbols"] = stocks[1:]
             else:
-                # No recognizable symbol — return top movers as a fallback
                 nifty100 = await _stocks.get_nifty100_stocks()
                 result["data"] = nifty100[:20]
                 result["message"] = "No specific stock symbol detected. Showing Nifty 100 overview."
@@ -91,23 +99,26 @@ async def nlp_query(body: dict[str, Any]):
             result["data"] = rotation
 
         elif intent == "pattern_scan":
-            patterns = await _patterns.get_patterns(
-                signal=signal,
-            )
+            patterns_result = await _patterns.get_patterns(signal=signal)
+            patterns_list   = patterns_result.get("patterns", [])
+
             if sectors:
-                # Filter patterns whose symbols are in the sector universe
-                patterns["patterns"] = [
-                    p for p in patterns.get("patterns", [])
-                    if any(
-                        s_name.lower() in sectors[0].lower()
-                        for s_name in [p.get("universe", "")]
-                    )
-                ] or patterns.get("patterns", [])
-            result["data"] = patterns
+                # Build the set of stock symbols that belong to the requested sectors
+                sector_syms: set[str] = set()
+                for sec in sectors:
+                    sector_syms.update(SECTOR_SYMBOLS.get(sec, []))
+                if sector_syms:
+                    filtered = [p for p in patterns_list if p.get("symbol") in sector_syms]
+                    # Keep original list if filter removes everything (sector has no detected patterns)
+                    patterns_list = filtered if filtered else patterns_list
+                    result["resolvedSectors"] = sectors
+                    result["sectorSymbolCount"] = len(sector_syms)
+
+            patterns_result["patterns"] = patterns_list
+            result["data"] = patterns_result
 
         elif intent == "scanner_run":
             all_scanners = _scanners.get_all_scanners()
-            # Try to match a scanner by name from the query
             matched = None
             query_lower = text.lower()
             for sc in all_scanners:
@@ -123,7 +134,6 @@ async def nlp_query(body: dict[str, Any]):
                 result["message"] = "Listed available scanners. Specify a scanner name to run one."
 
         elif intent == "analytics":
-            # Basic analytics summary
             all_sectors = await _sectors.get_all_sectors()
             result["data"] = {
                 "sectors": all_sectors,
