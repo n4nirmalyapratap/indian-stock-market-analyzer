@@ -36,7 +36,7 @@ SECTOR_INDICES = [
     {"name": "Nifty Realty",            "symbol": "NIFTY REALTY",            "category": "Real Estate",           "nseKey": "NIFTY REALTY",            "yahooTicker": "^CNXREALTY"},
     {"name": "Nifty Energy",            "symbol": "NIFTY ENERGY",            "category": "Energy & Oil",          "nseKey": "NIFTY ENERGY",            "yahooTicker": "^CNXENERGY"},
     {"name": "Nifty Media",             "symbol": "NIFTY MEDIA",             "category": "Media & Entertainment", "nseKey": "NIFTY MEDIA",             "yahooTicker": "^CNXMEDIA"},
-    {"name": "Nifty Financial Services","symbol": "NIFTY FINANCIAL SERVICES","category": "Financial Services",    "nseKey": "NIFTY FINANCIAL SERVICES","yahooTicker": "^CNXFINANCE"},
+    {"name": "Nifty Financial Services","symbol": "NIFTY FINANCIAL SERVICES","category": "Financial Services",    "nseKey": "NIFTY FINANCIAL SERVICES","yahooTicker": "HDFCBANK.NS"},
     {"name": "Nifty PSU Bank",          "symbol": "NIFTY PSU BANK",          "category": "PSU Banking",           "nseKey": "NIFTY PSU BANK",          "yahooTicker": "^CNXPSUBANK"},
     {"name": "Nifty Consumer Durables", "symbol": "NIFTY CONSUMER DURABLES", "category": "Consumer Durables",     "nseKey": "NIFTY CONSUMER DURABLES", "yahooTicker": "TITAN.NS"},
     {"name": "Nifty Oil & Gas",         "symbol": "NIFTY OIL AND GAS",       "category": "Oil & Gas",             "nseKey": "NIFTY OIL AND GAS",       "yahooTicker": "RELIANCE.NS"},
