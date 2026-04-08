@@ -31,14 +31,18 @@ _scanners = ScannersService(_yahoo, _nse)
 _service  = TelegramService(_sectors, _stocks, _patterns, _scanners, _nlp)
 
 
+def get_service() -> TelegramService:
+    """Return the shared TelegramService instance (used by main.py poller)."""
+    return _service
+
+
 @router.get("/status")
 async def get_status():
     status = _service.get_status()
+    status["mode"] = "polling"
     if _service.configured:
         bot_info = await _service.get_bot_info()
-        webhook  = await _service.get_webhook_info()
-        status["botInfo"]    = bot_info
-        status["webhookInfo"] = webhook
+        status["botInfo"] = bot_info
     return status
 
 

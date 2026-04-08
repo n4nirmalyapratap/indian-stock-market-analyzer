@@ -108,6 +108,39 @@ class TelegramService:
         except Exception as e:
             return {"configured": True, "error": str(e)}
 
+    async def delete_webhook(self) -> bool:
+        """Remove any existing webhook so long-polling works."""
+        if not self.configured:
+            return False
+        try:
+            url = f"https://api.telegram.org/bot{self.token}/deleteWebhook"
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.post(url, json={"drop_pending_updates": False})
+                return resp.status_code == 200
+        except Exception:
+            return False
+
+    async def get_updates(self, offset: int = 0, timeout: int = 25) -> tuple[list[dict], int]:
+        """Long-poll Telegram for new updates. Returns (updates, next_offset)."""
+        if not self.configured:
+            return [], offset
+        try:
+            url = f"https://api.telegram.org/bot{self.token}/getUpdates"
+            params = {"offset": offset, "timeout": timeout, "allowed_updates": ["message"]}
+            async with httpx.AsyncClient(timeout=timeout + 5.0) as client:
+                resp = await client.get(url, params=params)
+                if resp.status_code != 200:
+                    return [], offset
+                data = resp.json()
+                updates = data.get("result", [])
+                if updates:
+                    next_offset = updates[-1]["update_id"] + 1
+                else:
+                    next_offset = offset
+                return updates, next_offset
+        except Exception:
+            return [], offset
+
     async def set_webhook(self, webhook_url: str) -> dict:
         if not self.configured:
             return {"success": False, "error": "TELEGRAM_BOT_TOKEN not set"}
