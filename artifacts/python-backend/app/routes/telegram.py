@@ -83,3 +83,20 @@ async def test_message(body: dict[str, Any]):
     if not text:
         return JSONResponse(status_code=400, content={"error": "text field is required"})
     return await _service.test_message(text)
+
+
+@router.get("/rotation-preview")
+async def rotation_preview():
+    """Return the pre-formatted sector rotation Telegram message for UI preview."""
+    return await _service.get_rotation_message()
+
+
+@router.post("/send-rotation")
+async def send_rotation(body: dict[str, Any]):
+    """Send the sector rotation alert to a Telegram chat.
+    Body: { "chatId": "<chat_id>" }
+    """
+    chat_id = body.get("chatId") or body.get("chat_id") or ""
+    if not chat_id:
+        return JSONResponse(status_code=400, content={"error": "chatId field is required"})
+    return await _service.send_rotation_alert(chat_id)

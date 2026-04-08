@@ -20,6 +20,197 @@ from .scanners_service import ScannersService
 MAX_LOG = 100
 _message_log: list[dict] = []
 
+# ── Tier metadata ──────────────────────────────────────────────────────────────
+_TIER_META = {
+    "DEEP_GREEN":  {"emoji": "🟢", "label": "DEEP GREEN",  "action": "Consider trimming profits"},
+    "LIGHT_GREEN": {"emoji": "🟩", "label": "LIGHT GREEN", "action": "← Ideal entry zone"},
+    "YELLOW":      {"emoji": "🟡", "label": "NEUTRAL",     "action": "Hold existing positions"},
+    "ORANGE":      {"emoji": "🟠", "label": "WEAKENING",   "action": "Reduce / set tighter SL"},
+    "DEEP_RED":    {"emoji": "🔴", "label": "DEEP RED",    "action": "Avoid / Exit now"},
+}
+_TIER_ORDER = ["DEEP_GREEN", "LIGHT_GREEN", "YELLOW", "ORANGE", "DEEP_RED"]
+
+def _breadth_bar(adv: int, total: int, width: int = 16) -> str:
+    """ASCII bar: filled = advancing, empty = declining."""
+    if total <= 0:
+        return "░" * width
+    filled = round((adv / total) * width)
+    return "▰" * filled + "░" * (width - filled)
+
+
+def _format_rotation_message(r: dict) -> str:
+    """
+    Build a rich, structured Telegram Markdown message from sector rotation data.
+    Uses Telegram Markdown v1 (single * for bold, _ for italic, ` for code).
+    """
+    SEP = "━━━━━━━━━━━━━━━━━━━━"
+
+    # ── Header ─────────────────────────────────────────────────────────────────
+    date_str = r.get("date", "")
+    try:
+        from datetime import datetime as _dt
+        dt = _dt.strptime(date_str, "%Y-%m-%d")
+        date_str = dt.strftime("%d %b %Y")
+    except Exception:
+        pass
+
+    lines = [
+        f"📊 *SECTOR ROTATION REPORT — NSE*",
+        f"_{date_str}_",
+        SEP,
+    ]
+
+    # ── Phase 1: Economic Cycle ─────────────────────────────────────────────────
+    eco   = r.get("economicPhase", {})
+    phase = eco.get("phase", "Unknown")
+    conf  = eco.get("confidence", 0)
+    chars = eco.get("characteristics", "")
+    strat = eco.get("strategy", "")
+    theory = eco.get("theorySectors", [])
+
+    phase_emoji = {"EARLY": "🌱", "MID": "🚀", "LATE": "🌅", "RECESSION": "🛡"}.get(
+        eco.get("code", ""), "📍"
+    )
+    conf_bar = "🔵" * (conf // 20) + "⚪" * (5 - conf // 20)
+
+    lines += [
+        f"{phase_emoji} *ECONOMIC CYCLE: {phase.upper()}*",
+        f"Confidence: *{conf}%* {conf_bar}",
+        f"_{chars}_",
+        f"",
+        f"📌 *Theoretically favored:* {' · '.join(theory)}",
+        f"📋 *Strategy:* {strat}",
+        SEP,
+    ]
+
+    # ── Phase 2: Market Breadth ─────────────────────────────────────────────────
+    breadth = r.get("marketBreadth", {})
+    adv     = breadth.get("advancing", 0)
+    dec     = breadth.get("declining", 0)
+    flat    = breadth.get("unchanged", 0)
+    total   = adv + dec + flat or 1
+    bar     = _breadth_bar(adv, total)
+    pct_adv = round(adv / total * 100)
+
+    lines += [
+        f"📊 *MARKET BREADTH*",
+        f"🟢 {adv} Rising  🔴 {dec} Falling  ➡️ {flat} Flat",
+        f"`{bar}` {pct_adv}%",
+        SEP,
+    ]
+
+    # ── Phase 2: Sector Strength Matrix (5 tiers) ───────────────────────────────
+    sectors = r.get("sectors", [])
+    by_tier: dict[str, list] = {t: [] for t in _TIER_ORDER}
+    for s in sectors:
+        tier = s.get("momentum", {}).get("tier", "YELLOW")
+        if tier in by_tier:
+            by_tier[tier].append(s)
+
+    lines.append(f"🔢 *SECTOR STRENGTH MATRIX*")
+
+    for tier_key in _TIER_ORDER:
+        meta    = _TIER_META[tier_key]
+        members = by_tier[tier_key]
+        count   = len(members)
+        if count == 0:
+            continue
+
+        lines.append(
+            f"\n{meta['emoji']} *{meta['label']}* ({count})  _{meta['action']}_"
+        )
+
+        if tier_key in ("DEEP_GREEN", "LIGHT_GREEN"):
+            # Detailed rows for the actionable tiers
+            for s in members:
+                ms   = s.get("momentum", {})
+                name = s["name"].replace("Nifty ", "")
+                rs   = ms.get("rs", 0)
+                roc  = ms.get("roc_6m", 0)
+                b200 = ms.get("pct_above_200", 0)
+                pc   = s.get("pChange", 0)
+                rs_str  = f"+{rs:.1f}%" if rs >= 0 else f"{rs:.1f}%"
+                roc_str = f"+{roc:.1f}%" if roc >= 0 else f"{roc:.1f}%"
+                pc_str  = f"+{pc:.2f}%" if pc >= 0 else f"{pc:.2f}%"
+                action_icon = "🔥" if tier_key == "DEEP_GREEN" else "✅"
+                lines.append(
+                    f"  {action_icon} *{name}*  "
+                    f"Today {pc_str} | RS {rs_str} | ROC {roc_str} | {b200:.0f}% >200SMA"
+                )
+        elif tier_key == "YELLOW":
+            # Compact row
+            names = " · ".join(s["name"].replace("Nifty ", "") for s in members)
+            lines.append(f"  ⏸ {names}")
+        elif tier_key == "ORANGE":
+            names = " · ".join(s["name"].replace("Nifty ", "") for s in members)
+            lines.append(f"  ⚠️ {names}")
+        elif tier_key == "DEEP_RED":
+            names = " · ".join(s["name"].replace("Nifty ", "") for s in members)
+            lines.append(f"  ❌ {names}")
+
+    lines.append(SEP)
+
+    # ── Phase 3: Portfolio Strategy ─────────────────────────────────────────────
+    ps      = r.get("portfolioStrategy", {})
+    picks   = ps.get("topPicks", [])
+    cs      = ps.get("coreSatellite", {})
+    risk    = ps.get("riskManagement", {})
+    focused = ps.get("currentlyFocused", [])
+
+    lines.append(f"🎯 *PORTFOLIO STRATEGY — CORE-SATELLITE*")
+    lines += [
+        f"  🏛 *Core (60-70%):* Nifty 50 ETF (NIFTYBEES / NIFTY50 ETF)",
+        f"  🛰 *Satellite (30-40%):* Active sector rotation into momentum leaders",
+        f"  💵 *Cash reserve (5-10%):* Held for dip-buying opportunities",
+    ]
+
+    if picks:
+        lines.append(f"\n🏆 *TOP ENTRY CANDIDATES*")
+        for p in picks:
+            sector       = p.get("sector", "?").replace("Nifty ", "")
+            reason       = p.get("entryReason", "")
+            exit_rule    = p.get("exitRule", "")
+            profit_rule  = p.get("profitRule", "")
+            theory_match = p.get("theoryMatch", False)
+            rs           = p.get("rs", 0)
+            roc          = p.get("roc_6m", 0)
+            b200         = p.get("pct_above_200", 0)
+            max_alloc    = p.get("maxAllocation", "15-25%")
+            rs_str  = f"+{rs:.1f}%" if rs >= 0 else f"{rs:.1f}%"
+            roc_str = f"+{roc:.1f}%" if roc >= 0 else f"{roc:.1f}%"
+            theory_tag = "  ✓ _Theory match_" if theory_match else ""
+            lines += [
+                f"",
+                f"  ➤ *{sector}*{theory_tag}",
+                f"    RS {rs_str} | ROC {roc_str} | {b200:.0f}% >200SMA",
+                f"    Max alloc: _{max_alloc}_",
+                f"    Entry: _{reason}_" if reason else "",
+                f"    Exit: _{exit_rule}_" if exit_rule else "",
+            ]
+    elif focused:
+        lines.append(f"\n🏆 *CURRENTLY FOCUSED:* {' · '.join(f for f in focused)}")
+
+    # Risk rules
+    sl      = risk.get("stopLoss",    "7-10% below entry")
+    profit  = risk.get("profitTaking","Trim at Deep Green transition")
+    exit_r  = risk.get("exitSignal",  "Full exit on Orange/Red tier")
+    max_s   = risk.get("maxPerSector","15-25% of total portfolio")
+    max_stk = risk.get("maxPerStock", "5% per individual stock")
+
+    lines += [
+        f"",
+        f"🔒 *Risk Management Rules*",
+        f"  • SL: _{sl}_",
+        f"  • Profit: _{profit}_",
+        f"  • Exit: _{exit_r}_",
+        f"  • Max/sector: _{max_s}_",
+        f"  • Max/stock: _{max_stk}_",
+        SEP,
+        f"_Powered by NSE Analyzer · /sectors for live prices · /analyze SYMBOL_",
+    ]
+
+    return "\n".join(lines)
+
 
 def _log(from_user: str, text: str, response: str) -> None:
     _message_log.append({
@@ -342,25 +533,9 @@ class TelegramService:
     async def _rotation_reply(self) -> str:
         try:
             r = await self.sectors.get_sector_rotation()
-            phase = r.get("rotationPhase", "Unknown")
-            rec = r.get("recommendation", "")
-            breadth = r.get("marketBreadth", {})
-            adv = breadth.get("advancing", 0)
-            dec = breadth.get("declining", 0)
-            buy = r.get("whereToBuyNow", [])
-            lines = [
-                f"🔄 *Sector Rotation Analysis*\n",
-                f"Phase: *{phase}*",
-                f"Market: 📈 {adv} up · 📉 {dec} down",
-                f"\n_{rec}_",
-            ]
-            if buy:
-                lines.append("\n🎯 *Where to buy now:*")
-                for s in buy[:5]:
-                    lines.append(f"  • {s.get('name','?')} ({_fmt_pct(s.get('pChange',0))})")
-            return "\n".join(lines)
-        except Exception:
-            return "⚠️ Could not fetch rotation data."
+            return _format_rotation_message(r)
+        except Exception as e:
+            return "⚠️ Could not fetch rotation data. Try again shortly."
 
     async def _analyze_reply(self, symbol: str) -> str:
         try:
@@ -680,3 +855,37 @@ class TelegramService:
         reply = await self._build_reply(text)
         _log("test", text, reply)
         return {"text": text, "response": reply, "timestamp": datetime.utcnow().isoformat() + "Z"}
+
+    async def get_rotation_message(self) -> dict:
+        """Return the formatted sector rotation Telegram message (for UI preview)."""
+        try:
+            r = await self.sectors.get_sector_rotation()
+            msg = _format_rotation_message(r)
+            return {
+                "message": msg,
+                "charCount": len(msg),
+                "date": r.get("date"),
+                "phase": r.get("economicPhase", {}).get("phase"),
+                "confidence": r.get("economicPhase", {}).get("confidence"),
+            }
+        except Exception as e:
+            return {"error": str(e), "message": ""}
+
+    async def send_rotation_alert(self, chat_id: str | int) -> dict:
+        """Fetch the rotation data, format it, and push to the given Telegram chat."""
+        try:
+            r = await self.sectors.get_sector_rotation()
+            msg = _format_rotation_message(r)
+            ok = await self.send_message(chat_id, msg)
+            ts = datetime.utcnow().isoformat() + "Z"
+            _log("system", f"/rotation-alert → {chat_id}", msg[:120] + "…")
+            return {
+                "sent": ok,
+                "chatId": chat_id,
+                "charCount": len(msg),
+                "timestamp": ts,
+                "phase": r.get("economicPhase", {}).get("phase"),
+                "error": None if ok else "Telegram API rejected the message",
+            }
+        except Exception as e:
+            return {"sent": False, "chatId": chat_id, "error": str(e)}
