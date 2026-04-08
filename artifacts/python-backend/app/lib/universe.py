@@ -243,3 +243,84 @@ def build_universe(universes: list[str]) -> list[str]:
 
 
 VALID_UNIVERSES = {"NIFTY100", "MIDCAP", "SMALLCAP", "MICROCAP", "ALL"}
+
+# ── Live data overlay ─────────────────────────────────────────────────────────
+# If a fresh universe_cache.json exists (written by universe_builder.py),
+# override the hardcoded lists with live NSE data at import time.
+# The hardcoded lists above remain as the reliable fallback.
+
+COMPANY_MAP: dict[str, str] = {}   # symbol → company name (populated from cache)
+
+def _apply_live_data(cache: dict) -> None:
+    """Merge live cache into module-level dicts/lists (non-destructive)."""
+    global ALL_SYMBOLS, SECTOR_SYMBOLS, COMPANY_MAP
+
+    live_syms   = cache.get("all_symbols", [])
+    live_secs   = cache.get("sector_symbols", {})
+    live_names  = cache.get("company_map", {})
+    live_cats   = cache.get("categories", {})
+
+    if live_names:
+        COMPANY_MAP.update(live_names)
+
+    if live_syms:
+        # Build categorised lists from live AMFI categories + sector index membership
+        nifty100_live  = set(live_secs.get("NIFTY 100", []) or live_secs.get("NIFTY100", []))
+        mid_live       = set(live_secs.get("NIFTY MIDCAP 150", []))
+        small_live     = set(live_secs.get("NIFTY SMALLCAP 250", []))
+        micro_live     = set(live_secs.get("NIFTY MICROCAP 250", []))
+
+        new_nifty100  = sorted(set(
+            s for s in live_syms
+            if live_cats.get(s, "") == "Large-Cap" or s in nifty100_live
+        ))
+        new_midcap    = sorted(set(
+            s for s in live_syms
+            if live_cats.get(s, "") == "Mid-Cap" or s in mid_live
+        ))
+        new_smallcap  = sorted(set(
+            s for s in live_syms
+            if live_cats.get(s, "") == "Small-Cap" or s in small_live
+        ))
+        new_microcap  = sorted(set(
+            s for s in live_syms
+            if live_cats.get(s, "") == "Micro-Cap" or s in micro_live
+        ))
+
+        if new_nifty100 or new_midcap:
+            global NIFTY100, MIDCAP, SMALLCAP, MICROCAP
+            if new_nifty100:  NIFTY100  = new_nifty100
+            if new_midcap:    MIDCAP    = new_midcap
+            if new_smallcap:  SMALLCAP  = new_smallcap
+            if new_microcap:  MICROCAP  = new_microcap
+            ALL_SYMBOLS = _merge(NIFTY100, MIDCAP, SMALLCAP, MICROCAP)
+
+        # Supplement ALL_SYMBOLS with any live symbols not in cap categories
+        remaining = [s for s in live_syms if s not in set(ALL_SYMBOLS)]
+        if remaining:
+            ALL_SYMBOLS = ALL_SYMBOLS + remaining
+
+    if live_secs:
+        # Overlay sector symbols — keep hardcoded sectors as fallback for missing ones
+        for sec, syms in live_secs.items():
+            if syms:
+                SECTOR_SYMBOLS[sec] = syms
+        # Ensure legacy NIFTY 50 alias still works
+        if "NIFTY 50" not in SECTOR_SYMBOLS:
+            SECTOR_SYMBOLS["NIFTY 50"] = NIFTY100[:50]
+
+
+# Apply cache immediately at import time (fast: just a JSON read)
+try:
+    from .universe_builder import load_cache as _load_cache
+    _cached = _load_cache()
+    if _cached:
+        _apply_live_data(_cached)
+        import logging as _log
+        _log.getLogger(__name__).info(
+            "universe: loaded live data — %d symbols, %d sectors",
+            len(ALL_SYMBOLS), len(SECTOR_SYMBOLS),
+        )
+except Exception as _e:
+    import logging as _log
+    _log.getLogger(__name__).warning("universe: could not load cache: %s", _e)

@@ -15,6 +15,7 @@ from app.routes.whatsapp import router as whatsapp_router
 from app.routes.nlp import router as nlp_router
 from app.routes.analytics import router as analytics_router
 from app.routes.telegram import router as telegram_router, get_service as get_telegram_service
+from app.routes.universe import router as universe_router
 
 logger = logging.getLogger("telegram-poller")
 
@@ -47,6 +48,8 @@ async def _telegram_polling_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     poll_task = asyncio.create_task(_telegram_polling_loop())
+    # Refresh live universe in background — won't block startup
+    asyncio.create_task(_refresh_universe())
     try:
         yield
     finally:
@@ -55,6 +58,24 @@ async def lifespan(app: FastAPI):
             await poll_task
         except asyncio.CancelledError:
             pass
+
+
+async def _refresh_universe() -> None:
+    try:
+        from app.lib.universe_builder import refresh_in_background
+        await refresh_in_background()
+        # Re-apply to universe module after fresh cache is saved
+        from app.lib.universe import _apply_live_data
+        from app.lib.universe_builder import load_cache
+        fresh = load_cache()
+        if fresh:
+            _apply_live_data(fresh)
+            logger.info(
+                "Universe refreshed from live NSE data — %d symbols",
+                len(fresh.get("all_symbols", []))
+            )
+    except Exception as e:
+        logger.warning("Universe refresh failed (hardcoded fallback active): %s", e)
 
 
 app = FastAPI(
@@ -93,3 +114,4 @@ app.include_router(whatsapp_router,  prefix="/api")
 app.include_router(nlp_router,       prefix="/api")
 app.include_router(analytics_router, prefix="/api")
 app.include_router(telegram_router,  prefix="/api")
+app.include_router(universe_router,  prefix="/api")
