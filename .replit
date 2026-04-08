@@ -22,7 +22,7 @@ args = "NestJS Backend"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Next.js Frontend"
+args = "Stock Market Frontend"
 
 [[workflows.workflow]]
 name = "NestJS Backend"
@@ -37,13 +37,13 @@ waitForPort = 3001
 outputType = "console"
 
 [[workflows.workflow]]
-name = "Next.js Frontend"
+name = "Stock Market Frontend"
 author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "PORT=3000 pnpm --filter @workspace/nextjs-frontend run dev"
-waitForPort = 3000
+args = "BASE_PATH=/ PORT=3002 pnpm --filter @workspace/nestjs-backend-placeholder run dev"
+waitForPort = 3002
 
 [workflows.workflow.metadata]
 outputType = "webview"
@@ -63,6 +63,10 @@ externalPort = 3002
 [[ports]]
 localPort = 3001
 externalPort = 3001
+
+[[ports]]
+localPort = 3002
+externalPort = 3000
 
 [[ports]]
 localPort = 8080
