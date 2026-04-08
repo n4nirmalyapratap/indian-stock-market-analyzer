@@ -4,35 +4,91 @@
 
 Full-stack Indian stock market analysis platform with NSE sector rotation tracking, chart pattern detection, stock scanners, and WhatsApp bot integration.
 
-Source: https://github.com/n4nirmalyapratap/indian-stock-market-analyzer
+**Source:** https://github.com/n4nirmalyapratap/indian-stock-market-analyzer
+
+> All Replit compatibility fixes are already committed to GitHub. When you clone fresh in any Replit account, everything should work without manual fixes.
+
+---
+
+## Architecture
+
+```
+Stock Market Frontend  (Vite + React, port 3002)
+    ↓ proxies /api to localhost:8080
+API Server             (Express, port 8080)   ← main data backend
+    ↓ fetches data from NSE / Yahoo Finance
+
+NestJS Backend         (NestJS, port 3001)    ← WhatsApp bot + separate API
+    Swagger: http://localhost:3001/api/docs
+```
+
+---
 
 ## Stack
 
-- **Monorepo tool**: pnpm workspaces
-- **Node.js version**: 24
+- **Monorepo**: pnpm workspaces
+- **Node.js**: 24
 - **Package manager**: pnpm
-- **TypeScript version**: 5.9
-- **Backend**: NestJS (artifacts/nestjs-backend) — port 3001
-- **Frontend**: Next.js 14 (artifacts/nextjs-frontend) — port 3000
-- **Data sources**: NSE India API, Yahoo Finance
-- **Bot**: WhatsApp Web.js integration
+- **TypeScript**: 5.9
+- **Frontend**: Vite + React (`artifacts/nestjs-backend-placeholder`)
+- **Main backend**: Express 5 (`artifacts/api-server`)
+- **WhatsApp backend**: NestJS (`artifacts/nestjs-backend`)
+- **Data sources**: NSE India API (with cookie refresh), Yahoo Finance fallback
 
-## Key Commands
-
-- `pnpm --filter @workspace/nestjs-backend run dev` — run NestJS backend
-- `pnpm --filter @workspace/nextjs-frontend run dev` — run Next.js frontend
-- Swagger API docs: http://localhost:3001/api/docs
+---
 
 ## Workflows
 
-- **NestJS Backend** — runs the NestJS API on port 3001
-- **Next.js Frontend** — runs the Next.js UI on port 3000
+| Workflow Name | Command | Port | Purpose |
+|---|---|---|---|
+| **Stock Market Frontend** | `BASE_PATH=/ PORT=3002 pnpm --filter @workspace/nestjs-backend-placeholder run dev` | 3002 | Main React UI |
+| **NestJS Backend** | `pnpm --filter @workspace/nestjs-backend run dev` | 3001 | WhatsApp bot API |
+| **API Server** (artifact) | Managed by artifact system | 8080 | Stock data API |
+
+---
+
+## Key Commands
+
+```bash
+# Install all dependencies
+pnpm install
+
+# Run specific packages
+pnpm --filter @workspace/nestjs-backend-placeholder run dev   # Frontend
+pnpm --filter @workspace/nestjs-backend run dev               # NestJS
+pnpm --filter @workspace/api-server run dev                   # Express API
+
+# Swagger docs (NestJS)
+open http://localhost:3001/api/docs
+```
+
+---
+
+## Replit Compatibility Fixes (already applied to GitHub)
+
+These were fixed during the initial Replit setup and are now committed to the repo:
+
+1. **`nestjs-backend/tsconfig.json`** — Added `"esModuleInterop": true`
+   - Fixes: `node_cache_1.default is not a constructor` runtime error (CJS interop)
+
+2. **`nestjs-backend/src/main.ts`** — Changed `import * as cors` → `import cors`
+   - Fixes: `TS2349: This expression is not callable` TypeScript error
+
+3. **`nestjs-backend/src/modules/sectors/sectors.service.ts`** — Made `parseNseSectorData` async
+   - Fixes: `TS2740: Type 'Promise<any[]>' is missing properties from type 'any[]'`
+
+4. **`pnpm-workspace.yaml`** — Added `@nestjs/core` and `puppeteer` to `onlyBuiltDependencies`
+   - Fixes: NestJS and Puppeteer (whatsapp-web.js) build scripts not running on install
+
+5. **`REPLIT_SETUP.md`** — Added full setup guide at repo root
+
+---
 
 ## Features
 
-- NSE Sector Rotation analysis (15 sector indices)
-- Chart pattern detection (CALL/PUT signals)
-- Stock scanner with custom filters
-- Individual stock technical analysis (EMA, RSI, MACD, Bollinger Bands)
-- WhatsApp bot for automated alerts
-- Swagger API documentation
+- **Dashboard**: Real-time sector rotation, market breadth, CALL/PUT signal count
+- **Sectors**: 15 NSE sector indices with performance rankings
+- **Stocks**: Individual stock lookup with EMA, RSI, MACD, Bollinger Bands, VWAP
+- **Patterns**: Chart pattern detection (candlestick, H&S, Double Top/Bottom, Cup & Handle, etc.)
+- **Scanners**: Custom stock filters with visual condition builder and quick templates
+- **WhatsApp Bot**: Automated market alerts via WhatsApp Web.js
