@@ -94,8 +94,10 @@ class NseService:
         return self.fetch_nse("/api/allIndices", "sector-indices", 300)
 
     def get_stock_quote(self, symbol: str):
+        from urllib.parse import quote as url_encode
+        encoded = url_encode(symbol, safe="")
         return self.fetch_nse(
-            f"/api/quote-equity?symbol={symbol}",
+            f"/api/quote-equity?symbol={encoded}",
             f"quote-{symbol}",
             120,
         )

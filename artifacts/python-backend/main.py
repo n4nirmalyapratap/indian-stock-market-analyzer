@@ -16,6 +16,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    openapi_url="/openapi.json",
 )
 
 app.add_middleware(
@@ -32,12 +33,9 @@ async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"error": "Internal server error"})
 
 
-api = FastAPI()
-api.include_router(health_router)
-api.include_router(sectors_router)
-api.include_router(stocks_router)
-api.include_router(patterns_router)
-api.include_router(scanners_router)
-api.include_router(whatsapp_router)
-
-app.mount("/api", api)
+app.include_router(health_router, prefix="/api")
+app.include_router(sectors_router, prefix="/api")
+app.include_router(stocks_router, prefix="/api")
+app.include_router(patterns_router, prefix="/api")
+app.include_router(scanners_router, prefix="/api")
+app.include_router(whatsapp_router, prefix="/api")
