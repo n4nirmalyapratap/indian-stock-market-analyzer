@@ -1,78 +1,79 @@
-from typing import Optional
+"""
+Technical indicator calculations using the `ta` library (pandas-based).
+Falls back to manual numpy implementations if needed.
+"""
+import pandas as pd
+import ta
+from ta.trend import EMAIndicator, SMAIndicator, MACD
+from ta.momentum import RSIIndicator
+from ta.volatility import BollingerBands, AverageTrueRange
+
+
+def _closes_series(data: list[float]) -> pd.Series:
+    return pd.Series(data, dtype=float)
+
+
+def _ohlcv_df(ohlcv: list[dict]) -> pd.DataFrame:
+    return pd.DataFrame(ohlcv)
 
 
 def calculate_ema(data: list[float], period: int) -> list[float]:
     if len(data) < period:
         return []
-    k = 2.0 / (period + 1)
-    ema = [sum(data[:period]) / period]
-    for i in range(period, len(data)):
-        ema.append(data[i] * k + ema[-1] * (1 - k))
-    return ema
+    s = _closes_series(data)
+    ema_ind = EMAIndicator(close=s, window=period, fillna=False)
+    result = ema_ind.ema_indicator().dropna().tolist()
+    return result
 
 
 def calculate_sma(data: list[float], period: int) -> list[float]:
-    sma = []
-    for i in range(period - 1, len(data)):
-        sma.append(sum(data[i - period + 1:i + 1]) / period)
-    return sma
+    if len(data) < period:
+        return []
+    s = _closes_series(data)
+    sma_ind = SMAIndicator(close=s, window=period, fillna=False)
+    result = sma_ind.sma_indicator().dropna().tolist()
+    return result
 
 
 def calculate_rsi(data: list[float], period: int = 14) -> list[float]:
     if len(data) < period + 1:
         return []
-    gains = []
-    losses = []
-    for i in range(1, len(data)):
-        change = data[i] - data[i - 1]
-        gains.append(max(change, 0))
-        losses.append(max(-change, 0))
-    ag = sum(gains[:period]) / period
-    al = sum(losses[:period]) / period
-    rsi = []
-    for i in range(period, len(gains)):
-        ag = (ag * (period - 1) + gains[i]) / period
-        al = (al * (period - 1) + losses[i]) / period
-        if al == 0:
-            rsi.append(100.0)
-        else:
-            rsi.append(100 - 100 / (1 + ag / al))
-    return rsi
+    s = _closes_series(data)
+    rsi_ind = RSIIndicator(close=s, window=period, fillna=False)
+    result = rsi_ind.rsi().dropna().tolist()
+    return result
 
 
 def calculate_macd(data: list[float], fast: int = 12, slow: int = 26, signal: int = 9) -> dict:
-    ef = calculate_ema(data, fast)
-    es = calculate_ema(data, slow)
-    diff = slow - fast
-    macd_line = [ef[i + diff] - v for i, v in enumerate(es)]
-    signal_line = calculate_ema(macd_line, signal)
-    histogram = [macd_line[i + signal - 1] - v for i, v in enumerate(signal_line)]
+    s = _closes_series(data)
+    macd_ind = MACD(close=s, window_slow=slow, window_fast=fast, window_sign=signal, fillna=False)
+    macd_line   = macd_ind.macd().dropna().tolist()
+    signal_line = macd_ind.macd_signal().dropna().tolist()
+    histogram   = macd_ind.macd_diff().dropna().tolist()
     return {"macd": macd_line, "signal": signal_line, "histogram": histogram}
 
 
 def calculate_bollinger_bands(data: list[float], period: int = 20, sd: float = 2.0) -> dict:
-    middle = calculate_sma(data, period)
-    upper = []
-    lower = []
-    for idx, sma_val in enumerate(middle):
-        segment = data[idx:idx + period]
-        variance = sum((v - sma_val) ** 2 for v in segment) / period
-        std = variance ** 0.5
-        upper.append(sma_val + sd * std)
-        lower.append(sma_val - sd * std)
+    s = _closes_series(data)
+    bb = BollingerBands(close=s, window=period, window_dev=sd, fillna=False)
+    upper  = bb.bollinger_hband().dropna().tolist()
+    middle = bb.bollinger_mavg().dropna().tolist()
+    lower  = bb.bollinger_lband().dropna().tolist()
     return {"upper": upper, "middle": middle, "lower": lower}
 
 
 def calculate_atr(ohlcv: list[dict], period: int = 14) -> list[float]:
-    if len(ohlcv) < 2:
+    if len(ohlcv) < period + 1:
         return []
-    trs = []
-    for i in range(1, len(ohlcv)):
-        h = ohlcv[i]["high"]
-        l = ohlcv[i]["low"]
-        pc = ohlcv[i - 1]["close"]
-        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
-    return calculate_sma(trs, period)
+    df = _ohlcv_df(ohlcv)
+    atr_ind = AverageTrueRange(
+        high=df["high"].astype(float),
+        low=df["low"].astype(float),
+        close=df["close"].astype(float),
+        window=period,
+        fillna=False,
+    )
+    return atr_ind.average_true_range().dropna().tolist()
 
 
 def calculate_vwap(ohlcv: list[dict]) -> list[float]:
@@ -91,8 +92,8 @@ def calculate_vwap(ohlcv: list[dict]) -> list[float]:
 def detect_sr(ohlcv: list[dict], lookback: int = 10) -> dict:
     highs = [d["high"] for d in ohlcv]
     lows = [d["low"] for d in ohlcv]
-    supports = []
-    resistances = []
+    supports: list[float] = []
+    resistances: list[float] = []
     for i in range(lookback, len(ohlcv) - lookback):
         seg_h = highs[i - lookback:i + lookback + 1]
         seg_l = lows[i - lookback:i + lookback + 1]

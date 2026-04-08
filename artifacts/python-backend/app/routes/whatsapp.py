@@ -32,6 +32,14 @@ async def update_status(body: dict[str, Any]):
     return _service.update_bot_status(bool(enabled))
 
 
+@router.post("/status")
+async def set_status(body: dict[str, Any]):
+    enabled = body.get("enabled")
+    if enabled is None:
+        raise HTTPException(status_code=400, detail="'enabled' field required")
+    return _service.update_bot_status(bool(enabled))
+
+
 @router.post("/message")
 async def process_message(body: dict[str, Any]):
     try:

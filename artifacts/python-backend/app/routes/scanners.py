@@ -47,7 +47,7 @@ async def delete_scanner(scanner_id: str):
     ok = _service.delete_scanner(scanner_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Scanner not found")
-    return {"deleted": True, "id": scanner_id}
+    return {"success": True, "id": scanner_id}
 
 
 @router.post("/{scanner_id}/run")
