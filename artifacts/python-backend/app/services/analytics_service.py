@@ -15,6 +15,7 @@ from .yahoo_service import YahooService
 from .nse_service import NseService
 from .sectors_service import SectorsService
 from .patterns_service import PatternsService, _cached_patterns
+from ..lib.universe import NIFTY100 as NIFTY100_SYMBOLS
 
 # Yahoo Finance index tickers for Indian sector indices
 SECTOR_YAHOO_TICKERS: dict[str, str] = {
@@ -34,23 +35,6 @@ SECTOR_YAHOO_TICKERS: dict[str, str] = {
     "NIFTY OIL AND GAS":         "^CNXOILANDGAS",
     "NIFTY HEALTHCARE INDEX":    "^CNXHEALTH",
 }
-
-# Full Nifty 100 symbol list for analytics coverage
-NIFTY100_SYMBOLS = [
-    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR", "ITC",
-    "SBIN", "BHARTIARTL", "KOTAKBANK", "BAJFINANCE", "AXISBANK", "ASIANPAINT",
-    "MARUTI", "HCLTECH", "WIPRO", "TITAN", "NTPC", "SUNPHARMA", "TATAMOTORS",
-    "LT", "COALINDIA", "BAJAJ-AUTO", "DIVISLAB", "CIPLA", "DRREDDY", "TECHM",
-    "HINDALCO", "ONGC", "POWERGRID", "JSWSTEEL", "INDUSINDBK", "ULTRACEMCO",
-    "NESTLEIND", "TATACONSUM", "ADANIPORTS", "SBILIFE", "BRITANNIA", "APOLLOHOSP",
-    "BPCL", "TATASTEEL", "ADANIENT", "EICHERMOT", "HEROMOTOCO", "GRASIM",
-    "HAVELLS", "SHREECEM", "HDFCLIFE", "DABUR", "PIDILITE", "BAJAJFINSV",
-    "SIEMENS", "DLF", "TRENT", "LUPIN", "GAIL",
-    "COLPAL", "MUTHOOTFIN", "BERGEPAINT", "GODREJCP", "BOSCHLTD",
-    "ABB", "BANKBARODA", "PNB", "CANBK", "FEDERALBNK", "IDFCFIRSTB",
-    "BANDHANBNK", "RBLBANK", "YESBANK", "PERSISTENT", "COFORGE", "MPHASIS",
-    "LTTS", "KPITTECH", "TATAELXSI", "CYIENT", "IRCTC", "ZOMATO",
-]
 
 _CACHE: dict[str, dict] = {}
 MAX_CACHE = 50

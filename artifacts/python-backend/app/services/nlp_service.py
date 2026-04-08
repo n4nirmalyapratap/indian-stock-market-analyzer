@@ -7,25 +7,10 @@ import re
 from typing import Optional
 import spacy
 from spacy.language import Language
-from spacy.tokens import Doc
+
+from ..lib.universe import NIFTY100 as NIFTY100_SYMBOLS
 
 # ── symbol / sector vocabulary ───────────────────────────────────────────────
-
-NIFTY100_SYMBOLS = [
-    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR", "ITC",
-    "SBIN", "BHARTIARTL", "KOTAKBANK", "BAJFINANCE", "AXISBANK", "ASIANPAINT",
-    "MARUTI", "HCLTECH", "WIPRO", "TITAN", "NTPC", "SUNPHARMA", "TATAMOTORS",
-    "LT", "COALINDIA", "BAJAJ-AUTO", "DIVISLAB", "CIPLA", "DRREDDY", "TECHM",
-    "HINDALCO", "ONGC", "POWERGRID", "JSWSTEEL", "INDUSINDBK", "ULTRACEMCO",
-    "NESTLEIND", "TATACONSUM", "ADANIPORTS", "SBILIFE", "BRITANNIA", "APOLLOHOSP",
-    "BPCL", "TATASTEEL", "ADANIENT", "EICHERMOT", "HEROMOTOCO", "GRASIM",
-    "HAVELLS", "SHREECEM", "HDFCLIFE", "DABUR", "PIDILITE", "BAJAJFINSV",
-    "SIEMENS", "DLF", "TRENT", "LUPIN", "BIOCON", "GAIL",
-    "COLPAL", "MUTHOOTFIN", "BERGEPAINT", "GODREJCP", "BOSCHLTD",
-    "ABB", "BANKBARODA", "PNB", "CANBK", "FEDERALBNK", "IDFCFIRSTB",
-    "BANDHANBNK", "RBLBANK", "YESBANK", "PERSISTENT", "COFORGE", "MPHASIS",
-    "LTTS", "KPITTECH", "TATAELXSI", "CYIENT", "IRCTC", "ZOMATO",
-]
 
 SECTOR_ALIASES: dict[str, str] = {
     "NIFTY IT": "NIFTY IT", "IT": "NIFTY IT", "TECH": "NIFTY IT",
