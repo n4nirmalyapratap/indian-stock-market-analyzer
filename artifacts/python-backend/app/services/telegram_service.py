@@ -266,10 +266,16 @@ class TelegramService:
             return await self._rotation_reply()
 
         if cmd in ("analyze", "a") and args:
-            return await self._analyze_reply(args[0].upper())
+            raw_sym = " ".join(args)
+            parsed  = self.nlp.parse(raw_sym)
+            symbol  = parsed["stocks"][0] if parsed["stocks"] else raw_sym.upper()
+            return await self._analyze_reply(symbol)
 
         if cmd == "entry" and args:
-            return await self._entry_reply(args[0].upper())
+            raw_sym = " ".join(args)
+            parsed  = self.nlp.parse(raw_sym)
+            symbol  = parsed["stocks"][0] if parsed["stocks"] else raw_sym.upper()
+            return await self._entry_reply(symbol)
 
         if cmd == "patterns":
             return await self._patterns_reply()
@@ -469,40 +475,76 @@ class TelegramService:
     async def _nlp_reply(self, text: str) -> str:
         try:
             parsed = self.nlp.parse(text)
-            intent = parsed["intent"]
+            intent  = parsed["intent"]
             stocks  = parsed["stocks"]
             sectors = parsed["sectors"]
             signal  = parsed["signal"]
 
+            # ── Help ────────────────────────────────────────────────────────
             if intent == "help":
                 return await self._build_reply("/help")
 
-            if intent == "stock_analysis" and stocks:
-                return await self._analyze_reply(stocks[0])
+            # ── Stock analysis ───────────────────────────────────────────────
+            if intent == "stock_analysis":
+                if stocks:
+                    return await self._analyze_reply(stocks[0])
+                # "analyze" intent but no symbol extracted → ask rotation
+                return await self._rotation_reply()
 
+            # ── Sector query ─────────────────────────────────────────────────
             if intent == "sector_query":
                 if sectors:
-                    sector_data = await self.sectors.get_sector_detail(sectors[0])
-                    name = sector_data.get("name", sectors[0])
-                    pc   = _fmt_pct(sector_data.get("pChange"))
-                    adv  = sector_data.get("advances", "N/A")
-                    dec  = sector_data.get("declines", "N/A")
-                    return (
-                        f"📊 *{name}*\n"
-                        f"Change: *{pc}*\n"
-                        f"Advancing: {adv} · Declining: {dec}"
-                    )
+                    try:
+                        sector_data = await self.sectors.get_sector_detail(sectors[0])
+                        name = sector_data.get("name", sectors[0])
+                        pc   = _fmt_pct(sector_data.get("pChange"))
+                        adv  = sector_data.get("advances", "N/A")
+                        dec  = sector_data.get("declines", "N/A")
+                        top  = sector_data.get("topStocks", [])[:3]
+                        lines = [
+                            f"📊 *{name}*",
+                            f"Change: *{pc}*",
+                            f"Advancing: {adv} · Declining: {dec}",
+                        ]
+                        if top:
+                            lines.append("\n*Top stocks:*")
+                            for s in top:
+                                lines.append(f"  • *{s.get('symbol','?')}* {_fmt_pct(s.get('pChange',0))}")
+                        return "\n".join(lines)
+                    except Exception:
+                        pass
                 return await self._sectors_reply()
 
+            # ── Rotation / where to invest ───────────────────────────────────
             if intent == "rotation_query":
                 return await self._rotation_reply()
 
+            # ── Pattern scan ─────────────────────────────────────────────────
             if intent == "pattern_scan":
+                if stocks:
+                    # "bullish RELIANCE" → analyze specific stock
+                    return await self._analyze_reply(stocks[0])
+                if signal:
+                    # "show bullish patterns" → patterns filtered by signal
+                    result = await self.patterns.get_patterns()
+                    pats   = [p for p in result.get("patterns", []) if p.get("signal") == signal][:8]
+                    emoji  = "📈" if signal == "CALL" else "📉"
+                    if not pats:
+                        return f"{emoji} No *{signal}* patterns right now. Try /scan to refresh."
+                    lines = [f"{emoji} *{signal} Signals* ({len(pats)} found)\n"]
+                    for p in pats:
+                        lines.append(f"  • *{p['symbol']}* — {p['pattern']} ({p.get('confidence',0):.0f}%)")
+                    return "\n".join(lines)
                 return await self._patterns_reply()
 
+            # ── Analytics ────────────────────────────────────────────────────
             if intent == "analytics":
+                lower = text.lower()
+                if "heatmap" in lower:
+                    return await self._heatmap_reply()
                 return await self._movers_reply()
 
+            # ── Scanner ──────────────────────────────────────────────────────
             if intent == "scanner_run":
                 all_scanners = self.scanners.get_all_scanners()
                 query_lower  = text.lower()
@@ -520,17 +562,18 @@ class TelegramService:
                     for s in top:
                         lines.append(f"  • *{s['symbol']}* {_fmt_pct(s.get('pChange'))}")
                     return "\n".join(lines)
-                return "Available scanners:\n" + "\n".join(
-                    f"  • {s['name']}" for s in all_scanners
+                return (
+                    "📡 *Available scanners:*\n"
+                    + "\n".join(f"  • {s['name']}" for s in all_scanners)
                 )
 
-            # Generic fallback
+            # ── Fallback ─────────────────────────────────────────────────────
             return (
-                f"🤔 I understood: _{intent}_\n\n"
-                "Try:\n"
-                "• `/analyze RELIANCE`\n"
-                "• `/sectors`\n"
-                "• `/patterns`\n"
+                "🤔 Not sure what you mean. Try:\n"
+                "• `/analyze RELIANCE` — stock analysis\n"
+                "• `/sectors` — sector overview\n"
+                "• `/rotation` — where to invest\n"
+                "• `/patterns` — chart signals\n"
                 "• `/help` for full list"
             )
         except Exception:
