@@ -132,15 +132,16 @@ function SupervisorTab() {
     setLoading(true);
     try {
       const d = await hPost("/hydra/query", { query: q });
-      const summary = d.summary || d.error || JSON.stringify(d).slice(0, 200);
+      // plain_english is the human-readable explanation; fall back to summary, then error
+      const displayText = d.plain_english || d.summary || d.error || "Done — see details below.";
       setMessages(m => [...m, {
         role: "hydra",
-        text: summary,
+        text: displayText,
         data: d,
         time: new Date().toLocaleTimeString(),
       }]);
     } catch {
-      setMessages(m => [...m, { role: "hydra", text: "Engine error — please try again.", time: new Date().toLocaleTimeString() }]);
+      setMessages(m => [...m, { role: "hydra", text: "Something went wrong — please try again.", time: new Date().toLocaleTimeString() }]);
     } finally {
       setLoading(false);
     }
@@ -234,7 +235,13 @@ function SupervisorTab() {
                   <span className="text-xs text-gray-400">{m.time}</span>
                 </div>
               )}
-              <p className="text-sm leading-relaxed">{m.text}</p>
+              <p className="text-sm leading-relaxed whitespace-pre-line">
+                {m.text.split(/(\*\*[^*]+\*\*)/).map((part, pi) =>
+                  part.startsWith("**") && part.endsWith("**")
+                    ? <strong key={pi}>{part.slice(2, -2)}</strong>
+                    : part
+                )}
+              </p>
               {m.data && renderData(m.data)}
               {m.role === "user" && <p className="text-xs text-indigo-200 mt-1 text-right">{m.time}</p>}
             </div>
