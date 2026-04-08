@@ -21,11 +21,14 @@ async def universe_status():
 
 @router.post("/refresh")
 async def refresh_universe(background_tasks: BackgroundTasks):
-    """Trigger a live re-fetch of NSE universe data (runs in background)."""
+    """Force a fresh live fetch of NSE universe data (ignores cache, runs in background)."""
+    from ..lib.universe_builder import fetch_universe, save_cache
+
     async def _do():
-        data = await get_or_refresh()
-        if data:
+        data = await fetch_universe()
+        if data and data.get("all_symbols"):
+            save_cache(data)
             _univ._apply_live_data(data)
 
     background_tasks.add_task(_do)
-    return {"message": "Universe refresh started in background — check /universe/status in ~30s"}
+    return {"message": "Universe refresh started — check /api/universe/status in ~30 seconds"}
