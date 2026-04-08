@@ -4,8 +4,8 @@ import { TrendingUp, TrendingDown, Info, Target, Shield, BarChart2, Zap, Activit
 
 // ── Tier config ───────────────────────────────────────────────────────────────
 const TIER_META: Record<string, { label: string; color: string; bg: string; border: string; badge: string }> = {
-  DEEP_GREEN:  { label: "Deep Green",  color: "#16a34a", bg: "#f0fdf4", border: "#bbf7d0", badge: "bg-green-700 text-white" },
-  LIGHT_GREEN: { label: "Light Green", color: "#15803d", bg: "#dcfce7", border: "#86efac", badge: "bg-green-500 text-white" },
+  DEEP_GREEN:  { label: "Deep Green",  color: "#15803d", bg: "#dcfce7", border: "#86efac", badge: "bg-green-700 text-white" },
+  LIGHT_GREEN: { label: "Light Green", color: "#16a34a", bg: "#f0fdf4", border: "#bbf7d0", badge: "bg-green-500 text-white" },
   YELLOW:      { label: "Neutral",     color: "#ca8a04", bg: "#fefce8", border: "#fde68a", badge: "bg-yellow-500 text-white" },
   ORANGE:      { label: "Weakening",   color: "#ea580c", bg: "#fff7ed", border: "#fed7aa", badge: "bg-orange-500 text-white" },
   DEEP_RED:    { label: "Deep Red",    color: "#dc2626", bg: "#fef2f2", border: "#fecaca", badge: "bg-red-600 text-white" },
