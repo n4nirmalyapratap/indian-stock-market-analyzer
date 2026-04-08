@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 # ── Words that look like NSE tickers but are not ───────────────────────────────
 _SYMBOL_STOPWORDS = {
+    # Action / command words
     "BACKTEST", "PAIR", "PAIRS", "FORECAST", "PREDICT", "ANALYZE", "ANALYSE",
     "ANALYSIS", "SENTIMENT", "SIGNAL", "SCAN", "FIND", "RISK", "VAR", "WHAT",
     "THE", "AND", "FOR", "WITH", "GIVE", "SHOW", "TELL", "WILL", "IS", "ARE",
@@ -27,6 +28,19 @@ _SYMBOL_STOPWORDS = {
     "DAY", "DAYS", "WEEK", "WEEKS", "MONTH", "MONTHS", "YEAR", "CALCULATE",
     "SIMULATE", "HISTORICAL", "HISTORY", "PORTFOLIO", "STOCK", "STOCKS", "NSE",
     "NIFTY", "INDEX", "BETWEEN", "VS", "OR", "NOT", "ALL", "MY", "ME", "DO",
+    # Common English words that look like 2-10 uppercase letters
+    "PROCEED", "CONTINUE", "START", "STOP", "HELP", "PLEASE", "YES", "NO",
+    "OK", "OKAY", "SURE", "THANKS", "THANK", "HI", "HELLO", "HEY",
+    "HOW", "MUCH", "WHEN", "WHERE", "WHO", "WHY", "ANY", "ABOUT", "CAN",
+    "COULD", "WOULD", "SHOULD", "LET", "USE", "USING", "USED", "FROM",
+    "WANT", "NEED", "HAVE", "HAD", "HAS", "BEEN", "BEING", "DOES", "DID",
+    "WHICH", "SOME", "MORE", "LESS", "BETTER", "GOOD", "BAD", "HIGH", "LOW",
+    "UP", "DOWN", "LONG", "SHORT", "BUY", "SELL", "HOLD", "EXIT", "ENTER",
+    "OPEN", "CLOSE", "NEW", "OLD", "FEW", "LOT", "LOTS", "ONE", "TWO", "THREE",
+    "CURRENT", "LATEST", "RECENT", "TODAY", "NOW", "THEN", "ALSO", "JUST",
+    "PRICE", "TRADE", "TRADING", "MARKET", "DATA", "INFO", "INFORMATION",
+    "RETURN", "PROFIT", "LOSS", "GAIN", "VALUE", "RATE", "RATIO", "SCORE",
+    "TOP", "BEST", "WORST", "SAME", "BOTH", "EACH", "EVERY", "SUCH",
 }
 
 # ── Known NSE large caps for quick resolution ──────────────────────────────────
@@ -98,14 +112,146 @@ def _resolve_symbol(text: str) -> str | None:
 
 
 def _route_intent(query: str) -> str:
-    """Simple keyword-based intent classifier → agent name."""
+    """Simple keyword-based intent classifier → agent name. Returns '' if nothing matches."""
     lower = query.lower()
     scores = {}
     for agent in AGENT_DESCRIPTIONS:
         score = sum(1 for kw in agent["keywords"] if kw in lower)
         scores[agent["name"]] = score
     best = max(scores, key=scores.get)
-    return best if scores[best] > 0 else "forecast"
+    return best if scores[best] > 0 else ""
+
+
+_HELP_MESSAGE = (
+    "I didn't quite understand that. Here are some things I can help with:\n\n"
+    "• **Forecast a stock** — e.g. \"Forecast RELIANCE for 5 days\"\n"
+    "• **Find paired stocks** — e.g. \"Analyze pair HDFCBANK and ICICIBANK\"\n"
+    "• **Test a strategy** — e.g. \"Backtest ONGC BPCL pair\"\n"
+    "• **Check portfolio risk** — e.g. \"What is the VaR of TCS INFY WIPRO?\"\n"
+    "• **Read market mood** — e.g. \"Sentiment for TATAMOTORS\"\n\n"
+    "Just type a question with the stock name (e.g. RELIANCE, TCS, INFY)."
+)
+
+
+def _plain_english_forecast(result: dict, symbol: str, horizon: int) -> str:
+    p50 = result.get("p50", [])
+    p10 = result.get("p10", [])
+    p90 = result.get("p90", [])
+    direction = result.get("direction", "NEUTRAL")
+    exp_ret = result.get("expectedReturn", 0)
+    rsi = result.get("rsi", 50)
+
+    dir_word = {"BULLISH": "likely to go UP 📈", "BEARISH": "likely to go DOWN 📉"}.get(direction, "expected to stay FLAT ➡️")
+    p50_final = f"₹{p50[-1]:.1f}" if p50 else "?"
+    p10_final = f"₹{p10[-1]:.1f}" if p10 else "?"
+    p90_final = f"₹{p90[-1]:.1f}" if p90 else "?"
+
+    rsi_note = ""
+    if rsi > 70:
+        rsi_note = " The stock looks overbought — it may be due for a pullback."
+    elif rsi < 30:
+        rsi_note = " The stock looks oversold — it may bounce back soon."
+
+    return (
+        f"**{symbol} over the next {horizon} day(s):** The price is {dir_word}, "
+        f"with an expected change of {exp_ret:+.2f}%. "
+        f"The likely price range is {p10_final} (worst case) to {p90_final} (best case), "
+        f"with the most likely landing around {p50_final}.{rsi_note} "
+        f"Remember: this is a forecast, not a guarantee."
+    )
+
+
+def _plain_english_pairs(result: dict) -> str:
+    sym_a = result.get("symbolA", "A")
+    sym_b = result.get("symbolB", "B")
+    is_coint = result.get("isCointegrated", False)
+    signal = result.get("signal", {}).get("signal", "HOLD")
+    half_life = result.get("ou", {}).get("halfLife", 9999)
+    z = result.get("ou", {}).get("zScore", 0)
+
+    coint_note = (
+        f"✅ {sym_a} and {sym_b} historically move together — a good pair for spread trading."
+        if is_coint else
+        f"⚠️ {sym_a} and {sym_b} don't reliably move together — trading this pair carries higher risk."
+    )
+
+    hl_note = f"When they diverge, prices typically snap back in about {half_life:.0f} days." if half_life < 200 else "Price convergence is slow — patience required."
+
+    signal_map = {
+        "LONG_SPREAD": f"📌 Right now the gap is unusually wide ({z:.2f}σ) — this suggests buying {sym_a} and selling {sym_b}.",
+        "SHORT_SPREAD": f"📌 Right now the gap is unusually narrow ({z:.2f}σ) — this suggests selling {sym_a} and buying {sym_b}.",
+        "EXIT": "📌 The gap has returned to normal — a good time to close any open positions.",
+        "HOLD": "📌 The gap is within normal range — no action needed right now.",
+        "NO_TRADE": "📌 This pair moves too slowly to trade profitably.",
+    }
+    signal_note = signal_map.get(signal, "")
+
+    return f"{coint_note} {hl_note} {signal_note}"
+
+
+def _plain_english_backtest(sym_a: str, sym_b: str, result: dict) -> str:
+    m = result.get("metrics", {})
+    ret = m.get("totalReturnPct", 0)
+    sharpe = m.get("annSharpe", 0)
+    dd = m.get("maxDrawdownPct", 0)
+    win = m.get("winRatePct", 0)
+    trades = m.get("totalTrades", 0)
+    days = result.get("totalDays", 0)
+
+    ret_note = f"the portfolio **grew by {ret:.2f}%**" if ret > 0 else f"the portfolio **lost {abs(ret):.2f}%**"
+    sharpe_note = (
+        "That's an excellent risk-adjusted return (Sharpe > 2)." if sharpe > 2 else
+        "That's a decent risk-adjusted return (Sharpe 1–2)." if sharpe > 1 else
+        "The returns don't well compensate for the risk taken (Sharpe < 1)."
+    )
+    win_note = f"{win:.0f}% of trades were profitable."
+    dd_note = f"The worst losing stretch was {dd:.1f}% below the peak."
+
+    return (
+        f"Testing the {sym_a}/{sym_b} pair strategy over {days} trading days: {ret_note}. "
+        f"{sharpe_note} {win_note} {dd_note} "
+        f"Total of {trades} round-trip trade(s) were made. "
+        "This is a historical simulation — past performance does not guarantee future results."
+    )
+
+
+def _plain_english_var(result: dict) -> str:
+    var_pct = result.get("portfolioVarPct", 0)
+    cvar_pct = result.get("portfolioCvarPct", 0)
+    var_abs = result.get("portfolioVarAbs", 0)
+    symbols = result.get("symbols", [])
+    conf = result.get("confidence", 0.95)
+    syms_str = ", ".join(symbols[:3]) + ("..." if len(symbols) > 3 else "")
+
+    severity = "low" if abs(var_pct) < 1 else "moderate" if abs(var_pct) < 2 else "high"
+
+    return (
+        f"**Risk check for {syms_str}:** On {conf * 100:.0f}% of days, your portfolio "
+        f"should not lose more than **{abs(var_pct):.2f}%** in a single day. "
+        f"On the worst days (the remaining {(1-conf)*100:.0f}%), losses could average around "
+        f"{abs(cvar_pct):.2f}%. For a ₹10 lakh investment, that's roughly ₹{var_abs:,.0f} at risk on a bad day. "
+        f"Overall risk level: **{severity.upper()}**."
+    )
+
+
+def _plain_english_sentiment(symbol: str, result: dict) -> str:
+    label = result.get("label", "NEUTRAL")
+    score = result.get("compound", 0)
+    trend = result.get("trend", "")
+
+    mood_map = {
+        "STRONGLY_BULLISH": f"**Very positive** — {symbol} is showing strong upward momentum. Investors appear confident.",
+        "BULLISH":          f"**Positive** — {symbol} has been trending upward recently.",
+        "NEUTRAL":          f"**Neutral** — {symbol} is moving sideways with no clear direction.",
+        "BEARISH":          f"**Negative** — {symbol} has been weakening recently.",
+        "STRONGLY_BEARISH": f"**Very negative** — {symbol} is showing strong downward pressure.",
+    }
+    note = mood_map.get(label, f"Sentiment for {symbol}: {label}.")
+    return (
+        f"{note} The sentiment score is {score:.2f} "
+        f"(scale: −1 very bearish → 0 neutral → +1 very bullish). "
+        "This is based on recent price action, not news headlines."
+    )
 
 
 class HydraEngine:
@@ -127,6 +273,7 @@ class HydraEngine:
         """
         intent = _route_intent(user_query)
         symbol = _resolve_symbol(user_query)
+        syms = _extract_symbols(user_query)  # stopword-filtered symbol list
 
         # Extract forecast horizon
         horizon = 5
@@ -136,12 +283,26 @@ class HydraEngine:
             horizon = n * 5 if "week" in m.group(2) else n
             horizon = min(30, max(1, horizon))
 
-        logger.info("Query: %r → intent=%s symbol=%s", user_query, intent, symbol)
+        logger.info("Query: %r → intent=%s symbol=%s syms=%s", user_query, intent, symbol, syms)
 
-        syms = _extract_symbols(user_query)  # stopword-filtered symbol list
+        # No recognisable intent → return friendly help, not a crash
+        if not intent:
+            return {
+                "intent": "help",
+                "summary": _HELP_MESSAGE,
+                "plain_english": _HELP_MESSAGE,
+            }
+
+        # Intent detected but no usable symbol → also show help
+        if intent == "forecast" and not symbol and not syms:
+            return {
+                "intent": "help",
+                "summary": "Please tell me which stock to forecast — e.g. \"Forecast RELIANCE for 5 days\".",
+                "plain_english": "Please tell me which stock to forecast — e.g. \"Forecast RELIANCE for 5 days\".",
+            }
 
         if intent == "forecast":
-            return await self._run_forecast(symbol or "RELIANCE", horizon, user_query)
+            return await self._run_forecast(symbol or syms[0] if syms else "RELIANCE", horizon, user_query)
         elif intent == "pairs":
             if len(syms) >= 2:
                 return await self._run_pair_analysis(syms[0], syms[1])
@@ -149,15 +310,23 @@ class HydraEngine:
         elif intent == "backtest":
             if len(syms) >= 2:
                 return await self._run_backtest(syms[0], syms[1])
-            return {"error": "Please specify two symbols for backtesting, e.g. 'Backtest RELIANCE TCS'"}
+            return {
+                "intent": "help",
+                "summary": "Please give me two stock symbols — e.g. \"Backtest RELIANCE TCS pair\".",
+                "plain_english": "Please give me two stock symbols — e.g. \"Backtest RELIANCE TCS pair\".",
+            }
         elif intent == "var":
             if syms:
                 return await self._run_var(syms[:5])
             return await self._run_var(["RELIANCE", "TCS", "HDFCBANK"])
         elif intent == "sentiment":
-            return await self._run_sentiment(symbol or "RELIANCE")
+            return await self._run_sentiment(symbol or (syms[0] if syms else "RELIANCE"))
 
-        return {"error": "Could not understand query", "intent": intent}
+        return {
+            "intent": "help",
+            "summary": _HELP_MESSAGE,
+            "plain_english": _HELP_MESSAGE,
+        }
 
     # ── Expert agent implementations ───────────────────────────────────────────
 
@@ -172,17 +341,19 @@ class HydraEngine:
     async def _run_forecast(self, symbol: str, horizon: int, query: str = "") -> dict:
         rows = await self._ensure_data(symbol)
         if not rows:
-            return {"error": f"No data available for {symbol}"}
+            return {"error": f"No price data found for '{symbol}'. Please check the NSE symbol and try again."}
         closes = [r["close"] for r in rows if r.get("close")]
         sent = sentiment.price_action_sentiment(closes)
         result = forecast.forecast(symbol, rows, horizon_days=horizon,
                                    sentiment_score=sent["compound"])
+        plain = _plain_english_forecast(result, symbol, horizon) if "error" not in result else result.get("error", "")
         return {
             "agent": "Forecaster",
             "intent": "forecast",
             "symbol": symbol,
             "result": result,
             "sentiment": sent,
+            "plain_english": plain,
             "summary": (
                 f"{symbol} {horizon}-day forecast: "
                 f"P50={result.get('p50',['?'])[-1] if result.get('p50') else '?'} "
@@ -197,12 +368,14 @@ class HydraEngine:
         closes_a = [r["close"] for r in rows_a if r.get("close")]
         closes_b = [r["close"] for r in rows_b if r.get("close")]
         result = pairs.analyze_pair(symbol_a, symbol_b, closes_a, closes_b)
+        plain = _plain_english_pairs(result) if "error" not in result else result.get("error", "")
         return {
             "agent": "PairsTrader",
             "intent": "pairs",
             "symbolA": symbol_a,
             "symbolB": symbol_b,
             "result": result,
+            "plain_english": plain,
             "summary": (
                 f"{symbol_a}/{symbol_b}: "
                 f"p={result.get('cointegrationPValue','?')} "
@@ -222,11 +395,17 @@ class HydraEngine:
             if closes:
                 histories[s] = closes
         found = pairs.scan_pairs(list(histories.keys()), histories)
+        n = len(found)
+        plain = (
+            f"I scanned {len(histories)} large-cap NSE stocks and found {n} pairs that historically move together. "
+            + (f"The best match is {found[0]['symbolA']}/{found[0]['symbolB']} (p={found[0]['pValue']:.4f})." if n > 0 else "No cointegrated pairs found right now — markets may be uncorrelated.")
+        )
         return {
             "agent": "PairsTrader",
             "intent": "pairs_scan",
             "result": found,
-            "summary": f"Found {len(found)} cointegrated pairs among {len(histories)} symbols",
+            "plain_english": plain,
+            "summary": f"Found {n} cointegrated pairs among {len(histories)} symbols",
         }
 
     async def _run_backtest(self, symbol_a: str, symbol_b: str) -> dict:
@@ -237,13 +416,14 @@ class HydraEngine:
         pair_result = pairs.analyze_pair(symbol_a, symbol_b, closes_a, closes_b)
         ou = pair_result.get("ou", {})
         if "error" in ou or "error" in pair_result:
-            return {"error": pair_result.get("error", "Pair analysis failed")}
+            return {"error": pair_result.get("error", "Pair analysis failed — not enough price data.")}
         bt_result = backtest.run_pairs_backtest(
             symbol_a, symbol_b, rows_a, rows_b,
             hedge_ratio=pair_result.get("hedgeRatio", 1.0),
             mu=ou.get("mu", 0.0),
             sigma_eq=ou.get("sigmaEq", 1.0),
         )
+        plain = _plain_english_backtest(symbol_a, symbol_b, bt_result) if "error" not in bt_result else bt_result.get("error", "")
         return {
             "agent": "BacktestEngine",
             "intent": "backtest",
@@ -251,6 +431,7 @@ class HydraEngine:
             "symbolB": symbol_b,
             "pairAnalysis": pair_result,
             "result": bt_result,
+            "plain_english": plain,
             "summary": (
                 f"Backtest {symbol_a}/{symbol_b}: "
                 f"Return={bt_result.get('metrics',{}).get('totalReturnPct','?')}% "
@@ -270,11 +451,13 @@ class HydraEngine:
         valid = list(closes_map.keys())
         weights = [1 / len(valid)] * len(valid) if valid else []
         result = var_svc.portfolio_var(valid, closes_map, weights)
+        plain = _plain_english_var(result) if "error" not in result else result.get("error", "")
         return {
             "agent": "VaRCalculator",
             "intent": "var",
             "symbols": valid,
             "result": result,
+            "plain_english": plain,
             "summary": (
                 f"95% VaR ({len(valid)} stocks, equal weight): "
                 f"{result.get('portfolioVarPct','?')}% "
@@ -288,11 +471,13 @@ class HydraEngine:
         rows = await self._ensure_data(symbol)
         closes = [r["close"] for r in rows if r.get("close")]
         sent = sentiment.price_action_sentiment(closes)
+        plain = _plain_english_sentiment(symbol, sent)
         return {
             "agent": "SentimentAnalyzer",
             "intent": "sentiment",
             "symbol": symbol,
             "result": sent,
+            "plain_english": plain,
             "summary": (
                 f"{symbol} Sentiment: {sent['label']} "
                 f"(score={sent['compound']:.3f})"
