@@ -46,8 +46,15 @@ def calibrate_ou(spread: list[float]) -> dict:
     mu    = a / theta if abs(theta) > 1e-10 else float(x.mean())
     residuals = dx - (a + b * x_lag)
     sigma = float(np.std(residuals))
-    half_life = float(np.log(2) / theta) if theta > 1e-10 else 9999.0
-    sigma_eq  = sigma / np.sqrt(2 * theta) if theta > 1e-10 else sigma
+    # theta <= 0 means non-stationary (explosive/random-walk spread) — not tradeable
+    # theta > 0 but very small means extremely slow reversion → cap half_life at 9999
+    if theta > 1e-10:
+        raw_hl = float(np.log(2) / theta)
+        half_life = min(raw_hl, 9999.0)   # cap so JSON serialisation never sees inf
+        sigma_eq  = sigma / np.sqrt(2 * theta)
+    else:
+        half_life = 9999.0                 # non-stationary or negligible reversion
+        sigma_eq  = sigma
 
     # FIX-6: guard z-score when sigma_eq is degenerate
     latest  = float(x[-1])
@@ -75,7 +82,12 @@ def _compute_spread(closes_a: list[float], closes_b: list[float]) -> tuple[list[
     # OLS: regress A on B
     b_mean = b.mean()
     a_mean = a.mean()
-    beta = float(np.sum((b - b_mean) * (a - a_mean)) / np.sum((b - b_mean) ** 2))
+    denom = float(np.sum((b - b_mean) ** 2))
+    # Guard: if closes_b has near-zero variance (constant series) beta is undefined
+    if denom < 1e-12:
+        beta = 1.0  # safe fallback — treat as 1:1 ratio
+    else:
+        beta = float(np.sum((b - b_mean) * (a - a_mean)) / denom)
     spread = list(a - beta * b)
     return spread, round(beta, 6)
 

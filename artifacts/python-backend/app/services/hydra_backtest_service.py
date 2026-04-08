@@ -182,8 +182,10 @@ class PortfolioManager:
                 # Covering a short: prev_held < 0
                 cover_qty = min(q, abs(prev_held))
                 entry_price = self.avg_entry.get(sym, event.fill_price)
-                # Short PnL: sold high, bought low → profit when fill < entry
-                pnl = (entry_price - event.fill_price) * cover_qty - event.commission
+                # Short PnL: sold high, bought low → profit when fill < entry.
+                # Commission charged twice (once on open SELL, once on close BUY)
+                # so deduct 2× commission to match capital accounting.
+                pnl = (entry_price - event.fill_price) * cover_qty - 2 * event.commission
                 self.trades.append({
                     "symbol":     sym,
                     "direction":  "SHORT",
@@ -209,7 +211,9 @@ class PortfolioManager:
                 # Closing / reducing a long position
                 close_qty = min(q, prev_held)
                 entry_price = self.avg_entry.get(sym, event.fill_price)
-                pnl = (event.fill_price - entry_price) * close_qty - event.commission
+                # Commission charged twice (once on open BUY, once on close SELL)
+                # so deduct 2× commission to match capital accounting.
+                pnl = (event.fill_price - entry_price) * close_qty - 2 * event.commission
                 self.trades.append({
                     "symbol":     sym,
                     "direction":  "LONG",
