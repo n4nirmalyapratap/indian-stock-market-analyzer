@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import datetime as dt
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -47,35 +48,70 @@ async def _telegram_polling_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    poll_task = asyncio.create_task(_telegram_polling_loop())
-    # Refresh live universe in background — won't block startup
-    asyncio.create_task(_refresh_universe())
+    poll_task       = asyncio.create_task(_telegram_polling_loop())
+    universe_task   = asyncio.create_task(_universe_scheduler())
     try:
         yield
     finally:
-        poll_task.cancel()
+        for t in (poll_task, universe_task):
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+
+
+async def _universe_scheduler() -> None:
+    """
+    Refresh the stock universe once per day at 16:05 IST (10:35 UTC)
+    — just after NSE market close (15:30 IST).
+    On first startup, load from cache if it exists; only fetch live if cache is stale.
+    """
+    from app.lib.universe_builder import load_cache, get_or_refresh
+    from app.lib.universe import _apply_live_data
+
+    # Apply whatever is already cached so the server starts with live data
+    cached = load_cache()
+    if cached:
+        _apply_live_data(cached)
+        logger.info(
+            "Universe loaded from cache — %d symbols (generated %s)",
+            len(cached.get("all_symbols", [])),
+            cached.get("generated_at", "?"),
+        )
+
+    while True:
         try:
-            await poll_task
-        except asyncio.CancelledError:
-            pass
-
-
-async def _refresh_universe() -> None:
-    try:
-        from app.lib.universe_builder import refresh_in_background
-        await refresh_in_background()
-        # Re-apply to universe module after fresh cache is saved
-        from app.lib.universe import _apply_live_data
-        from app.lib.universe_builder import load_cache
-        fresh = load_cache()
-        if fresh:
-            _apply_live_data(fresh)
+            # Calculate seconds until next 10:35 UTC (= 16:05 IST)
+            now_utc = dt.datetime.utcnow()
+            target   = now_utc.replace(hour=10, minute=35, second=0, microsecond=0)
+            if now_utc >= target:
+                # Already past today's window — schedule for tomorrow
+                target += dt.timedelta(days=1)
+            wait_s = (target - now_utc).total_seconds()
             logger.info(
-                "Universe refreshed from live NSE data — %d symbols",
-                len(fresh.get("all_symbols", []))
+                "Universe scheduler: next refresh in %.0f s (at %s UTC)",
+                wait_s, target.strftime("%Y-%m-%d %H:%M"),
             )
-    except Exception as e:
-        logger.warning("Universe refresh failed (hardcoded fallback active): %s", e)
+            await asyncio.sleep(wait_s)
+
+            # Force a fresh fetch (ignore cache — this is the scheduled daily refresh)
+            from app.lib.universe_builder import fetch_universe, save_cache
+            data = await fetch_universe()
+            if data and data.get("all_symbols"):
+                save_cache(data)
+                _apply_live_data(data)
+                logger.info(
+                    "Universe refreshed — %d symbols, %d sectors",
+                    len(data.get("all_symbols", [])),
+                    len(data.get("sector_symbols", {})),
+                )
+        except asyncio.CancelledError:
+            logger.info("Universe scheduler stopped.")
+            break
+        except Exception as e:
+            logger.warning("Universe scheduler error: %s — retrying tomorrow", e)
+            await asyncio.sleep(3600)   # back-off 1 h on unexpected error
 
 
 app = FastAPI(
