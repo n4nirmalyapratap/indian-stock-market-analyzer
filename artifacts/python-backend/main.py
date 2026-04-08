@@ -1,0 +1,153 @@
+import os
+import asyncio
+import logging
+import datetime as dt
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.routes.health import router as health_router
+from app.routes.sectors import router as sectors_router
+from app.routes.stocks import router as stocks_router
+from app.routes.patterns import router as patterns_router
+from app.routes.scanners import router as scanners_router
+from app.routes.whatsapp import router as whatsapp_router
+from app.routes.nlp import router as nlp_router
+from app.routes.analytics import router as analytics_router
+from app.routes.telegram import router as telegram_router, get_service as get_telegram_service
+from app.routes.universe import router as universe_router
+
+logger = logging.getLogger("telegram-poller")
+
+
+async def _telegram_polling_loop() -> None:
+    """Long-poll Telegram getUpdates in the background."""
+    svc = get_telegram_service()
+    if not svc.configured:
+        logger.info("TELEGRAM_BOT_TOKEN not set — polling disabled.")
+        return
+
+    # Remove any existing webhook so polling works
+    await svc.delete_webhook()
+    logger.info("Telegram polling started (@%s)", (await svc.get_bot_info()).get("username", "?"))
+
+    offset = 0
+    while True:
+        try:
+            updates, offset = await svc.get_updates(offset=offset, timeout=25)
+            for update in updates:
+                asyncio.create_task(svc.process_update(update))
+        except asyncio.CancelledError:
+            logger.info("Telegram polling stopped.")
+            break
+        except Exception as e:
+            logger.warning("Telegram polling error: %s — retrying in 5s", e)
+            await asyncio.sleep(5)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    poll_task       = asyncio.create_task(_telegram_polling_loop())
+    universe_task   = asyncio.create_task(_universe_scheduler())
+    try:
+        yield
+    finally:
+        for t in (poll_task, universe_task):
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+
+
+async def _universe_scheduler() -> None:
+    """
+    Refresh the stock universe once per day at 16:05 IST (10:35 UTC)
+    — just after NSE market close (15:30 IST).
+    On first startup, load from cache if it exists; only fetch live if cache is stale.
+    """
+    from app.lib.universe_builder import load_cache, get_or_refresh
+    from app.lib.universe import _apply_live_data
+
+    # Apply whatever is already cached so the server starts with live data
+    cached = load_cache()
+    if cached:
+        _apply_live_data(cached)
+        logger.info(
+            "Universe loaded from cache — %d symbols (generated %s)",
+            len(cached.get("all_symbols", [])),
+            cached.get("generated_at", "?"),
+        )
+
+    while True:
+        try:
+            # Calculate seconds until next 10:35 UTC (= 16:05 IST)
+            now_utc = dt.datetime.utcnow()
+            target   = now_utc.replace(hour=10, minute=35, second=0, microsecond=0)
+            if now_utc >= target:
+                # Already past today's window — schedule for tomorrow
+                target += dt.timedelta(days=1)
+            wait_s = (target - now_utc).total_seconds()
+            logger.info(
+                "Universe scheduler: next refresh in %.0f s (at %s UTC)",
+                wait_s, target.strftime("%Y-%m-%d %H:%M"),
+            )
+            await asyncio.sleep(wait_s)
+
+            # Force a fresh fetch (ignore cache — this is the scheduled daily refresh)
+            from app.lib.universe_builder import fetch_universe, save_cache
+            data = await fetch_universe()
+            if data and data.get("all_symbols"):
+                save_cache(data)
+                _apply_live_data(data)
+                logger.info(
+                    "Universe refreshed — %d symbols, %d sectors",
+                    len(data.get("all_symbols", [])),
+                    len(data.get("sector_symbols", {})),
+                )
+        except asyncio.CancelledError:
+            logger.info("Universe scheduler stopped.")
+            break
+        except Exception as e:
+            logger.warning("Universe scheduler error: %s — retrying tomorrow", e)
+            await asyncio.sleep(3600)   # back-off 1 h on unexpected error
+
+
+app = FastAPI(
+    title="Indian Stock Market Analyzer — Python Backend",
+    description=(
+        "FastAPI backend for NSE sector rotation, stock analysis, chart patterns, "
+        "custom scanners, NLP natural-language queries, analytics, and Telegram bot."
+    ),
+    version="2.1.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+)
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(status_code=500, content={"error": "Internal server error"})
+
+
+app.include_router(health_router,    prefix="/api")
+app.include_router(sectors_router,   prefix="/api")
+app.include_router(stocks_router,    prefix="/api")
+app.include_router(patterns_router,  prefix="/api")
+app.include_router(scanners_router,  prefix="/api")
+app.include_router(whatsapp_router,  prefix="/api")
+app.include_router(nlp_router,       prefix="/api")
+app.include_router(analytics_router, prefix="/api")
+app.include_router(telegram_router,  prefix="/api")
+app.include_router(universe_router,  prefix="/api")
