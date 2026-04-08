@@ -61,8 +61,8 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd artifacts/python-backend && PORT=8099 python run.py"
-waitForPort = 8099
+args = "cd artifacts/python-backend && PORT=8090 python run.py"
+waitForPort = 8090
 
 [agent]
 stack = "PNPM_WORKSPACE"
