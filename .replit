@@ -18,27 +18,11 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "NestJS Backend"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "Stock Market Frontend"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "Python Backend"
-
-[[workflows.workflow]]
-name = "NestJS Backend"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "pnpm --filter @workspace/nestjs-backend run dev"
-waitForPort = 3001
-
-[workflows.workflow.metadata]
-outputType = "console"
 
 [[workflows.workflow]]
 name = "Stock Market Frontend"
