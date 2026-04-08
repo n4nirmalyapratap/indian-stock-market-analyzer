@@ -32,22 +32,26 @@ def calibrate_ou(spread: list[float]) -> dict:
     dx = np.diff(x)
 
     # OLS: dx = a + b*x_lag
-    n = len(x_lag)
-    x_mean = x_lag.mean()
+    # FIX-6: guard against near-zero variance in x_lag (degenerate spread)
+    x_mean  = x_lag.mean()
     dx_mean = dx.mean()
-    b = (np.sum((x_lag - x_mean) * (dx - dx_mean)) /
-         np.sum((x_lag - x_mean) ** 2))
+    denom   = np.sum((x_lag - x_mean) ** 2)
+    if denom < 1e-12:
+        return {"error": "Spread series has near-zero variance — cannot calibrate OU process"}
+
+    b = np.sum((x_lag - x_mean) * (dx - dx_mean)) / denom
     a = dx_mean - b * x_mean
 
-    theta = -b                        # speed of reversion
-    mu = a / theta if theta != 0 else x.mean()  # long-run mean
+    theta = -b                            # speed of reversion (should be > 0)
+    mu    = a / theta if abs(theta) > 1e-10 else float(x.mean())
     residuals = dx - (a + b * x_lag)
     sigma = float(np.std(residuals))
-    half_life = float(np.log(2) / theta) if theta > 0 else float("inf")
-    sigma_eq = sigma / np.sqrt(2 * theta) if theta > 0 else sigma
+    half_life = float(np.log(2) / theta) if theta > 1e-10 else 9999.0
+    sigma_eq  = sigma / np.sqrt(2 * theta) if theta > 1e-10 else sigma
 
-    latest = float(x[-1])
-    z_score = (latest - mu) / sigma_eq if sigma_eq > 0 else 0.0
+    # FIX-6: guard z-score when sigma_eq is degenerate
+    latest  = float(x[-1])
+    z_score = (latest - mu) / sigma_eq if sigma_eq > 1e-10 else 0.0
 
     return {
         "mu":       round(float(mu), 6),
