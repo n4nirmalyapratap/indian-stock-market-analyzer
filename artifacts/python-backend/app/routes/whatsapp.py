@@ -1,6 +1,6 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import JSONResponse, Response
-from typing import Any
+from typing import Any, Optional
 from ..services.whatsapp_service import WhatsappService
 from ..services.sectors_service import SectorsService
 from ..services.stocks_service import StocksService
@@ -52,19 +52,38 @@ async def process_message(body: dict[str, Any]):
 
 
 @router.post("/twilio")
-async def twilio_webhook(body: dict[str, Any]):
-    from_number = body.get("From") or body.get("from") or "whatsapp:+unknown"
-    text = body.get("Body") or body.get("body") or body.get("message") or ""
+async def twilio_webhook(request: Request):
+    """
+    Twilio WhatsApp webhook.
+    Twilio sends application/x-www-form-urlencoded with fields:
+      From  — sender number, e.g. "whatsapp:+911234567890"
+      Body  — message text
+      To    — your Twilio number
+    Returns TwiML XML so Twilio can send the reply back to the user.
+    """
+    form = await request.form()
+    from_number = form.get("From") or form.get("from") or "whatsapp:+unknown"
+    text = form.get("Body") or form.get("body") or ""
     try:
-        result = await _service.process_message({"from": from_number, "text": text})
-        reply = result.get("response") or ""
-    except ValueError as e:
+        result = await _service.process_message({"from": str(from_number), "text": str(text)})
+        reply = result.get("response") or "Sorry, I could not process your request."
+    except Exception as e:
         reply = f"Error: {e}"
 
-    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Message>{reply}</Message>
-</Response>"""
+    # Escape XML special characters in the reply
+    reply_safe = (
+        str(reply)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+    twiml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<Response>"
+        f"<Message>{reply_safe}</Message>"
+        "</Response>"
+    )
     return Response(content=twiml, media_type="application/xml")
 
 
