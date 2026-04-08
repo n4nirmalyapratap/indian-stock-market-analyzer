@@ -11,13 +11,15 @@ _nse = NseService()
 _service = PatternsService(_yahoo, _nse)
 
 
-@router.get("/")
-async def get_patterns(
+async def _get_patterns(
     universe: Optional[str] = Query(None),
     signal: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
 ):
     return await _service.get_patterns(universe, signal, category)
+
+router.add_api_route("",  _get_patterns, methods=["GET"])
+router.add_api_route("/", _get_patterns, methods=["GET"])
 
 
 @router.post("/scan")

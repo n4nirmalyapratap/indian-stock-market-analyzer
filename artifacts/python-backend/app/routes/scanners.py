@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from typing import Any
 from ..services.scanners_service import ScannersService
 from ..services.yahoo_service import YahooService
@@ -11,14 +12,16 @@ _nse = NseService()
 _service = ScannersService(_yahoo, _nse)
 
 
-@router.get("/")
-async def get_scanners():
+async def _get_scanners():
     return _service.get_all_scanners()
 
-
-@router.post("/")
-async def create_scanner(body: dict[str, Any]):
+async def _create_scanner(body: dict[str, Any]):
     return _service.create_scanner(body)
+
+router.add_api_route("",  _get_scanners,    methods=["GET"])
+router.add_api_route("/", _get_scanners,    methods=["GET"])
+router.add_api_route("",  _create_scanner,  methods=["POST"])
+router.add_api_route("/", _create_scanner,  methods=["POST"])
 
 
 @router.post("/adhoc/run")
@@ -30,7 +33,7 @@ async def run_adhoc(body: dict[str, Any]):
 async def get_scanner(scanner_id: str):
     s = _service.get_scanner_by_id(scanner_id)
     if s is None:
-        raise HTTPException(status_code=404, detail="Scanner not found")
+        return JSONResponse(status_code=404, content={"error": "Scanner not found"})
     return s
 
 
@@ -38,7 +41,7 @@ async def get_scanner(scanner_id: str):
 async def update_scanner(scanner_id: str, body: dict[str, Any]):
     s = _service.update_scanner(scanner_id, body)
     if s is None:
-        raise HTTPException(status_code=404, detail="Scanner not found")
+        return JSONResponse(status_code=404, content={"error": "Scanner not found"})
     return s
 
 
@@ -46,7 +49,7 @@ async def update_scanner(scanner_id: str, body: dict[str, Any]):
 async def delete_scanner(scanner_id: str):
     ok = _service.delete_scanner(scanner_id)
     if not ok:
-        raise HTTPException(status_code=404, detail="Scanner not found")
+        return JSONResponse(status_code=404, content={"error": "Scanner not found"})
     return {"success": True, "id": scanner_id}
 
 
@@ -54,5 +57,5 @@ async def delete_scanner(scanner_id: str):
 async def run_scanner(scanner_id: str):
     result = await _service.run_scanner(scanner_id)
     if "error" in result:
-        raise HTTPException(status_code=404, detail=result["error"])
+        return JSONResponse(status_code=404, content={"error": result["error"]})
     return result

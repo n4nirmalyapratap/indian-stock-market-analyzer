@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse, Response
 from typing import Any
 from ..services.whatsapp_service import WhatsappService
 from ..services.sectors_service import SectorsService
@@ -28,7 +29,7 @@ async def get_status():
 async def update_status(body: dict[str, Any]):
     enabled = body.get("enabled")
     if enabled is None:
-        raise HTTPException(status_code=400, detail="'enabled' field required")
+        return JSONResponse(status_code=400, content={"error": "'enabled' field required"})
     return _service.update_bot_status(bool(enabled))
 
 
@@ -36,7 +37,7 @@ async def update_status(body: dict[str, Any]):
 async def set_status(body: dict[str, Any]):
     enabled = body.get("enabled")
     if enabled is None:
-        raise HTTPException(status_code=400, detail="'enabled' field required")
+        return JSONResponse(status_code=400, content={"error": "'enabled' field required"})
     return _service.update_bot_status(bool(enabled))
 
 
@@ -45,7 +46,7 @@ async def process_message(body: dict[str, Any]):
     try:
         return await _service.process_message(body)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return JSONResponse(status_code=400, content={"error": str(e)})
 
 
 @router.post("/twilio")
@@ -53,9 +54,16 @@ async def twilio_webhook(body: dict[str, Any]):
     from_number = body.get("From") or body.get("from") or "whatsapp:+unknown"
     text = body.get("Body") or body.get("body") or body.get("message") or ""
     try:
-        return await _service.process_message({"from": from_number, "text": text})
+        result = await _service.process_message({"from": from_number, "text": text})
+        reply = result.get("response") or ""
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        reply = f"Error: {e}"
+
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>{reply}</Message>
+</Response>"""
+    return Response(content=twiml, media_type="application/xml")
 
 
 @router.get("/messages")
