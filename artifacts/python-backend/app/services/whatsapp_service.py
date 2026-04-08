@@ -1,9 +1,12 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from .sectors_service import SectorsService
 from .stocks_service import StocksService
 from .patterns_service import PatternsService
 from .scanners_service import ScannersService
+
+if TYPE_CHECKING:
+    from .nlp_service import NlpService
 
 MAX_LOG = 200
 _message_log: list[dict] = []
@@ -19,11 +22,13 @@ class WhatsappService:
         stocks: StocksService,
         patterns: PatternsService,
         scanners: ScannersService,
+        nlp: Optional["NlpService"] = None,
     ):
         self.sectors = sectors
         self.stocks = stocks
         self.patterns = patterns
         self.scanners = scanners
+        self.nlp = nlp
 
     def get_bot_status(self) -> dict:
         return {
@@ -35,12 +40,13 @@ class WhatsappService:
             "totalMessages": len(_message_log),
             "capabilities": [
                 "Stock analysis", "Sector rotation", "Pattern scan",
-                "Custom scanners", "Entry/exit signals",
+                "Custom scanners", "Entry/exit signals", "Natural language queries",
             ],
             "commands": [
                 "!help", "!sectors", "!rotation", "!analyze <SYMBOL>",
                 "!patterns", "!scan", "!scanner list", "!scanner run <id>",
                 "!entry <SYMBOL>", "!status",
+                "Or just type naturally: 'analyze RELIANCE', 'show IT sector', 'where to invest?'",
             ],
         }
 
@@ -52,33 +58,36 @@ class WhatsappService:
 
         start = datetime.utcnow()
         try:
-            response = await self._route(text.lower(), text)
+            response = await self._route(text)
         except Exception as e:
-            response = f"Error processing command: {e}"
+            response = f"Error processing request: {e}"
 
         elapsed = int((datetime.utcnow() - start).total_seconds() * 1000)
-        entry = {"from": from_, "text": text, "timestamp": datetime.utcnow().isoformat() + "Z", "response": response}
+        entry = {
+            "from": from_,
+            "text": text,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "response": response,
+        }
         _message_log.append(entry)
         if len(_message_log) > MAX_LOG:
             del _message_log[:len(_message_log) - MAX_LOG]
 
         return {**entry, "processingTime": f"{elapsed}ms"}
 
-    async def _route(self, cmd: str, raw: str) -> str:
-        if cmd in ("!help", "help"):
+    async def _route(self, raw: str) -> str:
+        cmd = raw.lower().strip()
+
+        # ── Exact-match commands (backwards-compatible) ───────────────────────
+        if cmd in ("!help", "help", "/help"):
             return self._help()
         if cmd in ("!status", "status"):
             return self._status()
-        if cmd.startswith("!analyze ") or cmd.startswith("analyze "):
-            sym = raw.split()[1].upper() if len(raw.split()) > 1 else ""
-            if not sym:
-                return "Usage: !analyze <SYMBOL>\nExample: !analyze RELIANCE"
-            return await self._analyze_stock(sym)
-        if cmd in ("!sectors", "sectors"):
+        if cmd in ("!sectors", "sectors", "/sectors"):
             return await self._fetch_sectors()
-        if cmd in ("!rotation", "rotation"):
+        if cmd in ("!rotation", "rotation", "/rotation"):
             return await self._fetch_rotation()
-        if cmd in ("!patterns", "patterns"):
+        if cmd in ("!patterns", "patterns", "/patterns"):
             return await self._fetch_patterns()
         if cmd == "!scan":
             return await self._trigger_scan()
@@ -87,16 +96,95 @@ class WhatsappService:
         if cmd.startswith("!scanner run "):
             sid = raw.split()[2] if len(raw.split()) > 2 else ""
             return await self._run_scanner(sid)
+        if cmd.startswith("!analyze ") or cmd.startswith("analyze "):
+            parts = raw.split()
+            sym = parts[1].upper() if len(parts) > 1 else ""
+            if not sym:
+                return "Usage: !analyze <SYMBOL>\nExample: !analyze RELIANCE"
+            return await self._analyze_stock(sym)
         if cmd.startswith("!entry ") or cmd.startswith("entry "):
-            sym = raw.split()[1].upper() if len(raw.split()) > 1 else ""
+            parts = raw.split()
+            sym = parts[1].upper() if len(parts) > 1 else ""
             if not sym:
                 return "Usage: !entry <SYMBOL>"
             return await self._entry_signal(sym)
-        return "Unknown command. Type !help for available commands."
+
+        # ── NLP fallback (natural language) ──────────────────────────────────
+        if self.nlp:
+            return await self._nlp_route(raw)
+
+        # Classic fallback: if text looks like a symbol, analyze it
+        upper = raw.upper().strip()
+        if 2 <= len(upper) <= 15 and upper.replace("-", "").isalnum():
+            return await self._analyze_stock(upper)
+
+        return "I didn't understand that. Type !help to see available commands."
+
+    async def _nlp_route(self, text: str) -> str:
+        parsed = self.nlp.parse(text)
+        intent = parsed["intent"]
+        stocks  = parsed["stocks"]
+        sectors = parsed["sectors"]
+        signal  = parsed["signal"]
+
+        if intent == "help":
+            return self._help()
+        elif intent == "stock_analysis":
+            if stocks:
+                return await self._analyze_stock(stocks[0])
+            return "Please specify a stock symbol. E.g. 'analyze RELIANCE' or just type 'TCS'."
+        elif intent == "sector_query":
+            if sectors:
+                data = await self.sectors.get_sector_detail(sectors[0])
+                if data:
+                    pc = data.get("pChange") or 0
+                    return (
+                        f"*{data['name']}*\n"
+                        f"Change: {'+' if pc > 0 else ''}{pc:.2f}%\n"
+                        f"Trend: {data.get('focus', 'HOLD')}\n"
+                        f"Source: {data.get('source', 'NSE')}"
+                    )
+            return await self._fetch_sectors()
+        elif intent == "rotation_query":
+            return await self._fetch_rotation()
+        elif intent == "pattern_scan":
+            if signal:
+                d = await self.patterns.get_patterns(signal=signal)
+            else:
+                d = await self.patterns.get_patterns()
+            patterns_list = d.get("patterns") or []
+            if not patterns_list:
+                return "No patterns detected. Try !scan to refresh."
+            lines = [f"*Chart Patterns ({intent})*"]
+            for p in patterns_list[:8]:
+                sig_icon = "🟢" if p["signal"] == "CALL" else "🔴"
+                lines.append(f"{sig_icon} {p['symbol']} — {p['pattern']} ({p['confidence']}%)")
+            return "\n".join(lines)
+        elif intent == "scanner_run":
+            all_s = self.scanners.get_all_scanners()
+            query_lower = text.lower()
+            matched = None
+            for sc in all_s:
+                if any(word in query_lower for word in sc["name"].lower().split() if len(word) > 3):
+                    matched = sc
+                    break
+            if matched:
+                return await self._run_scanner(matched["id"])
+            return self._list_scanners()
+        else:
+            # Generic fallback for analytics / unknown
+            return (
+                "I understood your request but couldn't find specific data.\n"
+                "Try: !sectors, !rotation, !patterns, !analyze <SYMBOL>\n"
+                "Or ask naturally: 'show IT sector', 'where to invest?'"
+            )
+
+    # ── Response formatters ───────────────────────────────────────────────────
 
     def _help(self) -> str:
         return (
-            "🤖 *Indian Stock Market Bot*\n\n*Commands:*\n"
+            "🤖 *Indian Stock Market Bot*\n\n"
+            "*Commands (or type naturally):*\n"
             "!sectors — Sector performance overview\n"
             "!rotation — Sector rotation analysis\n"
             "!analyze <SYMBOL> — Full stock analysis\n"
@@ -107,14 +195,18 @@ class WhatsappService:
             "!scanner run <id> — Run a scanner\n"
             "!status — Bot status\n"
             "!help — This help message\n\n"
-            "_End-of-day data. Not real-time._"
+            "*Natural language supported:*\n"
+            "_'analyze TCS', 'show me IT sector', 'where to invest?', "
+            "'bullish patterns', 'RELIANCE analysis'_\n\n"
+            "_End-of-day data from NSE/Yahoo Finance_"
         )
 
     def _status(self) -> str:
         return (
             f"*Bot Status:* {'✅ Active' if _bot_enabled else '❌ Disabled'}\n"
             f"*Session:* {_session_status}\n"
-            f"*Messages Processed:* {len(_message_log)}"
+            f"*Messages Processed:* {len(_message_log)}\n"
+            f"*NLP:* {'✅ Enabled' if self.nlp else '❌ Disabled'}"
         )
 
     async def _fetch_sectors(self) -> str:
@@ -122,14 +214,12 @@ class WhatsappService:
         if not data:
             return "Sector data unavailable right now."
         sorted_data = sorted(data, key=lambda s: s["pChange"], reverse=True)
-        top5 = sorted_data[:5]
-        bottom3 = sorted_data[-3:][::-1]
         msg = "📊 *Sector Overview*\n\n*Top Gainers:*\n"
-        for s in top5:
+        for s in sorted_data[:5]:
             pc = s.get("pChange") or 0
             msg += f"• {s['name']}: {'+' if pc > 0 else ''}{pc:.2f}%\n"
         msg += "\n*Laggards:*\n"
-        for s in bottom3:
+        for s in sorted_data[-3:]:
             pc = s.get("pChange") or 0
             msg += f"• {s['name']}: {pc:.2f}%\n"
         return msg
@@ -179,8 +269,7 @@ class WhatsappService:
         d = await self.patterns.get_patterns()
         if not d.get("patterns"):
             return "No patterns detected currently. Try !scan to refresh."
-        scan_time = datetime.fromisoformat(d["lastScanTime"].rstrip("Z")).strftime("%d %b %Y")
-        msg = f"🕯️ *Chart Patterns* ({scan_time})\n\n*CALL Signals ({d['callSignals']}):*\n"
+        msg = f"🕯️ *Chart Patterns*\n\n*CALL Signals ({d['callSignals']}):*\n"
         for p in (d.get("topCalls") or [])[:5]:
             msg += f"• {p['symbol']} — {p['pattern']} ({p['confidence']}%)\n"
         msg += f"\n*PUT Signals ({d['putSignals']}):*\n"
