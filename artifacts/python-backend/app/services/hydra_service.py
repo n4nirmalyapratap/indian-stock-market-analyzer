@@ -278,7 +278,9 @@ class HydraEngine:
             "summary": (
                 f"95% VaR ({len(valid)} stocks, equal weight): "
                 f"{result.get('portfolioVarPct','?')}% "
-                f"(₹{result.get('portfolioVarAbs','?'):,} per ₹10L)"
+                f"(₹{result.get('portfolioVarAbs', 0):,.0f} per ₹10L)"
+                if "error" not in result
+                else f"VaR error: {result.get('error', 'unknown')}"
             ),
         }
 

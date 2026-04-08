@@ -30,10 +30,12 @@ function fmtN(n: any, dec = 2) {
 }
 function fmtINR(n: any) {
   if (n == null) return "—";
-  const v = Math.abs(Number(n));
-  if (v >= 1e7) return `₹${(v / 1e7).toFixed(2)}Cr`;
-  if (v >= 1e5) return `₹${(v / 1e5).toFixed(2)}L`;
-  return `₹${v.toLocaleString("en-IN")}`;
+  const raw = Number(n);
+  const sign = raw < 0 ? "-" : "";
+  const v = Math.abs(raw);
+  if (v >= 1e7) return `${sign}₹${(v / 1e7).toFixed(2)}Cr`;
+  if (v >= 1e5) return `${sign}₹${(v / 1e5).toFixed(2)}L`;
+  return `${sign}₹${v.toLocaleString("en-IN")}`;
 }
 
 function SignalBadge({ signal }: { signal: string }) {

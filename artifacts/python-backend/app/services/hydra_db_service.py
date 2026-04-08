@@ -113,16 +113,19 @@ def get_close_series(ticker: str, days: int = 252) -> list[float]:
 
 def db_stats() -> dict:
     """Return row counts and ticker list from the DB."""
+    conn = None
     try:
         conn = ensure_schema()
         total = conn.execute("SELECT COUNT(*) FROM daily_prices").fetchone()[0]
         tickers = [r[0] for r in conn.execute(
             "SELECT ticker, COUNT(*) as c FROM daily_prices GROUP BY ticker ORDER BY c DESC"
         ).fetchall()]
-        conn.close()
         return {"totalRows": total, "tickers": tickers, "dbPath": DB_PATH}
     except Exception as e:
         return {"error": str(e)}
+    finally:
+        if conn:
+            conn.close()
 
 
 # ── Incremental Yahoo Finance fetch ───────────────────────────────────────────

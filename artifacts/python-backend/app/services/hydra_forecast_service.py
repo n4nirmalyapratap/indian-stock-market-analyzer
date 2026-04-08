@@ -83,7 +83,10 @@ def _bollinger(closes: list[float], period: int = 20) -> list[dict]:
 def _momentum(closes: list[float], period: int) -> Optional[float]:
     if len(closes) < period + 1:
         return None
-    return (closes[-1] - closes[-period - 1]) / closes[-period - 1] * 100
+    base = closes[-period - 1]
+    if base <= 0:
+        return None  # guard: zero/negative price would cause divide-by-zero or nonsensical result
+    return (closes[-1] - base) / base * 100
 
 
 def _build_features(rows: list[dict]) -> list[dict]:
