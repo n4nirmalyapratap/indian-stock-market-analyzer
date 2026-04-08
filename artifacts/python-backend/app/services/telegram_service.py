@@ -48,6 +48,12 @@ def _fmt_pct(v: Any) -> str:
         return str(v) if v is not None else "N/A"
 
 
+def _safe(v: Any) -> str:
+    """Convert value to string safe for Telegram Markdown v1.
+    Replaces underscores (italic markers) with spaces."""
+    return str(v).replace("_", " ") if v is not None else "N/A"
+
+
 class TelegramService:
     def __init__(
         self,
@@ -75,15 +81,29 @@ class TelegramService:
     async def send_message(self, chat_id: int | str, text: str) -> bool:
         if not self.configured:
             return False
+        url = f"https://api.telegram.org/bot{self.token}/sendMessage"
+        # Attempt 1: Markdown mode
         try:
-            url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-            payload = {
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "Markdown",
-            }
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(url, json=payload)
+                resp = await client.post(url, json={
+                    "chat_id": chat_id,
+                    "text": text,
+                    "parse_mode": "Markdown",
+                })
+                if resp.status_code == 200:
+                    return True
+                # Markdown parse failed → strip and retry as plain text
+        except Exception:
+            pass
+        # Attempt 2: plain text (strip common Markdown markers)
+        import re as _re
+        plain = _re.sub(r"[*_`]", "", text)
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(url, json={
+                    "chat_id": chat_id,
+                    "text": plain,
+                })
                 return resp.status_code == 200
         except Exception:
             return False
@@ -352,17 +372,18 @@ class TelegramService:
             price = _fmt_price(d.get("lastPrice"))
             pc = _fmt_pct(d.get("pChange"))
             rsi = ta.get("rsi")
-            trend = ta.get("trend", "N/A")
-            signal = entry.get("signal", "N/A")
+            trend = _safe(ta.get("trend", "N/A"))
+            signal = _safe(entry.get("signal", "N/A"))
             confidence = entry.get("confidence", "N/A")
             ema = ta.get("ema") or {}
+            price_dir = "📈" if (d.get("pChange") or 0) >= 0 else "📉"
             lines = [
-                f"📈 *{d.get('companyName', symbol)}* ({symbol})\n",
+                f"{price_dir} *{d.get('companyName', symbol)}* ({symbol})\n",
                 f"Price: *{price}* ({pc})",
                 f"Trend: *{trend}*",
             ]
             if rsi:
-                rsi_zone = ta.get("rsiZone", "")
+                rsi_zone = _safe(ta.get("rsiZone", ""))
                 lines.append(f"RSI: *{rsi:.1f}* {rsi_zone}")
             if ema.get("ema9"):
                 lines.append(f"EMA9: {_fmt_price(ema['ema9'])} | EMA21: {_fmt_price(ema.get('ema21'))}")
@@ -370,10 +391,10 @@ class TelegramService:
                 lines.append(f"EMA50: {_fmt_price(ema['ema50'])}")
             macd = ta.get("macd") or {}
             if macd.get("crossover"):
-                lines.append(f"MACD: *{macd['crossover']}*")
+                lines.append(f"MACD: *{_safe(macd['crossover'])}*")
             lines.append(f"\n🎯 Signal: *{signal}* (Confidence: {confidence})")
             if entry.get("entryCall"):
-                lines.append(f"Entry: {entry['entryCall']}")
+                lines.append(f"Entry: {_safe(entry['entryCall'])}")
             if entry.get("targetPrice"):
                 lines.append(f"Target: {_fmt_price(entry['targetPrice'])} | SL: {_fmt_price(entry.get('stopLoss'))}")
             return "\n".join(lines)
@@ -388,11 +409,11 @@ class TelegramService:
                 return f"⚠️ No entry data for *{symbol}*."
             lines = [
                 f"🎯 *Entry Signal — {symbol}*\n",
-                f"Signal: *{entry.get('signal','N/A')}*",
+                f"Signal: *{_safe(entry.get('signal','N/A'))}*",
                 f"Confidence: {entry.get('confidence','N/A')}",
             ]
             if entry.get("entryCall"):
-                lines.append(f"Entry: _{entry['entryCall']}_")
+                lines.append(f"Entry: {_safe(entry['entryCall'])}")
             if entry.get("targetPrice"):
                 lines.append(f"Target: {_fmt_price(entry['targetPrice'])}")
             if entry.get("stopLoss"):
@@ -400,7 +421,7 @@ class TelegramService:
             if entry.get("riskReward"):
                 lines.append(f"Risk:Reward = 1:{entry['riskReward']}")
             if entry.get("summary"):
-                lines.append(f"\n_{entry['summary']}_")
+                lines.append(f"\n{_safe(entry['summary'])}")
             return "\n".join(lines)
         except Exception:
             return f"⚠️ Could not get entry data for *{symbol}*."
