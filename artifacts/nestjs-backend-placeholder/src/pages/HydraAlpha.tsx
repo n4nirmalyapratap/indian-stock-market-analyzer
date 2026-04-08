@@ -106,7 +106,7 @@ function SupervisorTab() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "hydra",
-      text: "Hi! I'm your AI Stock Analyzer. I can forecast where a stock price might go, find two stocks that move together, test trading strategies on past data, and measure your portfolio risk. What would you like to explore?",
+      text: "Hi! I'm Nifty Node Bot. I can forecast where a stock price might go, find two stocks that move together, test trading strategies on past data, and measure your portfolio risk. What would you like to explore?",
       time: new Date().toLocaleTimeString(),
     }
   ]);
@@ -230,8 +230,8 @@ function SupervisorTab() {
             }`}>
               {m.role === "hydra" && (
                 <div className="flex items-center gap-1.5 mb-1">
-                  <Brain className="w-3 h-3 text-indigo-600" />
-                  <span className="text-xs font-semibold text-indigo-600">Hydra-Alpha Engine</span>
+                  <img src="/niftynodes-logo.png" alt="" className="w-4 h-4 rounded-full object-cover" />
+                  <span className="text-xs font-semibold text-indigo-600">Nifty Node Bot</span>
                   <span className="text-xs text-gray-400">{m.time}</span>
                 </div>
               )}
@@ -252,7 +252,7 @@ function SupervisorTab() {
             <div className="bg-white border border-gray-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
               <div className="flex items-center gap-2">
                 <Brain className="w-3 h-3 text-indigo-600 animate-pulse" />
-                <span className="text-xs text-gray-500">Hydra Engine processing</span>
+                <span className="text-xs text-gray-500">Nifty Node Bot processing</span>
                 <div className="flex gap-1">
                   {[0, 1, 2].map(i => (
                     <span key={i} className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce"
@@ -278,7 +278,7 @@ function SupervisorTab() {
         <div className="flex gap-2">
           <input
             className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
-            placeholder="Ask Hydra anything — forecast, pairs, VaR, backtest, sentiment..."
+            placeholder="Ask Nifty Node Bot anything — forecast, pairs, VaR, backtest, sentiment..."
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === "Enter" && !e.shiftKey && send()}
@@ -882,11 +882,11 @@ export default function HydraAlpha() {
         <div className="flex items-start justify-between">
           <div>
             <div className="flex items-center gap-3 mb-2">
-              <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center">
-                <Brain className="w-6 h-6 text-white" />
+              <div className="w-10 h-10 rounded-xl overflow-hidden bg-white/10 flex items-center justify-center flex-shrink-0">
+                <img src="/niftynodes-logo.png" alt="NiftyNodes" className="w-10 h-10 object-cover" />
               </div>
               <div>
-                <h1 className="text-2xl font-bold">AI Stock Analyzer</h1>
+                <h1 className="text-2xl font-bold">Nifty Node</h1>
                 <p className="text-indigo-300 text-sm">Professional-Grade Stock Analysis — Made Simple</p>
               </div>
             </div>

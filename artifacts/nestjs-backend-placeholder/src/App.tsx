@@ -11,7 +11,7 @@ import WhatsAppBot from "@/pages/WhatsAppBot";
 import TelegramBot from "@/pages/TelegramBot";
 import HydraAlpha from "@/pages/HydraAlpha";
 import NotFound from "@/pages/not-found";
-import { LayoutDashboard, BarChart3, Search, Scan, Filter, MessageCircle, TrendingUp, Send, Brain } from "lucide-react";
+import { LayoutDashboard, BarChart3, Search, Scan, Filter, MessageCircle, Send, Brain } from "lucide-react";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -34,10 +34,10 @@ function Layout({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen bg-gray-50 flex">
       <aside className="w-56 bg-white border-r border-gray-100 shadow-sm flex-shrink-0 hidden md:flex flex-col">
         <div className="px-4 py-5 border-b border-gray-100">
-          <div className="flex items-center gap-2">
-            <TrendingUp className="w-6 h-6 text-indigo-600" />
+          <div className="flex items-center gap-2.5">
+            <img src="/niftynodes-logo.png" alt="NiftyNodes" className="w-9 h-9 rounded-full object-cover" />
             <div>
-              <p className="font-bold text-gray-900 text-sm">NSE Analyzer</p>
+              <p className="font-bold text-gray-900 text-sm">Nifty Node</p>
               <p className="text-xs text-gray-400">Indian Stock Market</p>
             </div>
           </div>
@@ -64,8 +64,8 @@ function Layout({ children }: { children: React.ReactNode }) {
 
       <div className="flex-1 flex flex-col min-w-0">
         <div className="md:hidden bg-white border-b border-gray-100 px-4 py-3 flex items-center gap-2">
-          <TrendingUp className="w-5 h-5 text-indigo-600" />
-          <span className="font-bold text-gray-900 text-sm">NSE Analyzer</span>
+          <img src="/niftynodes-logo.png" alt="NiftyNodes" className="w-7 h-7 rounded-full object-cover" />
+          <span className="font-bold text-gray-900 text-sm">Nifty Node</span>
         </div>
         <div className="md:hidden bg-white border-b border-gray-100 px-2 py-2 flex gap-1 overflow-x-auto">
           {NAV.map(({ path, label, icon: Icon }) => {
