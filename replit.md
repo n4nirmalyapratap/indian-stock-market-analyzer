@@ -1,8 +1,10 @@
-# Workspace
+# Indian Stock Market Analyzer
 
 ## Overview
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+Full-stack Indian stock market analysis platform with NSE sector rotation tracking, chart pattern detection, stock scanners, and WhatsApp bot integration.
+
+Source: https://github.com/n4nirmalyapratap/indian-stock-market-analyzer
 
 ## Stack
 
@@ -10,18 +12,27 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - **Node.js version**: 24
 - **Package manager**: pnpm
 - **TypeScript version**: 5.9
-- **API framework**: Express 5
-- **Database**: PostgreSQL + Drizzle ORM
-- **Validation**: Zod (`zod/v4`), `drizzle-zod`
-- **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (CJS bundle)
+- **Backend**: NestJS (artifacts/nestjs-backend) — port 3001
+- **Frontend**: Next.js 14 (artifacts/nextjs-frontend) — port 3000
+- **Data sources**: NSE India API, Yahoo Finance
+- **Bot**: WhatsApp Web.js integration
 
 ## Key Commands
 
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- `pnpm --filter @workspace/api-server run dev` — run API server locally
+- `pnpm --filter @workspace/nestjs-backend run dev` — run NestJS backend
+- `pnpm --filter @workspace/nextjs-frontend run dev` — run Next.js frontend
+- Swagger API docs: http://localhost:3001/api/docs
 
-See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
+## Workflows
+
+- **NestJS Backend** — runs the NestJS API on port 3001
+- **Next.js Frontend** — runs the Next.js UI on port 3000
+
+## Features
+
+- NSE Sector Rotation analysis (15 sector indices)
+- Chart pattern detection (CALL/PUT signals)
+- Stock scanner with custom filters
+- Individual stock technical analysis (EMA, RSI, MACD, Bollinger Bands)
+- WhatsApp bot for automated alerts
+- Swagger API documentation
