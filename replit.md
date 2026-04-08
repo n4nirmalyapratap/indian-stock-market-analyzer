@@ -4,7 +4,7 @@
 
 Real-time Indian stock market analysis platform — sector rotation tracking,
 candlestick pattern detection, custom stock scanners, NLP-powered natural
-language queries, analytics layer, and WhatsApp bot integration.
+language queries, analytics layer, WhatsApp bot, and Telegram bot integration.
 
 **Backend: Python FastAPI (only). No Node.js backend is active.**
 
@@ -16,7 +16,8 @@ language queries, analytics layer, and WhatsApp bot integration.
 
 ```
 Stock Market Frontend  (React + Vite, port 3002)
-    ↓ Vite proxy: /api → localhost:8090
+    ↓ Reverse proxy: / → port 3002
+    ↓ Reverse proxy: /api → port 8090
 Python Backend         (FastAPI + uvicorn, port 8090)   ← ALL API routes
     ↓ fetches market data from NSE India + Yahoo Finance
 ```
@@ -27,7 +28,7 @@ Python Backend         (FastAPI + uvicorn, port 8090)   ← ALL API routes
 
 | Workflow | Command | Port | Purpose |
 |---|---|---|---|
-| **Python Backend** | `cd artifacts/python-backend && PORT=8090 python run.py` | 8090 | FastAPI — all stock/analytics/NLP APIs |
+| **Python Backend** | `cd artifacts/python-backend && PORT=8090 python run.py` | 8090 | FastAPI — all stock/analytics/NLP/Telegram APIs |
 | **Stock Market Frontend** | `BASE_PATH=/ PORT=3002 pnpm --filter @workspace/nestjs-backend-placeholder run dev` | 3002 | React UI |
 
 ## DEPRECATED Services (kept for reference, NOT started)
@@ -36,6 +37,21 @@ Python Backend         (FastAPI + uvicorn, port 8090)   ← ALL API routes
 |---|---|
 | `artifacts/nestjs-backend/` | Original NestJS/WhatsApp backend — replaced by Python |
 | `artifacts/api-server/` | Original Express stock data API — replaced by Python |
+
+---
+
+## Proxy Routing
+
+The Replit reverse proxy routes traffic based on artifact.toml registrations:
+
+| Path | Port | Service |
+|---|---|---|
+| `/api` | 8090 | Python FastAPI backend |
+| `/` | 3002 | React + Vite frontend |
+
+Artifact configs:
+- `artifacts/api-server/.replit-artifact/artifact.toml` → routes `/api` to port 8090
+- `artifacts/stock-market-app/.replit-artifact/artifact.toml` → routes `/` to port 3002
 
 ---
 
@@ -49,17 +65,19 @@ artifacts/
     requirements.txt           ← Python dependencies
     pandas_ta/                 ← ta-library shim (mirrors pandas-ta API)
     app/
-      routes/                  ← sectors, stocks, patterns, scanners, whatsapp, nlp, analytics
+      routes/                  ← sectors, stocks, patterns, scanners, whatsapp, nlp, analytics, telegram, universe
       services/                ← nse_service, yahoo_service, stocks, sectors, patterns,
-                                  scanners, whatsapp, nlp_service, analytics_service
+                                  scanners, whatsapp, nlp_service, analytics_service, telegram_service
       lib/
         universe.py            ← NIFTY100 (80 syms), MIDCAP, SMALLCAP, SECTOR_SYMBOLS
         indicators.py          ← Technical indicator wrappers
   nestjs-backend-placeholder/  ← ACTIVE: Vite + React frontend (port 3002)
     src/lib/api.ts             ← All frontend API calls (relative /api/*)
-    src/pages/                 ← Dashboard, Sectors, Stocks, Patterns, Scanners, WhatsApp
+    src/pages/                 ← Dashboard, Sectors, Stocks, Patterns, Scanners, WhatsApp, Telegram
+  stock-market-app/            ← Artifact registration only (proxy config)
+    .replit-artifact/          ← Routes / to port 3002
   nestjs-backend/              ← DEPRECATED (reference only)
-  api-server/                  ← DEPRECATED (reference only)
+  api-server/                  ← DEPRECATED (reference only); artifact.toml routes /api → 8090
   mockup-sandbox/              ← Replit canvas tool (managed by artifact system)
 lib/
   api-zod/                     ← Zod schemas (unused in active code)
@@ -89,6 +107,11 @@ scripts/                       ← post-merge.sh
 | WhatsApp | `POST /api/whatsapp/status` | Update status |
 | WhatsApp | `GET /api/whatsapp/messages` | Message history |
 | WhatsApp | `POST /api/whatsapp/message` | Send/test message |
+| Telegram | `GET /api/telegram/status` | Bot status + polling mode |
+| Telegram | `GET /api/telegram/messages` | Message log |
+| Telegram | `POST /api/telegram/webhook` | Telegram webhook receiver |
+| Telegram | `POST /api/telegram/set-webhook` | Register webhook URL |
+| Telegram | `POST /api/telegram/test` | Send test message |
 | NLP | `POST /api/nlp/query` | Natural language query |
 | Analytics | `GET /api/analytics/sector-correlation` | 30-day Pearson correlation |
 | Analytics | `GET /api/analytics/breadth-history` | A/D ratio time series |
@@ -98,11 +121,21 @@ scripts/                       ← post-merge.sh
 
 ---
 
+## Environment Variables / Secrets
+
+| Key | Required | Purpose |
+|---|---|---|
+| `SESSION_SECRET` | Optional | Session security |
+| `TELEGRAM_BOT_TOKEN` | Optional | Telegram bot — bot will show unconfigured without it |
+| `TWILIO_*` | Optional | WhatsApp bot via Twilio |
+
+---
+
 ## Stack
 
 - **Monorepo**: pnpm workspaces
 - **Python**: 3.11 · FastAPI · uvicorn · spaCy 3.8 · pandas · numpy · ta library
-- **Node.js**: 24 (frontend only — Vite + React)
+- **Node.js**: 24 (frontend only — Vite + React + TailwindCSS + TanStack Query)
 - **Data sources**: NSE India REST API · Yahoo Finance (httpx)
 - **NLP**: spaCy rule-based EntityRuler + Nifty100/sector vocabulary
 - **pandas-ta**: custom shim at `artifacts/python-backend/pandas_ta/` wrapping `ta` library
@@ -113,9 +146,11 @@ scripts/                       ← post-merge.sh
 
 1. Import repo from GitHub: `n4nirmalyapratap/indian-stock-market-analyzer`
 2. `pnpm install` (installs frontend dependencies)
-3. `cd artifacts/python-backend && pip install -r requirements.txt`
-4. The `run.py` auto-downloads `en_core_web_sm` (spaCy model) on first start
-5. Hit **Run** — the Project button starts Python Backend + Stock Market Frontend
+3. Install Python 3.11 module in Replit
+4. `cd artifacts/python-backend && pip install -r requirements.txt`
+5. The `run.py` auto-downloads `en_core_web_sm` (spaCy model) on first start
+6. Add `TELEGRAM_BOT_TOKEN` secret if you want Telegram bot active
+7. Hit **Run** — starts Python Backend + Stock Market Frontend
 
 ---
 
@@ -128,4 +163,5 @@ scripts/                       ← post-merge.sh
 - **Scanners**: Custom stock filters with condition builder + built-in templates
 - **NLP**: Plain-English queries ("analyze RELIANCE", "bullish IT stocks")
 - **Analytics**: Sector correlation matrix, breadth history, top movers, heatmap
-- **WhatsApp Bot**: Twilio webhook with NLP fallback for natural language messages
+- **WhatsApp Bot**: Twilio webhook with NLP fallback
+- **Telegram Bot**: Long-poll bot with commands (/analyze, /sectors, /rotation, /patterns, /movers, /heatmap) + NLP fallback
