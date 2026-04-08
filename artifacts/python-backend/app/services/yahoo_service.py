@@ -34,6 +34,12 @@ def _set_cache(key: str, data: Any, ttl: int) -> None:
 
 
 def _to_yahoo(symbol: str) -> str:
+    """Return the Yahoo Finance ticker for a symbol.
+    Index symbols (starting with ^) are returned as-is.
+    NSE equity symbols get the .NS suffix.
+    """
+    if symbol.startswith("^"):
+        return symbol
     return f"{symbol}.NS"
 
 

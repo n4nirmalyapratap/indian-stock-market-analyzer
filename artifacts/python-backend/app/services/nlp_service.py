@@ -20,66 +20,34 @@ NIFTY100_SYMBOLS = [
     "NESTLEIND", "TATACONSUM", "ADANIPORTS", "SBILIFE", "BRITANNIA", "APOLLOHOSP",
     "BPCL", "TATASTEEL", "ADANIENT", "EICHERMOT", "HEROMOTOCO", "GRASIM",
     "HAVELLS", "SHREECEM", "HDFCLIFE", "DABUR", "PIDILITE", "BAJAJFINSV",
-    "SIEMENS", "DLF", "TRENT", "LUPIN", "BIOCON", "IPCALAB", "GAIL",
-    "MOTHERSON", "COLPAL", "MUTHOOTFIN", "BERGEPAINT", "GODREJCP", "BOSCHLTD",
-    "ABB", "MCDOWELL-N", "AMBUJACEM", "ACCLIMITED", "BANKBARODA", "PNB",
-    "CANBK", "IDBI", "FEDERALBNK", "IDFCFIRSTB", "BANDHANBNK", "AUBANK",
-    "RBLBANK", "YESBANK", "PERSISTENT", "COFORGE", "MPHASIS", "LTTS",
-    "KPITTECH", "TATAELXSI", "CYIENT", "MINDTREE", "MFSL", "IRCTC",
-    "ZOMATO", "PAYTM", "NYKAA", "PB", "SULA", "DELHIVERY",
+    "SIEMENS", "DLF", "TRENT", "LUPIN", "BIOCON", "GAIL",
+    "COLPAL", "MUTHOOTFIN", "BERGEPAINT", "GODREJCP", "BOSCHLTD",
+    "ABB", "BANKBARODA", "PNB", "CANBK", "FEDERALBNK", "IDFCFIRSTB",
+    "BANDHANBNK", "RBLBANK", "YESBANK", "PERSISTENT", "COFORGE", "MPHASIS",
+    "LTTS", "KPITTECH", "TATAELXSI", "CYIENT", "IRCTC", "ZOMATO",
 ]
 
 SECTOR_ALIASES: dict[str, str] = {
-    # canonical name → NSE symbol
-    "NIFTY IT": "NIFTY IT",
-    "IT": "NIFTY IT",
-    "TECH": "NIFTY IT",
-    "TECHNOLOGY": "NIFTY IT",
-    "INFORMATION TECHNOLOGY": "NIFTY IT",
-    "SOFTWARE": "NIFTY IT",
-    "NIFTY BANK": "NIFTY BANK",
-    "BANK": "NIFTY BANK",
-    "BANKING": "NIFTY BANK",
-    "BANKEX": "NIFTY BANK",
-    "NIFTY AUTO": "NIFTY AUTO",
-    "AUTO": "NIFTY AUTO",
-    "AUTOMOBILE": "NIFTY AUTO",
-    "NIFTY PHARMA": "NIFTY PHARMA",
-    "PHARMA": "NIFTY PHARMA",
-    "PHARMACEUTICALS": "NIFTY PHARMA",
-    "NIFTY FMCG": "NIFTY FMCG",
-    "FMCG": "NIFTY FMCG",
-    "CONSUMER": "NIFTY FMCG",
-    "NIFTY METAL": "NIFTY METAL",
-    "METAL": "NIFTY METAL",
-    "METALS": "NIFTY METAL",
-    "STEEL": "NIFTY METAL",
-    "NIFTY REALTY": "NIFTY REALTY",
-    "REALTY": "NIFTY REALTY",
-    "REAL ESTATE": "NIFTY REALTY",
-    "NIFTY ENERGY": "NIFTY ENERGY",
-    "ENERGY": "NIFTY ENERGY",
-    "OIL": "NIFTY ENERGY",
-    "NIFTY MEDIA": "NIFTY MEDIA",
-    "MEDIA": "NIFTY MEDIA",
+    "NIFTY IT": "NIFTY IT", "IT": "NIFTY IT", "TECH": "NIFTY IT",
+    "TECHNOLOGY": "NIFTY IT", "INFORMATION TECHNOLOGY": "NIFTY IT", "SOFTWARE": "NIFTY IT",
+    "NIFTY BANK": "NIFTY BANK", "BANK": "NIFTY BANK", "BANKING": "NIFTY BANK", "BANKEX": "NIFTY BANK",
+    "NIFTY AUTO": "NIFTY AUTO", "AUTO": "NIFTY AUTO", "AUTOMOBILE": "NIFTY AUTO",
+    "NIFTY PHARMA": "NIFTY PHARMA", "PHARMA": "NIFTY PHARMA", "PHARMACEUTICALS": "NIFTY PHARMA",
+    "NIFTY FMCG": "NIFTY FMCG", "FMCG": "NIFTY FMCG", "CONSUMER": "NIFTY FMCG",
+    "NIFTY METAL": "NIFTY METAL", "METAL": "NIFTY METAL", "METALS": "NIFTY METAL", "STEEL": "NIFTY METAL",
+    "NIFTY REALTY": "NIFTY REALTY", "REALTY": "NIFTY REALTY", "REAL ESTATE": "NIFTY REALTY",
+    "NIFTY ENERGY": "NIFTY ENERGY", "ENERGY": "NIFTY ENERGY", "OIL": "NIFTY ENERGY",
+    "NIFTY MEDIA": "NIFTY MEDIA", "MEDIA": "NIFTY MEDIA",
     "NIFTY FINANCIAL SERVICES": "NIFTY FINANCIAL SERVICES",
-    "FINANCIAL SERVICES": "NIFTY FINANCIAL SERVICES",
-    "NBFC": "NIFTY FINANCIAL SERVICES",
-    "NIFTY PSU BANK": "NIFTY PSU BANK",
-    "PSU BANK": "NIFTY PSU BANK",
-    "PSU": "NIFTY PSU BANK",
+    "FINANCIAL SERVICES": "NIFTY FINANCIAL SERVICES", "NBFC": "NIFTY FINANCIAL SERVICES",
+    "NIFTY PSU BANK": "NIFTY PSU BANK", "PSU BANK": "NIFTY PSU BANK", "PSU": "NIFTY PSU BANK",
     "NIFTY CONSUMER DURABLES": "NIFTY CONSUMER DURABLES",
-    "CONSUMER DURABLES": "NIFTY CONSUMER DURABLES",
-    "DURABLES": "NIFTY CONSUMER DURABLES",
-    "NIFTY OIL AND GAS": "NIFTY OIL AND GAS",
-    "OIL AND GAS": "NIFTY OIL AND GAS",
+    "CONSUMER DURABLES": "NIFTY CONSUMER DURABLES", "DURABLES": "NIFTY CONSUMER DURABLES",
+    "NIFTY OIL AND GAS": "NIFTY OIL AND GAS", "OIL AND GAS": "NIFTY OIL AND GAS",
     "OIL & GAS": "NIFTY OIL AND GAS",
     "NIFTY HEALTHCARE INDEX": "NIFTY HEALTHCARE INDEX",
-    "HEALTHCARE": "NIFTY HEALTHCARE INDEX",
-    "HEALTH": "NIFTY HEALTHCARE INDEX",
-    "NIFTY 50": "NIFTY 50",
-    "NIFTY": "NIFTY 50",
-    "NIFTY50": "NIFTY 50",
+    "HEALTHCARE": "NIFTY HEALTHCARE INDEX", "HEALTH": "NIFTY HEALTHCARE INDEX",
+    "NIFTY 50": "NIFTY 50", "NIFTY": "NIFTY 50", "NIFTY50": "NIFTY 50",
 }
 
 COMPANY_TO_SYMBOL: dict[str, str] = {
@@ -98,60 +66,30 @@ COMPANY_TO_SYMBOL: dict[str, str] = {
     "ASIAN PAINTS": "ASIANPAINT",
     "MARUTI": "MARUTI", "MARUTI SUZUKI": "MARUTI",
     "HCL TECH": "HCLTECH", "HCL TECHNOLOGIES": "HCLTECH",
-    "WIPRO": "WIPRO",
-    "TITAN": "TITAN",
-    "NTPC": "NTPC",
+    "WIPRO": "WIPRO", "TITAN": "TITAN", "NTPC": "NTPC",
     "SUN PHARMA": "SUNPHARMA", "SUN PHARMACEUTICAL": "SUNPHARMA",
     "TATA MOTORS": "TATAMOTORS",
     "LARSEN": "LT", "L&T": "LT", "LARSEN AND TOUBRO": "LT",
     "COAL INDIA": "COALINDIA",
     "BAJAJ AUTO": "BAJAJ-AUTO",
-    "CIPLA": "CIPLA",
-    "DR REDDY": "DRREDDY", "DR. REDDY": "DRREDDY",
-    "TECH MAHINDRA": "TECHM",
-    "HINDALCO": "HINDALCO",
-    "ONGC": "ONGC",
-    "POWER GRID": "POWERGRID",
-    "JSW STEEL": "JSWSTEEL",
-    "INDUSIND BANK": "INDUSINDBK",
-    "ULTRA CEMENT": "ULTRACEMCO", "ULTRATECH": "ULTRACEMCO",
-    "NESTLE": "NESTLEIND",
-    "TATA CONSUMER": "TATACONSUM",
-    "ADANI PORTS": "ADANIPORTS",
-    "BRITANNIA": "BRITANNIA",
-    "APOLLO HOSPITALS": "APOLLOHOSP",
-    "BPCL": "BPCL", "BHARAT PETROLEUM": "BPCL",
-    "TATA STEEL": "TATASTEEL",
-    "ADANI ENTERPRISES": "ADANIENT",
-    "EICHER MOTORS": "EICHERMOT",
-    "HERO MOTOCORP": "HEROMOTOCO",
-    "GRASIM": "GRASIM",
-    "HAVELLS": "HAVELLS",
-    "SHREE CEMENT": "SHREECEM",
-    "HDFC LIFE": "HDFCLIFE",
-    "DABUR": "DABUR",
-    "PIDILITE": "PIDILITE",
-    "SIEMENS": "SIEMENS",
-    "DLF": "DLF",
-    "TRENT": "TRENT",
-    "LUPIN": "LUPIN",
-    "GAIL": "GAIL",
-    "COLGATE": "COLPAL",
-    "BERGEPAINT": "BERGEPAINT", "BERGER PAINTS": "BERGEPAINT",
-    "BOSCH": "BOSCHLTD",
-    "BANK OF BARODA": "BANKBARODA",
-    "PNB": "PNB", "PUNJAB NATIONAL": "PNB",
-    "CANARA BANK": "CANBK",
-    "FEDERAL BANK": "FEDERALBNK",
-    "YES BANK": "YESBANK",
-    "IRCTC": "IRCTC",
-    "ZOMATO": "ZOMATO",
-    "PERSISTENT": "PERSISTENT",
-    "COFORGE": "COFORGE",
-    "MPHASIS": "MPHASIS",
+    "CIPLA": "CIPLA", "DR REDDY": "DRREDDY", "DR. REDDY": "DRREDDY",
+    "TECH MAHINDRA": "TECHM", "HINDALCO": "HINDALCO", "ONGC": "ONGC",
+    "POWER GRID": "POWERGRID", "JSW STEEL": "JSWSTEEL",
+    "INDUSIND BANK": "INDUSINDBK", "ULTRA CEMENT": "ULTRACEMCO", "ULTRATECH": "ULTRACEMCO",
+    "NESTLE": "NESTLEIND", "TATA CONSUMER": "TATACONSUM", "ADANI PORTS": "ADANIPORTS",
+    "BRITANNIA": "BRITANNIA", "APOLLO HOSPITALS": "APOLLOHOSP",
+    "BPCL": "BPCL", "BHARAT PETROLEUM": "BPCL", "TATA STEEL": "TATASTEEL",
+    "ADANI ENTERPRISES": "ADANIENT", "EICHER MOTORS": "EICHERMOT",
+    "HERO MOTOCORP": "HEROMOTOCO", "GRASIM": "GRASIM", "HAVELLS": "HAVELLS",
+    "SHREE CEMENT": "SHREECEM", "HDFC LIFE": "HDFCLIFE",
+    "DABUR": "DABUR", "PIDILITE": "PIDILITE", "SIEMENS": "SIEMENS", "DLF": "DLF",
+    "TRENT": "TRENT", "LUPIN": "LUPIN", "GAIL": "GAIL",
+    "COLGATE": "COLPAL", "BANK OF BARODA": "BANKBARODA",
+    "PNB": "PNB", "PUNJAB NATIONAL": "PNB", "CANARA BANK": "CANBK",
+    "FEDERAL BANK": "FEDERALBNK", "YES BANK": "YESBANK",
+    "IRCTC": "IRCTC", "ZOMATO": "ZOMATO",
+    "PERSISTENT": "PERSISTENT", "COFORGE": "COFORGE", "MPHASIS": "MPHASIS",
 }
-
-# ── intent definitions ────────────────────────────────────────────────────────
 
 INTENT_PATTERNS: dict[str, list[str]] = {
     "help": [
@@ -173,7 +111,7 @@ INTENT_PATTERNS: dict[str, list[str]] = {
     "rotation_query": [
         "rotation", "focus", "where to invest", "where to buy", "money flowing",
         "outperforming", "underperforming", "best sector", "top sector",
-        "breadth", "advance decline", "market phase", "bull", "bear",
+        "breadth", "advance decline", "market phase",
     ],
     "pattern_scan": [
         "pattern", "patterns", "candlestick", "signal", "signals",
@@ -194,7 +132,7 @@ INTENT_PATTERNS: dict[str, list[str]] = {
 
 SIGNAL_WORDS = {
     "bullish": "CALL", "bearish": "PUT", "call": "CALL", "put": "PUT",
-    "oversold": "CALL", "overbought": "PUT", "buy": "CALL", "sell": "PUT",
+    "oversold": "CALL", "overbought": "PUT",
 }
 
 
@@ -207,7 +145,8 @@ class NlpService:
         if self._loaded and self._nlp is not None:
             return self._nlp
         nlp = spacy.load("en_core_web_sm", disable=["ner"])
-        ruler = nlp.add_pipe("entity_ruler", before="senter")
+        # Place entity_ruler LAST (safe — works regardless of which pipes are present)
+        ruler = nlp.add_pipe("entity_ruler", last=True)
         patterns = []
         for sym in NIFTY100_SYMBOLS:
             patterns.append({"label": "STOCK", "pattern": sym})
@@ -232,7 +171,6 @@ class NlpService:
             for kw in keywords:
                 if kw in lower:
                     scores[intent] += 1.0 + (len(kw.split()) - 1) * 0.5
-        # Boost stock_analysis if text looks like a single upper-case symbol
         clean = lower.strip()
         if re.match(r"^[a-z0-9&-]{2,15}$", clean) and clean.replace("-", "").isalnum():
             upper = clean.upper()
@@ -256,7 +194,6 @@ class NlpService:
                 canon = SECTOR_ALIASES.get(raw)
                 if canon and canon not in sectors:
                     sectors.append(canon)
-        # Fallback: check upper-cased tokens against symbol list
         if not stocks:
             for token in doc:
                 t = token.text.upper()
@@ -264,7 +201,6 @@ class NlpService:
                     stocks.append(t)
                 if t in COMPANY_TO_SYMBOL and COMPANY_TO_SYMBOL[t] not in stocks:
                     stocks.append(COMPANY_TO_SYMBOL[t])
-        # Detect bias words (bullish/bearish/call/put)
         signal = None
         lower = text.lower()
         for word, sig in SIGNAL_WORDS.items():

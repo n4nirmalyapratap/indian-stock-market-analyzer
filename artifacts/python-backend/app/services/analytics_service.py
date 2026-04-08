@@ -5,7 +5,7 @@ All data is computed on-demand and cached in memory with TTLs.
 from __future__ import annotations
 import asyncio
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Optional
 
 import numpy as np
@@ -13,9 +13,10 @@ import pandas as pd
 
 from .yahoo_service import YahooService
 from .nse_service import NseService
-from .sectors_service import SectorsService, SECTOR_INDICES
+from .sectors_service import SectorsService
 from .patterns_service import PatternsService, _cached_patterns
 
+# Yahoo Finance index tickers for Indian sector indices
 SECTOR_YAHOO_TICKERS: dict[str, str] = {
     "NIFTY 50":                  "^NSEI",
     "NIFTY BANK":                "^NSEBANK",
@@ -34,18 +35,21 @@ SECTOR_YAHOO_TICKERS: dict[str, str] = {
     "NIFTY HEALTHCARE INDEX":    "^CNXHEALTH",
 }
 
-# Stock tickers for top-movers (Nifty 50 subset)
-NIFTY50_SYMBOLS = [
-    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
-    "HINDUNILVR", "ITC", "SBIN", "BHARTIARTL", "KOTAKBANK",
-    "BAJFINANCE", "AXISBANK", "ASIANPAINT", "MARUTI", "HCLTECH",
-    "WIPRO", "TITAN", "NTPC", "SUNPHARMA", "TATAMOTORS",
-    "LT", "COALINDIA", "BAJAJ-AUTO", "CIPLA", "DRREDDY",
-    "TECHM", "HINDALCO", "ONGC", "POWERGRID", "JSWSTEEL",
-    "INDUSINDBK", "ULTRACEMCO", "NESTLEIND", "TATACONSUM", "ADANIPORTS",
-    "BRITANNIA", "APOLLOHOSP", "BPCL", "TATASTEEL", "ADANIENT",
-    "EICHERMOT", "HEROMOTOCO", "GRASIM", "HAVELLS", "SHREECEM",
-    "HDFCLIFE", "DABUR", "PIDILITE", "BAJAJFINSV", "SIEMENS",
+# Full Nifty 100 symbol list for analytics coverage
+NIFTY100_SYMBOLS = [
+    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR", "ITC",
+    "SBIN", "BHARTIARTL", "KOTAKBANK", "BAJFINANCE", "AXISBANK", "ASIANPAINT",
+    "MARUTI", "HCLTECH", "WIPRO", "TITAN", "NTPC", "SUNPHARMA", "TATAMOTORS",
+    "LT", "COALINDIA", "BAJAJ-AUTO", "DIVISLAB", "CIPLA", "DRREDDY", "TECHM",
+    "HINDALCO", "ONGC", "POWERGRID", "JSWSTEEL", "INDUSINDBK", "ULTRACEMCO",
+    "NESTLEIND", "TATACONSUM", "ADANIPORTS", "SBILIFE", "BRITANNIA", "APOLLOHOSP",
+    "BPCL", "TATASTEEL", "ADANIENT", "EICHERMOT", "HEROMOTOCO", "GRASIM",
+    "HAVELLS", "SHREECEM", "HDFCLIFE", "DABUR", "PIDILITE", "BAJAJFINSV",
+    "SIEMENS", "DLF", "TRENT", "LUPIN", "GAIL",
+    "COLPAL", "MUTHOOTFIN", "BERGEPAINT", "GODREJCP", "BOSCHLTD",
+    "ABB", "BANKBARODA", "PNB", "CANBK", "FEDERALBNK", "IDFCFIRSTB",
+    "BANDHANBNK", "RBLBANK", "YESBANK", "PERSISTENT", "COFORGE", "MPHASIS",
+    "LTTS", "KPITTECH", "TATAELXSI", "CYIENT", "IRCTC", "ZOMATO",
 ]
 
 _CACHE: dict[str, dict] = {}
@@ -90,13 +94,11 @@ class AnalyticsService:
             return cached
 
         sector_data: dict[str, list[float]] = {}
-        sector_names = list(SECTOR_YAHOO_TICKERS.keys())
 
-        # Fetch NSE sector data first (faster, gives % change per day)
-        for name in sector_names:
-            ticker = SECTOR_YAHOO_TICKERS[name]
+        for name, ticker in SECTOR_YAHOO_TICKERS.items():
             try:
-                hist = await self.yahoo.get_historical_data(ticker.lstrip("^"), days)
+                # ticker is e.g. "^NSEI" — YahooService now handles ^ prefix correctly
+                hist = await self.yahoo.get_historical_data(ticker, days)
                 if len(hist) < 5:
                     continue
                 closes = [d["close"] for d in hist if d.get("close")]
@@ -105,17 +107,17 @@ class AnalyticsService:
                     for i in range(1, len(closes))
                 ]
                 sector_data[name] = returns
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.15)
             except Exception:
                 pass
 
         if not sector_data:
-            # Fallback: use live sector data to approximate a simple breadth correlation
+            # Fallback: use live sector pChange as single-point proxy
             live = await self.sectors.get_all_sectors()
             for s in live:
-                sector_data[s["name"]] = [s.get("pChange") or 0]
+                if s.get("pChange") is not None:
+                    sector_data[s["name"]] = [s["pChange"]]
 
-        # Build correlation matrix using pandas
         min_len = min(len(v) for v in sector_data.values()) if sector_data else 0
         if min_len < 2:
             result = {
@@ -125,19 +127,16 @@ class AnalyticsService:
                 "correlationMatrix": [],
                 "topCorrelations": [],
                 "topDivergences": [],
-                "message": "Insufficient data for correlation; showing sector list only",
+                "message": "Insufficient historical data; try again during market hours",
             }
-            _set_cache(cache_key, result, 3600)
+            _set_cache(cache_key, result, 1800)
             return result
 
         df = pd.DataFrame({k: v[-min_len:] for k, v in sector_data.items()})
         corr = df.corr()
-
-        # Build flat matrix list
         sectors_list = corr.columns.tolist()
         matrix = corr.values.tolist()
 
-        # Top correlations (pairs most correlated, excl. self)
         pairs = []
         for i, s1 in enumerate(sectors_list):
             for j, s2 in enumerate(sectors_list):
@@ -145,7 +144,7 @@ class AnalyticsService:
                     continue
                 pairs.append({
                     "sector1": s1, "sector2": s2,
-                    "correlation": round(corr.loc[s1, s2], 3),
+                    "correlation": round(float(corr.loc[s1, s2]), 3),
                 })
         pairs_sorted = sorted(pairs, key=lambda p: abs(p["correlation"]), reverse=True)
 
@@ -153,9 +152,9 @@ class AnalyticsService:
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "days": days,
             "sectors": sectors_list,
-            "correlationMatrix": [[round(v, 3) for v in row] for row in matrix],
-            "topCorrelations": [p for p in pairs_sorted if p["correlation"] >= 0.7][:10],
-            "topDivergences": [p for p in pairs_sorted if p["correlation"] <= -0.3][:5],
+            "correlationMatrix": [[round(float(v), 3) for v in row] for row in matrix],
+            "topCorrelations": [p for p in pairs_sorted if p["correlation"] >= 0.6][:10],
+            "topDivergences":  [p for p in pairs_sorted if p["correlation"] <= -0.2][:5],
         }
         _set_cache(cache_key, result, 3600)
         return result
@@ -168,14 +167,15 @@ class AnalyticsService:
         if cached:
             return cached
 
-        # We proxy breadth from Nifty 100 daily returns (up vs down)
+        # Use a broad sample of Nifty100 for advance/decline tracking
+        sample = NIFTY100_SYMBOLS[:40]
         history_by_sym: dict[str, list[dict]] = {}
-        for sym in NIFTY50_SYMBOLS[:20]:
+        for sym in sample:
             try:
                 h = await self.yahoo.get_historical_data(sym, days + 5)
                 if len(h) >= 2:
                     history_by_sym[sym] = h[-(days):]
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.12)
             except Exception:
                 pass
 
@@ -183,42 +183,37 @@ class AnalyticsService:
             result = {
                 "timestamp": datetime.utcnow().isoformat() + "Z",
                 "days": days,
+                "stocksTracked": 0,
                 "breadthSeries": [],
-                "summary": {"avgAdvances": 0, "avgDeclines": 0},
+                "summary": {"avgAdvances": 0, "avgDeclines": 0, "bullishDays": 0, "bearishDays": 0},
             }
             _set_cache(cache_key, result, 3600)
             return result
 
-        # Align by date
         min_len = min(len(v) for v in history_by_sym.values())
         breadth_series = []
-        for day_idx in range(min_len):
+        for day_idx in range(1, min_len):
             date = list(history_by_sym.values())[0][day_idx]["date"]
-            advances = 0
-            declines = 0
-            unchanged = 0
+            advances = declines = unchanged = 0
             for h in history_by_sym.values():
-                if day_idx >= 1:
-                    prev_close = h[day_idx - 1]["close"]
-                    curr_close = h[day_idx]["close"]
-                    if curr_close > prev_close:
-                        advances += 1
-                    elif curr_close < prev_close:
-                        declines += 1
-                    else:
-                        unchanged += 1
-            if day_idx == 0:
-                continue
+                prev_close = h[day_idx - 1]["close"]
+                curr_close = h[day_idx]["close"]
+                if curr_close > prev_close:
+                    advances += 1
+                elif curr_close < prev_close:
+                    declines += 1
+                else:
+                    unchanged += 1
+            total = advances + declines + unchanged
             ad_ratio = advances / declines if declines > 0 else float(advances)
             breadth_series.append({
                 "date": date,
                 "advances": advances,
                 "declines": declines,
                 "unchanged": unchanged,
-                "total": advances + declines + unchanged,
+                "total": total,
                 "adRatio": round(ad_ratio, 2),
-                "breadthScore": round(advances / (advances + declines + unchanged) * 100, 1)
-                    if (advances + declines + unchanged) > 0 else 0,
+                "breadthScore": round(advances / total * 100, 1) if total > 0 else 0,
             })
 
         avg_adv = sum(b["advances"] for b in breadth_series) / len(breadth_series) if breadth_series else 0
@@ -246,8 +241,9 @@ class AnalyticsService:
         if cached:
             return cached
 
+        # Pull quotes for full Nifty100
         movers = []
-        for sym in NIFTY50_SYMBOLS[:30]:
+        for sym in NIFTY100_SYMBOLS:
             try:
                 q = await self.yahoo.get_quote(sym)
                 if q:
@@ -261,21 +257,21 @@ class AnalyticsService:
                         "change": round(q.get("change") or 0, 2),
                         "pChange": round(pc, 2),
                         "volume": vol,
-                        "momentumScore": round(
-                            (abs(pc) * 0.6 + (vol / 1_000_000) * 0.4), 2
-                        ),
+                        "momentumScore": round(abs(pc) * 0.6 + (vol / 1_000_000) * 0.4, 2),
                     })
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(0.12)
             except Exception:
                 pass
 
         gainers = sorted(movers, key=lambda s: s["pChange"], reverse=True)[:10]
         losers  = sorted(movers, key=lambda s: s["pChange"])[:10]
+        most_active = sorted(movers, key=lambda s: s.get("volume") or 0, reverse=True)[:10]
         result = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
+            "totalScanned": len(movers),
             "gainers": gainers,
             "losers": losers,
-            "mostActive": sorted(movers, key=lambda s: s.get("volume") or 0, reverse=True)[:10],
+            "mostActive": most_active,
         }
         _set_cache(cache_key, result, 1800)
         return result
@@ -304,15 +300,15 @@ class AnalyticsService:
                     "avgConfidence": 0.0,
                     "symbols": [],
                     "successCount": 0,
+                    "totalChecked": 0,
                     "successRate": None,
                 }
             entry = stats_by_pattern[name]
             entry["detections"] += 1
-            entry["avgConfidence"] += p.get("confidence", 0)
-            if p.get("symbol") not in entry["symbols"]:
+            entry["avgConfidence"] += p.get("confidence") or 0
+            if p.get("symbol") and p["symbol"] not in entry["symbols"]:
                 entry["symbols"].append(p["symbol"])
 
-        # Backtest: for each pattern+symbol, check if price moved in expected direction within 5 days
         for name, entry in stats_by_pattern.items():
             entry["avgConfidence"] = round(
                 entry["avgConfidence"] / entry["detections"], 1
@@ -325,9 +321,9 @@ class AnalyticsService:
                     if len(h) < 6:
                         continue
                     price_at_detection = h[-6]["close"]
-                    price_5d_later = h[-1]["close"]
+                    price_5d_later     = h[-1]["close"]
                     expected_up = entry["signal"] == "CALL"
-                    actual_up = price_5d_later > price_at_detection
+                    actual_up   = price_5d_later > price_at_detection
                     if expected_up == actual_up:
                         hits += 1
                     checked += 1
@@ -336,19 +332,17 @@ class AnalyticsService:
                     pass
             if checked > 0:
                 entry["successCount"] = hits
-                entry["successRate"] = round(hits / checked * 100, 1)
+                entry["totalChecked"] = checked
+                entry["successRate"]  = round(hits / checked * 100, 1)
 
         stats_list = sorted(
-            stats_by_pattern.values(),
-            key=lambda s: s["avgConfidence"],
-            reverse=True,
+            stats_by_pattern.values(), key=lambda s: s["avgConfidence"], reverse=True
         )
-        call_stats  = [s for s in stats_list if s["signal"] == "CALL"]
-        put_stats   = [s for s in stats_list if s["signal"] == "PUT"]
-        best_rate   = sorted(
+        call_stats = [s for s in stats_list if s["signal"] == "CALL"]
+        put_stats  = [s for s in stats_list if s["signal"] == "PUT"]
+        best_rate  = sorted(
             [s for s in stats_list if s.get("successRate") is not None],
-            key=lambda s: s["successRate"],
-            reverse=True,
+            key=lambda s: s["successRate"], reverse=True,
         )[:5]
 
         result = {
@@ -356,7 +350,7 @@ class AnalyticsService:
             "totalPatternsTracked": len(stats_list),
             "stats": stats_list,
             "callPatterns": call_stats,
-            "putPatterns": put_stats,
+            "putPatterns":  put_stats,
             "highestSuccessRate": best_rate,
         }
         _set_cache(cache_key, result, 7200)
@@ -370,46 +364,48 @@ class AnalyticsService:
         if cached:
             return cached
 
-        sectors = await self.sectors.get_all_sectors()
-        # Build heatmap: daily pChange per sector + last 5 values from Yahoo
+        live_sectors = await self.sectors.get_all_sectors()
         heatmap: list[dict] = []
-        for s in sectors:
-            sym = SECTOR_YAHOO_TICKERS.get(s["symbol"])
+
+        for s in live_sectors:
+            ticker = SECTOR_YAHOO_TICKERS.get(s["symbol"])
             weekly: list[dict] = []
-            if sym:
+            if ticker:
                 try:
-                    h = await self.yahoo.get_historical_data(sym.lstrip("^"), 10)
+                    h = await self.yahoo.get_historical_data(ticker, 10)
                     closes = [d["close"] for d in h if d.get("close")]
                     dates  = [d["date"]  for d in h if d.get("close")]
                     for i in range(1, min(6, len(closes))):
                         pc = (closes[i] - closes[i - 1]) / closes[i - 1] * 100
                         weekly.append({"date": dates[i], "pChange": round(pc, 2)})
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.12)
                 except Exception:
                     pass
+
+            pc_today = round(s.get("pChange") or 0, 2)
             heatmap.append({
                 "name": s["name"],
                 "symbol": s["symbol"],
                 "category": s.get("category", ""),
-                "todayPChange": round(s.get("pChange") or 0, 2),
+                "todayPChange": pc_today,
                 "lastPrice": s.get("lastPrice"),
                 "trend": s.get("focus", "HOLD"),
                 "weeklyChanges": weekly,
                 "color": (
-                    "green"  if (s.get("pChange") or 0) > 1.5 else
-                    "lime"   if (s.get("pChange") or 0) > 0 else
-                    "salmon" if (s.get("pChange") or 0) > -1.5 else
+                    "green"  if pc_today > 1.5  else
+                    "lime"   if pc_today > 0     else
+                    "salmon" if pc_today > -1.5  else
                     "red"
                 ),
             })
 
+        advancing = sum(1 for h in heatmap if h["todayPChange"] > 0)
         result = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "sectors": heatmap,
-            "overallBias": (
-                "BULLISH"  if sum(1 for h in heatmap if h["todayPChange"] > 0) > len(heatmap) // 2 else
-                "BEARISH"
-            ),
+            "overallBias": "BULLISH" if advancing > len(heatmap) // 2 else "BEARISH",
+            "advancing": advancing,
+            "declining": len(heatmap) - advancing,
         }
         _set_cache(cache_key, result, 1800)
         return result
