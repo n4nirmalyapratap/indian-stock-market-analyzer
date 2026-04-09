@@ -161,7 +161,42 @@ Look for `"source": "YAHOO"` or `"source": "NSE"` in the response. If you see `"
 
 ## Pushing Changes to GitHub
 
-After making any changes:
+There are two ways to push. Use whichever suits the situation.
+
+### Option 1 — Script push (no git credentials needed, used by the agent)
+
+This uses the Replit GitHub connector (OAuth) to push via the GitHub REST API. No `GITHUB_TOKEN` secret or git remote setup is required for this method. It syncs all source files automatically.
+
+**Prerequisites:**
+- The Replit GitHub integration must be connected (Settings → Integrations → GitHub → Connect)
+
+**Run the push script:**
+```bash
+pnpm --filter @workspace/scripts run push-github
+```
+
+The script lives at `scripts/src/push-github.ts`. It:
+1. Authenticates via the connected GitHub account through the Replit OAuth connector
+2. Gets the current HEAD commit from GitHub
+3. Collects all source files (excludes `node_modules`, `.pythonlibs`, `pandas_ta`, binary images, caches, generated files)
+4. Creates blobs on GitHub for each file (skips files over 400 KB and binary image/font extensions)
+5. Creates a new commit on top of the existing GitHub history
+6. Force-updates the `main` branch ref
+
+The commit URL and ID are printed at the end.
+
+**What is excluded from the script push:**
+- `node_modules`, `.pythonlibs`, `pandas_ta`, `.venv`, `dist`, `build`, `__pycache__`
+- `market_cache`, `.cache`, `.local`, `.upm`, `.agents`, `.replit-artifact`
+- Binary files: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.ico`, `.woff`, `.woff2`, `.ttf`, `.mp4`, `.pdf`, `.zip`
+- Files over 400 KB
+- `pnpm-lock.yaml`, `uv.lock`, `hydra_prices.db`
+
+---
+
+### Option 2 — Manual git push (standard git workflow, used from Shell)
+
+Requires `GITHUB_TOKEN` secret and git remote configured (Step 6 in First-Time Setup above).
 
 ```bash
 git add -A
