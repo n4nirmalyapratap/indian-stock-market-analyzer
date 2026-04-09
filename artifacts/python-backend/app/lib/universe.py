@@ -224,7 +224,107 @@ def _merge(*lists: list[str]) -> list[str]:
     return out
 
 
-ALL_SYMBOLS: list[str] = _merge(NIFTY100, MIDCAP, SMALLCAP, MICROCAP)
+# ── NSE & BSE Indices (searchable, chartable) ─────────────────────────────────
+INDICES: list[str] = [
+    # NSE Broad Market
+    "NIFTY 50", "NIFTY NEXT 50", "NIFTY 100", "NIFTY 200", "NIFTY 500",
+    "NIFTY MIDCAP 50", "NIFTY MIDCAP 100", "NIFTY MIDCAP 150", "NIFTY MIDCAP SELECT",
+    "NIFTY SMALLCAP 50", "NIFTY SMALLCAP 100", "NIFTY SMALLCAP 250",
+    "NIFTY MICROCAP 250", "NIFTY LARGEMIDCAP 250",
+    # NSE Sectoral
+    "NIFTY BANK", "NIFTY FIN SERVICE", "NIFTY IT", "NIFTY AUTO",
+    "NIFTY PHARMA", "NIFTY FMCG", "NIFTY METAL", "NIFTY REALTY",
+    "NIFTY ENERGY", "NIFTY INFRA", "NIFTY PSU BANK", "NIFTY MNC",
+    "NIFTY MEDIA", "NIFTY HEALTHCARE", "NIFTY COMMODITIES",
+    "NIFTY SERVICES SECTOR", "NIFTY CPSE", "NIFTY PSE",
+    "NIFTY OIL & GAS", "NIFTY CONSUMER DURABLES",
+    "NIFTY INDIA CONSUMPTION", "NIFTY INDIA DIGITAL", "NIFTY INDIA DEFENCE",
+    # NSE Strategy / Thematic
+    "INDIA VIX", "NIFTY ALPHA 50", "NIFTY50 VALUE 20",
+    # BSE Broad Market
+    "SENSEX", "BSE 100", "BSE 200", "BSE 500",
+    "BSE MIDCAP", "BSE SMALLCAP", "BSE LARGECAP",
+    # BSE Sectoral
+    "BANKEX", "BSE IT", "BSE HEALTHCARE", "BSE AUTO", "BSE FMCG",
+    "BSE METAL", "BSE REALTY", "BSE ENERGY", "BSE POWER",
+    "BSE CAPITAL GOODS", "BSE CONSUMER DURABLES", "BSE TECK",
+    "BSE OIL & GAS", "BSE UTILITIES", "BSE FINANCE",
+    "BSE INDUSTRIALS", "BSE TELECOM", "BSE COMMODITIES",
+]
+
+# Human-readable names for each index (used in search results)
+INDICES_COMPANY_MAP: dict[str, str] = {
+    "NIFTY 50":                 "Nifty 50 Index (NSE)",
+    "NIFTY NEXT 50":            "Nifty Next 50 Index (NSE)",
+    "NIFTY 100":                "Nifty 100 Index (NSE)",
+    "NIFTY 200":                "Nifty 200 Index (NSE)",
+    "NIFTY 500":                "Nifty 500 Index (NSE)",
+    "NIFTY MIDCAP 50":          "Nifty Midcap 50 Index (NSE)",
+    "NIFTY MIDCAP 100":         "Nifty Midcap 100 Index (NSE)",
+    "NIFTY MIDCAP 150":         "Nifty Midcap 150 Index (NSE)",
+    "NIFTY MIDCAP SELECT":      "Nifty Midcap Select Index (NSE)",
+    "NIFTY SMALLCAP 50":        "Nifty Smallcap 50 Index (NSE)",
+    "NIFTY SMALLCAP 100":       "Nifty Smallcap 100 Index (NSE)",
+    "NIFTY SMALLCAP 250":       "Nifty Smallcap 250 Index (NSE)",
+    "NIFTY MICROCAP 250":       "Nifty Microcap 250 Index (NSE)",
+    "NIFTY LARGEMIDCAP 250":    "Nifty LargeMidcap 250 Index (NSE)",
+    "NIFTY BANK":               "Nifty Bank Index (NSE)",
+    "NIFTY FIN SERVICE":        "Nifty Financial Services Index (NSE)",
+    "NIFTY IT":                 "Nifty IT Index (NSE)",
+    "NIFTY AUTO":               "Nifty Auto Index (NSE)",
+    "NIFTY PHARMA":             "Nifty Pharma Index (NSE)",
+    "NIFTY FMCG":               "Nifty FMCG Index (NSE)",
+    "NIFTY METAL":              "Nifty Metal Index (NSE)",
+    "NIFTY REALTY":             "Nifty Realty Index (NSE)",
+    "NIFTY ENERGY":             "Nifty Energy Index (NSE)",
+    "NIFTY INFRA":              "Nifty Infrastructure Index (NSE)",
+    "NIFTY PSU BANK":           "Nifty PSU Bank Index (NSE)",
+    "NIFTY MNC":                "Nifty MNC Index (NSE)",
+    "NIFTY MEDIA":              "Nifty Media Index (NSE)",
+    "NIFTY HEALTHCARE":         "Nifty Healthcare Index (NSE)",
+    "NIFTY COMMODITIES":        "Nifty Commodities Index (NSE)",
+    "NIFTY SERVICES SECTOR":    "Nifty Services Sector Index (NSE)",
+    "NIFTY CPSE":               "Nifty CPSE Index (NSE)",
+    "NIFTY PSE":                "Nifty PSE Index (NSE)",
+    "NIFTY OIL & GAS":          "Nifty Oil & Gas Index (NSE)",
+    "NIFTY CONSUMER DURABLES":  "Nifty Consumer Durables Index (NSE)",
+    "NIFTY INDIA CONSUMPTION":  "Nifty India Consumption Index (NSE)",
+    "NIFTY INDIA DIGITAL":      "Nifty India Digital Index (NSE)",
+    "NIFTY INDIA DEFENCE":      "Nifty India Defence Index (NSE)",
+    "INDIA VIX":                "India Volatility Index (NSE)",
+    "NIFTY ALPHA 50":           "Nifty Alpha 50 Index (NSE)",
+    "NIFTY50 VALUE 20":         "Nifty 50 Value 20 Index (NSE)",
+    "SENSEX":                   "BSE Sensex 30 Index",
+    "BSE 100":                  "BSE 100 Index",
+    "BSE 200":                  "BSE 200 Index",
+    "BSE 500":                  "BSE 500 Index",
+    "BSE MIDCAP":               "BSE Midcap Index",
+    "BSE SMALLCAP":             "BSE Smallcap Index",
+    "BSE LARGECAP":             "BSE Largecap Index",
+    "BANKEX":                   "BSE Bankex Index",
+    "BSE IT":                   "BSE IT Index",
+    "BSE HEALTHCARE":           "BSE Healthcare Index",
+    "BSE AUTO":                 "BSE Auto Index",
+    "BSE FMCG":                 "BSE FMCG Index",
+    "BSE METAL":                "BSE Metal Index",
+    "BSE REALTY":               "BSE Realty Index",
+    "BSE ENERGY":               "BSE Energy Index",
+    "BSE POWER":                "BSE Power Index",
+    "BSE CAPITAL GOODS":        "BSE Capital Goods Index",
+    "BSE CONSUMER DURABLES":    "BSE Consumer Durables Index",
+    "BSE TECK":                 "BSE Teck Index",
+    "BSE OIL & GAS":            "BSE Oil & Gas Index",
+    "BSE UTILITIES":            "BSE Utilities Index",
+    "BSE FINANCE":              "BSE Finance Index",
+    "BSE INDUSTRIALS":          "BSE Industrials Index",
+    "BSE TELECOM":              "BSE Telecom Index",
+    "BSE COMMODITIES":          "BSE Commodities Index",
+}
+
+# Pre-populate COMPANY_MAP with index names (stocks will be added from cache later)
+COMPANY_MAP: dict[str, str] = dict(INDICES_COMPANY_MAP)
+
+ALL_SYMBOLS: list[str] = INDICES + _merge(NIFTY100, MIDCAP, SMALLCAP, MICROCAP)
 
 
 def build_universe(universes: list[str]) -> list[str]:
@@ -249,7 +349,7 @@ VALID_UNIVERSES = {"NIFTY100", "MIDCAP", "SMALLCAP", "MICROCAP", "ALL"}
 # override the hardcoded lists with live NSE data at import time.
 # The hardcoded lists above remain as the reliable fallback.
 
-COMPANY_MAP: dict[str, str] = {}   # symbol → company name (populated from cache)
+# COMPANY_MAP is initialised above with index names; stock names are merged from cache below
 
 def _apply_live_data(cache: dict) -> None:
     """Merge live cache into module-level dicts/lists (non-destructive)."""
@@ -293,7 +393,7 @@ def _apply_live_data(cache: dict) -> None:
             if new_midcap:    MIDCAP    = new_midcap
             if new_smallcap:  SMALLCAP  = new_smallcap
             if new_microcap:  MICROCAP  = new_microcap
-            ALL_SYMBOLS = _merge(NIFTY100, MIDCAP, SMALLCAP, MICROCAP)
+            ALL_SYMBOLS = INDICES + _merge(NIFTY100, MIDCAP, SMALLCAP, MICROCAP)
 
         # Supplement ALL_SYMBOLS with any live symbols not in cap categories
         remaining = [s for s in live_syms if s not in set(ALL_SYMBOLS)]
