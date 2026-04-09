@@ -4,12 +4,14 @@ from typing import Any
 from ..services.scanners_service import ScannersService
 from ..services.yahoo_service import YahooService
 from ..services.nse_service import NseService
+from ..services.price_service import PriceService
 
 router = APIRouter(prefix="/scanners", tags=["scanners"])
 
 _yahoo = YahooService()
-_nse = NseService()
-_service = ScannersService(_yahoo, _nse)
+_nse   = NseService()
+_price = PriceService(_nse, _yahoo)
+_service = ScannersService(_price)
 
 
 async def _get_scanners():

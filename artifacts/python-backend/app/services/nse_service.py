@@ -122,3 +122,63 @@ class NseService:
             "smallcap250",
             1800,
         )
+
+    async def get_historical_data(self, symbol: str, days: int = 90) -> list[dict]:
+        """
+        Fetch daily OHLCV from NSE India historical API (cookie method).
+        NSE endpoint: /api/historical/cm/equity?symbol=X&series=["EQ"]&from=dd-mm-yyyy&to=dd-mm-yyyy
+        Returns same shape as YahooService.get_historical_data for drop-in compatibility.
+        """
+        from datetime import datetime, timedelta
+        cache_key = f"nse-hist-{symbol}-{days}"
+        cached = _get_cache(cache_key)
+        if cached is not None:
+            return cached
+
+        to_date   = datetime.utcnow()
+        from_date = to_date - timedelta(days=days)
+        fmt = lambda d: d.strftime("%d-%m-%Y")
+
+        from urllib.parse import quote as url_encode
+        import json as _json
+        series_param = url_encode(_json.dumps(["EQ"]))
+        path = (
+            f"/api/historical/cm/equity"
+            f"?symbol={url_encode(symbol, safe='')}"
+            f"&series={series_param}"
+            f"&from={fmt(from_date)}"
+            f"&to={fmt(to_date)}"
+        )
+
+        await _ensure_cookies()
+        headers = {**HEADERS_API, "Cookie": _cookies}
+        try:
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                resp = await client.get(f"https://www.nseindia.com{path}", headers=headers)
+                if resp.status_code != 200:
+                    return []
+                raw = resp.json()
+                rows = raw.get("data", [])
+                if not rows:
+                    return []
+                data = []
+                for r in rows:
+                    ts = r.get("CH_TIMESTAMP") or r.get("mTIMESTAMP", "")
+                    c  = r.get("CH_CLOSING_PRICE") or r.get("CH_LAST_TRADED_PRICE")
+                    if not c:
+                        continue
+                    data.append({
+                        "date":   ts[:10],
+                        "open":   r.get("CH_OPENING_PRICE", 0) or 0,
+                        "high":   r.get("CH_TRADE_HIGH_PRICE", 0) or 0,
+                        "low":    r.get("CH_TRADE_LOW_PRICE", 0) or 0,
+                        "close":  float(c),
+                        "volume": r.get("CH_TOT_TRADED_QTY", 0) or 0,
+                    })
+                # NSE returns newest-first — sort ascending
+                data.sort(key=lambda x: x["date"])
+                if data:
+                    _set_cache(cache_key, data, 1800)
+                return data
+        except Exception:
+            return []

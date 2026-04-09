@@ -12,17 +12,19 @@ from ..services.patterns_service import PatternsService
 from ..services.scanners_service import ScannersService
 from ..services.nse_service import NseService
 from ..services.yahoo_service import YahooService
+from ..services.price_service import PriceService
 from ..lib.universe import SECTOR_SYMBOLS
 
 router = APIRouter(prefix="/nlp", tags=["nlp"])
 
 _nse      = NseService()
 _yahoo    = YahooService()
+_price    = PriceService(_nse, _yahoo)
 _nlp      = NlpService()
 _stocks   = StocksService(_nse, _yahoo)
 _sectors  = SectorsService(_nse, _yahoo)
 _patterns = PatternsService(_yahoo, _nse)
-_scanners = ScannersService(_yahoo, _nse)
+_scanners = ScannersService(_price)
 
 
 @router.post("/query")

@@ -1,9 +1,11 @@
 from fastapi import APIRouter, BackgroundTasks
 from app.services.market_cache_service import cache_status, warmup_cache
 from app.services.yahoo_service import YahooService
+from app.services.nse_service import NseService
+from app.services.price_service import PriceService
 
 router = APIRouter()
-_yahoo = YahooService()
+_price = PriceService(NseService(), YahooService())
 
 _warmup_running = False
 
@@ -23,7 +25,7 @@ async def trigger_warmup(background_tasks: BackgroundTasks):
     async def _run():
         global _warmup_running
         try:
-            result = await warmup_cache(_yahoo)
+            result = await warmup_cache(_price)
             return result
         finally:
             _warmup_running = False
@@ -31,5 +33,5 @@ async def trigger_warmup(background_tasks: BackgroundTasks):
     background_tasks.add_task(_run)
     return {
         "status": "started",
-        "message": "Cache warmup started in background. Check /api/cache/status for progress.",
+        "message": "Cache warmup started in background — NSE primary, Yahoo fallback. Check /api/cache/status.",
     }

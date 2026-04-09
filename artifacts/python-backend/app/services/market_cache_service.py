@@ -90,10 +90,11 @@ def cache_status() -> dict:
     }
 
 
-async def warmup_cache(yahoo_service, batch_size: int = 10) -> dict:
+async def warmup_cache(price_service, batch_size: int = 10) -> dict:
     """
     Pre-fetch and cache historical data for ALL universe symbols.
-    Runs in parallel batches of `batch_size` to avoid overwhelming Yahoo Finance.
+    Uses PriceService so each symbol tries NSE first, then Yahoo fallback.
+    Runs in parallel batches of `batch_size` to avoid overwhelming APIs.
     Returns a summary dict.
     """
     from ..lib.universe import build_universe
@@ -110,13 +111,12 @@ async def warmup_cache(yahoo_service, batch_size: int = 10) -> dict:
             if existing:
                 continue
             try:
-                data = await yahoo_service.get_historical_data(sym, days)
+                # PriceService: NSE primary → Yahoo fallback
+                data = await price_service.get_historical_data(sym, days)
                 if data:
-                    save_to_disk(sym, days, data)
-                    nonlocal saved
                     saved += 1
+                    # save_to_disk already called inside PriceService on success
             except Exception:
-                nonlocal errors
                 errors += 1
             await asyncio.sleep(0.15)
 

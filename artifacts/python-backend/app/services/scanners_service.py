@@ -2,8 +2,7 @@ import random
 import string
 from datetime import datetime
 from typing import Optional
-from .yahoo_service import YahooService
-from .nse_service import NseService
+from .price_service import PriceService
 from .indicators import (
     calculate_ema, calculate_sma, calculate_rsi,
     calculate_macd, calculate_bollinger_bands, calculate_atr,
@@ -234,9 +233,8 @@ _init_defaults()
 
 
 class ScannersService:
-    def __init__(self, yahoo: YahooService, nse: NseService):
-        self.yahoo = yahoo
-        self.nse = nse
+    def __init__(self, price: PriceService):
+        self.price = price
 
     def get_all_scanners(self) -> list[dict]:
         return sorted(_scanners.values(), key=lambda s: s["createdAt"], reverse=True)
@@ -290,7 +288,7 @@ class ScannersService:
 
         for sym in symbols:
             try:
-                h = await self.yahoo.get_historical_data(sym, 90)
+                h = await self.price.get_historical_data(sym, 90)
                 if len(h) < 30:
                     continue
                 closes = [d["close"] for d in h if d.get("close")]
