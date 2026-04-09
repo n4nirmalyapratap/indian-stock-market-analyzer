@@ -378,91 +378,123 @@ export default function OptionsStrategyTester() {
       </div>
 
       {/* Symbol bar */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-        <div className="flex flex-wrap items-end gap-4">
-          <div className="flex-1 min-w-0">
-            <label className="block text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">
-              Underlying Index
-            </label>
-            {/* Index pill selector */}
-            <div className="flex flex-wrap gap-2">
-              {[
-                { sym: "NIFTY",      label: "NIFTY 50",      sub: "NSE · Lot 75" },
-                { sym: "BANKNIFTY",  label: "BANK NIFTY",    sub: "NSE · Lot 30" },
-                { sym: "FINNIFTY",   label: "FIN NIFTY",     sub: "NSE · Lot 40" },
-                { sym: "MIDCPNIFTY", label: "MIDCAP NIFTY",  sub: "NSE · Lot 75" },
-                { sym: "SENSEX",     label: "SENSEX",         sub: "BSE · Lot 10" },
-              ].map(({ sym, label, sub }) => {
-                const active = symbol === sym;
-                return (
-                  <button
-                    key={sym}
-                    onClick={async () => {
-                      setSymbol(sym);
-                      setSpotInfo(null);
-                      setLegs([]);
-                      setAnalysis(null);
-                      // fetch immediately on selection
-                      setLoadingSpot(true);
-                      setSpotErr("");
-                      try {
-                        const info = await get<SpotInfo>(`/options/spot/${sym}`);
-                        setSpotInfo(info);
-                      } catch (e: any) {
-                        setSpotErr(e?.message || `Failed to fetch ${sym}`);
-                      } finally {
-                        setLoadingSpot(false);
-                      }
-                    }}
-                    disabled={loadingSpot}
-                    className={`flex flex-col items-start px-4 py-2.5 rounded-xl border text-left transition
-                      ${active
-                        ? "bg-indigo-600 border-indigo-600 text-white shadow-md"
-                        : "bg-white border-gray-200 text-gray-700 hover:border-indigo-300 hover:bg-indigo-50"
-                      } disabled:opacity-60`}
-                  >
-                    <span className="text-sm font-bold leading-tight">
-                      {active && loadingSpot
-                        ? <span className="flex items-center gap-1"><RefreshCw className="w-3 h-3 animate-spin inline" /> {label}</span>
-                        : label}
-                    </span>
-                    <span className={`text-xs leading-tight mt-0.5 ${active ? "text-indigo-200" : "text-gray-400"}`}>
-                      {sub}
-                    </span>
-                  </button>
-                );
-              })}
+      {(() => {
+        const INDICES = [
+          { sym: "NIFTY",      label: "NIFTY 50",     lot: 75, exch: "NSE" },
+          { sym: "BANKNIFTY",  label: "BANK NIFTY",   lot: 30, exch: "NSE" },
+          { sym: "FINNIFTY",   label: "FIN NIFTY",    lot: 40, exch: "NSE" },
+          { sym: "MIDCPNIFTY", label: "MIDCAP NIFTY", lot: 75, exch: "NSE" },
+          { sym: "SENSEX",     label: "SENSEX",        lot: 10, exch: "BSE" },
+        ];
+        const switchIndex = async (sym: string) => {
+          if (sym === symbol && spotInfo) return;
+          setSymbol(sym);
+          setSpotInfo(null);
+          setLegs([]);
+          setAnalysis(null);
+          setLoadingSpot(true);
+          setSpotErr("");
+          try {
+            const info = await get<SpotInfo>(`/options/spot/${sym}`);
+            setSpotInfo(info);
+          } catch (e: any) {
+            setSpotErr(e?.message || `Failed to fetch ${sym}`);
+          } finally {
+            setLoadingSpot(false);
+          }
+        };
+        return (
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            {/* Segmented control */}
+            <div className="bg-gray-50 border-b border-gray-100 p-2">
+              <div className="bg-gray-100 rounded-xl p-1 flex gap-0.5">
+                {INDICES.map(({ sym, label, lot, exch }) => {
+                  const active = symbol === sym;
+                  const fetching = active && loadingSpot;
+                  return (
+                    <button
+                      key={sym}
+                      onClick={() => switchIndex(sym)}
+                      disabled={loadingSpot}
+                      className={`flex-1 flex flex-col items-center py-2 px-1 rounded-lg transition-all duration-150 disabled:opacity-60
+                        ${active
+                          ? "bg-white shadow-sm text-gray-900"
+                          : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                        }`}
+                    >
+                      <span className="text-xs font-bold tracking-tight leading-tight whitespace-nowrap">
+                        {fetching
+                          ? <span className="flex items-center gap-1"><RefreshCw className="w-3 h-3 animate-spin" />{label}</span>
+                          : label}
+                      </span>
+                      <span className={`text-[10px] leading-tight mt-0.5 font-medium
+                        ${active ? "text-indigo-500" : "text-gray-400"}`}>
+                        {exch} · {lot}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
-              {/* Re-fetch button */}
-              {spotInfo && (
+            {/* Live market data strip */}
+            {spotInfo && (
+              <div className="flex items-center divide-x divide-gray-100 px-1">
+                <div className="flex items-baseline gap-1.5 px-4 py-3">
+                  <span className="text-xl font-bold text-gray-900">
+                    ₹{spotInfo.spot.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                  <span className="text-xs text-gray-400 font-medium">SPOT</span>
+                </div>
+                <div className="flex items-center gap-5 px-5 py-3 flex-1">
+                  <div className="text-center">
+                    <p className="text-xs text-gray-400 font-medium mb-0.5">ATM Strike</p>
+                    <p className="text-sm font-bold text-gray-800">₹{spotInfo.atm.toLocaleString("en-IN")}</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-xs text-gray-400 font-medium mb-0.5">HV 30d</p>
+                    <p className="text-sm font-bold text-orange-600">{pct(spotInfo.hv30_pct)}</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-xs text-gray-400 font-medium mb-0.5">Lot Size</p>
+                    <p className="text-sm font-bold text-gray-800">{spotInfo.lot_size} units</p>
+                  </div>
+                </div>
                 <button
                   onClick={fetchSpot}
                   disabled={loadingSpot}
-                  title="Refresh spot price"
-                  className="flex items-center gap-1 self-center px-3 py-2 rounded-xl border border-gray-200 text-gray-500 hover:border-indigo-300 hover:text-indigo-600 text-xs transition disabled:opacity-50"
+                  className="px-4 py-3 text-gray-400 hover:text-indigo-600 transition disabled:opacity-40"
+                  title="Refresh"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 ${loadingSpot ? "animate-spin" : ""}`} />
-                  Refresh
+                  <RefreshCw className={`w-4 h-4 ${loadingSpot ? "animate-spin" : ""}`} />
                 </button>
-              )}
-            </div>
-          </div>
+              </div>
+            )}
 
-          {spotInfo && (
-            <div className="flex flex-wrap gap-3">
-              <Pill label="Spot" value={`₹${spotInfo.spot.toLocaleString("en-IN")}`} color="indigo" />
-              <Pill label="ATM Strike" value={`₹${spotInfo.atm}`} color="gray" />
-              <Pill label="HV 30d" value={pct(spotInfo.hv30_pct)} color="orange" />
-              <Pill label="Lot Size" value={String(spotInfo.lot_size)} color="gray" />
-            </div>
-          )}
-          {spotErr && (
-            <p className="text-red-500 text-sm flex items-center gap-1">
-              <AlertTriangle className="w-4 h-4" /> {spotErr}
-            </p>
-          )}
-        </div>
-      </div>
+            {!spotInfo && !loadingSpot && !spotErr && (
+              <div className="px-4 py-3 text-sm text-gray-400 flex items-center gap-2">
+                <Zap className="w-4 h-4 text-indigo-300" />
+                Select an index above to load live market data
+              </div>
+            )}
+
+            {loadingSpot && !spotInfo && (
+              <div className="px-4 py-3 text-sm text-gray-400 flex items-center gap-2">
+                <RefreshCw className="w-4 h-4 animate-spin text-indigo-400" />
+                Fetching {symbol} live data…
+              </div>
+            )}
+
+            {spotErr && (
+              <div className="px-4 py-3">
+                <p className="text-red-500 text-sm flex items-center gap-1">
+                  <AlertTriangle className="w-4 h-4" /> {spotErr}
+                </p>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Tabs */}
       <div className="border-b border-gray-200">
