@@ -101,11 +101,11 @@ function Layout({ children }: { children: React.ReactNode }) {
     <div className="h-screen bg-gray-50 dark:bg-gray-950 flex overflow-hidden">
 
       {/* ── Sidebar ─────────────────────────────────────────────────────── */}
-      <aside className={`hidden md:flex flex-col bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-900/60 shadow-sm flex-shrink-0
+      <aside className={`hidden md:flex flex-col bg-white dark:bg-gray-950 border-r border-gray-100 dark:border-white/[0.05] flex-shrink-0
         transition-all duration-200 ease-in-out ${open ? "w-52" : "w-[52px]"}`}>
 
         {/* Logo */}
-        <div className={`flex items-center gap-2.5 border-b border-gray-100 dark:border-gray-800 flex-shrink-0 h-[57px]
+        <div className={`flex items-center gap-2.5 border-b border-gray-100 dark:border-white/[0.05] flex-shrink-0 h-[57px]
           ${open ? "px-4" : "justify-center"}`}>
           <img src="/niftynodes-logo.png" alt="NiftyNodes" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
           {open && (
@@ -124,7 +124,7 @@ function Layout({ children }: { children: React.ReactNode }) {
         </nav>
 
         {/* Bottom: Settings + theme + toggle */}
-        <div className="border-t border-gray-100 dark:border-gray-800 py-2 flex-shrink-0">
+        <div className="border-t border-gray-100 dark:border-white/[0.05] py-2 flex-shrink-0">
 
           {/* Settings — inline accordion when open, link to /settings when collapsed */}
           {open ? (
