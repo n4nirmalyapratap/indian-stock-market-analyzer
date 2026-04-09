@@ -3,6 +3,7 @@ import * as echarts from "echarts";
 import { calcEMA, calcSMA, calcRSI, calcMACD, calcBollingerBands } from "@/lib/indicators";
 
 export type DrawingTool = "none" | "trendline" | "hline" | "vline" | "rectangle" | "eraser";
+export type ChartType = "candles" | "bars" | "hollow" | "line" | "line_markers" | "step" | "area" | "baseline" | "columns" | "ha";
 
 export interface Drawing {
   id: string;
@@ -24,6 +25,7 @@ interface Props {
   symbolName?: string;
   periodCfg: { p: string; i: string };
   drawingTool: DrawingTool;
+  chartType: ChartType;
   indicators: Set<string>;
   showRSI: boolean;
   showMACD: boolean;
@@ -61,6 +63,20 @@ function fmtVol(v: number): string {
 
 function fmtPrice(v: number): string {
   return v.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// ── Heikin Ashi transform ─────────────────────────────────────────────────────
+function computeHA(cs: Candle[]): Candle[] {
+  const out: Candle[] = [];
+  for (let i = 0; i < cs.length; i++) {
+    const c = cs[i];
+    const haClose = (c.open + c.high + c.low + c.close) / 4;
+    const haOpen = i === 0
+      ? (c.open + c.close) / 2
+      : (out[i - 1].open + out[i - 1].close) / 2;
+    out.push({ ...c, open: haOpen, close: haClose, high: Math.max(c.high, haOpen, haClose), low: Math.min(c.low, haOpen, haClose) });
+  }
+  return out;
 }
 
 // ── SVG overlay helpers ────────────────────────────────────────────────────────
@@ -208,7 +224,7 @@ interface HoverCandle {
 }
 
 export default function ChartPanel({
-  symbol, symbolName, periodCfg, drawingTool, indicators,
+  symbol, symbolName, periodCfg, drawingTool, chartType, indicators,
   showRSI, showMACD, isActive, drawings, onDrawingAdd, onDrawingErase, onActivate,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -219,8 +235,10 @@ export default function ChartPanel({
   const eraserPos    = useRef<{ x: number; y: number } | null>(null);
   const drawingToolRef = useRef<DrawingTool>(drawingTool);
   const intervalRef    = useRef<string>(periodCfg.i);
+  const chartTypeRef   = useRef<ChartType>(chartType);
   useEffect(() => { drawingToolRef.current = drawingTool; }, [drawingTool]);
   useEffect(() => { intervalRef.current = periodCfg.i; }, [periodCfg.i]);
+  useEffect(() => { chartTypeRef.current = chartType; }, [chartType]);
 
   const [loading, setLoading]       = useState(true);
   const [hoverCandle, setHoverCandle] = useState<HoverCandle | null>(null);
@@ -256,8 +274,11 @@ export default function ChartPanel({
     const cs       = candles.current;
     const showTime = INTRADAY_INTERVALS.has(intervalRef.current);
     const dates    = cs.map(c => toDateStr(c.time, showTime));
-    const closes   = cs.map(c => c.close);
-    const ohlc   = cs.map(c => [c.open, c.close, c.low, c.high]);
+    const ct       = chartTypeRef.current;
+    // For Heikin Ashi, transform the raw candles
+    const wcs      = ct === "ha" ? computeHA(cs) : cs;
+    const closes   = wcs.map(c => c.close);
+    const ohlc     = wcs.map(c => [c.open, c.close, c.low, c.high]);
 
     const hasSub = showRSI || showMACD;
 
@@ -317,16 +338,51 @@ export default function ChartPanel({
       });
     }
 
-    // Series
-    const series: object[] = [
-      {
+    // ── Price series — varies by chart type ──────────────────────────────────
+    let priceSeries: object;
+    if (ct === "candles" || ct === "ha") {
+      priceSeries = {
         name: "Price", type: "candlestick", xAxisIndex: 0, yAxisIndex: 0, data: ohlc,
-        itemStyle: {
-          color: "#26a69a", color0: "#ef5350",
-          borderColor: "#26a69a", borderColor0: "#ef5350",
-          borderWidth: 1,
-        },
-      },
+        itemStyle: { color: "#26a69a", color0: "#ef5350", borderColor: "#26a69a", borderColor0: "#ef5350", borderWidth: 1 },
+      };
+    } else if (ct === "bars") {
+      priceSeries = {
+        name: "Price", type: "candlestick", xAxisIndex: 0, yAxisIndex: 0, data: ohlc,
+        itemStyle: { color: "transparent", color0: "transparent", borderColor: "#26a69a", borderColor0: "#ef5350", borderWidth: 1.5 },
+      };
+    } else if (ct === "hollow") {
+      priceSeries = {
+        name: "Price", type: "candlestick", xAxisIndex: 0, yAxisIndex: 0, data: ohlc,
+        itemStyle: { color: "transparent", color0: "#ef5350", borderColor: "#26a69a", borderColor0: "#ef5350", borderWidth: 1.5 },
+      };
+    } else if (ct === "line") {
+      priceSeries = { name: "Price", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: closes, lineStyle: { color: "#2196F3", width: 1.5 }, showSymbol: false };
+    } else if (ct === "line_markers") {
+      priceSeries = { name: "Price", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: closes, lineStyle: { color: "#2196F3", width: 1.5 }, showSymbol: true, symbolSize: 4, symbol: "circle", itemStyle: { color: "#2196F3" } };
+    } else if (ct === "step") {
+      priceSeries = { name: "Price", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: closes, lineStyle: { color: "#2196F3", width: 1.5 }, step: "middle", showSymbol: false };
+    } else if (ct === "area") {
+      priceSeries = {
+        name: "Price", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: closes, lineStyle: { color: "#2196F3", width: 1.5 }, showSymbol: false,
+        areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(33,150,243,0.3)" }, { offset: 1, color: "rgba(33,150,243,0.01)" }] } },
+      };
+    } else if (ct === "baseline") {
+      const mid = closes.length ? (Math.max(...closes) + Math.min(...closes)) / 2 : 0;
+      priceSeries = {
+        name: "Price", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: closes, lineStyle: { color: "#6366f1", width: 1.5 }, showSymbol: false,
+        markLine: { silent: true, symbol: "none", lineStyle: { color: "rgba(99,102,241,0.5)", type: "dashed", width: 1 }, data: [{ yAxis: mid }] },
+        areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(99,102,241,0.25)" }, { offset: 1, color: "rgba(239,83,80,0.1)" }] } },
+      };
+    } else {
+      // columns
+      priceSeries = {
+        name: "Price", type: "bar", xAxisIndex: 0, yAxisIndex: 0, barMaxWidth: 8,
+        data: cs.map(c => ({ value: c.close, itemStyle: { color: c.close >= c.open ? "rgba(38,166,154,0.7)" : "rgba(239,83,80,0.7)" } })),
+      };
+    }
+
+    const series: object[] = [
+      priceSeries,
       {
         name: "Volume", type: "bar", xAxisIndex: 1, yAxisIndex: 1, barMaxWidth: 10,
         data: cs.map(c => ({
@@ -469,7 +525,7 @@ export default function ChartPanel({
   }, []);
 
   useEffect(() => { fetchData(); }, [symbol, periodCfg]);
-  useEffect(() => { renderChart(); }, [indicators, showRSI, showMACD]);
+  useEffect(() => { renderChart(); }, [indicators, showRSI, showMACD, chartType]);
   useEffect(() => { paintSvg(); }, [drawings]);
 
   // ── Drawing helpers ────────────────────────────────────────────────────────
