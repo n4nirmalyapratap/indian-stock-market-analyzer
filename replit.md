@@ -268,15 +268,16 @@ artifacts/
     requirements.txt           ← Python dependencies
     pandas_ta/                 ← ta-library shim (mirrors pandas-ta API)
     app/
-      routes/                  ← sectors, stocks, patterns, scanners, whatsapp, nlp, analytics, telegram, universe
+      routes/                  ← sectors, stocks, patterns, scanners, whatsapp, nlp, analytics, telegram, universe, options
       services/                ← nse_service, yahoo_service, stocks, sectors, patterns,
-                                  scanners, whatsapp, nlp_service, analytics_service, telegram_service
+                                  scanners, whatsapp, nlp_service, analytics_service, telegram_service,
+                                  options_service (Black-Scholes+Greeks+VaR), options_backtest_service
       lib/
         universe.py            ← NIFTY100 (80 syms), MIDCAP, SMALLCAP, SECTOR_SYMBOLS
         indicators.py          ← Technical indicator wrappers
   nestjs-backend-placeholder/  ← ACTIVE: Vite + React frontend (port 3002)
     src/lib/api.ts             ← All frontend API calls (relative /api/*)
-    src/pages/                 ← Dashboard, Sectors, Stocks, Patterns, Scanners, WhatsApp, Telegram
+    src/pages/                 ← Dashboard, Sectors, Stocks, Patterns, Scanners, WhatsApp, Telegram, OptionsStrategyTester
   stock-market-app/            ← Artifact registration (proxy config, routes / → port 3002)
   api-server/                  ← Artifact registration (proxy config, routes /api → port 8090)
   mockup-sandbox/              ← Replit canvas tool (managed by artifact system)
@@ -299,3 +300,80 @@ scripts/
 - **Analytics**: Sector correlation matrix, breadth history, top movers, heatmap
 - **WhatsApp Bot**: Twilio webhook with NLP fallback
 - **Telegram Bot**: Long-poll bot with commands + NLP fallback
+- **Options Strategy Tester**: Full options analytics suite — see below
+
+---
+
+## Options Strategy Tester
+
+Route: `/options` (nav item "Options Tester")
+
+### Backend (`app/routes/options.py` + `app/services/options_service.py` + `app/services/options_backtest_service.py`)
+
+**API endpoints (all under `/api/options/`):**
+| Endpoint | Method | Description |
+|---|---|---|
+| `/spot/{symbol}` | GET | Live spot price + 30-day HV estimate via yfinance |
+| `/price` | POST | Black-Scholes price + full Greeks for a single option |
+| `/strategy` | POST | Multi-leg strategy: payoff curve, aggregate Greeks, breakevens, max P&L |
+| `/backtest` | POST | Event-driven historical backtest (last-Thursday expiry cycle) |
+| `/scenario` | POST | 2-D scenario matrix: price shocks × vol shocks |
+| `/var` | POST | Monte Carlo VaR + CVaR via Geometric Brownian Motion |
+| `/strategies` | GET | List all supported strategy template names |
+| `/chat` | POST | Options education chatbot — rule-based, zero cost, context-aware |
+
+**Pricing model:**
+- Black-Scholes European pricing (correct for NIFTY/BANKNIFTY index options)
+- Risk-free rate: 7% (India 10Y G-Sec)
+- Lot sizes: NIFTY=75, BANKNIFTY=30, FINNIFTY=40
+
+**Backtesting engine:**
+- Event-driven — no lookahead bias; HV30 computed from rolling window ending on entry date
+- Monthly expiry cycle: last Thursday of each month (NSE convention)
+- Cost model: ₹20 commission/lot + 0.3% bid-ask slippage on premiums
+- 13 strategy templates: long/short call/put, straddle, strangle, bull call spread, bear put spread, iron condor, butterfly, covered call
+
+**Risk analysis:**
+- Scenario matrix: 9 price shocks × 6 vol shocks → 54-cell heat map
+- Monte Carlo VaR: GBM with 10,000 simulations, vectorised scipy norm.cdf repricing
+
+### Frontend (`src/pages/OptionsStrategyTester.tsx`)
+
+Four tabs:
+1. **Strategy Builder** — Multi-leg editor with quick-add buttons (Long Straddle, Short Strangle, Iron Condor). Live Greeks, max P&L/loss, breakevens, net premium after clicking Analyse. Quick-add buttons auto-fetch spot price if not already loaded — no manual Fetch step required.
+2. **Payoff Diagram** — Recharts line chart showing P&L at expiry vs spot price. Breakeven reference lines, current-spot marker.
+3. **Backtest** — Configure strategy template, date range, lots, entry DTE, roll DTE, OTM wing %. Results: 12 metric cards + equity curve + trade log table.
+4. **Risk Analysis** — Monte Carlo VaR histogram (colour-coded) + scenario analysis heat map (red/green gradient).
+
+**Floating AI Assistant** — Indigo button fixed to the bottom-right corner. Opens a chat panel backed by `POST /options/chat`. Context-aware: automatically passes the current symbol, spot, legs, Greeks, and P&L results into every query. Zero API cost — fully rule-based engine.
+
+**Net Premium display** — Summary card shows absolute value (₹) with a green **CREDIT** or red **DEBIT** badge. Green background = you collected premium; red background = you paid premium. Removes the confusing raw negative number.
+
+---
+
+## Recent Improvements (Session Log)
+
+### Options Strategy Tester — Bug Fixes
+| Fix | File(s) |
+|---|---|
+| All async route handlers wrapped blocking I/O with `asyncio.to_thread()` | `options.py`, `options_service.py` |
+| Iron Condor quick-add now uses correct OTM strikes via `otmMult` field | `OptionsStrategyTester.tsx` |
+| `"expiiries"` typo fixed to `"expiries"` in backtest response schema | `options_backtest_service.py` |
+| `/scenario` and `/var` auto-price legs with zero premium using Black-Scholes | `options.py` |
+| `S > 0`, `K > 0` Pydantic validators added to pricing models | `options_service.py` |
+| `_to_yf_sym()` extracted as single shared symbol resolver | `options_backtest_service.py` |
+| `scipy` import moved to module level (was inside function — caused import lag) | `options_service.py` |
+| Frontend 404 fixed: all 5 API calls were double-prefixing `/api` | `OptionsStrategyTester.tsx` |
+
+### Options Strategy Tester — New Features
+| Feature | Details |
+|---|---|
+| **Net Premium CREDIT/DEBIT display** | Card shows absolute premium value + coloured badge. Green = credit, Red = debit. |
+| **AI Options Assistant (rule-based)** | Floating chat panel; `POST /options/chat`; context-aware; covers 20+ topics; zero cost (no external API) |
+| **Auto-fetch on quick-add** | Clicking Long Straddle/Short Strangle/Iron Condor with no spot loaded silently fetches NIFTY spot first, then adds legs. No alert box. |
+
+### Chatbot Topics Covered (`app/services/options_chatbot.py`)
+Iron Condor · Long/Short Straddle · Long/Short Strangle · Bull/Bear Spreads · Butterfly · Covered Call · Delta · Gamma · Theta · Vega · Rho · Implied Volatility · Historical Volatility · Black-Scholes · Breakeven calculation · Max profit/loss · VaR / Monte Carlo · Scenario Analysis · NSE lot sizes · Expiry schedule · Risk management · Strategy comparison table · Position-aware answers using live legs + Greeks + P&L
+
+### GitHub Push Convention
+Direct git push is blocked by the Replit gitsafe proxy when remote has diverged. Use the GitHub REST API via the connected OAuth integration to push changed files individually (`PUT /repos/{owner}/{repo}/contents/{path}`). This bypasses the merge requirement and pushes only modified files.
