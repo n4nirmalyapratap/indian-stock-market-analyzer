@@ -79,10 +79,11 @@ If you add a new large/generated directory, add it to **both**:
 
 | Metric | Value |
 |---|---|
-| Source files synced | ~166 |
-| Typical first-run time | 70–100 s (may time out) |
-| Typical second-run time | 10–20 s (remaining blobs only) |
-| Blob upload rate | ~0.4–0.6 s / file |
+| Source files synced | ~320 |
+| Parallel workers | 4 (stays ≤ 8 RPS, under the 10 RPS proxy limit) |
+| Typical run time | 40–50 s (completes in **one run**) |
+| Blob upload rate | ~0.4–0.6 s / file sequential; ÷4 with parallelism |
+| 429 rate-limit handling | Automatic exponential backoff + retry (up to 4×) |
 
 ---
 
