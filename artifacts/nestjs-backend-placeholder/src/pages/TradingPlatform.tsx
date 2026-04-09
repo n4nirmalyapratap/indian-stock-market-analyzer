@@ -66,15 +66,19 @@ const SYMBOLS = [
   { symbol: "BANDHANBNK",  name: "Bandhan Bank",                 type: "stock"  },
 ];
 
-// ─── Period configs ──────────────────────────────────────────────────────────
-const PERIODS = [
-  { label: "1D",  p: "1d",  i: "5m"  },
-  { label: "1W",  p: "5d",  i: "15m" },
-  { label: "1M",  p: "1mo", i: "1d"  },
-  { label: "3M",  p: "3mo", i: "1d"  },
-  { label: "6M",  p: "6mo", i: "1d"  },
-  { label: "1Y",  p: "1y",  i: "1wk" },
-  { label: "2Y",  p: "2y",  i: "1wk" },
+// ─── Interval / timeframe configs (TradingView-style) ────────────────────────
+// Each entry sets the candlestick interval AND a sensible default look-back period.
+// Yahoo Finance supported intervals: 1m 2m 5m 15m 30m 60m 90m 1d 5d 1wk 1mo 3mo
+const INTERVALS = [
+  { label: "1m",  p: "1d",   i: "1m"  },
+  { label: "2m",  p: "1d",   i: "2m"  },
+  { label: "5m",  p: "2d",   i: "5m"  },
+  { label: "15m", p: "5d",   i: "15m" },
+  { label: "30m", p: "1mo",  i: "30m" },
+  { label: "1H",  p: "1mo",  i: "60m" },
+  { label: "2H",  p: "3mo",  i: "90m" },
+  { label: "1D",  p: "1y",   i: "1d"  },
+  { label: "1W",  p: "5y",   i: "1wk" },
 ];
 
 // ─── Layout modes ────────────────────────────────────────────────────────────
@@ -184,7 +188,7 @@ export default function TradingPlatform() {
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("1");
   const [panels, setPanels] = useState<PanelState[]>([makePanel("RELIANCE")]);
   const [activePanelId, setActivePanelId] = useState(panels[0].id);
-  const [periodIdx, setPeriodIdx] = useState(2);
+  const [intervalIdx, setIntervalIdx] = useState(7); // default: 1D
   const [drawingTool, setDrawingTool] = useState<DrawingTool>("none");
   const [indicators, setIndicators] = useState<Set<string>>(new Set(["ema21"]));
   const [showRSI, setShowRSI] = useState(false);
@@ -254,15 +258,15 @@ export default function TradingPlatform() {
         {/* Symbol search */}
         <SymbolSearch onSelect={setSymbolForActivePanel} placeholder={activePanel?.symbol ?? "Search…"} />
 
-        {/* Period selector */}
-        <div className="flex items-center gap-0.5 bg-gray-800/60 rounded p-0.5">
-          {PERIODS.map((p, i) => (
+        {/* Interval selector (TradingView-style) */}
+        <div className="flex items-center gap-0.5">
+          {INTERVALS.map((iv, i) => (
             <button
-              key={p.label}
-              onClick={() => setPeriodIdx(i)}
-              className={`px-2 py-0.5 text-xs rounded transition-colors ${i === periodIdx ? "bg-indigo-600 text-white" : "text-gray-400 hover:text-white"}`}
+              key={iv.label}
+              onClick={() => setIntervalIdx(i)}
+              className={`px-2 py-0.5 text-xs rounded transition-colors font-medium ${i === intervalIdx ? "bg-indigo-600 text-white" : "text-gray-500 hover:text-gray-200 hover:bg-gray-800"}`}
             >
-              {p.label}
+              {iv.label}
             </button>
           ))}
         </div>
@@ -281,11 +285,14 @@ export default function TradingPlatform() {
               {icon}
             </button>
           ))}
-          {activePanel?.drawings?.length > 0 && (
-            <button onClick={clearDrawings} title="Clear all drawings" className="text-xs text-red-400 hover:text-red-300 px-2">
-              Clear
-            </button>
-          )}
+          <button
+            onClick={clearDrawings}
+            title="Clear all drawings on active chart"
+            disabled={!activePanel?.drawings?.length}
+            className={`text-xs px-2 py-0.5 rounded transition-colors ${activePanel?.drawings?.length ? "text-red-400 hover:text-white hover:bg-red-600/30" : "text-gray-700 cursor-not-allowed"}`}
+          >
+            Clear
+          </button>
         </div>
 
         <div className="w-px h-5 bg-gray-700" />
@@ -379,7 +386,8 @@ export default function TradingPlatform() {
               <ChartPanel
                 panelId={panel.id}
                 symbol={panel.symbol}
-                periodCfg={PERIODS[periodIdx]}
+                symbolName={SYMBOLS.find(s => s.symbol === panel.symbol)?.name}
+                periodCfg={INTERVALS[intervalIdx]}
                 drawingTool={drawingTool}
                 indicators={indicators}
                 showRSI={showRSI}
