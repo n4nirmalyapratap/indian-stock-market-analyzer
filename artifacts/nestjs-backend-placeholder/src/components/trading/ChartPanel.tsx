@@ -47,6 +47,7 @@ interface Props {
   onDrawingErase: (id: string) => void;
   onClearDrawings?: () => void;
   onActivate: () => void;
+  onDrawingDone?: () => void;
   theme: "dark" | "light";
 }
 
@@ -295,7 +296,8 @@ function shapeToPixels(
     const len = Math.hypot(dx, dy);
     if (len < 1) return null;
     const nx = dx / len, ny = dy / len;
-    const spread = len * 0.3;
+    const frac = typeof s.spreadFrac === "number" ? s.spreadFrac : 0.3;
+    const spread = len * frac;
     const perpX = -ny, perpY = nx;
     const [me1x, me1y] = extendRay(px0, py0,  nx,  ny, 0, 0, W, H);
     const [me2x, me2y] = extendRay(px0, py0, -nx, -ny, 0, 0, W, H);
@@ -657,7 +659,7 @@ interface HoverCandle {
 export default function ChartPanel({
   symbol, symbolName, periodCfg, drawingTool, chartType, indicators,
   showRSI, showMACD, isActive, drawings, onDrawingAdd, onDrawingErase, onClearDrawings, onActivate,
-  theme,
+  onDrawingDone, theme,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef       = useRef<SVGSVGElement>(null);
@@ -666,6 +668,11 @@ export default function ChartPanel({
   const dragStart    = useRef<{ px: number; py: number; xIdx: number; y: number } | null>(null);
   const eraserPos    = useRef<{ x: number; y: number } | null>(null);
   const paintSvgRef  = useRef<((preview?: SvgEl | SvgEl[] | null, eraser?: { x: number; y: number } | null) => void) | null>(null);
+  const phase2State  = useRef<{
+    tool: "parallelch" | "pitchfork";
+    x0Idx: number; y0: number; x1Idx: number; y1: number;
+    px0: number; py0: number; px1: number; py1: number;
+  } | null>(null);
   const indicatorDataRef = useRef<Record<string, (number | null)[]>>({});
   const drawingToolRef = useRef<DrawingTool>(drawingTool);
   const intervalRef    = useRef<string>(periodCfg.i);
@@ -1008,6 +1015,12 @@ export default function ChartPanel({
     return { xIdx, y: pt[1] as number };
   };
 
+  const saveDrawing = (shape: Record<string, unknown>) => {
+    onDrawingAdd({ id: uid(), shape });
+    onDrawingDone?.();
+    paintSvg();
+  };
+
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (drawingTool === "none") return;
     e.preventDefault();
@@ -1015,6 +1028,29 @@ export default function ChartPanel({
 
     const pos = getXY(e);
     if (!pos) return;
+
+    // ── Phase-2 finalise (parallel channel / pitchfork) ──────────────────
+    if (phase2State.current) {
+      const p2 = phase2State.current;
+      const d2 = pixelToData(pos.px, pos.py);
+      phase2State.current = null;
+      if (d2) {
+        if (p2.tool === "parallelch") {
+          saveDrawing({ type: "parallelch",
+            x0Idx: p2.x0Idx, y0: p2.y0, x1Idx: p2.x1Idx, y1: p2.y1, y2: d2.y });
+        } else {
+          const spread = Math.abs(pos.py - p2.py1);
+          const dx = p2.px1 - p2.px0, dy = p2.py1 - p2.py0;
+          const len = Math.hypot(dx, dy);
+          const spreadFrac = len > 0 ? spread / len : 0;
+          saveDrawing({ type: "pitchfork",
+            x0Idx: p2.x0Idx, y0: p2.y0, x1Idx: p2.x1Idx, y1: p2.y1, spreadFrac });
+        }
+      } else {
+        paintSvg();
+      }
+      return;
+    }
 
     if (drawingTool === "eraser") {
       const chart = chartRef.current;
@@ -1029,16 +1065,16 @@ export default function ChartPanel({
 
     // Click-only tools — create shape immediately, no drag needed
     if (drawingTool === "arrowmarker")
-      { onDrawingAdd({ id: uid(), shape: { type: "arrowmarker", xIdx: data.xIdx, y: data.y } }); return; }
+      { saveDrawing({ type: "arrowmarker", xIdx: data.xIdx, y: data.y }); return; }
     if (drawingTool === "arrowmarkup")
-      { onDrawingAdd({ id: uid(), shape: { type: "arrowmarkup", xIdx: data.xIdx, y: data.y } }); return; }
+      { saveDrawing({ type: "arrowmarkup", xIdx: data.xIdx, y: data.y }); return; }
     if (drawingTool === "arrowmarkdown")
-      { onDrawingAdd({ id: uid(), shape: { type: "arrowmarkdown", xIdx: data.xIdx, y: data.y } }); return; }
+      { saveDrawing({ type: "arrowmarkdown", xIdx: data.xIdx, y: data.y }); return; }
     if (drawingTool === "flag")
-      { onDrawingAdd({ id: uid(), shape: { type: "flag", xIdx: data.xIdx, y: data.y } }); return; }
+      { saveDrawing({ type: "flag", xIdx: data.xIdx, y: data.y }); return; }
     if (drawingTool === "note") {
       const text = window.prompt("Enter note text:") ?? "";
-      if (text.trim()) onDrawingAdd({ id: uid(), shape: { type: "note", xIdx: data.xIdx, y: data.y, text: text.trim() } });
+      if (text.trim()) saveDrawing({ type: "note", xIdx: data.xIdx, y: data.y, text: text.trim() });
       return;
     }
 
@@ -1052,6 +1088,49 @@ export default function ChartPanel({
     if (drawingTool === "eraser") {
       eraserPos.current = { x: pos.px, y: pos.py };
       paintSvg(null, eraserPos.current);
+      return;
+    }
+
+    // ── Phase-2 preview (parallel channel / pitchfork offset) ────────────
+    if (phase2State.current) {
+      const p2 = phase2State.current;
+      const chart = chartRef.current;
+      if (!chart) return;
+      const W = chart.getWidth(), H = chart.getHeight();
+      const dx = p2.px1 - p2.px0, dy = p2.py1 - p2.py0;
+      const len = Math.hypot(dx, dy);
+      if (len < 1) return;
+      const nx = dx / len, ny = dy / len;
+      const perpX = -ny, perpY = nx;
+
+      if (p2.tool === "parallelch") {
+        const off = pos.py - p2.py0;
+        const [e1x, e1y] = extendRay(p2.px0, p2.py0,  nx,  ny, 0, 0, W, H);
+        const [e2x, e2y] = extendRay(p2.px0, p2.py0, -nx, -ny, 0, 0, W, H);
+        const [e3x, e3y] = extendRay(p2.px0, p2.py0 + off,  nx,  ny, 0, 0, W, H);
+        const [e4x, e4y] = extendRay(p2.px0, p2.py0 + off, -nx, -ny, 0, 0, W, H);
+        const [e5x, e5y] = extendRay(p2.px0, p2.py0 + off / 2,  nx,  ny, 0, 0, W, H);
+        const [e6x, e6y] = extendRay(p2.px0, p2.py0 + off / 2, -nx, -ny, 0, 0, W, H);
+        paintSvg([
+          { type: "line", x1: e2x, y1: e2y, x2: e1x, y2: e1y },
+          { type: "line", x1: e4x, y1: e4y, x2: e3x, y2: e3y },
+          { type: "line", x1: e6x, y1: e6y, x2: e5x, y2: e5y, dash: true, color: DRAW_CLR + "88" },
+        ]);
+      } else {
+        const spread = Math.abs(pos.py - p2.py1);
+        const f1x = p2.px1 + perpX * spread, f1y = p2.py1 + perpY * spread;
+        const f2x = p2.px1 - perpX * spread, f2y = p2.py1 - perpY * spread;
+        const [me1x, me1y] = extendRay(p2.px0, p2.py0,  nx,  ny, 0, 0, W, H);
+        const [me2x, me2y] = extendRay(p2.px0, p2.py0, -nx, -ny, 0, 0, W, H);
+        const [f1ex, f1ey] = extendRay(f1x, f1y, nx, ny, 0, 0, W, H);
+        const [f2ex, f2ey] = extendRay(f2x, f2y, nx, ny, 0, 0, W, H);
+        paintSvg([
+          { type: "line", x1: me2x, y1: me2y, x2: me1x, y2: me1y },
+          { type: "line", x1: f1x, y1: f1y, x2: f1ex, y2: f1ey },
+          { type: "line", x1: f2x, y1: f2y, x2: f2ex, y2: f2ey },
+          { type: "line", x1: f1x, y1: f1y, x2: f2x, y2: f2y, dash: true, color: DRAW_CLR + "88" },
+        ]);
+      }
       return;
     }
 
@@ -1101,41 +1180,9 @@ export default function ChartPanel({
       const rx = Math.abs(pos.px - s.px) / 2, ry = Math.abs(pos.py - s.py) / 2;
       preview = [{ type: "ellipse", cx: (s.px + pos.px) / 2, cy: (s.py + pos.py) / 2, rx, ry }];
     }
-    else if (drawingTool === "parallelch") {
-      const dx = pos.px - s.px, dy = pos.py - s.py;
-      const len = Math.hypot(dx, dy);
-      if (len > 1) {
-        const nx = dx / len, ny = dy / len;
-        const off = len * 0.22;
-        const perpX = -ny, perpY = nx;
-        const [e1x, e1y] = extendRay(s.px, s.py,  nx,  ny, 0, 0, W, H);
-        const [e2x, e2y] = extendRay(s.px, s.py, -nx, -ny, 0, 0, W, H);
-        const [e3x, e3y] = extendRay(s.px + perpX * off, s.py + perpY * off,  nx,  ny, 0, 0, W, H);
-        const [e4x, e4y] = extendRay(s.px + perpX * off, s.py + perpY * off, -nx, -ny, 0, 0, W, H);
-        preview = [
-          { type: "line", x1: e2x, y1: e2y, x2: e1x, y2: e1y },
-          { type: "line", x1: e4x, y1: e4y, x2: e3x, y2: e3y, dash: true },
-        ];
-      }
-    }
-    else if (drawingTool === "pitchfork") {
-      const dx = pos.px - s.px, dy = pos.py - s.py;
-      const len = Math.hypot(dx, dy);
-      if (len > 1) {
-        const nx = dx / len, ny = dy / len;
-        const spread = len * 0.3;
-        const perpX = -ny, perpY = nx;
-        const [me1x, me1y] = extendRay(s.px, s.py,  nx,  ny, 0, 0, W, H);
-        const [me2x, me2y] = extendRay(s.px, s.py, -nx, -ny, 0, 0, W, H);
-        const [f1ex, f1ey] = extendRay(pos.px + perpX * spread, pos.py + perpY * spread, nx, ny, 0, 0, W, H);
-        const [f2ex, f2ey] = extendRay(pos.px - perpX * spread, pos.py - perpY * spread, nx, ny, 0, 0, W, H);
-        preview = [
-          { type: "line", x1: me2x, y1: me2y, x2: me1x, y2: me1y },
-          { type: "line", x1: pos.px + perpX * spread, y1: pos.py + perpY * spread, x2: f1ex, y2: f1ey },
-          { type: "line", x1: pos.px - perpX * spread, y1: pos.py - perpY * spread, x2: f2ex, y2: f2ey },
-        ];
-      }
-    }
+    // Phase-1 for channel/fork: just show the base trendline during drag
+    else if (drawingTool === "parallelch" || drawingTool === "pitchfork")
+      preview = { type: "line", x1: s.px, y1: s.py, x2: pos.px, y2: pos.py };
     else if (drawingTool === "fibretracement" || drawingTool === "fibextension") {
       const levels = drawingTool === "fibextension"
         ? [0, 0.236, 0.382, 0.618, 1, 1.272, 1.618, 2.618]
@@ -1214,46 +1261,49 @@ export default function ChartPanel({
     const s = dragStart.current;
     dragStart.current = null;
 
-    // For tools that only need mousedown data (hline, vline, crossline, hray),
-    // save the shape immediately — don't require mouseup to be inside the grid.
+    // Single-click tools (use start-point data only)
     let shape: Record<string, unknown> | null = null;
-    if (drawingTool === "hline")
-      shape = { type: "hline", y: s.y };
-    else if (drawingTool === "hray")
-      shape = { type: "hray", xIdx: s.xIdx, y: s.y };
-    else if (drawingTool === "vline")
-      shape = { type: "vline", xIdx: s.xIdx };
-    else if (drawingTool === "crossline")
-      shape = { type: "crossline", xIdx: s.xIdx, y: s.y };
+    if (drawingTool === "hline")      shape = { type: "hline",      y: s.y };
+    else if (drawingTool === "hray")  shape = { type: "hray",      xIdx: s.xIdx, y: s.y };
+    else if (drawingTool === "vline") shape = { type: "vline",     xIdx: s.xIdx };
+    else if (drawingTool === "crossline") shape = { type: "crossline", xIdx: s.xIdx, y: s.y };
 
-    if (shape) { onDrawingAdd({ id: uid(), shape }); paintSvg(); return; }
+    if (shape) { saveDrawing(shape); return; }
 
-    // Tools that need both endpoints — require valid mouseup position
+    // Two-endpoint tools
     const data = pos ? pixelToData(pos.px, pos.py) : null;
     if (!data || !pos) { paintSvg(); return; }
 
-    const two = { x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y };
-    if      (drawingTool === "trendline")     shape = { type: "trendline",     ...two };
-    else if (drawingTool === "ray")           shape = { type: "ray",           ...two };
-    else if (drawingTool === "extendedline")  shape = { type: "extendedline",  ...two };
-    else if (drawingTool === "rectangle")     shape = { type: "rectangle",     ...two };
-    else if (drawingTool === "circle")        shape = { type: "circle",        ...two };
-    else if (drawingTool === "ellipse")       shape = { type: "ellipse",       ...two };
-    else if (drawingTool === "parallelch")    shape = { type: "parallelch",    ...two, y2: s.y + (data.y - s.y) * 0.35 };
-    else if (drawingTool === "pitchfork")     shape = { type: "pitchfork",     ...two };
-    else if (drawingTool === "fibretracement") shape = { type: "fibretracement", ...two };
-    else if (drawingTool === "fibextension")  shape = { type: "fibextension",  ...two };
-    else if (drawingTool === "fibtimezone")   shape = { type: "fibtimezone",   ...two };
-    else if (drawingTool === "fibfan")        shape = { type: "fibfan",        ...two };
-    else if (drawingTool === "gannfan")       shape = { type: "gannfan",       ...two };
-    else if (drawingTool === "gannbox")       shape = { type: "gannbox",       ...two };
-    else if (drawingTool === "longposition")  shape = { type: "longposition",  ...two };
-    else if (drawingTool === "shortposition") shape = { type: "shortposition", ...two };
-    else if (drawingTool === "cycliclines")   shape = { type: "cycliclines",   ...two };
-    else if (drawingTool === "measure")       shape = { type: "measure",       ...two };
+    // ── Two-phase tools: enter phase-2 instead of saving immediately ─────
+    if (drawingTool === "parallelch" || drawingTool === "pitchfork") {
+      phase2State.current = {
+        tool: drawingTool,
+        x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y,
+        px0: s.px, py0: s.py, px1: pos.px, py1: pos.py,
+      };
+      paintSvg([{ type: "line", x1: s.px, y1: s.py, x2: pos.px, y2: pos.py }]);
+      return;
+    }
 
-    if (shape) onDrawingAdd({ id: uid(), shape });
-    paintSvg();
+    const two = { x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y };
+    if      (drawingTool === "trendline")      shape = { type: "trendline",     ...two };
+    else if (drawingTool === "ray")            shape = { type: "ray",           ...two };
+    else if (drawingTool === "extendedline")   shape = { type: "extendedline",  ...two };
+    else if (drawingTool === "rectangle")      shape = { type: "rectangle",     ...two };
+    else if (drawingTool === "circle")         shape = { type: "circle",        ...two };
+    else if (drawingTool === "ellipse")        shape = { type: "ellipse",       ...two };
+    else if (drawingTool === "fibretracement") shape = { type: "fibretracement",...two };
+    else if (drawingTool === "fibextension")   shape = { type: "fibextension",  ...two };
+    else if (drawingTool === "fibtimezone")    shape = { type: "fibtimezone",   ...two };
+    else if (drawingTool === "fibfan")         shape = { type: "fibfan",        ...two };
+    else if (drawingTool === "gannfan")        shape = { type: "gannfan",       ...two };
+    else if (drawingTool === "gannbox")        shape = { type: "gannbox",       ...two };
+    else if (drawingTool === "longposition")   shape = { type: "longposition",  ...two };
+    else if (drawingTool === "shortposition")  shape = { type: "shortposition", ...two };
+    else if (drawingTool === "cycliclines")    shape = { type: "cycliclines",   ...two };
+    else if (drawingTool === "measure")        shape = { type: "measure",       ...two };
+
+    if (shape) saveDrawing(shape); else paintSvg();
   };
 
   // ── Derived display values ─────────────────────────────────────────────────
@@ -1381,6 +1431,7 @@ export default function ChartPanel({
             onMouseLeave={() => {
               eraserPos.current = null;
               if (dragStart.current) { dragStart.current = null; }
+              // Don't cancel phase2 on leaf so user can re-enter the chart
               paintSvg();
             }}
           />
