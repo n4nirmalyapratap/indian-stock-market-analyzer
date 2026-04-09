@@ -348,8 +348,8 @@ export default function ChartPanel({
     // x-axis: labels ONLY on the bottom-most grid
     const xBase = { axisLine: { lineStyle: { color: GRID_CLR } }, axisTick: { show: false } };
     const xAxes: object[] = [
-      { ...xBase, gridIndex: 0, data: dates, axisLabel: { show: false }, splitLine: { lineStyle: { color: GRID_CLR } } },
-      { ...xBase, gridIndex: 1, data: dates, axisLabel: hasSub ? { show: false } : { color: TEXT_CLR, fontSize: 9, margin: 6, formatter: (v: string) => fmtXLabel(v, showTime) }, splitLine: { show: false } },
+      { ...xBase, gridIndex: 0, data: dates, axisLabel: { show: false }, splitLine: { lineStyle: { color: GRID_CLR } }, axisPointer: { label: { show: false } } },
+      { ...xBase, gridIndex: 1, data: dates, axisLabel: hasSub ? { show: false } : { color: TEXT_CLR, fontSize: 9, margin: 6, formatter: (v: string) => fmtXLabel(v, showTime) }, splitLine: { show: false }, axisPointer: hasSub ? { label: { show: false } } : {} },
     ];
     if (hasSub) {
       xAxes.push({ ...xBase, gridIndex: 2, data: dates, axisLabel: { color: TEXT_CLR, fontSize: 9, margin: 6, formatter: (v: string) => fmtXLabel(v, showTime) }, splitLine: { lineStyle: { color: GRID_CLR } } });
@@ -785,6 +785,9 @@ export default function ChartPanel({
         }}
       >
         <div ref={containerRef} className="absolute inset-0" />
+        {loading && (
+          <div className="absolute inset-0 z-30 pointer-events-none transition-opacity" style={{ background: "rgba(19,23,34,0.65)" }} />
+        )}
         <svg ref={svgRef} className="absolute inset-0" style={{ pointerEvents: "none", zIndex: 10 }} />
         {drawingTool !== "none" && (
           <div

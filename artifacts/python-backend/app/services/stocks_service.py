@@ -23,6 +23,7 @@ class StocksService:
             if nse_quote and nse_quote.get("priceInfo"):
                 p = nse_quote["priceInfo"]
                 info = nse_quote.get("info") or nse_quote.get("metadata") or {}
+                week_high = p.get("weekHighLow", {}) or {}
                 quote_data = {
                     "symbol": upper,
                     "companyName": info.get("companyName", upper),
@@ -32,8 +33,12 @@ class StocksService:
                     "change": p.get("change"),
                     "pChange": p.get("pChange"),
                     "open": p.get("open"),
+                    "dayHigh": p.get("intraDayHighLow", {}).get("max") or p.get("dayHigh"),
+                    "dayLow": p.get("intraDayHighLow", {}).get("min") or p.get("dayLow"),
                     "previousClose": p.get("previousClose"),
                     "volume": p.get("totalTradedVolume"),
+                    "fiftyTwoWeekHigh": week_high.get("max"),
+                    "fiftyTwoWeekLow": week_high.get("min"),
                     "source": "NSE",
                 }
         except Exception:

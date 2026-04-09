@@ -706,29 +706,102 @@ export default function TradingPlatform() {
 
       {/* ── Chart area ──────────────────────────────────────────────────────── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* Charts grid */}
-        <div className={`flex-1 min-w-0 ${getGridClass()} p-1 gap-1`} style={{ minHeight: 0, height: "100%" }}>
-          {visiblePanels.map((panel) => (
-            <div key={panel.id} className={layoutMode === "4" ? "min-h-0 min-w-0 overflow-hidden" : "flex-1 min-h-0 min-w-0 overflow-hidden"}>
-              <ChartPanel
-                panelId={panel.id}
-                symbol={panel.symbol}
-                symbolName={SYMBOLS.find(s => s.symbol === panel.symbol)?.name}
-                periodCfg={customPeriodCfg ?? INTERVALS[intervalIdx]}
-                drawingTool={drawingTool}
-                chartType={chartType}
-                indicators={indicators}
-                showRSI={showRSI}
-                showMACD={showMACD}
-                isActive={panel.id === activePanelId}
-                drawings={panel.drawings}
-                onDrawingAdd={(d) => addDrawing(panel.id, d)}
-                onDrawingErase={(id) => eraseDrawing(panel.id, id)}
-                onClearDrawings={() => clearDrawings()}
-                onActivate={() => setActivePanelId(panel.id)}
-              />
+
+        {/* Chart column: grid + bottom bar (clock stays inside chart area) */}
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+          {/* Charts grid */}
+          <div className={`flex-1 min-w-0 min-h-0 ${getGridClass()} p-1 gap-1`}>
+            {visiblePanels.map((panel) => (
+              <div key={panel.id} className={layoutMode === "4" ? "min-h-0 min-w-0 overflow-hidden" : "flex-1 min-h-0 min-w-0 overflow-hidden"}>
+                <ChartPanel
+                  panelId={panel.id}
+                  symbol={panel.symbol}
+                  symbolName={SYMBOLS.find(s => s.symbol === panel.symbol)?.name}
+                  periodCfg={customPeriodCfg ?? INTERVALS[intervalIdx]}
+                  drawingTool={drawingTool}
+                  chartType={chartType}
+                  indicators={indicators}
+                  showRSI={showRSI}
+                  showMACD={showMACD}
+                  isActive={panel.id === activePanelId}
+                  drawings={panel.drawings}
+                  onDrawingAdd={(d) => addDrawing(panel.id, d)}
+                  onDrawingErase={(id) => eraseDrawing(panel.id, id)}
+                  onClearDrawings={() => clearDrawings()}
+                  onActivate={() => setActivePanelId(panel.id)}
+                />
+              </div>
+            ))}
+          </div>
+
+          {/* ── Bottom range bar (chart area only — clock lives here) ── */}
+          <div className="relative flex items-center justify-between px-3 py-1 border-t border-gray-800 bg-[#131722] shrink-0">
+            {/* Range buttons + calendar */}
+            <div className="flex items-center gap-0.5">
+              {RANGES.map(r => (
+                <button
+                  key={r.label}
+                  onClick={() => applyRange(r)}
+                  className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                    activeRange === r.label
+                      ? "bg-indigo-600 text-white"
+                      : "text-gray-400 hover:text-white hover:bg-gray-800"
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+              <div className="relative ml-1">
+                <button
+                  onClick={() => setShowCalendar(v => !v)}
+                  title="Custom date range"
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] transition-colors ${
+                    activeRange === "custom"
+                      ? "bg-indigo-600 text-white"
+                      : "text-gray-400 hover:text-white hover:bg-gray-800"
+                  }`}
+                >
+                  <Calendar size={12} />
+                </button>
+                {showCalendar && (
+                  <div className="absolute bottom-full mb-2 left-0 z-50 bg-gray-900 border border-gray-700 rounded shadow-2xl p-3 flex flex-col gap-2" style={{ minWidth: 240 }}>
+                    <div className="text-xs text-gray-400 font-medium">Custom range</div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-[11px] text-gray-400 w-10">From</label>
+                      <input
+                        type="date"
+                        value={calStart}
+                        onChange={e => setCalStart(e.target.value)}
+                        className="flex-1 bg-gray-800 text-gray-200 rounded px-2 py-0.5 text-xs border border-gray-700 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-[11px] text-gray-400 w-10">To</label>
+                      <input
+                        type="date"
+                        value={calEnd}
+                        onChange={e => setCalEnd(e.target.value)}
+                        className="flex-1 bg-gray-800 text-gray-200 rounded px-2 py-0.5 text-xs border border-gray-700 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                    <button
+                      onClick={applyCustomRange}
+                      disabled={!calStart || !calEnd}
+                      className="mt-0.5 w-full py-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs rounded transition-colors"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
-          ))}
+
+            {/* Live IST clock — now inside chart panel area, not watchlist */}
+            <div className="flex items-center gap-2 select-none">
+              <span className="font-mono text-[12px] tracking-wide text-gray-100 tabular-nums">{clock}</span>
+              <span className="font-mono text-[12px] text-gray-400">UTC+5:30</span>
+            </div>
+          </div>
         </div>
 
         {/* Watchlist */}
@@ -738,75 +811,6 @@ export default function TradingPlatform() {
             activeSymbol={activePanel?.symbol ?? ""}
           />
         )}
-      </div>
-
-      {/* ── Bottom range bar ─────────────────────────────────────────────────── */}
-      <div className="relative flex items-center justify-between px-3 py-1 border-t border-gray-800 bg-[#131722] shrink-0">
-        {/* Range buttons + calendar */}
-        <div className="flex items-center gap-0.5">
-          {RANGES.map(r => (
-            <button
-              key={r.label}
-              onClick={() => applyRange(r)}
-              className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
-                activeRange === r.label
-                  ? "bg-indigo-600 text-white"
-                  : "text-gray-400 hover:text-white hover:bg-gray-800"
-              }`}
-            >
-              {r.label}
-            </button>
-          ))}
-          <div className="relative ml-1">
-            <button
-              onClick={() => setShowCalendar(v => !v)}
-              title="Custom date range"
-              className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] transition-colors ${
-                activeRange === "custom"
-                  ? "bg-indigo-600 text-white"
-                  : "text-gray-400 hover:text-white hover:bg-gray-800"
-              }`}
-            >
-              <Calendar size={12} />
-            </button>
-            {showCalendar && (
-              <div className="absolute bottom-full mb-2 left-0 z-50 bg-gray-900 border border-gray-700 rounded shadow-2xl p-3 flex flex-col gap-2" style={{ minWidth: 240 }}>
-                <div className="text-xs text-gray-400 font-medium">Custom range</div>
-                <div className="flex items-center gap-2">
-                  <label className="text-[11px] text-gray-400 w-10">From</label>
-                  <input
-                    type="date"
-                    value={calStart}
-                    onChange={e => setCalStart(e.target.value)}
-                    className="flex-1 bg-gray-800 text-gray-200 rounded px-2 py-0.5 text-xs border border-gray-700 focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <label className="text-[11px] text-gray-400 w-10">To</label>
-                  <input
-                    type="date"
-                    value={calEnd}
-                    onChange={e => setCalEnd(e.target.value)}
-                    className="flex-1 bg-gray-800 text-gray-200 rounded px-2 py-0.5 text-xs border border-gray-700 focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-                <button
-                  onClick={applyCustomRange}
-                  disabled={!calStart || !calEnd}
-                  className="mt-0.5 w-full py-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs rounded transition-colors"
-                >
-                  Apply
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Live IST clock */}
-        <div className="flex items-center gap-2 select-none">
-          <span className="font-mono text-[12px] tracking-wide text-gray-100 tabular-nums">{clock}</span>
-          <span className="font-mono text-[12px] text-gray-400">UTC+5:30</span>
-        </div>
       </div>
     </div>
   );
