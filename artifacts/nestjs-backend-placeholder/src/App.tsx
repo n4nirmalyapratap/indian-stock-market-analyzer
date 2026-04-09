@@ -68,7 +68,7 @@ function Layout({ children }: { children: React.ReactNode }) {
   const inSettings = SETTINGS_NAV.some(({ path }) => loc === path);
 
   return (
-    <div className="min-h-screen bg-gray-50 flex">
+    <div className="h-screen bg-gray-50 flex overflow-hidden">
 
       {/* ── Sidebar (desktop) ─────────────────────────────────────────── */}
       <aside
