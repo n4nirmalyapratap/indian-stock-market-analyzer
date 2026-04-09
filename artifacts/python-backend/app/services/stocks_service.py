@@ -43,7 +43,7 @@ class StocksService:
             return {"error": f"Stock {upper} not found", "symbol": upper}
 
         try:
-            h = await self.yahoo.get_historical_data(upper, 180)
+            h = await self.yahoo.get_historical_data(upper, 300)  # 300 calendar days ≈ 210 trading days — enough for EMA 200
             if h:
                 history = h
         except Exception:
