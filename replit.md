@@ -113,21 +113,65 @@ Start both workflows. The API Server takes ~30 seconds on first boot (downloadin
 
 ---
 
-### Step 6 — Connect the GitHub Integration (required for pushing)
+### Step 6 — Connect GitHub Integration and Verify Push (mandatory)
 
-This project uses the Replit GitHub OAuth integration for all pushes. No personal access tokens or git credentials are needed.
+This is a mandatory step. The push script (`scripts/src/push-github.ts`) uses the Replit GitHub OAuth connector to authenticate. Without completing all three sub-steps below, the push script will fail silently with `Authenticated as: undefined`.
 
-1. In Replit, go to **Settings → Integrations → GitHub → Connect**
-2. Authorise Replit to access your GitHub account
-3. Done — the push script will now authenticate automatically
+---
 
-After connecting, push any changes with:
+#### Step 6a — Authorise the GitHub OAuth integration (user action required)
+
+The agent cannot do this on your behalf. You must do it once in the Replit UI:
+
+1. In Replit, click **Tools** (or the wrench icon) in the left sidebar
+2. Go to **Integrations**
+3. Find **GitHub** and click **Connect**
+4. Complete the GitHub OAuth flow — authorise Replit to access your account
+5. Once done, the status changes to **Connected**
+
+> If the agent is running and waiting: after you complete OAuth, tell the agent "done" and it will continue automatically.
+
+---
+
+#### Step 6b — Install the GitHub connector SDK in the scripts package
+
+Even if `pnpm install` was already run (Step 4), run this explicitly to ensure the connector SDK is installed in the scripts workspace:
+
+```bash
+cd /home/runner/workspace/scripts && pnpm add @replit/connectors-sdk
+```
+
+This installs `@replit/connectors-sdk` — the package the push script uses to proxy authenticated GitHub API calls through the connected OAuth integration. It is listed in `scripts/package.json` but must be explicitly installed in the scripts workspace before the push script will work.
+
+After this, go back to the workspace root:
+
+```bash
+cd /home/runner/workspace
+```
+
+---
+
+#### Step 6c — Run the push script to verify everything works
 
 ```bash
 pnpm --filter @workspace/scripts run push-github
 ```
 
-Run this after every set of changes to keep GitHub in sync.
+Expected output:
+```
+🔗  Authenticated as: <your-github-username>
+📌  GitHub HEAD:  <sha>
+📌  Local HEAD:   <sha>
+📁  Syncing NNN source files…
+  NNN/NNN blobs created.
+✅  Pushed to GitHub!
+    Commit ID : <full-sha>
+    URL       : https://github.com/n4nirmalyapratap/indian-stock-market-analyzer/commit/<sha>
+```
+
+If you see `Authenticated as: undefined`, Step 6a was not completed — go back and connect the GitHub integration.
+
+> Run this script after every set of changes to keep GitHub in sync.
 
 ---
 
@@ -199,7 +243,7 @@ The commit URL and ID are printed at the end.
 
 ---
 
-### GitHub Push Script Fails — "Authenticated as: undefined" (UNRESOLVED — requires user action)
+### GitHub Push Script Fails — "Authenticated as: undefined" (FIXED)
 
 **Symptom:** Running `pnpm --filter @workspace/scripts run push-github` fails with:
 ```
@@ -209,14 +253,12 @@ The commit URL and ID are printed at the end.
 
 **Root cause:** The push script uses the Replit GitHub OAuth integration (`@replit/connectors-sdk`) to authenticate with GitHub. If the GitHub integration has not been connected in this Replit workspace, the connector returns no credentials — `user.login` is `undefined` — and the first GitHub API call (`GET /repos/.../git/ref/heads/main`) returns an error object instead of ref data, causing the `.sha` read to fail.
 
-**This is not a code bug.** The script is correct. The integration simply hasn't been authorized yet.
+**Fix applied:**
+1. Connected the GitHub OAuth integration via Replit (Settings → Integrations → GitHub → Connect) — authenticated as `n4nirmalyapratap`
+2. Installed `@replit/connectors-sdk` in the scripts package (`cd scripts && pnpm add @replit/connectors-sdk`)
+3. First successful push: commit `945b2e8` — https://github.com/n4nirmalyapratap/indian-stock-market-analyzer/commit/945b2e8e468718c7f3dd2e86947ed7db80ad584c
 
-**Fix (one-time setup by workspace owner):**
-1. In Replit, go to **Settings → Integrations → GitHub → Connect**
-2. Authorise Replit to access the GitHub account that owns the repo
-3. Once connected, re-run: `pnpm --filter @workspace/scripts run push-github`
-
-**Prevention:** Always perform Step 6 of the First-Time Setup (Connect GitHub Integration) before attempting any push. If the push fails with "Authenticated as: undefined", this is always the reason.
+**Prevention:** Always perform Step 6 of the First-Time Setup (Connect GitHub Integration) before attempting any push. If the push fails with "Authenticated as: undefined", the GitHub integration is not connected — go to Settings → Integrations → GitHub → Connect and re-authorise.
 
 ---
 
