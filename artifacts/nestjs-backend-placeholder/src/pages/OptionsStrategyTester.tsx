@@ -736,67 +736,60 @@ export default function OptionsStrategyTester() {
 
       {/* ── TAB: Strategy Builder ────────────────────────────────────────── */}
       {tab === "strategy" && (
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex overflow-hidden" style={{ minHeight: 540 }}>
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col overflow-hidden" style={{ minHeight: 540 }}>
 
-          {/* ── LEFT: Builder ───────────────────────────────────────────── */}
-          <div className="w-[44%] flex-shrink-0 flex flex-col border-r border-gray-100">
-
-            {/* Quick presets — categorised grid */}
-            <div className="px-3 pt-3 pb-2 border-b border-gray-100">
-              <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-2">Quick Add Strategy</p>
-              <div className="space-y-2">
-                {STRATEGY_GROUPS.map(group => {
-                  const addStrategy = async (qs: typeof QUICK_STRATEGIES[0]) => {
-                    const info = spotInfo ?? await doFetchSpot();
-                    if (!info) return;
-                    const atm  = info.atm;
-                    const step = atm >= 10000 ? 100 : atm >= 2000 ? 50 : 10;
-                    const otm  = step * 3;
-                    const newLegs = qs.legs.map((l) => {
-                      const offset =
-                        l.spreadMult !== undefined
-                          ? step * l.spreadMult
-                          : otm * (l.otmMult ?? 0);
-                      const strike = l.option_type === "call" ? atm + offset : atm - offset;
-                      return {
-                        id:          crypto.randomUUID(),
-                        action:      l.action      ?? ("buy" as const),
-                        option_type: l.option_type ?? ("call" as const),
-                        strike,
-                        premium:     0,
-                        lots:        l.lots ?? 1,
-                        lot_size:    info.lot_size,
-                        iv:          info.hv30,
-                      };
-                    });
-                    setLegs(prev => [...prev, ...newLegs]);
-                  };
-                  return (
-                    <div key={group.label}>
-                      <p className="text-[8px] font-bold text-gray-300 uppercase tracking-widest mb-1">{group.label}</p>
-                      <div className="grid grid-cols-2 gap-1">
-                        {group.items.map(qs => (
-                          <button
-                            key={qs.label}
-                            onClick={() => addStrategy(qs)}
-                            className={`flex items-center gap-1.5 px-2 py-1.5 text-[11px] font-medium rounded-lg border transition-colors ${OUTLOOK_CHIP[qs.outlook]}`}
-                          >
-                            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${OUTLOOK_DOT[qs.outlook]}`} />
-                            <span className="truncate">{qs.label}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
+          {/* ── TOP STRIP: Quick Add (full-width horizontal bar) ─────────── */}
+          {(() => {
+            const addStrategy = async (qs: typeof QUICK_STRATEGIES[0]) => {
+              const info = spotInfo ?? await doFetchSpot();
+              if (!info) return;
+              const atm  = info.atm;
+              const step = atm >= 10000 ? 100 : atm >= 2000 ? 50 : 10;
+              const otm  = step * 3;
+              const newLegs = qs.legs.map((l) => {
+                const offset = l.spreadMult !== undefined ? step * l.spreadMult : otm * (l.otmMult ?? 0);
+                const strike = l.option_type === "call" ? atm + offset : atm - offset;
+                return {
+                  id: crypto.randomUUID(),
+                  action:      l.action      ?? ("buy" as const),
+                  option_type: l.option_type ?? ("call" as const),
+                  strike, premium: 0,
+                  lots:     l.lots ?? 1,
+                  lot_size: info.lot_size,
+                  iv:       info.hv30,
+                };
+              });
+              setLegs(prev => [...prev, ...newLegs]);
+            };
+            return (
+              <div className="border-b border-gray-100 px-4 py-2 flex flex-wrap items-center gap-x-1.5 gap-y-1.5">
+                <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mr-1 shrink-0">Add</span>
+                {STRATEGY_GROUPS.map((group, gi) => (
+                  <React.Fragment key={group.label}>
+                    {gi > 0 && <span className="text-gray-200 mx-0.5 select-none text-sm leading-none">·</span>}
+                    <span className="text-[8px] font-bold text-gray-300 uppercase tracking-widest shrink-0">{group.label}:</span>
+                    {group.items.map(qs => (
+                      <button key={qs.label} onClick={() => addStrategy(qs)}
+                        className={`flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded-md border transition-colors ${OUTLOOK_CHIP[qs.outlook]}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${OUTLOOK_DOT[qs.outlook]}`} />
+                        {qs.label}
+                      </button>
+                    ))}
+                  </React.Fragment>
+                ))}
+                <button onClick={() => addLeg()}
+                  className="ml-auto flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-md border border-dashed border-gray-200 text-gray-400 hover:bg-gray-50 transition shrink-0">
+                  <Plus className="w-2.5 h-2.5" /> Custom
+                </button>
               </div>
-              <button
-                onClick={() => addLeg()}
-                className="mt-2 w-full flex items-center justify-center gap-1.5 py-1.5 text-[11px] text-gray-400 rounded-lg border border-dashed border-gray-200 hover:bg-gray-50 hover:text-gray-600 transition"
-              >
-                <Plus className="w-3 h-3" /> Custom Leg
-              </button>
-            </div>
+            );
+          })()}
+
+          {/* ── BODY: Left / Right split ──────────────────────────────────── */}
+          <div className="flex flex-1 overflow-hidden">
+
+          {/* ── LEFT: Builder ─────────────────────────────────────────────── */}
+          <div className="w-[38%] flex-shrink-0 flex flex-col border-r border-gray-100">
 
             {/* Legs header */}
             <div className="px-4 py-2 border-b border-gray-100 flex items-center justify-between bg-gray-50/60">
@@ -1037,6 +1030,7 @@ export default function OptionsStrategyTester() {
             )}
           </div>
 
+          </div>{/* end flex body */}
         </div>
       )}
 
