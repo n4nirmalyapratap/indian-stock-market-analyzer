@@ -136,11 +136,70 @@ function GreeksBar({ g }: { g: Greeks }) {
   );
 }
 
+// ── P&L Heatmap ───────────────────────────────────────────────────────────────
+function PnlHeatmap({ spots, payoffs, currentSpot }: {
+  spots: number[]; payoffs: number[]; currentSpot?: number;
+}) {
+  const maxAbs = Math.max(...payoffs.map(Math.abs), 1);
+  // Downsample to ~80 bars for performance
+  const step = Math.max(1, Math.floor(spots.length / 80));
+  const bars = spots
+    .filter((_, i) => i % step === 0)
+    .map((s, i) => {
+      const pnl = payoffs[i * step] ?? 0;
+      const norm = Math.min(Math.abs(pnl) / maxAbs, 1);
+      const alpha = 0.12 + norm * 0.88;
+      const color = pnl > 0
+        ? `rgba(22,163,74,${alpha})`
+        : pnl < 0
+          ? `rgba(220,38,38,${alpha})`
+          : "rgba(200,200,200,0.2)";
+      return { s, pnl, color };
+    });
+
+  // Find spot bar nearest to currentSpot
+  const nearestIdx = currentSpot
+    ? bars.reduce((best, b, i) =>
+        Math.abs(b.s - currentSpot) < Math.abs(bars[best].s - currentSpot) ? i : best, 0)
+    : -1;
+
+  return (
+    <div className="mt-2">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">P&L Heatmap at Expiry</span>
+        <div className="flex items-center gap-3 text-[10px] text-gray-400">
+          <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm inline-block bg-red-500 opacity-70" /> Loss</span>
+          <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm inline-block bg-green-600 opacity-70" /> Profit</span>
+        </div>
+      </div>
+      <div className="flex h-8 rounded-lg overflow-hidden border border-gray-100">
+        {bars.map((b, i) => (
+          <div
+            key={i}
+            className="flex-1 relative group cursor-default transition-opacity"
+            style={{ background: b.color }}
+            title={`₹${b.s.toLocaleString("en-IN")} → ${b.pnl >= 0 ? "+" : ""}${b.pnl.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`}
+          >
+            {i === nearestIdx && (
+              <div className="absolute inset-y-0 left-1/2 w-0.5 bg-orange-500 opacity-90" />
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-between text-[9px] text-gray-400 mt-0.5 font-mono">
+        <span>₹{bars[0]?.s.toLocaleString("en-IN", { maximumFractionDigits: 0 })}</span>
+        {currentSpot && <span className="text-orange-500">↑ Spot</span>}
+        <span>₹{bars[bars.length - 1]?.s.toLocaleString("en-IN", { maximumFractionDigits: 0 })}</span>
+      </div>
+    </div>
+  );
+}
+
 // ── TABS ──────────────────────────────────────────────────────────────────────
-type Tab = "builder" | "payoff" | "backtest" | "risk";
+type Tab = "strategy" | "backtest" | "risk";
 
 export default function OptionsStrategyTester() {
-  const [tab, setTab] = useState<Tab>("builder");
+  const [tab, setTab] = useState<Tab>("strategy");
 
   // Symbol / spot state
   const [symbol, setSymbol] = useState("NIFTY");
@@ -359,7 +418,7 @@ export default function OptionsStrategyTester() {
 
   // ── Render ────────────────────────────────────────────────────────────────────
   const tabCls = (t: Tab) =>
-    `px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 transition-colors ${
+    `px-5 py-2.5 text-sm font-medium rounded-t-lg border-b-2 transition-colors ${
       tab === t
         ? "border-indigo-600 text-indigo-700 bg-white"
         : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
@@ -499,16 +558,19 @@ export default function OptionsStrategyTester() {
       {/* Tabs */}
       <div className="border-b border-gray-200">
         <nav className="flex gap-1">
-          <button className={tabCls("builder")}  onClick={() => setTab("builder")}>Strategy Builder</button>
-          <button className={tabCls("payoff")}   onClick={() => setTab("payoff")}>Payoff Diagram</button>
+          <button className={tabCls("strategy")} onClick={() => setTab("strategy")}>Strategy &amp; Payoff</button>
           <button className={tabCls("backtest")} onClick={() => setTab("backtest")}>Backtest</button>
           <button className={tabCls("risk")}     onClick={() => setTab("risk")}>Risk Analysis</button>
         </nav>
       </div>
 
       {/* ── TAB: Strategy Builder ────────────────────────────────────────── */}
-      {tab === "builder" && (
-        <div className="space-y-4">
+      {tab === "strategy" && (
+        <div className="flex gap-4 items-start">
+
+          {/* ── LEFT PANEL: Builder ──────────────────────────────────── */}
+          <div className="w-[42%] flex-shrink-0 space-y-4">
+
           {/* Quick presets */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
@@ -691,51 +753,7 @@ export default function OptionsStrategyTester() {
           )}
 
           {analysis && (
-            <div className="space-y-4">
-              {/* Summary cards */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                {(() => {
-                  const np     = analysis.payoff?.net_premium ?? 0;
-                  const isCredit = np >= 0;
-                  return (
-                    <div className={`rounded-xl border shadow-sm p-4 ${isCredit ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}>
-                      <div className="flex items-center justify-between mb-1">
-                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Net Premium</p>
-                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${isCredit ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
-                          {isCredit ? "CREDIT" : "DEBIT"}
-                        </span>
-                      </div>
-                      <p className={`text-xl font-bold ${isCredit ? "text-green-700" : "text-red-600"}`}>
-                        {fmtINR(Math.abs(np))}
-                      </p>
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        {isCredit ? "Premium collected upfront" : "Premium paid upfront"}
-                      </p>
-                    </div>
-                  );
-                })()}
-                <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-                  <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Max Profit</p>
-                  <p className="text-xl font-bold text-green-600">
-                    {analysis.payoff?.max_profit != null ? fmtINR(analysis.payoff.max_profit) : "Unlimited"}
-                  </p>
-                </div>
-                <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-                  <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Max Loss</p>
-                  <p className="text-xl font-bold text-red-600">
-                    {analysis.payoff?.max_loss != null ? fmtINR(analysis.payoff.max_loss) : "Unlimited"}
-                  </p>
-                </div>
-                <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-                  <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Breakevens</p>
-                  <p className="text-sm font-bold text-gray-800">
-                    {analysis.payoff?.breakevens?.length
-                      ? analysis.payoff.breakevens.map((b: number) => `₹${b.toLocaleString("en-IN")}`).join(" / ")
-                      : "None"}
-                  </p>
-                </div>
-              </div>
-
+            <div className="space-y-3">
               {/* Greeks */}
               <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
                 <h3 className="text-sm font-semibold text-gray-700 mb-3">
@@ -748,73 +766,111 @@ export default function OptionsStrategyTester() {
               </div>
             </div>
           )}
-        </div>
-      )}
 
-      {/* ── TAB: Payoff Diagram ──────────────────────────────────────────── */}
-      {tab === "payoff" && (
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-          {!analysis ? (
-            <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-              <BarChart2 className="w-12 h-12 mb-3 opacity-30" />
-              <p>Build a strategy and click Analyse Strategy first</p>
-            </div>
-          ) : (
-            <div>
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-gray-800">P&L at Expiry</h3>
-                <div className="flex gap-4 text-xs text-gray-500">
-                  <span className="flex items-center gap-1">
-                    <span className="w-3 h-0.5 bg-indigo-500 inline-block" /> Strategy P&L
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-3 h-0.5 bg-orange-400 border-dashed inline-block" /> Spot
-                  </span>
+          </div>{/* end LEFT PANEL */}
+
+          {/* ── RIGHT PANEL: Payoff Diagram ──────────────────────────── */}
+          <div className="flex-1 min-w-0">
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 h-full">
+              {!analysis ? (
+                <div className="flex flex-col items-center justify-center py-20 text-gray-400">
+                  <BarChart2 className="w-12 h-12 mb-3 opacity-25" />
+                  <p className="text-sm font-medium">No strategy yet</p>
+                  <p className="text-xs mt-1">Add legs and click Analyse Strategy</p>
                 </div>
-              </div>
-              <ResponsiveContainer width="100%" height={380}>
-                <LineChart data={analysis.payoff.spots.map((s: number, i: number) => ({
-                  spot: s, pnl: analysis.payoff.payoffs[i],
-                }))}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis
-                    dataKey="spot"
-                    tickFormatter={(v: number) => `₹${(v / 1000).toFixed(0)}k`}
-                    tick={{ fontSize: 11 }}
-                  />
-                  <YAxis
-                    tickFormatter={(v: number) => v >= 1e5 ? `${(v / 1e5).toFixed(1)}L` : v.toLocaleString("en-IN")}
-                    tick={{ fontSize: 11 }}
-                  />
-                  <Tooltip
-                    formatter={(v: number) => [fmtINR(v), "P&L"]}
-                    labelFormatter={(l: number) => `Spot: ₹${Number(l).toLocaleString("en-IN")}`}
-                    contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                  />
-                  {/* Zero line */}
-                  <ReferenceLine y={0} stroke="#9ca3af" strokeWidth={1} />
-                  {/* Current spot */}
-                  {spotInfo && (
-                    <ReferenceLine x={spotInfo.spot} stroke="#f97316" strokeDasharray="4 2"
-                                   label={{ value: "Spot", fill: "#f97316", fontSize: 10 }} />
-                  )}
+              ) : (
+                <div className="space-y-3">
+                  {/* P&L summary strip */}
+                  <div className="grid grid-cols-2 gap-2">
+                    {(() => {
+                      const np = analysis.payoff?.net_premium ?? 0;
+                      const isCredit = np >= 0;
+                      return (
+                        <div className={`rounded-lg border p-2.5 ${isCredit ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}>
+                          <div className="flex items-center justify-between">
+                            <p className="text-[10px] font-semibold text-gray-500 uppercase">Net Premium</p>
+                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${isCredit ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+                              {isCredit ? "CREDIT" : "DEBIT"}
+                            </span>
+                          </div>
+                          <p className={`text-base font-bold mt-0.5 ${isCredit ? "text-green-700" : "text-red-600"}`}>{fmtINR(Math.abs(np))}</p>
+                        </div>
+                      );
+                    })()}
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <div className="bg-gray-50 rounded-lg border border-gray-100 p-2">
+                        <p className="text-[10px] text-gray-400 uppercase">Max Profit</p>
+                        <p className="text-sm font-bold text-green-600 mt-0.5">
+                          {analysis.payoff?.max_profit != null ? fmtINR(analysis.payoff.max_profit) : "Unlimited"}
+                        </p>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg border border-gray-100 p-2">
+                        <p className="text-[10px] text-gray-400 uppercase">Max Loss</p>
+                        <p className="text-sm font-bold text-red-600 mt-0.5">
+                          {analysis.payoff?.max_loss != null ? fmtINR(analysis.payoff.max_loss) : "Unlimited"}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Breakevens */}
-                  {analysis.payoff.breakevens?.map((be: number, i: number) => (
-                    <ReferenceLine key={i} x={be} stroke="#10b981" strokeDasharray="3 3"
-                                   label={{ value: `BE ₹${be.toLocaleString("en-IN")}`, fill: "#059669", fontSize: 9 }} />
-                  ))}
-                  <Line
-                    type="monotone"
-                    dataKey="pnl"
-                    stroke="#6366f1"
-                    strokeWidth={2.5}
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+                  {analysis.payoff?.breakevens?.length > 0 && (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[10px] text-gray-400 uppercase font-semibold">Breakevens</span>
+                      {analysis.payoff.breakevens.map((b: number, i: number) => (
+                        <span key={i} className="text-xs font-mono bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">
+                          ₹{b.toLocaleString("en-IN")}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* P&L Line chart */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-semibold text-gray-600">P&amp;L at Expiry</p>
+                      <div className="flex gap-3 text-[10px] text-gray-400">
+                        <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-indigo-500 inline-block" /> P&amp;L</span>
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" /> Spot</span>
+                      </div>
+                    </div>
+                    <ResponsiveContainer width="100%" height={260}>
+                      <LineChart data={analysis.payoff.spots.map((s: number, i: number) => ({
+                        spot: s, pnl: analysis.payoff.payoffs[i],
+                      }))}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f4f4f5" />
+                        <XAxis dataKey="spot" tickFormatter={(v: number) => `₹${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 10 }} />
+                        <YAxis tickFormatter={(v: number) => v >= 1e5 ? `${(v / 1e5).toFixed(1)}L` : v.toLocaleString("en-IN")} tick={{ fontSize: 10 }} width={55} />
+                        <Tooltip
+                          formatter={(v: number) => [fmtINR(v), "P&L"]}
+                          labelFormatter={(l: number) => `Spot: ₹${Number(l).toLocaleString("en-IN")}`}
+                          contentStyle={{ fontSize: 11, borderRadius: 8 }}
+                        />
+                        <ReferenceLine y={0} stroke="#d1d5db" strokeWidth={1} />
+                        {spotInfo && (
+                          <ReferenceLine x={spotInfo.spot} stroke="#f97316" strokeDasharray="4 2"
+                            label={{ value: "Spot", fill: "#f97316", fontSize: 9 }} />
+                        )}
+                        {analysis.payoff.breakevens?.map((be: number, i: number) => (
+                          <ReferenceLine key={i} x={be} stroke="#10b981" strokeDasharray="3 3"
+                            label={{ value: `BE`, fill: "#059669", fontSize: 9 }} />
+                        ))}
+                        <Line type="monotone" dataKey="pnl" stroke="#6366f1" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
+                      </LineChart>
+                    </ResponsiveContainer>
+
+                    {/* P&L Heatmap */}
+                    <PnlHeatmap
+                      spots={analysis.payoff.spots}
+                      payoffs={analysis.payoff.payoffs}
+                      currentSpot={spotInfo?.spot}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
-          )}
+          </div>{/* end RIGHT PANEL */}
+
         </div>
       )}
 
