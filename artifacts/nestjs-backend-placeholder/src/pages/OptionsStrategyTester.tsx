@@ -581,102 +581,99 @@ export default function OptionsStrategyTester() {
 
       {/* ── TAB: Strategy Builder ────────────────────────────────────────── */}
       {tab === "strategy" && (
-        <div className="flex gap-4 items-start">
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex overflow-hidden" style={{ minHeight: 540 }}>
 
-          {/* ── LEFT PANEL: Builder ──────────────────────────────────── */}
-          <div className="w-[42%] flex-shrink-0 space-y-4">
+          {/* ── LEFT: Builder ───────────────────────────────────────────── */}
+          <div className="w-[44%] flex-shrink-0 flex flex-col border-r border-gray-100">
 
-          {/* Quick presets */}
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-              Quick Add Strategy
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {QUICK_STRATEGIES.map(qs => (
+            {/* Quick presets */}
+            <div className="px-4 py-3 border-b border-gray-100">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Quick Add Strategy</p>
+              <div className="flex flex-wrap gap-1.5">
+                {QUICK_STRATEGIES.map(qs => (
+                  <button
+                    key={qs.label}
+                    onClick={async () => {
+                      const info = spotInfo ?? await doFetchSpot();
+                      if (!info) return;
+                      const atm  = info.atm;
+                      const step = atm >= 10000 ? 100 : atm >= 2000 ? 50 : 10;
+                      const otm  = step * 3;
+                      const newLegs = qs.legs.map((l) => {
+                        const mult   = l.otmMult ?? 0;
+                        const offset = otm * mult;
+                        const strike = l.option_type === "call" ? atm + offset : atm - offset;
+                        return {
+                          id:          crypto.randomUUID(),
+                          action:      l.action      ?? ("buy" as const),
+                          option_type: l.option_type ?? ("call" as const),
+                          strike,
+                          premium:     0,
+                          lots:        l.lots ?? 1,
+                          lot_size:    info.lot_size,
+                          iv:          info.hv30,
+                        };
+                      });
+                      setLegs(prev => [...prev, ...newLegs]);
+                    }}
+                    className="px-2.5 py-1 text-xs rounded-lg border border-indigo-200 text-indigo-700 hover:bg-indigo-50 transition font-medium"
+                  >
+                    {qs.label}
+                  </button>
+                ))}
                 <button
-                  key={qs.label}
-                  onClick={async () => {
-                    // Auto-fetch spot if not loaded yet — no alert needed
-                    const info = spotInfo ?? await doFetchSpot();
-                    if (!info) return; // fetch failed; spotErr banner will show
-                    const atm  = info.atm;
-                    const step = atm >= 10000 ? 100 : atm >= 2000 ? 50 : 10;
-                    const otm  = step * 3;
-                    const newLegs = qs.legs.map((l) => {
-                      const mult   = l.otmMult ?? 0;
-                      const offset = otm * mult;
-                      const strike = l.option_type === "call"
-                        ? atm + offset
-                        : atm - offset;
-                      return {
-                        id:          crypto.randomUUID(),
-                        action:      l.action      ?? ("buy" as const),
-                        option_type: l.option_type ?? ("call" as const),
-                        strike,
-                        premium:     0,
-                        lots:        l.lots ?? 1,
-                        lot_size:    info.lot_size,
-                        iv:          info.hv30,
-                      };
-                    });
-                    setLegs(prev => [...prev, ...newLegs]);
-                  }}
-                  className="px-3 py-1.5 text-sm rounded-lg border border-indigo-200 text-indigo-700 hover:bg-indigo-50 transition"
+                  onClick={() => addLeg()}
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition"
                 >
-                  {qs.label}
+                  <Plus className="w-3 h-3" /> Custom
                 </button>
-              ))}
-              <button
-                onClick={() => addLeg()}
-                className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition"
-              >
-                <Plus className="w-3.5 h-3.5" /> Custom Leg
-              </button>
+              </div>
             </div>
-          </div>
 
-          {/* Legs table */}
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-              <h3 className="font-semibold text-gray-800">Legs</h3>
-              <div className="flex items-center gap-3">
-                <label className="text-xs text-gray-500">Days to Expiry:</label>
+            {/* Legs header */}
+            <div className="px-4 py-2 border-b border-gray-100 flex items-center justify-between bg-gray-50/60">
+              <span className="text-xs font-semibold text-gray-600">Legs</span>
+              <div className="flex items-center gap-2">
+                <label className="text-[10px] text-gray-400 font-medium">DTE</label>
                 <input
                   type="number" min={1} max={365}
                   value={T}
                   onChange={e => setT(Number(e.target.value))}
-                  className="w-16 border border-gray-300 rounded px-2 py-1 text-sm"
+                  className="w-14 border border-gray-200 rounded px-2 py-0.5 text-xs text-center"
                 />
               </div>
             </div>
 
-            {legs.length === 0 ? (
-              <div className="p-8 text-center text-gray-400 text-sm">
-                No legs yet — click a quick strategy or add a custom leg above
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm">
-                  <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+            {/* Legs body */}
+            <div className="flex-1 overflow-y-auto">
+              {legs.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full py-10 text-gray-400">
+                  <Plus className="w-8 h-8 mb-2 opacity-30" />
+                  <p className="text-sm">No legs yet</p>
+                  <p className="text-xs mt-0.5">Pick a strategy or add a custom leg above</p>
+                </div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 text-[10px] text-gray-400 uppercase tracking-wide sticky top-0">
                     <tr>
-                      <th className="px-4 py-2 text-left">Action</th>
-                      <th className="px-4 py-2 text-left">Type</th>
-                      <th className="px-4 py-2 text-left">Strike</th>
-                      <th className="px-4 py-2 text-left">IV %</th>
-                      <th className="px-4 py-2 text-left">Lots</th>
-                      <th className="px-4 py-2 text-left">Lot Size</th>
-                      <th className="px-4 py-2 text-left">Premium</th>
-                      <th className="px-4 py-2" />
+                      <th className="px-3 py-2 text-left">Action</th>
+                      <th className="px-3 py-2 text-left">Type</th>
+                      <th className="px-3 py-2 text-left">Strike</th>
+                      <th className="px-3 py-2 text-left">IV%</th>
+                      <th className="px-3 py-2 text-left">Lots</th>
+                      <th className="px-3 py-2 text-left">Sz</th>
+                      <th className="px-3 py-2 text-left">Prem</th>
+                      <th className="px-3 py-2" />
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100">
+                  <tbody className="divide-y divide-gray-50">
                     {legs.map(leg => (
-                      <tr key={leg.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-2">
+                      <tr key={leg.id} className="hover:bg-gray-50/70">
+                        <td className="px-3 py-1.5">
                           <select
                             value={leg.action}
                             onChange={e => updateLeg(leg.id, "action", e.target.value)}
-                            className={`rounded px-2 py-1 text-xs font-bold border-0 ${
+                            className={`rounded px-1.5 py-0.5 text-[10px] font-bold border-0 cursor-pointer ${
                               leg.action === "buy" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
                             }`}
                           >
@@ -684,64 +681,77 @@ export default function OptionsStrategyTester() {
                             <option value="sell">SELL</option>
                           </select>
                         </td>
-                        <td className="px-4 py-2">
+                        <td className="px-3 py-1.5">
                           <select
                             value={leg.option_type}
                             onChange={e => updateLeg(leg.id, "option_type", e.target.value)}
-                            className="border border-gray-200 rounded px-2 py-1 text-xs"
+                            className="border border-gray-200 rounded px-1.5 py-0.5 text-[10px]"
                           >
-                            <option value="call">CALL</option>
-                            <option value="put">PUT</option>
+                            <option value="call">CE</option>
+                            <option value="put">PE</option>
                           </select>
                         </td>
-                        <td className="px-4 py-2">
+                        <td className="px-3 py-1.5">
                           <input
                             type="number" step={50} min={0}
                             value={leg.strike}
                             onChange={e => updateLeg(leg.id, "strike", Number(e.target.value))}
-                            className="border border-gray-200 rounded px-2 py-1 text-sm w-24 font-mono"
+                            className="border border-gray-200 rounded px-1.5 py-0.5 text-xs w-20 font-mono"
                           />
                         </td>
-                        <td className="px-4 py-2">
+                        <td className="px-3 py-1.5">
                           <input
                             type="number" step={0.5} min={1} max={300}
                             value={parseFloat((leg.iv * 100).toFixed(1))}
                             onChange={e => updateLeg(leg.id, "iv", Number(e.target.value) / 100)}
-                            className="border border-gray-200 rounded px-2 py-1 text-sm w-16 font-mono"
+                            className="border border-gray-200 rounded px-1.5 py-0.5 text-xs w-14 font-mono"
                           />
                         </td>
-                        <td className="px-4 py-2">
+                        <td className="px-3 py-1.5">
                           <input
                             type="number" min={1} max={50}
                             value={leg.lots}
                             onChange={e => updateLeg(leg.id, "lots", Number(e.target.value))}
-                            className="border border-gray-200 rounded px-2 py-1 text-sm w-14"
+                            className="border border-gray-200 rounded px-1.5 py-0.5 text-xs w-12"
                           />
                         </td>
-                        <td className="px-4 py-2">
+                        <td className="px-3 py-1.5">
                           <input
                             type="number" min={1}
                             value={leg.lot_size}
                             onChange={e => updateLeg(leg.id, "lot_size", Number(e.target.value))}
-                            className="border border-gray-200 rounded px-2 py-1 text-sm w-16"
+                            className="border border-gray-200 rounded px-1.5 py-0.5 text-xs w-14"
                           />
                         </td>
-                        <td className="px-4 py-2 font-mono text-xs text-gray-500">
-                          {leg.premium > 0 ? `₹${leg.premium.toFixed(2)}` : "—"}
+                        <td className="px-3 py-1.5 font-mono text-gray-400">
+                          {leg.premium > 0 ? `₹${leg.premium.toFixed(1)}` : "—"}
                         </td>
-                        <td className="px-4 py-2">
-                          <button onClick={() => removeLeg(leg.id)}
-                                  className="text-red-400 hover:text-red-600">
-                            <Trash2 className="w-4 h-4" />
+                        <td className="px-3 py-1.5">
+                          <button onClick={() => removeLeg(leg.id)} className="text-red-300 hover:text-red-500 transition">
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+              )}
+            </div>
+
+            {/* Greeks (when available) */}
+            {analysis && (
+              <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/40">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Portfolio Greeks</p>
+                <GreeksBar g={analysis.greeks} />
               </div>
             )}
 
+            {/* Footer: error + actions */}
+            {analysisErr && (
+              <div className="px-4 py-2 bg-red-50 border-t border-red-100 text-red-600 text-xs">
+                {analysisErr}
+              </div>
+            )}
             <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-between">
               <button
                 onClick={() => setLegs([])}
@@ -752,139 +762,112 @@ export default function OptionsStrategyTester() {
               <button
                 onClick={analyseStrategy}
                 disabled={loadingAnalysis || !legs.length}
-                className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-60 transition"
+                className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 transition"
               >
-                {loadingAnalysis ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                {loadingAnalysis ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
                 Analyse Strategy
               </button>
             </div>
           </div>
 
-          {/* Analysis results */}
-          {analysisErr && (
-            <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">
-              {analysisErr}
-            </div>
-          )}
-
-          {analysis && (
-            <div className="space-y-3">
-              {/* Greeks */}
-              <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-                <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                  Portfolio Greeks
-                  <span className="ml-2 text-xs text-gray-400 font-normal">
-                    (per strategy, accounting for lots × lot size)
-                  </span>
-                </h3>
-                <GreeksBar g={analysis.greeks} />
+          {/* ── RIGHT: Payoff ────────────────────────────────────────── */}
+          <div className="flex-1 flex flex-col min-w-0 p-5">
+            {!analysis ? (
+              <div className="flex flex-col items-center justify-center h-full text-gray-300">
+                <BarChart2 className="w-14 h-14 mb-3" />
+                <p className="text-sm font-semibold text-gray-400">No strategy yet</p>
+                <p className="text-xs text-gray-300 mt-1">Add legs on the left and click Analyse Strategy</p>
               </div>
-            </div>
-          )}
+            ) : (
+              <div className="flex flex-col gap-3 h-full">
 
-          </div>{/* end LEFT PANEL */}
-
-          {/* ── RIGHT PANEL: Payoff Diagram ──────────────────────────── */}
-          <div className="flex-1 min-w-0">
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 h-full">
-              {!analysis ? (
-                <div className="flex flex-col items-center justify-center py-20 text-gray-400">
-                  <BarChart2 className="w-12 h-12 mb-3 opacity-25" />
-                  <p className="text-sm font-medium">No strategy yet</p>
-                  <p className="text-xs mt-1">Add legs and click Analyse Strategy</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {/* P&L summary strip */}
-                  <div className="grid grid-cols-2 gap-2">
-                    {(() => {
-                      const np = analysis.payoff?.net_premium ?? 0;
-                      const isCredit = np >= 0;
-                      return (
-                        <div className={`rounded-lg border p-2.5 ${isCredit ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}>
-                          <div className="flex items-center justify-between">
-                            <p className="text-[10px] font-semibold text-gray-500 uppercase">Net Premium</p>
-                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${isCredit ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
-                              {isCredit ? "CREDIT" : "DEBIT"}
-                            </span>
-                          </div>
-                          <p className={`text-base font-bold mt-0.5 ${isCredit ? "text-green-700" : "text-red-600"}`}>{fmtINR(Math.abs(np))}</p>
+                {/* Summary strip */}
+                <div className="grid grid-cols-3 gap-2.5">
+                  {(() => {
+                    const np = analysis.payoff?.net_premium ?? 0;
+                    const isCredit = np >= 0;
+                    return (
+                      <div className={`rounded-xl border p-3 ${isCredit ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}>
+                        <div className="flex items-center justify-between mb-0.5">
+                          <p className="text-[10px] font-semibold text-gray-500 uppercase">Net Premium</p>
+                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${isCredit ? "bg-green-200 text-green-800" : "bg-red-200 text-red-700"}`}>
+                            {isCredit ? "CREDIT" : "DEBIT"}
+                          </span>
                         </div>
-                      );
-                    })()}
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <div className="bg-gray-50 rounded-lg border border-gray-100 p-2">
-                        <p className="text-[10px] text-gray-400 uppercase">Max Profit</p>
-                        <p className="text-sm font-bold text-green-600 mt-0.5">
-                          {analysis.payoff?.max_profit != null ? fmtINR(analysis.payoff.max_profit) : "Unlimited"}
-                        </p>
+                        <p className={`text-base font-bold ${isCredit ? "text-green-700" : "text-red-600"}`}>{fmtINR(Math.abs(np))}</p>
                       </div>
-                      <div className="bg-gray-50 rounded-lg border border-gray-100 p-2">
-                        <p className="text-[10px] text-gray-400 uppercase">Max Loss</p>
-                        <p className="text-sm font-bold text-red-600 mt-0.5">
-                          {analysis.payoff?.max_loss != null ? fmtINR(analysis.payoff.max_loss) : "Unlimited"}
-                        </p>
-                      </div>
-                    </div>
+                    );
+                  })()}
+                  <div className="bg-gray-50 rounded-xl border border-gray-100 p-3">
+                    <p className="text-[10px] text-gray-400 uppercase mb-0.5">Max Profit</p>
+                    <p className="text-base font-bold text-green-600">
+                      {analysis.payoff?.max_profit != null ? fmtINR(analysis.payoff.max_profit) : "∞"}
+                    </p>
                   </div>
-
-                  {/* Breakevens */}
-                  {analysis.payoff?.breakevens?.length > 0 && (
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-[10px] text-gray-400 uppercase font-semibold">Breakevens</span>
-                      {analysis.payoff.breakevens.map((b: number, i: number) => (
-                        <span key={i} className="text-xs font-mono bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">
-                          ₹{b.toLocaleString("en-IN")}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* P&L Line chart */}
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-xs font-semibold text-gray-600">P&amp;L at Expiry</p>
-                      <div className="flex gap-3 text-[10px] text-gray-400">
-                        <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-indigo-500 inline-block" /> P&amp;L</span>
-                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" /> Spot</span>
-                      </div>
-                    </div>
-                    <ResponsiveContainer width="100%" height={260}>
-                      <LineChart data={analysis.payoff.spots.map((s: number, i: number) => ({
-                        spot: s, pnl: analysis.payoff.payoffs[i],
-                      }))}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#f4f4f5" />
-                        <XAxis dataKey="spot" tickFormatter={(v: number) => `₹${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 10 }} />
-                        <YAxis tickFormatter={(v: number) => v >= 1e5 ? `${(v / 1e5).toFixed(1)}L` : v.toLocaleString("en-IN")} tick={{ fontSize: 10 }} width={55} />
-                        <Tooltip
-                          formatter={(v: number) => [fmtINR(v), "P&L"]}
-                          labelFormatter={(l: number) => `Spot: ₹${Number(l).toLocaleString("en-IN")}`}
-                          contentStyle={{ fontSize: 11, borderRadius: 8 }}
-                        />
-                        <ReferenceLine y={0} stroke="#d1d5db" strokeWidth={1} />
-                        {spotInfo && (
-                          <ReferenceLine x={spotInfo.spot} stroke="#f97316" strokeDasharray="4 2"
-                            label={{ value: "Spot", fill: "#f97316", fontSize: 9 }} />
-                        )}
-                        {analysis.payoff.breakevens?.map((be: number, i: number) => (
-                          <ReferenceLine key={i} x={be} stroke="#10b981" strokeDasharray="3 3"
-                            label={{ value: `BE`, fill: "#059669", fontSize: 9 }} />
-                        ))}
-                        <Line type="monotone" dataKey="pnl" stroke="#6366f1" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
-                      </LineChart>
-                    </ResponsiveContainer>
-
-                    {/* P&L Heatmap */}
-                    <PnlHeatmap
-                      spots={analysis.payoff.spots}
-                      payoffs={analysis.payoff.payoffs}
-                      currentSpot={spotInfo?.spot}
-                    />
+                  <div className="bg-gray-50 rounded-xl border border-gray-100 p-3">
+                    <p className="text-[10px] text-gray-400 uppercase mb-0.5">Max Loss</p>
+                    <p className="text-base font-bold text-red-500">
+                      {analysis.payoff?.max_loss != null ? fmtINR(analysis.payoff.max_loss) : "∞"}
+                    </p>
                   </div>
                 </div>
-              )}
-            </div>
-          </div>{/* end RIGHT PANEL */}
+
+                {/* Breakevens */}
+                {analysis.payoff?.breakevens?.length > 0 && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[10px] text-gray-400 uppercase font-semibold tracking-wide">Breakevens</span>
+                    {analysis.payoff.breakevens.map((b: number, i: number) => (
+                      <span key={i} className="text-xs font-mono bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">
+                        ₹{b.toLocaleString("en-IN")}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* P&L Chart */}
+                <div className="flex-1 flex flex-col min-h-0">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <p className="text-xs font-semibold text-gray-600">P&amp;L at Expiry</p>
+                    <div className="flex gap-3 text-[10px] text-gray-400">
+                      <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-indigo-500 inline-block rounded" /> P&amp;L</span>
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" /> Spot</span>
+                    </div>
+                  </div>
+                  <ResponsiveContainer width="100%" height={230}>
+                    <LineChart data={analysis.payoff.spots.map((s: number, i: number) => ({
+                      spot: s, pnl: analysis.payoff.payoffs[i],
+                    }))}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f4f4f5" />
+                      <XAxis dataKey="spot" tickFormatter={(v: number) => `₹${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 10 }} />
+                      <YAxis tickFormatter={(v: number) => v >= 1e5 ? `${(v / 1e5).toFixed(1)}L` : v.toLocaleString("en-IN")} tick={{ fontSize: 10 }} width={55} />
+                      <Tooltip
+                        formatter={(v: number) => [fmtINR(v), "P&L"]}
+                        labelFormatter={(l: number) => `Spot: ₹${Number(l).toLocaleString("en-IN")}`}
+                        contentStyle={{ fontSize: 11, borderRadius: 8 }}
+                      />
+                      <ReferenceLine y={0} stroke="#d1d5db" strokeWidth={1} />
+                      {spotInfo && (
+                        <ReferenceLine x={spotInfo.spot} stroke="#f97316" strokeDasharray="4 2"
+                          label={{ value: "Spot", fill: "#f97316", fontSize: 9 }} />
+                      )}
+                      {analysis.payoff.breakevens?.map((be: number, i: number) => (
+                        <ReferenceLine key={i} x={be} stroke="#10b981" strokeDasharray="3 3"
+                          label={{ value: "BE", fill: "#059669", fontSize: 9 }} />
+                      ))}
+                      <Line type="monotone" dataKey="pnl" stroke="#6366f1" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+
+                  {/* Heatmap */}
+                  <PnlHeatmap
+                    spots={analysis.payoff.spots}
+                    payoffs={analysis.payoff.payoffs}
+                    currentSpot={spotInfo?.spot}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
 
         </div>
       )}
