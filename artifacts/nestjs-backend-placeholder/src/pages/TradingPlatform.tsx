@@ -240,10 +240,10 @@ export default function TradingPlatform() {
   const visiblePanels = panels.slice(0, LAYOUTS.find(l => l.mode === layoutMode)!.panels);
 
   function getGridClass() {
-    if (layoutMode === "2h") return "grid grid-cols-2 gap-1";
-    if (layoutMode === "2v") return "grid grid-rows-2 gap-1";
+    if (layoutMode === "2h") return "flex flex-row gap-1";
+    if (layoutMode === "2v") return "flex flex-col gap-1";
     if (layoutMode === "4")  return "grid grid-cols-2 grid-rows-2 gap-1";
-    return "grid grid-cols-1";
+    return "flex flex-col";
   }
 
   return (
@@ -373,9 +373,9 @@ export default function TradingPlatform() {
       {/* ── Chart area ──────────────────────────────────────────────────────── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Charts grid */}
-        <div className={`flex-1 min-w-0 ${getGridClass()} p-1 gap-1`} style={{ minHeight: 0 }}>
+        <div className={`flex-1 min-w-0 ${getGridClass()} p-1 gap-1`} style={{ minHeight: 0, height: "100%" }}>
           {visiblePanels.map((panel) => (
-            <div key={panel.id} className="min-h-0 min-w-0" style={{ minHeight: "200px" }}>
+            <div key={panel.id} className={layoutMode === "4" ? "min-h-0 min-w-0 overflow-hidden" : "flex-1 min-h-0 min-w-0 overflow-hidden"}>
               <ChartPanel
                 panelId={panel.id}
                 symbol={panel.symbol}

@@ -1,21 +1,12 @@
-import { useEffect, useRef, useState, useCallback, useId } from "react";
-import {
-  createChart, CandlestickSeries, LineSeries, HistogramSeries,
-  ColorType, CrosshairMode, LineStyle,
-  type IChartApi, type ISeriesApi, type Time,
-} from "lightweight-charts";
+import { useEffect, useRef, useState, useCallback } from "react";
+import * as echarts from "echarts";
 import { calcEMA, calcSMA, calcRSI, calcMACD, calcBollingerBands } from "@/lib/indicators";
 
 export type DrawingTool = "none" | "trendline" | "hline" | "vline" | "rectangle" | "eraser";
 
 export interface Drawing {
   id: string;
-  type: DrawingTool;
-  startTime: number;
-  startPrice: number;
-  endTime: number;
-  endPrice: number;
-  color: string;
+  shape: Record<string, unknown>;
 }
 
 export interface Candle {
@@ -42,476 +33,391 @@ interface Props {
   onActivate: () => void;
 }
 
-const COLORS = {
-  bg: "#131722",
-  gridLine: "#1e2433",
-  text: "#c4cfd8",
-  ema9: "#f59e0b",
-  ema21: "#6366f1",
-  ema50: "#10b981",
-  ema200: "#ef4444",
-  sma50: "#a78bfa",
-  bbUpper: "#3b82f6",
-  bbLower: "#3b82f6",
-  bbMiddle: "#64748b",
-  rsiLine: "#f59e0b",
-  macdLine: "#6366f1",
-  macdSignal: "#f59e0b",
-};
+const DARK      = "#131722";
+const GRID_CLR  = "rgba(255,255,255,0.06)";
+const TEXT_CLR  = "#c4cfd8";
+const DRAW_CLR  = "#6366f1";
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
+function toDateStr(ts: number) {
+  const d = new Date(ts * 1000);
+  const date = d.toISOString().slice(0, 10);
+  const hh = d.getUTCHours();
+  const mm = d.getUTCMinutes();
+  return hh === 0 && mm === 0 ? date : `${date} ${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+// ── SVG overlay helpers ────────────────────────────────────────────────────────
+
+interface SvgLine   { type: "line";   x1: number; y1: number; x2: number; y2: number }
+interface SvgRect   { type: "rect";   x: number;  y: number;  w: number;  h: number  }
+interface SvgPixels { id: string; el: SvgLine | SvgRect }
+
+function getGridBounds(chart: echarts.ECharts, n: number, candles: Candle[]) {
+  // Derive actual pixel bounds from the chart's own coordinate system
+  const [leftX] = chart.convertToPixel({ gridIndex: 0 }, [0, 0]);
+  const [rightX] = chart.convertToPixel({ gridIndex: 0 }, [Math.max(0, n - 1), 0]);
+  const highs = candles.map(c => c.high);
+  const lows  = candles.map(c => c.low);
+  const maxH  = highs.length ? Math.max(...highs) : 0;
+  const minL  = lows.length  ? Math.min(...lows)  : 0;
+  const [, topY] = chart.convertToPixel({ gridIndex: 0 }, [0, maxH]);
+  const [, botY] = chart.convertToPixel({ gridIndex: 0 }, [0, minL]);
+  return { leftX, rightX, topY: Math.min(topY, botY), botY: Math.max(topY, botY) };
+}
+
+function shapeToPixels(
+  shape: Record<string, unknown>,
+  chart: echarts.ECharts,
+  candles: Candle[],
+): SvgLine | SvgRect | null {
+  const s = shape as any;
+  const n = candles.length;
+  const b = getGridBounds(chart, n, candles);
+
+  if (s.type === "hline") {
+    const [, py] = chart.convertToPixel({ gridIndex: 0 }, [0, s.y]);
+    if (py < b.topY - 4 || py > b.botY + 4) return null;
+    return { type: "line", x1: b.leftX, y1: py, x2: b.rightX, y2: py };
+  }
+  if (s.type === "vline") {
+    const [px] = chart.convertToPixel({ gridIndex: 0 }, [s.xIdx, 0]);
+    if (px < b.leftX - 4 || px > b.rightX + 4) return null;
+    return { type: "line", x1: px, y1: b.topY, x2: px, y2: b.botY };
+  }
+  if (s.type === "trendline") {
+    const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
+    const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
+    return { type: "line", x1: px0, y1: py0, x2: px1, y2: py1 };
+  }
+  if (s.type === "rectangle") {
+    const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
+    const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
+    return { type: "rect", x: Math.min(px0, px1), y: Math.min(py0, py1), w: Math.abs(px1 - px0), h: Math.abs(py1 - py0) };
+  }
+  return null;
+}
+
+function renderSvg(
+  svgEl: SVGSVGElement | null,
+  pixels: SvgPixels[],
+  preview: SvgLine | SvgRect | null,
+) {
+  if (!svgEl) return;
+  while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
+
+  const add = (el: SvgLine | SvgRect, dash = false, alpha = 1) => {
+    const color = DRAW_CLR + (alpha < 1 ? "bb" : "");
+    if (el.type === "line") {
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("x1", String(el.x1)); line.setAttribute("y1", String(el.y1));
+      line.setAttribute("x2", String(el.x2)); line.setAttribute("y2", String(el.y2));
+      line.setAttribute("stroke", color);
+      line.setAttribute("stroke-width", "1.5");
+      if (dash) line.setAttribute("stroke-dasharray", "5 4");
+      svgEl.appendChild(line);
+    } else {
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("x", String(el.x)); rect.setAttribute("y", String(el.y));
+      rect.setAttribute("width", String(el.w)); rect.setAttribute("height", String(el.h));
+      rect.setAttribute("stroke", color);
+      rect.setAttribute("stroke-width", "1.5");
+      rect.setAttribute("fill", "rgba(99,102,241,0.08)");
+      svgEl.appendChild(rect);
+    }
+  };
+
+  for (const p of pixels) add(p.el, p.el.type === "line");
+  if (preview) add(preview, preview.type === "line", 0.7);
+}
+
+// ── Component ──────────────────────────────────────────────────────────────────
+
 export default function ChartPanel({
-  panelId, symbol, periodCfg, drawingTool, indicators,
-  showRSI, showMACD, isActive, drawings, onDrawingAdd, onDrawingErase, onActivate
+  symbol, periodCfg, drawingTool, indicators,
+  showRSI, showMACD, isActive, drawings, onDrawingAdd, onDrawingErase, onActivate,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const rsiContainerRef = useRef<HTMLDivElement>(null);
-  const macdContainerRef = useRef<HTMLDivElement>(null);
+  const svgRef       = useRef<SVGSVGElement>(null);
+  const chartRef     = useRef<echarts.ECharts | null>(null);
+  const candles      = useRef<Candle[]>([]);
+  const dragStart       = useRef<{ px: number; py: number; xIdx: number; y: number } | null>(null);
+  const drawingToolRef  = useRef<DrawingTool>(drawingTool);
+  useEffect(() => { drawingToolRef.current = drawingTool; }, [drawingTool]);
 
-  const chartRef = useRef<IChartApi | null>(null);
-  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const volSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const rsiChartRef = useRef<IChartApi | null>(null);
-  const macdChartRef = useRef<IChartApi | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const indicatorSeriesRefs = useRef<Record<string, ISeriesApi<any>>>({});
-  const candlesRef = useRef<Candle[]>([]);
-
-  const [loading, setLoading] = useState(false);
-  const [crosshair, setCrosshair] = useState<{ o: number; h: number; l: number; c: number; v: number; t: number } | null>(null);
-
-  const drawingStateRef = useRef<{
-    active: boolean;
-    startX: number; startY: number;
-    startTime: number | null;
-    startPrice: number | null;
-  } | null>(null);
-
-  const drawCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
+  // ── Repaint SVG (called after chart render or drawings change) ─────────────
+  const paintSvg = useCallback((preview: SvgLine | SvgRect | null = null) => {
     const chart = chartRef.current;
-    const series = candleSeriesRef.current;
-    if (!canvas || !chart || !series) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const svg   = svgRef.current;
+    const div   = containerRef.current;
+    if (!chart || !svg || !div || !candles.current.length) return;
+    svg.setAttribute("width", String(div.offsetWidth));
+    svg.setAttribute("height", String(div.offsetHeight));
 
-    const allDrawings = [...drawings];
-    if (drawingStateRef.current?.active && drawingStateRef.current.startTime != null && drawingStateRef.current.startPrice != null) {
-      allDrawings.push({
-        id: "preview",
-        type: drawingTool === "none" ? "trendline" : drawingTool,
-        startTime: drawingStateRef.current.startTime,
-        startPrice: drawingStateRef.current.startPrice,
-        endTime: drawingStateRef.current.startTime,
-        endPrice: drawingStateRef.current.startPrice,
-        color: "#6366f1",
-      });
-    }
+    const pixels: SvgPixels[] = drawings
+      .map(d => {
+        const el = shapeToPixels(d.shape, chart, candles.current);
+        return el ? { id: d.id, el } : null;
+      })
+      .filter(Boolean) as SvgPixels[];
 
-    for (const d of allDrawings) {
-      if (d.type === "none" || d.type === "eraser") continue;
-      const x1 = chart.timeScale().timeToCoordinate(d.startTime as Time);
-      const y1 = series.priceToCoordinate(d.startPrice);
-      const x2 = chart.timeScale().timeToCoordinate(d.endTime as Time);
-      const y2 = series.priceToCoordinate(d.endPrice);
-      if (x1 == null || y1 == null) continue;
+    renderSvg(svg, pixels, preview);
+  }, [drawings]);
 
-      ctx.save();
-      ctx.strokeStyle = d.id === "preview" ? "rgba(99,102,241,0.7)" : d.color;
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash(d.id === "preview" ? [4, 3] : []);
-      ctx.beginPath();
-
-      if (d.type === "hline") {
-        ctx.moveTo(0, y1);
-        ctx.lineTo(canvas.width, y1);
-        ctx.stroke();
-        ctx.fillStyle = d.color;
-        ctx.font = "11px sans-serif";
-        ctx.fillText(`₹${d.startPrice.toFixed(2)}`, 4, y1 - 3);
-      } else if (d.type === "vline") {
-        if (x1 == null) continue;
-        ctx.moveTo(x1, 0);
-        ctx.lineTo(x1, canvas.height);
-        ctx.stroke();
-      } else if (d.type === "trendline") {
-        if (x2 == null || y2 == null) continue;
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.stroke();
-        ctx.fillStyle = "rgba(99,102,241,0.2)";
-        ctx.beginPath();
-        ctx.arc(x1, y1, 4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(x2, y2, 4, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (d.type === "rectangle") {
-        if (x2 == null || y2 == null) continue;
-        ctx.fillStyle = "rgba(99,102,241,0.08)";
-        ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
-        ctx.rect(x1, y1, x2 - x1, y2 - y1);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-  }, [drawings, drawingTool]);
-
-  const applyIndicators = useCallback(() => {
+  // ── Render ECharts (chart data only, NO graphic component) ────────────────
+  const renderChart = useCallback(() => {
     const chart = chartRef.current;
-    if (!chart || !candlesRef.current.length) return;
-    const candles = candlesRef.current;
-    const closes = candles.map(c => c.close);
-    const times = candles.map(c => c.time as Time);
+    if (!chart || !candles.current.length) return;
 
-    const removeOld = (key: string) => {
-      if (indicatorSeriesRefs.current[key]) {
-        try { chart.removeSeries(indicatorSeriesRefs.current[key]); } catch {}
-        delete indicatorSeriesRefs.current[key];
-      }
-    };
+    const cs     = candles.current;
+    const dates  = cs.map(c => toDateStr(c.time));
+    const closes = cs.map(c => c.close);
+    const ohlc   = cs.map(c => [c.open, c.close, c.low, c.high]);
 
-    const addLine = (key: string, values: (number | null)[], color: string, width = 1, paneId?: string) => {
-      removeOld(key);
-      if (!indicators.has(key) && !["rsi", "macd"].includes(key)) return;
-      const s = chart.addSeries(LineSeries, {
-        color, lineWidth: width as 1, priceScaleId: paneId ?? "right",
-        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
-      });
-      const data = values.map((v, i) => v !== null ? { time: times[i], value: v } : null).filter(Boolean) as { time: Time; value: number }[];
-      s.setData(data);
-      indicatorSeriesRefs.current[key] = s;
-    };
+    const hasSub = showRSI || showMACD;
+    const grids: object[] = [
+      { top: "6%", left: 50, right: 8, height: hasSub ? "55%" : "75%" },
+      { top: hasSub ? "57%" : "77%", left: 50, right: 8, height: "8%" },
+    ];
+    if (hasSub) grids.push({ top: "70%", left: 50, right: 8, height: "18%" });
 
-    const IND_MAP: Record<string, { fn: () => (number | null)[]; color: string }> = {
-      ema9:   { fn: () => calcEMA(closes, 9),   color: COLORS.ema9 },
-      ema21:  { fn: () => calcEMA(closes, 21),  color: COLORS.ema21 },
-      ema50:  { fn: () => calcEMA(closes, 50),  color: COLORS.ema50 },
-      ema200: { fn: () => calcEMA(closes, 200), color: COLORS.ema200 },
-      sma50:  { fn: () => calcSMA(closes, 50),  color: COLORS.sma50 },
-    };
+    const xBase = { axisLine: { lineStyle: { color: GRID_CLR } }, axisTick: { show: false } };
+    const xAxes: object[] = [
+      { ...xBase, gridIndex: 0, data: dates, axisLabel: { color: TEXT_CLR, fontSize: 10 }, splitLine: { lineStyle: { color: GRID_CLR } } },
+      { ...xBase, gridIndex: 1, data: dates, axisLabel: { show: false }, splitLine: { show: false } },
+    ];
+    if (hasSub) xAxes.push({ ...xBase, gridIndex: 2, data: dates, axisLabel: { color: TEXT_CLR, fontSize: 9 }, splitLine: { lineStyle: { color: GRID_CLR } } });
 
-    for (const [key, cfg] of Object.entries(IND_MAP)) {
-      if (indicators.has(key)) addLine(key, cfg.fn(), cfg.color);
-      else removeOld(key);
+    const yBase = { axisLine: { lineStyle: { color: GRID_CLR } } };
+    const yAxes: object[] = [
+      { ...yBase, gridIndex: 0, scale: true, axisLabel: { color: TEXT_CLR, fontSize: 10 }, splitLine: { lineStyle: { color: GRID_CLR } } },
+      { ...yBase, gridIndex: 1, scale: true, axisLabel: { show: false }, splitLine: { show: false } },
+    ];
+    if (hasSub) yAxes.push({ ...yBase, gridIndex: 2, scale: true, axisLabel: { color: TEXT_CLR, fontSize: 9 }, splitLine: { lineStyle: { color: GRID_CLR } } });
+
+    const series: object[] = [
+      {
+        name: "Price", type: "candlestick", xAxisIndex: 0, yAxisIndex: 0, data: ohlc,
+        itemStyle: { color: "#22c55e", color0: "#ef4444", borderColor: "#22c55e", borderColor0: "#ef4444", borderWidth: 1 },
+      },
+      {
+        name: "Volume", type: "bar", xAxisIndex: 1, yAxisIndex: 1, barMaxWidth: 12,
+        data: cs.map(c => ({ value: c.volume, itemStyle: { color: c.close >= c.open ? "rgba(34,197,94,0.45)" : "rgba(239,68,68,0.45)" } })),
+      },
+    ];
+
+    const MA = [
+      { key: "ema9",   label: "EMA 9",   color: "#f59e0b", fn: () => calcEMA(closes, 9)   },
+      { key: "ema21",  label: "EMA 21",  color: "#6366f1", fn: () => calcEMA(closes, 21)  },
+      { key: "ema50",  label: "EMA 50",  color: "#10b981", fn: () => calcEMA(closes, 50)  },
+      { key: "ema200", label: "EMA 200", color: "#ef4444", fn: () => calcEMA(closes, 200) },
+      { key: "sma50",  label: "SMA 50",  color: "#a78bfa", fn: () => calcSMA(closes, 50)  },
+    ];
+    for (const m of MA) {
+      if (!indicators.has(m.key)) continue;
+      series.push({ name: m.label, type: "line", xAxisIndex: 0, yAxisIndex: 0, data: m.fn().map(v => v ?? null), lineStyle: { color: m.color, width: 1.5 }, showSymbol: false, connectNulls: false });
     }
-
     if (indicators.has("bb")) {
       const bb = calcBollingerBands(closes);
-      addLine("bbUpper",  bb.upper,  COLORS.bbUpper,  1);
-      addLine("bbMiddle", bb.middle, COLORS.bbMiddle, 1);
-      addLine("bbLower",  bb.lower,  COLORS.bbLower,  1);
-    } else {
-      ["bbUpper", "bbMiddle", "bbLower"].forEach(removeOld);
+      series.push(
+        { name: "BB+", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: bb.upper.map(v => v ?? null), lineStyle: { color: "#3b82f6", width: 1, type: "dashed" }, showSymbol: false, connectNulls: false },
+        { name: "BBm", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: bb.middle.map(v => v ?? null), lineStyle: { color: "#64748b", width: 1, type: "dashed" }, showSymbol: false, connectNulls: false },
+        { name: "BB-", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: bb.lower.map(v => v ?? null), lineStyle: { color: "#3b82f6", width: 1, type: "dashed" }, showSymbol: false, connectNulls: false },
+      );
     }
-  }, [indicators]);
+    if (showRSI && !showMACD) {
+      const rv = calcRSI(closes);
+      series.push(
+        { name: "RSI", type: "line", xAxisIndex: 2, yAxisIndex: 2, data: rv.map(v => v !== null ? +(v as number).toFixed(2) : null), lineStyle: { color: "#f59e0b", width: 1.5 }, showSymbol: false, connectNulls: false },
+        { name: "OB",  type: "line", xAxisIndex: 2, yAxisIndex: 2, data: dates.map(() => 70), lineStyle: { color: "rgba(239,68,68,0.4)", width: 1, type: "dashed" }, showSymbol: false },
+        { name: "OS",  type: "line", xAxisIndex: 2, yAxisIndex: 2, data: dates.map(() => 30), lineStyle: { color: "rgba(34,197,94,0.4)", width: 1, type: "dashed" }, showSymbol: false },
+      );
+    }
+    if (showMACD) {
+      const mac = calcMACD(closes);
+      series.push(
+        { name: "MACD",   type: "line", xAxisIndex: 2, yAxisIndex: 2, data: mac.macd.map(v => v !== null ? +(v as number).toFixed(4) : null), lineStyle: { color: "#3b82f6", width: 1.2 }, showSymbol: false, connectNulls: false },
+        { name: "Signal", type: "line", xAxisIndex: 2, yAxisIndex: 2, data: mac.signal.map(v => v !== null ? +(v as number).toFixed(4) : null), lineStyle: { color: "#f97316", width: 1.2 }, showSymbol: false, connectNulls: false },
+        { name: "Hist",   type: "bar",  xAxisIndex: 2, yAxisIndex: 2, barMaxWidth: 6, data: mac.histogram.map(v => ({ value: v !== null ? +(v as number).toFixed(4) : null, itemStyle: { color: (v ?? 0) >= 0 ? "rgba(34,197,94,0.7)" : "rgba(239,68,68,0.7)" } })) },
+      );
+    }
 
-  const applyRSI = useCallback((candles: Candle[]) => {
-    const rc = rsiChartRef.current;
-    if (!rc) return;
-    try {
-      const closes = candles.map(c => c.close);
-      const rsiVals = calcRSI(closes);
-      const s = rc.addSeries(LineSeries, { color: COLORS.rsiLine, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-      const data = rsiVals.map((v, i) => v !== null ? { time: candles[i].time as Time, value: v } : null).filter(Boolean) as { time: Time; value: number }[];
-      s.setData(data);
-      const ob = rc.addSeries(LineSeries, { color: "#ef444466", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-      ob.setData(candles.map(c => ({ time: c.time as Time, value: 70 })));
-      const os = rc.addSeries(LineSeries, { color: "#22c55e66", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-      os.setData(candles.map(c => ({ time: c.time as Time, value: 30 })));
-    } catch {}
-  }, []);
+    chart.setOption({
+      backgroundColor: DARK, animation: false,
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "cross", crossStyle: { color: "rgba(255,255,255,0.25)" } },
+        backgroundColor: "#1e2131", borderColor: "#374151",
+        textStyle: { color: TEXT_CLR, fontSize: 10 },
+        formatter: (params: any) => {
+          const c = Array.isArray(params) ? params.find((p: any) => p.seriesName === "Price") : null;
+          if (!c || !c.data) return "";
+          const [o, cl, l, h] = c.data as number[];
+          const p = (((cl - o) / o) * 100).toFixed(2);
+          const col = cl >= o ? "#22c55e" : "#ef4444";
+          return `<div style="font-size:10px;line-height:1.6"><b style="color:#fff">${c.name}</b><br/>O<b>${o.toFixed(2)}</b> H<b style="color:#22c55e">${h.toFixed(2)}</b> L<b style="color:#ef4444">${l.toFixed(2)}</b> C<b>${cl.toFixed(2)}</b> <span style="color:${col}">${Number(p)>=0?"+":""}${p}%</span></div>`;
+        },
+      },
+      axisPointer: { link: [{ xAxisIndex: "all" }] },
+      dataZoom: [{ type: "inside", xAxisIndex: hasSub ? [0, 1, 2] : [0, 1], start: 0, end: 100 }],
+      grid: grids, xAxis: xAxes, yAxis: yAxes, series,
+    }, true);
 
-  const applyMACD = useCallback((candles: Candle[]) => {
-    const mc = macdChartRef.current;
-    if (!mc) return;
-    try {
-      const closes = candles.map(c => c.close);
-      const { macd, signal, histogram } = calcMACD(closes);
-      const times = candles.map(c => c.time as Time);
+    // repaint SVG after chart re-renders
+    requestAnimationFrame(() => paintSvg());
+  }, [indicators, showRSI, showMACD, paintSvg]);
 
-      const histSeries = mc.addSeries(HistogramSeries, {
-        priceScaleId: "right",
-        priceLineVisible: false, lastValueVisible: false,
-      });
-      const histData = histogram.map((v, i) => v !== null
-        ? { time: times[i], value: v, color: v >= 0 ? "#22c55e" : "#ef4444" }
-        : null
-      ).filter(Boolean) as { time: Time; value: number; color: string }[];
-      histSeries.setData(histData);
-
-      const macdSeries = mc.addSeries(LineSeries, { color: COLORS.macdLine, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-      macdSeries.setData(macd.map((v, i) => v !== null ? { time: times[i], value: v } : null).filter(Boolean) as any);
-
-      const sigSeries = mc.addSeries(LineSeries, { color: COLORS.macdSignal, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-      sigSeries.setData(signal.map((v, i) => v !== null ? { time: times[i], value: v } : null).filter(Boolean) as any);
-    } catch {}
-  }, []);
-
+  // ── Fetch ──────────────────────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
     if (!symbol) return;
     setLoading(true);
-    const sym = symbol === "NIFTY 50" ? "%5ENSEI" : symbol === "BANKNIFTY" ? "%5ENSEBANK" : symbol;
     try {
-      const res = await fetch(`/api/stocks/${sym}/history?period=${periodCfg.p}&interval=${periodCfg.i}`);
-      if (!res.ok) throw new Error("fetch failed");
+      const res = await fetch(`/api/stocks/${encodeURIComponent(symbol)}/history?period=${periodCfg.p}&interval=${periodCfg.i}`);
+      if (!res.ok) throw new Error();
       const data = await res.json();
-      const candles: Candle[] = data.candles ?? [];
-      candlesRef.current = candles;
+      candles.current = data.candles ?? [];
+    } catch {} finally { setLoading(false); }
+    renderChart();
+  }, [symbol, periodCfg, renderChart]);
 
-      if (candleSeriesRef.current && candles.length) {
-        candleSeriesRef.current.setData(candles.map(c => ({
-          time: c.time as Time, open: c.open, high: c.high, low: c.low, close: c.close,
-        })));
-        volSeriesRef.current?.setData(candles.map(c => ({
-          time: c.time as Time, value: c.volume,
-          color: c.close >= c.open ? "rgba(34,197,94,0.5)" : "rgba(239,68,68,0.5)",
-        })));
-        applyIndicators();
-        if (showRSI) applyRSI(candles);
-        if (showMACD) applyMACD(candles);
-        chartRef.current?.timeScale().fitContent();
-      }
-    } catch {
-    } finally { setLoading(false); }
-  }, [symbol, periodCfg, applyIndicators, showRSI, showMACD, applyRSI, applyMACD]);
-
+  // ── Init ──────────────────────────────────────────────────────────────────
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const chart = createChart(el, {
-      layout: { background: { type: ColorType.Solid, color: COLORS.bg }, textColor: COLORS.text },
-      grid: { vertLines: { color: COLORS.gridLine }, horzLines: { color: COLORS.gridLine } },
-      crosshair: { mode: CrosshairMode.Normal },
-      rightPriceScale: { borderColor: COLORS.gridLine },
-      timeScale: { borderColor: COLORS.gridLine, timeVisible: true },
-      handleScroll: true, handleScale: true,
-    });
+    const div = containerRef.current;
+    if (!div) return;
+    const chart = echarts.init(div, null, { renderer: "canvas" });
     chartRef.current = chart;
 
-    const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: "#22c55e", downColor: "#ef4444",
-      borderUpColor: "#22c55e", borderDownColor: "#ef4444",
-      wickUpColor: "#22c55e", wickDownColor: "#ef4444",
-      priceScaleId: "right",
-    });
-    candleSeriesRef.current = candleSeries;
+    // Repaint SVG after any zoom/pan (only resize chart, never re-render full setOption)
+    chart.on("dataZoom", () => requestAnimationFrame(() => paintSvg()));
+    chart.on("rendered", () => requestAnimationFrame(() => paintSvg()));
 
-    const volSeries = chart.addSeries(HistogramSeries, {
-      priceScaleId: "vol",
-      priceLineVisible: false, lastValueVisible: false,
-    });
-    chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-    volSeriesRef.current = volSeries;
+    // ResizeObserver: ONLY resize chart, do NOT call renderChart (avoids layout loop)
+    const ro = new ResizeObserver(() => { chart.resize(); requestAnimationFrame(() => paintSvg()); });
+    ro.observe(div);
 
-    chart.subscribeCrosshairMove((p) => {
-      if (p.seriesData.has(candleSeries)) {
-        const bar = p.seriesData.get(candleSeries) as any;
-        if (bar) setCrosshair({ o: bar.open, h: bar.high, l: bar.low, c: bar.close, v: bar.customValues?.volume ?? 0, t: bar.time });
-      }
-      if (!p.time) setCrosshair(null);
-    });
-
-    chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
-      requestAnimationFrame(drawCanvas);
-    });
-
-    const ro = new ResizeObserver(() => {
-      chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
-      const canvas = canvasRef.current;
-      if (canvas) { canvas.width = el.clientWidth; canvas.height = el.clientHeight; }
-      requestAnimationFrame(drawCanvas);
-    });
-    ro.observe(el);
-
-    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; };
+    fetchData();
+    return () => { ro.disconnect(); chart.dispose(); chartRef.current = null; };
   }, []);
 
-  useEffect(() => {
-    const rsiEl = rsiContainerRef.current;
-    if (!rsiEl || !showRSI) return;
-    const chart = createChart(rsiEl, {
-      layout: { background: { type: ColorType.Solid, color: COLORS.bg }, textColor: COLORS.text },
-      grid: { vertLines: { color: COLORS.gridLine }, horzLines: { color: COLORS.gridLine } },
-      rightPriceScale: { borderColor: COLORS.gridLine, scaleMargins: { top: 0.1, bottom: 0.1 } },
-      timeScale: { borderColor: COLORS.gridLine, visible: false },
-      handleScroll: false, handleScale: false,
-    });
-    rsiChartRef.current = chart;
-    const ro = new ResizeObserver(() => {
-      chart.applyOptions({ width: rsiEl.clientWidth, height: rsiEl.clientHeight });
-    });
-    ro.observe(rsiEl);
-    if (candlesRef.current.length) applyRSI(candlesRef.current);
-    return () => { ro.disconnect(); chart.remove(); rsiChartRef.current = null; };
-  }, [showRSI]);
-
-  useEffect(() => {
-    const macdEl = macdContainerRef.current;
-    if (!macdEl || !showMACD) return;
-    const chart = createChart(macdEl, {
-      layout: { background: { type: ColorType.Solid, color: COLORS.bg }, textColor: COLORS.text },
-      grid: { vertLines: { color: COLORS.gridLine }, horzLines: { color: COLORS.gridLine } },
-      rightPriceScale: { borderColor: COLORS.gridLine, scaleMargins: { top: 0.1, bottom: 0.1 } },
-      timeScale: { borderColor: COLORS.gridLine, visible: false },
-      handleScroll: false, handleScale: false,
-    });
-    macdChartRef.current = chart;
-    const ro = new ResizeObserver(() => {
-      chart.applyOptions({ width: macdEl.clientWidth, height: macdEl.clientHeight });
-    });
-    ro.observe(macdEl);
-    if (candlesRef.current.length) applyMACD(candlesRef.current);
-    return () => { ro.disconnect(); chart.remove(); macdChartRef.current = null; };
-  }, [showMACD]);
-
   useEffect(() => { fetchData(); }, [symbol, periodCfg]);
-  useEffect(() => { applyIndicators(); }, [indicators]);
-  useEffect(() => { requestAnimationFrame(drawCanvas); }, [drawings, drawingTool, drawCanvas]);
+  useEffect(() => { renderChart(); }, [indicators, showRSI, showMACD]);
+  useEffect(() => { paintSvg(); }, [drawings]);
 
-  function getCanvasCoords(e: React.MouseEvent<HTMLCanvasElement>) {
-    const rect = canvasRef.current!.getBoundingClientRect();
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-  }
+  // ── Drawing helpers ────────────────────────────────────────────────────────
+  const getXY = (e: React.MouseEvent<HTMLDivElement>) => {
+    const div = containerRef.current;
+    if (!div) return null;
+    const r = div.getBoundingClientRect();
+    return { px: e.clientX - r.left, py: e.clientY - r.top };
+  };
 
-  function handleCanvasMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
+  const pixelToData = (px: number, py: number) => {
+    const chart = chartRef.current;
+    if (!chart) return null;
+    const pt = chart.convertFromPixel({ gridIndex: 0 }, [px, py]);
+    if (!pt) return null;
+    const dates = candles.current.map(c => toDateStr(c.time));
+    const xIdx = Math.max(0, Math.min(Math.round(pt[0] as number), dates.length - 1));
+    return { xIdx, y: pt[1] as number };
+  };
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (drawingTool === "none") return;
+    e.preventDefault();
     onActivate();
-    const { x, y } = getCanvasCoords(e);
-    const time = chartRef.current?.timeScale().coordinateToTime(x);
-    const price = candleSeriesRef.current?.coordinateToPrice(y);
-    if (time == null || price == null) return;
-
-    if (drawingTool === "hline" || drawingTool === "vline") {
-      onDrawingAdd({ id: uid(), type: drawingTool, startTime: time as number, startPrice: price, endTime: time as number, endPrice: price, color: "#6366f1" });
+    if (drawingTool === "eraser") {
+      if (drawings.length > 0) onDrawingErase(drawings[drawings.length - 1].id);
       return;
     }
-    drawingStateRef.current = { active: true, startX: x, startY: y, startTime: time as number, startPrice: price };
-  }
+    const pos = getXY(e);
+    if (!pos) return;
+    const data = pixelToData(pos.px, pos.py);
+    if (!data) return;
+    dragStart.current = { px: pos.px, py: pos.py, xIdx: data.xIdx, y: data.y };
+  };
 
-  function handleCanvasMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
-    if (!drawingStateRef.current?.active) return;
-    const { x, y } = getCanvasCoords(e);
-    const time = chartRef.current?.timeScale().coordinateToTime(x);
-    const price = candleSeriesRef.current?.coordinateToPrice(y);
-    if (!time || !price) return;
-    drawingStateRef.current = { ...drawingStateRef.current, startTime: drawingStateRef.current.startTime!, startPrice: drawingStateRef.current.startPrice! };
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!dragStart.current) return;
+    const pos = getXY(e);
+    if (!pos) return;
+    const data = pixelToData(pos.px, pos.py);
+    if (!data) return;
+    const chart = chartRef.current;
+    const div = containerRef.current;
+    if (!chart || !div) return;
 
-    const preview: Drawing = {
-      id: "preview", type: drawingTool,
-      startTime: drawingStateRef.current.startTime!,
-      startPrice: drawingStateRef.current.startPrice!,
-      endTime: time as number, endPrice: price, color: "#6366f1",
-    };
-    const ctx = canvasRef.current?.getContext("2d");
-    if (!ctx || !chartRef.current || !candleSeriesRef.current) return;
-    const canvas = canvasRef.current!;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    for (const d of drawings) drawSingleDrawing(ctx, d, canvas);
-    drawSingleDrawing(ctx, preview, canvas);
-  }
+    // Build preview pixel shape directly — NO ECharts re-render
+    let preview: SvgLine | SvgRect | null = null;
+    const s = dragStart.current;
+    const b = getGridBounds(chart, candles.current.length, candles.current);
+    if (drawingTool === "hline")
+      preview = { type: "line", x1: b.leftX, y1: s.py, x2: b.rightX, y2: s.py };
+    else if (drawingTool === "vline")
+      preview = { type: "line", x1: s.px, y1: b.topY, x2: s.px, y2: b.botY };
+    else if (drawingTool === "trendline")
+      preview = { type: "line", x1: s.px, y1: s.py, x2: pos.px, y2: pos.py };
+    else if (drawingTool === "rectangle")
+      preview = { type: "rect", x: Math.min(s.px, pos.px), y: Math.min(s.py, pos.py), w: Math.abs(pos.px - s.px), h: Math.abs(pos.py - s.py) };
 
-  function drawSingleDrawing(ctx: CanvasRenderingContext2D, d: Drawing, canvas: HTMLCanvasElement) {
-    const chart = chartRef.current!;
-    const series = candleSeriesRef.current!;
-    const x1 = chart.timeScale().timeToCoordinate(d.startTime as Time);
-    const y1 = series.priceToCoordinate(d.startPrice);
-    if (x1 == null || y1 == null) return;
-    ctx.save();
-    ctx.strokeStyle = d.id === "preview" ? "rgba(99,102,241,0.8)" : d.color;
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash(d.id === "preview" ? [4, 3] : []);
-    ctx.beginPath();
-    if (d.type === "hline") {
-      ctx.moveTo(0, y1); ctx.lineTo(canvas.width, y1);
-    } else if (d.type === "vline") {
-      ctx.moveTo(x1, 0); ctx.lineTo(x1, canvas.height);
-    } else {
-      const x2 = chart.timeScale().timeToCoordinate(d.endTime as Time);
-      const y2 = series.priceToCoordinate(d.endPrice);
-      if (x2 == null || y2 == null) { ctx.restore(); return; }
-      if (d.type === "trendline") { ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); }
-      else if (d.type === "rectangle") {
-        ctx.fillStyle = "rgba(99,102,241,0.08)";
-        ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
-        ctx.rect(x1, y1, x2 - x1, y2 - y1);
-      }
-    }
-    ctx.stroke();
-    ctx.restore();
-  }
+    paintSvg(preview);
+  };
 
-  function handleCanvasMouseUp(e: React.MouseEvent<HTMLCanvasElement>) {
-    const state = drawingStateRef.current;
-    if (!state?.active) return;
-    const { x, y } = getCanvasCoords(e);
-    const time = chartRef.current?.timeScale().coordinateToTime(x);
-    const price = candleSeriesRef.current?.coordinateToPrice(y);
-    drawingStateRef.current = null;
-    if (time == null || price == null) return;
+  const handleMouseUp = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!dragStart.current) return;
+    const pos = getXY(e);
+    const data = pos ? pixelToData(pos.px, pos.py) : null;
+    const s = dragStart.current;
+    dragStart.current = null;
 
-    if (drawingTool === "eraser") return;
-    onDrawingAdd({
-      id: uid(), type: drawingTool,
-      startTime: state.startTime!, startPrice: state.startPrice!,
-      endTime: time as number, endPrice: price, color: "#6366f1",
-    });
-  }
+    if (!data || !pos) { paintSvg(); return; }
 
-  const pct = crosshair ? ((crosshair.c - crosshair.o) / crosshair.o * 100) : 0;
-  const isUp = pct >= 0;
+    let shape: Record<string, unknown> | null = null;
+    if (drawingTool === "hline")     shape = { type: "hline", y: s.y };
+    else if (drawingTool === "vline") shape = { type: "vline", xIdx: s.xIdx };
+    else if (drawingTool === "trendline") shape = { type: "trendline", x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y };
+    else if (drawingTool === "rectangle") shape = { type: "rectangle", x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y };
+
+    if (shape) onDrawingAdd({ id: uid(), shape });
+    paintSvg();
+  };
 
   return (
     <div
-      className={`flex flex-col h-full rounded border ${isActive ? "border-indigo-500" : "border-gray-800"}`}
-      style={{ background: COLORS.bg }}
+      className={`flex flex-col h-full rounded border transition-colors ${isActive ? "border-indigo-500" : "border-gray-800"}`}
+      style={{ background: DARK }}
       onClick={onActivate}
     >
-      <div className="flex items-center gap-3 px-3 py-1.5 border-b border-gray-800 min-h-[36px]">
-        <span className="font-semibold text-white text-sm">{symbol}</span>
-        {crosshair ? (
-          <span className="flex gap-2 text-xs text-gray-400">
-            <span>O <span className="text-white">{crosshair.o.toFixed(2)}</span></span>
-            <span>H <span className="text-white">{crosshair.h.toFixed(2)}</span></span>
-            <span>L <span className="text-white">{crosshair.l.toFixed(2)}</span></span>
-            <span>C <span className={isUp ? "text-green-400" : "text-red-400"}>{crosshair.c.toFixed(2)}</span></span>
-            <span className={isUp ? "text-green-400" : "text-red-400"}>{isUp ? "+" : ""}{pct.toFixed(2)}%</span>
-          </span>
-        ) : null}
-        {loading && <span className="text-xs text-gray-500 ml-auto animate-pulse">Loading…</span>}
+      {/* Header */}
+      <div className="flex items-center gap-2 px-3 py-1 border-b border-gray-800 min-h-[32px] shrink-0">
+        <span className="font-bold text-white text-sm tracking-wide">{symbol}</span>
+        {loading && <span className="ml-auto text-[11px] text-gray-600 animate-pulse">Loading…</span>}
       </div>
 
+      {/* Chart + SVG overlay + drawing capture overlay */}
       <div className="flex-1 relative min-h-0">
+        {/* ECharts canvas */}
         <div ref={containerRef} className="absolute inset-0" />
-        <canvas
-          ref={canvasRef}
+        {/* SVG drawing layer — always present, pointer-events: none so ECharts works normally */}
+        <svg
+          ref={svgRef}
           className="absolute inset-0"
-          style={{
-            pointerEvents: drawingTool !== "none" ? "all" : "none",
-            cursor: drawingTool === "eraser" ? "cell" : drawingTool !== "none" ? "crosshair" : "default",
-            zIndex: 10,
-          }}
-          onMouseDown={handleCanvasMouseDown}
-          onMouseMove={handleCanvasMouseMove}
-          onMouseUp={handleCanvasMouseUp}
+          style={{ pointerEvents: "none", zIndex: 10 }}
         />
+        {/* Mouse capture layer — only active when a drawing tool is selected */}
+        {drawingTool !== "none" && (
+          <div
+            className="absolute inset-0"
+            style={{ zIndex: 20, cursor: drawingTool === "eraser" ? "cell" : "crosshair" }}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={() => { if (dragStart.current) { dragStart.current = null; paintSvg(); } }}
+          />
+        )}
       </div>
-
-      {showRSI && (
-        <div className="border-t border-gray-800" style={{ height: 90 }}>
-          <div className="text-[10px] text-gray-500 px-2 pt-1">RSI (14)</div>
-          <div ref={rsiContainerRef} style={{ height: 70 }} />
-        </div>
-      )}
-      {showMACD && (
-        <div className="border-t border-gray-800" style={{ height: 100 }}>
-          <div className="text-[10px] text-gray-500 px-2 pt-1">MACD (12,26,9)</div>
-          <div ref={macdContainerRef} style={{ height: 78 }} />
-        </div>
-      )}
     </div>
   );
 }

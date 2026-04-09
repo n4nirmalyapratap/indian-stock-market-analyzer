@@ -14,6 +14,17 @@ _service = StocksService(_nse, _yahoo)
 VALID_PERIODS   = {"1d","5d","1mo","3mo","6mo","1y","2y","5y"}
 VALID_INTERVALS = {"1m","2m","5m","15m","30m","60m","90m","1d","5d","1wk","1mo"}
 
+# Map NSE index names to Yahoo Finance tickers (indices need the ^ prefix)
+SYMBOL_MAP = {
+    "NIFTY 50":    "^NSEI",
+    "NIFTY50":     "^NSEI",
+    "NIFTY":       "^NSEI",
+    "BANKNIFTY":   "^NSEBANK",
+    "BANK NIFTY":  "^NSEBANK",
+    "FINNIFTY":    "^CNXFIN",
+    "MIDCPNIFTY":  "^CNXSC",
+}
+
 
 @router.get("/nifty100")
 async def get_nifty100():
@@ -43,8 +54,15 @@ async def get_stock_history(
     import yfinance as yf
 
     def _fetch():
-        # Try NSE suffix first, fall back to plain symbol (for indices like ^NSEI)
-        for ticker_sym in (f"{symbol}.NS", symbol):
+        # Check explicit map first (indices need ^ prefix, never .NS suffix)
+        if symbol in SYMBOL_MAP:
+            candidates = [SYMBOL_MAP[symbol]]
+        elif symbol.startswith("^"):
+            candidates = [symbol]
+        else:
+            candidates = [f"{symbol}.NS", symbol]
+
+        for ticker_sym in candidates:
             try:
                 tk   = yf.Ticker(ticker_sym)
                 hist = tk.history(period=period, interval=interval, auto_adjust=True)
