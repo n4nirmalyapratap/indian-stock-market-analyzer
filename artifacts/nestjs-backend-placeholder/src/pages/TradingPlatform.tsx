@@ -803,9 +803,9 @@ export default function TradingPlatform() {
         </div>
 
         {/* Live IST clock */}
-        <div className="flex items-center gap-3 text-[11px] text-gray-400 font-mono select-none">
-          <span className="text-gray-200">{clock}</span>
-          <span>UTC+5:30</span>
+        <div className="flex items-center gap-2 select-none">
+          <span className="font-mono text-[12px] tracking-wide text-gray-100 tabular-nums">{clock}</span>
+          <span className="font-mono text-[12px] text-gray-400">UTC+5:30</span>
         </div>
       </div>
     </div>
