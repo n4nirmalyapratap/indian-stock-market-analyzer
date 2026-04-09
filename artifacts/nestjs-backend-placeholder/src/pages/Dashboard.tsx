@@ -1,4 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { TrendingUp, TrendingDown, Activity, AlertCircle, RefreshCw } from "lucide-react";
 
@@ -21,22 +22,32 @@ function StatCard({ title, value, sub, trend }: any) {
 }
 
 export default function Dashboard() {
-  const { data: rotation, isLoading: rotLoading, error: rotErr, refetch: refetchRotation } = useQuery({
+  const queryClient = useQueryClient();
+  const [refreshing, setRefreshing] = useState(false);
+
+  const { data: rotation, isLoading: rotLoading, error: rotErr } = useQuery({
     queryKey: ["rotation"],
     queryFn: api.sectorRotation,
     staleTime: 5 * 60 * 1000,
   });
-  const { data: patterns, isLoading: patLoading, refetch: refetchPatterns } = useQuery({
+  const { data: patterns, isLoading: patLoading } = useQuery({
     queryKey: ["patterns-overview"],
     queryFn: () => api.patterns(),
     staleTime: 10 * 60 * 1000,
   });
 
-  const isRefreshing = rotLoading || patLoading;
+  const isRefreshing = refreshing || rotLoading || patLoading;
 
-  function handleRefresh() {
-    refetchRotation();
-    refetchPatterns();
+  async function handleRefresh() {
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["rotation"] }),
+        queryClient.invalidateQueries({ queryKey: ["patterns-overview"] }),
+      ]);
+    } finally {
+      setRefreshing(false);
+    }
   }
 
   const breadth = rotation?.marketBreadth;
