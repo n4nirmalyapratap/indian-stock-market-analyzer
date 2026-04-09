@@ -5,8 +5,11 @@
  *
  * Run: pnpm --filter @workspace/scripts run push-github
  *
- * Strategy: whitelist only source directories (avoids node_modules,
- * .pythonlibs, .cache, dist, __pycache__, and other generated dirs).
+ * Strategy: walk the ENTIRE workspace root and skip anything that matches
+ * the patterns in .gitignore (maintained in SKIP_DIRS, SKIP_FILES, SKIP_EXTS
+ * below — keep these in sync with /.gitignore so there is one source of truth).
+ *
+ * See GITHUB_PUSH.md for timeout behaviour and retry notes.
  */
 
 import { ReplitConnectors } from "@replit/connectors-sdk";
@@ -19,94 +22,93 @@ const REPO   = "indian-stock-market-analyzer";
 const BRANCH = "main";
 const ROOT   = path.resolve(import.meta.dirname, "../..");
 
-// ── Whitelist: only these paths are synced to GitHub ─────────────────────────
-// Paths are relative to workspace root. Directories are walked recursively
-// (with the SKIP_INSIDE dirs excluded).
-const INCLUDE_PATHS = [
-  // Root config files
-  "package.json",
-  "pnpm-workspace.yaml",
-  "tsconfig.json",
-  "tsconfig.base.json",
-  "replit.md",
-  ".replit",
-  ".gitignore",
-  ".replitignore",
-  ".npmrc",
-  "main.py",
-  "pyproject.toml",
-  // Python backend (all source)
-  "artifacts/python-backend",
-  // React frontend source
-  "artifacts/nestjs-backend-placeholder/src",
-  "artifacts/nestjs-backend-placeholder/public",
-  "artifacts/nestjs-backend-placeholder/package.json",
-  "artifacts/nestjs-backend-placeholder/vite.config.ts",
-  "artifacts/nestjs-backend-placeholder/tsconfig.json",
-  "artifacts/nestjs-backend-placeholder/index.html",
-  "artifacts/nestjs-backend-placeholder/components.json",
-  // Artifact routing configs
-  "artifacts/stock-market-app/.replit-artifact/artifact.toml",
-  "artifacts/api-server/.replit-artifact/artifact.toml",
-  // Scripts
-  "scripts/src",
-  "scripts/package.json",
-  "scripts/tsconfig.json",
-  // Shared libs
-  "lib/api-spec",
-  "lib/api-zod/src",
-  "lib/api-zod/package.json",
-  "lib/api-client-react/src",
-  "lib/api-client-react/package.json",
-  "lib/db/src",
-  "lib/db/package.json",
-  "lib/db/drizzle.config.ts",
-];
+// ── Skip rules — mirror /.gitignore exactly so there is one source of truth ──
+//
+// SKIP_DIRS   : directory names that are never descended into
+// SKIP_FILES  : exact filenames that are skipped wherever they appear
+// SKIP_EXTS   : file extensions that are always skipped
+// MAX_FILE_BYTES : hard cap — files larger than this are skipped with a warning
 
-// Dirs to skip when walking a whitelisted directory
-const SKIP_INSIDE = new Set([
-  "node_modules", "__pycache__", ".pnpm-store", "market_cache",
-  "dist", ".cache", ".pythonlibs", ".upm", ".agents", ".local",
-  ".replit-artifact", "pandas_ta", ".venv", "venv", "env",
-  ".tox", "build", "eggs", "*.egg-info",
+const SKIP_DIRS = new Set([
+  // Git internal objects — never push these
+  ".git",
+  // JS / TS tooling
+  "node_modules", "dist", "build", "tmp", "out-tsc", ".cache",
+  // Python tooling / venvs
+  "__pycache__", ".pythonlibs", ".pnpm-store", ".upm", ".venv",
+  "venv", "env", ".tox", ".eggs",
+  // Replit platform
+  ".agents", ".local", ".replit-artifact",
+  // App-generated data
+  "market_cache",
+  // Vendored shim (not real source)
+  "pandas_ta",
+  // Expo / React Native
+  ".expo", ".expo-shared",
+  // Misc
+  ".idea", ".vscode", "coverage", "typings",
 ]);
+
 const SKIP_FILES = new Set([
-  "hydra_prices.db", "pnpm-lock.yaml", "uv.lock", ".DS_Store",
-  "package-lock.json", "yarn.lock",
+  // Lock files — generated, not human-maintained
+  "pnpm-lock.yaml", "uv.lock", "package-lock.json", "yarn.lock",
+  // Databases written at runtime
+  "hydra_prices.db",
+  // System
+  ".DS_Store", "Thumbs.db",
+  // Large build artefacts
+  ".tsbuildinfo",
 ]);
-const MAX_FILE_BYTES = 400 * 1024; // skip files > 400 KB (proxy limit)
-// Skip binary asset extensions that are large or not useful in source sync
-const SKIP_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp4", ".mp3", ".wav", ".pdf", ".zip"]);
 
-function walkDir(dir: string, base: string): string[] {
+// Also skip any file whose name ends in these suffixes (gitignore glob patterns)
+const SKIP_NAME_SUFFIXES = [".pyc", ".pyo", ".pyd", ".egg-info", ".db"];
+
+const SKIP_EXTS = new Set([
+  // Binary assets — host on a CDN instead
+  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico",
+  ".woff", ".woff2", ".ttf", ".otf", ".eot",
+  ".mp4", ".mp3", ".wav", ".pdf", ".zip",
+]);
+
+const MAX_FILE_BYTES = 400 * 1024; // 400 KB hard cap (GitHub API proxy limit)
+
+// ── File walker ───────────────────────────────────────────────────────────────
+
+function shouldSkipFile(name: string): boolean {
+  if (SKIP_FILES.has(name)) return true;
+  const ext = path.extname(name).toLowerCase();
+  if (SKIP_EXTS.has(ext)) return true;
+  if (SKIP_NAME_SUFFIXES.some(s => name.endsWith(s))) return true;
+  return false;
+}
+
+function walkDir(dir: string): string[] {
   const out: string[] = [];
-  for (const name of fs.readdirSync(dir)) {
-    if (SKIP_INSIDE.has(name) || SKIP_FILES.has(name)) continue;
+  let entries: string[];
+  try { entries = fs.readdirSync(dir); } catch { return out; }
+
+  for (const name of entries) {
+    if (name.startsWith(".") && SKIP_DIRS.has(name)) continue; // hidden dirs
+    if (SKIP_DIRS.has(name)) continue;
+
     const full = path.join(dir, name);
-    const stat = fs.statSync(full);
+    let stat: fs.Stats;
+    try { stat = fs.statSync(full); } catch { continue; }
+
     if (stat.isDirectory()) {
-      out.push(...walkDir(full, base));
-    } else if (!SKIP_EXTS.has(path.extname(name).toLowerCase())) {
-      out.push(path.relative(base, full));
+      out.push(...walkDir(full));
+    } else if (!shouldSkipFile(name)) {
+      out.push(path.relative(ROOT, full));
     }
   }
   return out;
 }
 
 function collectFiles(): string[] {
-  const results: string[] = [];
-  for (const rel of INCLUDE_PATHS) {
-    const abs = path.join(ROOT, rel);
-    if (!fs.existsSync(abs)) continue;
-    const stat = fs.statSync(abs);
-    if (stat.isDirectory()) {
-      results.push(...walkDir(abs, ROOT));
-    } else {
-      if (!SKIP_FILES.has(path.basename(rel))) results.push(rel);
-    }
-  }
-  return [...new Set(results)]; // dedupe
+  return [...new Set(walkDir(ROOT))];
 }
+
+// ── GitHub API helper ─────────────────────────────────────────────────────────
 
 type GHResp = Record<string, unknown>;
 
@@ -122,21 +124,53 @@ async function api(
       : {}),
   });
   const text = await resp.text() as string;
+  let json: GHResp;
   try {
-    return JSON.parse(text) as GHResp;
+    json = JSON.parse(text) as GHResp;
   } catch {
-    throw new Error(`GitHub API returned non-JSON: ${text.slice(0, 200)}`);
+    throw new Error(`GitHub API ${opts.method ?? "GET"} ${endpoint} returned non-JSON (HTTP ${resp.status}): ${text.slice(0, 300)}`);
   }
+  // GitHub returns error details in a "message" field on 4xx/5xx responses
+  if (resp.status >= 400) {
+    const msg = (json.message as string) ?? text.slice(0, 300);
+    const errors = json.errors ? `\n  Errors: ${JSON.stringify(json.errors)}` : "";
+    throw new Error(`HTTP_${resp.status}: ${msg}${errors}`);
+  }
+  return json;
 }
+
+/** api() with automatic retry on 429 (rate limit) */
+async function apiWithRetry(
+  c: InstanceType<typeof ReplitConnectors>,
+  endpoint: string,
+  opts: { method?: string; body?: unknown } = {},
+  retries = 4,
+): Promise<GHResp> {
+  let delay = 1000; // ms
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await api(c, endpoint, opts);
+    } catch (err) {
+      const msg = (err as Error).message ?? "";
+      if (msg.startsWith("HTTP_429") && attempt < retries) {
+        await new Promise(r => setTimeout(r, delay));
+        delay = Math.min(delay * 2, 8000);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("unreachable");
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
   const connectors = new ReplitConnectors();
 
-  // Verify auth
   const user = await api(connectors, "/user") as { login: string };
   console.log(`\n🔗  Authenticated as: ${user.login}`);
 
-  // Get GitHub HEAD sha
   const refData = await api(
     connectors,
     `/repos/${OWNER}/${REPO}/git/ref/heads/${BRANCH}`,
@@ -144,49 +178,59 @@ async function main() {
   const githubSha = (refData.object as { sha: string }).sha;
   console.log(`📌  GitHub HEAD:  ${githubSha.slice(0, 7)}`);
 
-  // Get local HEAD sha
   const localSha = execSync("git rev-parse HEAD", { cwd: ROOT }).toString().trim();
   console.log(`📌  Local HEAD:   ${localSha.slice(0, 7)}`);
 
-  // Collect whitelisted source files
   const files = collectFiles();
   console.log(`📁  Syncing ${files.length} source files…\n`);
 
-  // Get GitHub's current base tree
   const commitInfo = await api(
     connectors,
     `/repos/${OWNER}/${REPO}/git/commits/${githubSha}`,
   ) as { tree: { sha: string } };
   const baseTreeSha = (commitInfo.tree as { sha: string }).sha;
 
-  // Create blobs for all whitelisted files
   const treeEntries: { path: string; mode: string; type: string; sha: string }[] = [];
   let done = 0;
-  for (const rel of files) {
+
+  // Upload blobs in parallel with a concurrency cap.
+  // Replit's GitHub proxy allows max 10 RPS; 4 workers × ~0.5 s/req ≈ 8 RPS.
+  const CONCURRENCY = 4;
+
+  async function uploadBlob(rel: string): Promise<void> {
     const abs = path.join(ROOT, rel);
     let content: string;
     try {
       const stat = fs.statSync(abs);
       if (stat.size > MAX_FILE_BYTES) {
         console.log(`  ⚠️  Skipping large file (${(stat.size / 1024 / 1024).toFixed(1)} MB): ${rel}`);
-        continue;
+        return;
       }
       content = fs.readFileSync(abs).toString("base64");
     } catch {
-      continue;
+      return;
     }
-    const blob = await api(
+    const blob = await apiWithRetry(
       connectors,
       `/repos/${OWNER}/${REPO}/git/blobs`,
       { method: "POST", body: { content, encoding: "base64" } },
     ) as { sha: string };
     treeEntries.push({ path: rel, mode: "100644", type: "blob", sha: blob.sha });
     done++;
-    if (done % 5 === 0) process.stdout.write(`  ${done}/${files.length} blobs created…\r`);
+    if (done % 10 === 0) process.stdout.write(`  ${done}/${files.length} blobs…\r`);
   }
+
+  // Simple concurrency pool
+  const queue = [...files];
+  async function worker() {
+    while (queue.length > 0) {
+      const rel = queue.shift()!;
+      await uploadBlob(rel);
+    }
+  }
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
   process.stdout.write(`  ${done}/${files.length} blobs created.  \n`);
 
-  // Build commit message
   let msg = "chore: periodic sync from Replit";
   try {
     const subject = execSync("git log -1 --pretty=format:%s", { cwd: ROOT }).toString().trim();
@@ -194,21 +238,18 @@ async function main() {
     msg = body ? `${subject}\n\n${body}` : subject;
   } catch { /* use default */ }
 
-  // Create tree (inherits untouched files from GitHub's base tree)
   const newTree = await api(
     connectors,
     `/repos/${OWNER}/${REPO}/git/trees`,
     { method: "POST", body: { base_tree: baseTreeSha, tree: treeEntries } },
   ) as { sha: string };
 
-  // Create commit
   const newCommit = await api(
     connectors,
     `/repos/${OWNER}/${REPO}/git/commits`,
     { method: "POST", body: { message: msg, tree: newTree.sha, parents: [githubSha] } },
   ) as { sha: string };
 
-  // Update branch ref (force allows pushing on top of diverged history)
   await api(
     connectors,
     `/repos/${OWNER}/${REPO}/git/refs/heads/${BRANCH}`,
