@@ -693,13 +693,21 @@ export default function TradingPlatform() {
           )}
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
-          {/* Watchlist toggle */}
+        <div className="ml-auto flex items-center gap-1">
+          {/* Watchlist toggle — TradingView-style icon button */}
           <button
             onClick={() => setShowWatchlist(v => !v)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors ${showWatchlist ? "bg-indigo-600 text-white" : "bg-gray-800 text-gray-300 hover:text-white"}`}
+            title={showWatchlist ? "Hide watchlist" : "Show watchlist"}
+            className={`relative w-8 h-8 flex items-center justify-center rounded transition-all ${
+              showWatchlist
+                ? "text-indigo-400 bg-indigo-500/15 hover:bg-indigo-500/25"
+                : "text-gray-400 hover:text-gray-200 hover:bg-white/8"
+            }`}
           >
-            <PanelRight size={13} /> Watchlist
+            <PanelRight size={15} />
+            {showWatchlist && (
+              <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-indigo-400" />
+            )}
           </button>
         </div>
       </div>
