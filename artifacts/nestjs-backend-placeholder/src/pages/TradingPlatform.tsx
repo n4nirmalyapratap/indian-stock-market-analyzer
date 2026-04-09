@@ -2,10 +2,11 @@ import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHand
 import {
   BarChart2, TrendingUp, Minus, Square, Eraser,
   LayoutTemplate, PanelRight, X, Search, Minus as Divider,
-  ChevronDown, Crosshair, Calendar, Sun, Moon,
+  ChevronDown, Crosshair, Calendar,
 } from "lucide-react";
 import ChartPanel, { type DrawingTool, type Drawing, type ChartType } from "@/components/trading/ChartPanel";
 import WatchlistPanel, { type WatchlistPanelHandle } from "@/components/trading/WatchlistPanel";
+import { useTheme } from "@/context/ThemeContext";
 
 // ─── Symbol catalogue ────────────────────────────────────────────────────────
 const SYMBOLS = [
@@ -588,7 +589,7 @@ export default function TradingPlatform() {
   const [activePanelId, setActivePanelId] = useState(panels[0].id);
   const [intervalIdx, setIntervalIdx] = useState(7); // default: 1D
   const [chartType, setChartType] = useState<ChartType>("candles");
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const { theme } = useTheme();
   const [drawingTool, setDrawingTool] = useState<DrawingTool>("none");
   const [indicators, setIndicators] = useState<Set<string>>(new Set(["ema21"]));
   const [showRSI, setShowRSI] = useState(false);
@@ -811,7 +812,7 @@ export default function TradingPlatform() {
               {IND_OPTS.map(opt => (
                 <label key={opt.key} className="flex items-center gap-2.5 py-1 cursor-pointer group">
                   <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${indicators.has(opt.key) ? "bg-indigo-600 border-indigo-600" : "border-gray-600 group-hover:border-gray-400"}`}>
-                    {indicators.has(opt.key) && <div className="w-2 h-2 bg-white rounded-sm" />}
+                    {indicators.has(opt.key) && <div className="w-2 h-2 rounded-sm" style={{ background: "#fff" }} />}
                   </div>
                   <input type="checkbox" checked={indicators.has(opt.key)} onChange={() => toggleIndicator(opt.key)} className="hidden" />
                   <div className="w-3 h-0.5 rounded" style={{ background: opt.color }} />
@@ -829,7 +830,7 @@ export default function TradingPlatform() {
                       onClick={opt.toggle}
                       className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${opt.active ? "bg-indigo-600 border-indigo-600" : "border-gray-600 group-hover:border-gray-400"}`}
                     >
-                      {opt.active && <div className="w-2 h-2 bg-white rounded-sm" />}
+                      {opt.active && <div className="w-2 h-2 rounded-sm" style={{ background: "#fff" }} />}
                     </div>
                     <span className="text-xs" style={{ color: PT.itemTxt }}>{opt.label}</span>
                   </label>
@@ -866,15 +867,6 @@ export default function TradingPlatform() {
         </div>
 
         <div className="ml-auto flex items-center gap-1">
-          {/* Theme toggle */}
-          <button
-            onClick={() => setTheme(t => t === "dark" ? "light" : "dark")}
-            title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-            className="w-8 h-8 flex items-center justify-center rounded transition-all"
-            style={{ color: PT.iconTxt }}
-          >
-            {isDark ? <Sun size={15} /> : <Moon size={15} />}
-          </button>
           {/* Watchlist toggle — TradingView-style icon button */}
           <button
             onClick={() => setShowWatchlist(v => !v)}
