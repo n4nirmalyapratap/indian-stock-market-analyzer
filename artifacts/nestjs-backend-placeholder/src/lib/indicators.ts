@@ -37,8 +37,13 @@ export function calcRSI(closes: number[], period = 14): (number | null)[] {
       avgGain = (avgGain * (period - 1) + (d > 0 ? d : 0)) / period;
       avgLoss = (avgLoss * (period - 1) + (d < 0 ? -d : 0)) / period;
     }
-    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-    out.push(+(100 - 100 / (1 + rs)).toFixed(2));
+    // Correct boundary: gain>0, loss=0 => RSI=100; gain=0, loss>0 => RSI=0; both=0 => RSI=50
+    let rsi: number;
+    if (avgLoss === 0 && avgGain === 0) rsi = 50;
+    else if (avgLoss === 0) rsi = 100;
+    else if (avgGain === 0) rsi = 0;
+    else rsi = 100 - 100 / (1 + avgGain / avgLoss);
+    out.push(+rsi.toFixed(2));
   }
   return out;
 }
@@ -46,12 +51,15 @@ export function calcRSI(closes: number[], period = 14): (number | null)[] {
 export function calcMACD(closes: number[], fast = 12, slow = 26, sig = 9): {
   macd: (number | null)[]; signal: (number | null)[]; histogram: (number | null)[];
 } {
+  const nulls = closes.map(() => null as null);
   const emaFast = calcEMA(closes, fast);
   const emaSlow = calcEMA(closes, slow);
   const macdLine = emaFast.map((f, i) =>
     f !== null && emaSlow[i] !== null ? +(f - emaSlow[i]!).toFixed(4) : null
   );
   const firstNonNull = macdLine.findIndex(v => v !== null);
+  if (firstNonNull < 0) return { macd: nulls, signal: nulls, histogram: nulls };
+
   const macdVals = macdLine.slice(firstNonNull).map(v => v ?? 0);
   const sigLine = calcEMA(macdVals, sig);
   const signal = macdLine.map((m, i) => {

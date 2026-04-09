@@ -23,6 +23,7 @@ Real-time Indian stock market analysis platform — sector rotation tracking, ca
 | Options Strategy Tester | Live | `/api/options/*` |
 | Analytics | Live | `/api/analytics/*` |
 | **Per-Stock Chat** | **Live** | **WebSocket rooms per symbol — see below** |
+| **Trading Platform** | **Live** | **`/trading` — ECharts candlestick charts, indicators, drawing tools, multi-layout, watchlists** |
 
 ### Per-Stock Chat System
 
