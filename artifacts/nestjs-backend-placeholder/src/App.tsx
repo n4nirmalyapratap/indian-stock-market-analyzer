@@ -16,10 +16,11 @@ import OptionsStrategyTester from "@/pages/OptionsStrategyTester";
 import SettingsPage from "@/pages/SettingsPage";
 import NotFound from "@/pages/not-found";
 import TradingPlatform from "@/pages/TradingPlatform";
+import { ThemeProvider, useTheme } from "@/context/ThemeContext";
 import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
   MessageCircle, Send, Brain, TrendingUp, CandlestickChart,
-  Settings, ChevronRight, ChevronLeft, ChevronDown
+  Settings, ChevronRight, ChevronLeft, ChevronDown, Sun, Moon,
 } from "lucide-react";
 
 const queryClient = new QueryClient({
@@ -54,13 +55,32 @@ function NavLink({ path, label, icon: Icon, open, indent = false }: {
       className={`flex items-center gap-2.5 transition rounded-lg mx-1.5
         ${indent && open ? "pl-7 pr-2.5 py-1.5" : open ? "px-2.5 py-2" : "px-0 py-2 justify-center"}
         ${active
-          ? "bg-indigo-50 text-indigo-700"
-          : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
+          ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300"
+          : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white"
         }`}
     >
-      <Icon className={`flex-shrink-0 ${indent ? "w-4 h-4" : "w-[18px] h-[18px]"} ${active ? "text-indigo-600" : ""}`} />
+      <Icon className={`flex-shrink-0 ${indent ? "w-4 h-4" : "w-[18px] h-[18px]"} ${active ? "text-indigo-600 dark:text-indigo-400" : ""}`} />
       {open && <span className={`font-medium whitespace-nowrap ${indent ? "text-xs" : "text-sm"}`}>{label}</span>}
     </Link>
+  );
+}
+
+function ThemeToggle({ open }: { open: boolean }) {
+  const { theme, toggle } = useTheme();
+  const isDark = theme === "dark";
+  return (
+    <button
+      onClick={toggle}
+      title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+      className={`w-full flex items-center gap-2.5 rounded-lg transition py-2
+        ${open ? "px-2.5 mx-1.5 w-[calc(100%-12px)]" : "px-0 justify-center"}
+        text-gray-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-800`}
+    >
+      {isDark
+        ? <Sun  className="w-4 h-4 flex-shrink-0" />
+        : <Moon className="w-4 h-4 flex-shrink-0" />}
+      {open && <span className="text-xs font-medium whitespace-nowrap">{isDark ? "Light mode" : "Dark mode"}</span>}
+    </button>
   );
 }
 
@@ -71,7 +91,6 @@ function Layout({ children }: { children: React.ReactNode }) {
 
   useEffect(() => { localStorage.setItem("sidebar-open", String(open)); }, [open]);
 
-  // Auto-open accordion if currently on a settings sub-page
   useEffect(() => {
     if (SETTINGS_NAV.some(({ path }) => loc === path)) setSettingsOpen(true);
   }, [loc]);
@@ -79,20 +98,20 @@ function Layout({ children }: { children: React.ReactNode }) {
   const inSettings = SETTINGS_NAV.some(({ path }) => loc === path) || loc === "/settings";
 
   return (
-    <div className="h-screen bg-gray-50 flex overflow-hidden">
+    <div className="h-screen bg-gray-50 dark:bg-gray-950 flex overflow-hidden">
 
       {/* ── Sidebar ─────────────────────────────────────────────────────── */}
-      <aside className={`hidden md:flex flex-col bg-white border-r border-gray-100 shadow-sm flex-shrink-0
+      <aside className={`hidden md:flex flex-col bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-800 shadow-sm flex-shrink-0
         transition-all duration-200 ease-in-out ${open ? "w-52" : "w-[52px]"}`}>
 
         {/* Logo */}
-        <div className={`flex items-center gap-2.5 border-b border-gray-100 flex-shrink-0 h-[57px]
+        <div className={`flex items-center gap-2.5 border-b border-gray-100 dark:border-gray-800 flex-shrink-0 h-[57px]
           ${open ? "px-4" : "justify-center"}`}>
           <img src="/niftynodes-logo.png" alt="NiftyNodes" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
           {open && (
             <div className="overflow-hidden">
-              <p className="font-bold text-gray-900 text-sm whitespace-nowrap">Nifty Node</p>
-              <p className="text-xs text-gray-400 whitespace-nowrap">Indian Stock Market</p>
+              <p className="font-bold text-gray-900 dark:text-white text-sm whitespace-nowrap">Nifty Node</p>
+              <p className="text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">Indian Stock Market</p>
             </div>
           )}
         </div>
@@ -104,8 +123,8 @@ function Layout({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
 
-        {/* Bottom: Settings + toggle */}
-        <div className="border-t border-gray-100 py-2 flex-shrink-0">
+        {/* Bottom: Settings + theme + toggle */}
+        <div className="border-t border-gray-100 dark:border-gray-800 py-2 flex-shrink-0">
 
           {/* Settings — inline accordion when open, link to /settings when collapsed */}
           {open ? (
@@ -113,7 +132,9 @@ function Layout({ children }: { children: React.ReactNode }) {
               <button
                 onClick={() => setSettingsOpen(s => !s)}
                 className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg mx-1.5 transition
-                  ${inSettings ? "bg-indigo-50 text-indigo-700" : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"}
+                  ${inSettings
+                    ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300"
+                    : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white"}
                   w-[calc(100%-12px)]`}
               >
                 <Settings className="w-[18px] h-[18px] flex-shrink-0" />
@@ -132,18 +153,21 @@ function Layout({ children }: { children: React.ReactNode }) {
             <NavLink path="/settings" label="Settings" icon={Settings} open={false} />
           )}
 
+          {/* Dark / Light mode toggle */}
+          <ThemeToggle open={open} />
+
           {/* Expand / collapse */}
           <button
             onClick={() => setOpen(o => !o)}
             title={open ? "Collapse sidebar" : "Expand sidebar"}
             className={`w-full flex items-center gap-2.5 rounded-lg transition py-2 mt-0.5
               ${open ? "px-2.5 w-[calc(100%-12px)] mx-1.5" : "px-0 justify-center"}
-              text-gray-400 hover:text-indigo-600 hover:bg-gray-50`}
+              text-gray-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-800`}
           >
             {open
               ? <ChevronLeft  className="w-4 h-4 flex-shrink-0" />
               : <ChevronRight className="w-4 h-4 flex-shrink-0" />}
-            {open && <span className="text-xs font-medium text-gray-400 whitespace-nowrap">Collapse</span>}
+            {open && <span className="text-xs font-medium text-gray-400 dark:text-gray-500 whitespace-nowrap">Collapse</span>}
           </button>
         </div>
       </aside>
@@ -152,19 +176,20 @@ function Layout({ children }: { children: React.ReactNode }) {
       <div className="flex-1 flex flex-col min-w-0">
 
         {/* Mobile header */}
-        <div className="md:hidden bg-white border-b border-gray-100 px-4 py-3 flex items-center gap-2">
+        <div className="md:hidden bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 px-4 py-3 flex items-center gap-2">
           <img src="/niftynodes-logo.png" alt="NiftyNodes" className="w-7 h-7 rounded-full object-cover" />
-          <span className="font-bold text-gray-900 text-sm">Nifty Node</span>
+          <span className="font-bold text-gray-900 dark:text-white text-sm flex-1">Nifty Node</span>
+          <ThemeToggle open={false} />
         </div>
 
         {/* Mobile nav strip */}
-        <div className="md:hidden bg-white border-b border-gray-100 px-2 py-2 flex gap-1 overflow-x-auto">
+        <div className="md:hidden bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 px-2 py-2 flex gap-1 overflow-x-auto">
           {[...MAIN_NAV, { path: "/settings", label: "Settings", icon: Settings }].map(({ path, label, icon: Icon }) => {
             const active = loc === path || (path !== "/" && loc.startsWith(path));
             return (
               <Link key={path} href={path}
                 className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg text-xs transition flex-shrink-0
-                  ${active ? "bg-indigo-50 text-indigo-700 font-medium" : "text-gray-500"}`}
+                  ${active ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 font-medium" : "text-gray-500 dark:text-gray-400"}`}
               >
                 <Icon className="w-4 h-4" />
                 {label}
@@ -205,14 +230,16 @@ function Router() {
 
 function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-          <Router />
-        </WouterRouter>
-        <Toaster />
-      </TooltipProvider>
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+            <Router />
+          </WouterRouter>
+          <Toaster />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ThemeProvider>
   );
 }
 

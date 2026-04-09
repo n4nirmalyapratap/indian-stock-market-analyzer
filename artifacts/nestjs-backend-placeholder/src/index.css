@@ -390,4 +390,65 @@
   .border.hover-elevate:not(.no-hover-interaction-elevate)::after {
     inset: -1px;
   }
+
+  /* ─── Global dark-mode overrides for page content ─────────────────────────
+     These apply to pages that haven't had individual dark: variants added yet.
+     Scoped to html.dark so they're completely safe in light mode.          */
+  html.dark .page-dark-card {
+    background-color: #1e293b;
+    border-color: #334155;
+  }
+}
+
+/* Dark mode page-wide helpers — apply globally inside html.dark */
+html.dark .pg-card {
+  background-color: #1e293b !important;
+  border-color: #334155 !important;
+}
+html.dark .pg-card-inner {
+  background-color: #0f172a !important;
+  border-color: #1e293b !important;
+}
+
+/* All standard white cards on page content */
+html.dark main .bg-white {
+  background-color: #1e293b;
+}
+html.dark main .border-gray-50,
+html.dark main .border-gray-100 {
+  border-color: #334155;
+}
+html.dark main .border-gray-200 {
+  border-color: #475569;
+}
+
+/* Text */
+html.dark main .text-gray-900 { color: #f1f5f9; }
+html.dark main .text-gray-800 { color: #e2e8f0; }
+html.dark main .text-gray-700 { color: #cbd5e1; }
+html.dark main .text-gray-600 { color: #94a3b8; }
+html.dark main .text-gray-500 { color: #94a3b8; }
+
+/* Skeleton / muted backgrounds */
+html.dark main .bg-gray-100 { background-color: #334155; }
+html.dark main .bg-gray-50  { background-color: #1e293b; }
+html.dark main .bg-gray-200 { background-color: #475569; }
+
+/* Form inputs */
+html.dark main input:not([style]),
+html.dark main select:not([style]),
+html.dark main textarea:not([style]) {
+  background-color: #1e293b;
+  color: #f1f5f9;
+  border-color: #475569;
+}
+html.dark main input::placeholder,
+html.dark main textarea::placeholder {
+  color: #64748b;
+}
+
+/* Rounded-xl dividers */
+html.dark main .rounded-2xl.bg-white,
+html.dark main .rounded-xl.bg-white {
+  background-color: #1e293b;
 }
