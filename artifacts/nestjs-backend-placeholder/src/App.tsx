@@ -29,7 +29,7 @@ const queryClient = new QueryClient({
 
 const MAIN_NAV = [
   { path: "/",         label: "Dashboard",      icon: LayoutDashboard },
-  { path: "/trading",  label: "TV Charts",      icon: CandlestickChart },
+  { path: "/trading",  label: "Chart Studio",   icon: CandlestickChart },
   { path: "/sectors",  label: "Market Sectors", icon: BarChart3 },
   { path: "/stocks",   label: "Stock Lookup",   icon: Search },
   { path: "/patterns", label: "Patterns",       icon: Scan },
