@@ -17,6 +17,41 @@ Real-time Indian stock market analysis platform — sector rotation tracking, ca
 
 ---
 
+## Dark / Light Mode — CRITICAL UI RULE
+
+**Every UI change must fully support both dark and light mode. No exceptions.**
+
+### How it works
+
+- `ThemeContext` (`src/context/ThemeContext.tsx`) manages the theme state.
+- It toggles the `dark` class on `<html>` (i.e. `document.documentElement`).
+- Theme is persisted in `localStorage` under the key `"app-theme"`. Default is `"dark"`.
+- To read the current theme: `const { theme, toggle } = useTheme()` from `ThemeContext`.
+
+### CSS approach
+
+- Light mode variables are defined on `:root` in `src/index.css`.
+- Dark mode variables are defined on `.dark` in `src/index.css`.
+- All color tokens use CSS custom properties (e.g. `var(--background)`, `var(--foreground)`, `var(--card)`, `var(--border)`, etc).
+- **Never hardcode hex colors or Tailwind static colors** (e.g. avoid `bg-white`, `text-gray-900`).
+
+### Tailwind approach
+
+- Use semantic Tailwind classes that reference CSS variables: `bg-background`, `text-foreground`, `border-border`, `bg-card`, `text-card-foreground`, etc.
+- For elements that need explicit dark overrides, use the `dark:` variant: e.g. `bg-gray-100 dark:bg-gray-800`.
+- Charts and canvas elements must set background/text colors dynamically using the `theme` value from `useTheme()`.
+
+### Checklist for every new component or page
+
+- [ ] No hardcoded light-only or dark-only colors
+- [ ] All backgrounds use `bg-background`, `bg-card`, `bg-sidebar`, or `dark:` variants
+- [ ] All text uses `text-foreground`, `text-muted-foreground`, or `dark:` variants
+- [ ] All borders use `border-border` or `dark:` variants
+- [ ] Charts/canvas use dynamic colors derived from the current `theme`
+- [ ] Test mentally in both modes before submitting
+
+---
+
 ## Active Services
 
 | Workflow | Command | Port | Purpose |
