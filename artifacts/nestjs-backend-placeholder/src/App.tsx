@@ -3,8 +3,7 @@ import { Switch, Route, Router as WouterRouter, Link, useLocation } from "wouter
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import StockChat from "@/components/StockChat";
-import { useChatStore } from "@/lib/chatStore";
+import ChartView from "@/pages/ChartView";
 import Dashboard from "@/pages/Dashboard";
 import Sectors from "@/pages/Sectors";
 import StockLookup from "@/pages/StockLookup";
@@ -184,26 +183,21 @@ function Router() {
   return (
     <Layout>
       <Switch>
-        <Route path="/"         component={Dashboard} />
-        <Route path="/sectors"  component={Sectors} />
-        <Route path="/stocks"   component={StockLookup} />
-        <Route path="/patterns" component={Patterns} />
-        <Route path="/scanners" component={Scanners} />
-        <Route path="/whatsapp" component={WhatsAppBot} />
-        <Route path="/telegram" component={TelegramBot} />
-        <Route path="/hydra"    component={HydraAlpha} />
-        <Route path="/options"  component={OptionsStrategyTester} />
-        <Route path="/settings" component={SettingsPage} />
+        <Route path="/"                component={Dashboard} />
+        <Route path="/sectors"         component={Sectors} />
+        <Route path="/stocks"          component={StockLookup} />
+        <Route path="/patterns"        component={Patterns} />
+        <Route path="/scanners"        component={Scanners} />
+        <Route path="/whatsapp"        component={WhatsAppBot} />
+        <Route path="/telegram"        component={TelegramBot} />
+        <Route path="/hydra"           component={HydraAlpha} />
+        <Route path="/options"         component={OptionsStrategyTester} />
+        <Route path="/settings"        component={SettingsPage} />
+        <Route path="/chart/:symbol"   component={ChartView} />
         <Route component={NotFound} />
       </Switch>
     </Layout>
   );
-}
-
-function ChatOverlay() {
-  const { symbol, close } = useChatStore();
-  if (!symbol) return null;
-  return <StockChat symbol={symbol} onClose={close} />;
 }
 
 function App() {
@@ -212,7 +206,6 @@ function App() {
       <TooltipProvider>
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
           <Router />
-          <ChatOverlay />
         </WouterRouter>
         <Toaster />
       </TooltipProvider>

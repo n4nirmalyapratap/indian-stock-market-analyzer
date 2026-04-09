@@ -6,7 +6,7 @@ import {
   Zap, AlertCircle, CheckCircle2, X, Copy, Edit2,
   Filter, BarChart2, Loader2, Target,
 } from "lucide-react";
-import ChatButton from "@/components/ChatButton";
+import ChartButton from "@/components/ChartButton";
 
 // ─── Indicator Definitions ───────────────────────────────────────────────────
 
@@ -682,7 +682,7 @@ export default function Scanners() {
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-3 flex-wrap">
                               <span className="font-bold text-gray-900 text-base">{r.symbol}</span>
-                              <ChatButton symbol={r.symbol} />
+                              <ChartButton symbol={r.symbol} />
                               <span className={`flex items-center gap-1 text-sm font-semibold ${r.pChange >= 0 ? "text-green-600" : "text-red-500"}`}>
                                 {r.pChange >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
                                 {r.pChange >= 0 ? "+" : ""}{r.pChange?.toFixed(2)}%
