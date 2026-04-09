@@ -115,6 +115,62 @@ function Pill({ label, value, color = "gray" }: { label: string; value: string; 
   );
 }
 
+// ── Minimal markdown renderer for chat messages ───────────────────────────────
+function renderMd(text: string) {
+  return text.split("\n").map((line, i) => {
+    // Blank line → spacer
+    if (!line.trim()) return <div key={i} className="h-1" />;
+
+    // Parse inline **bold** and `code`
+    function parseInline(s: string) {
+      const result: React.ReactNode[] = [];
+      const re = /\*\*(.*?)\*\*|`([^`]+)`/g;
+      let last = 0; let m: RegExpExecArray | null;
+      while ((m = re.exec(s)) !== null) {
+        if (m.index > last) result.push(s.slice(last, m.index));
+        if (m[1] !== undefined) result.push(<strong key={m.index} className="font-semibold text-gray-900">{m[1]}</strong>);
+        if (m[2] !== undefined) result.push(<code key={m.index} className="bg-gray-100 text-indigo-700 px-1 py-0.5 rounded text-[11px] font-mono">{m[2]}</code>);
+        last = re.lastIndex;
+      }
+      if (last < s.length) result.push(s.slice(last));
+      return result;
+    }
+
+    // Header
+    if (/^#{1,3}\s/.test(line)) {
+      const t = line.replace(/^#+\s/, "");
+      return <p key={i} className="font-bold text-gray-800 mt-2 text-sm">{parseInline(t)}</p>;
+    }
+    // Bullet or dash list
+    if (/^[•\-\*]\s/.test(line)) {
+      const t = line.replace(/^[•\-\*]\s/, "");
+      return (
+        <div key={i} className="flex gap-2 items-start">
+          <span className="text-indigo-400 mt-0.5 flex-shrink-0 text-xs">•</span>
+          <span className="text-sm leading-snug text-gray-700">{parseInline(t)}</span>
+        </div>
+      );
+    }
+    // Numbered list
+    if (/^\d+\.\s/.test(line)) {
+      const num = line.match(/^(\d+)\./)?.[1];
+      const t   = line.replace(/^\d+\.\s/, "");
+      return (
+        <div key={i} className="flex gap-2 items-start">
+          <span className="text-indigo-500 font-semibold flex-shrink-0 text-xs w-4 text-right mt-0.5">{num}.</span>
+          <span className="text-sm leading-snug text-gray-700">{parseInline(t)}</span>
+        </div>
+      );
+    }
+    // Table row (skip — render as plain)
+    if (/^\|/.test(line)) {
+      return <p key={i} className="text-xs font-mono text-gray-500 leading-relaxed">{line}</p>;
+    }
+    // Default paragraph
+    return <p key={i} className="text-sm leading-snug text-gray-700">{parseInline(line)}</p>;
+  });
+}
+
 function GreeksBar({ g }: { g: Greeks }) {
   const items = [
     { sym: "Δ", label: "Delta", val: g.delta, tip: "Price sensitivity per ₹1 move" },
@@ -1245,22 +1301,27 @@ export default function OptionsStrategyTester() {
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
           {chatMsgs.length === 0 && (
-            <div className="pt-6 text-center">
-              <div className="flex items-center justify-center w-14 h-14 rounded-2xl bg-indigo-50 mx-auto mb-3">
-                <Bot className="w-7 h-7 text-indigo-400" />
+            <div className="flex flex-col items-center pt-8 pb-4 px-2">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-md mb-4">
+                <Bot className="w-8 h-8 text-white" />
               </div>
-              <p className="text-sm font-semibold text-gray-700">Options Strategy Expert</p>
-              <p className="text-xs text-gray-400 mt-1 leading-relaxed">Ask me about Greeks, strategies, or your current position</p>
-              <div className="mt-4 flex flex-col gap-1.5 text-left">
+              <p className="text-base font-bold text-gray-800">Options AI Assistant</p>
+              <p className="text-xs text-gray-400 mt-1 text-center leading-relaxed max-w-[260px]">
+                Ask about Greeks, strategies, IV, or your current position
+              </p>
+
+              <div className="mt-5 w-full space-y-2">
+                <p className="text-[10px] font-bold text-gray-300 uppercase tracking-widest text-center mb-2">Try asking</p>
                 {[
-                  "What is an Iron Condor?",
-                  "Explain my strategy Greeks",
-                  "What's a good NIFTY strategy for range-bound market?",
-                  "Why is my net premium negative?",
-                ].map(s => (
-                  <button key={s} onClick={() => setChatInput(s)}
-                    className="text-xs text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg px-3 py-2 text-left transition">
-                    {s}
+                  { q: "What is an Iron Condor?",                        icon: "📐" },
+                  { q: "Explain my strategy Greeks",                     icon: "🔢" },
+                  { q: "Best NIFTY strategy for range-bound market?",    icon: "📊" },
+                  { q: "Why is my net premium negative?",                icon: "❓" },
+                ].map(({ q, icon }) => (
+                  <button key={q} onClick={() => setChatInput(q)}
+                    className="w-full flex items-center gap-2.5 text-left bg-gray-50 hover:bg-indigo-50 border border-gray-100 hover:border-indigo-200 rounded-xl px-3.5 py-2.5 transition group">
+                    <span className="text-base">{icon}</span>
+                    <span className="text-xs text-gray-600 group-hover:text-indigo-700 leading-snug">{q}</span>
                   </button>
                 ))}
               </div>
@@ -1268,31 +1329,46 @@ export default function OptionsStrategyTester() {
           )}
 
           {chatMsgs.map((m, i) => (
-            <div key={i} className={`flex gap-2 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+            <div key={i} className={`flex gap-2.5 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+
+              {/* AI avatar */}
               {m.role === "assistant" && (
-                <div className="flex-shrink-0 w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center mt-0.5">
-                  <Bot style={{ width: 13, height: 13 }} className="text-indigo-600" />
+                <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-sm mt-0.5">
+                  <Bot style={{ width: 14, height: 14 }} className="text-white" />
                 </div>
               )}
-              <div className={`max-w-[82%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap
-                ${m.role === "user"
-                  ? "bg-indigo-600 text-white rounded-tr-sm"
-                  : "bg-gray-100 text-gray-800 rounded-tl-sm"}`}>
-                {m.content}
-              </div>
+
+              {m.role === "user" ? (
+                /* User bubble */
+                <div className="max-w-[80%] bg-indigo-600 text-white rounded-2xl rounded-tr-none px-3.5 py-2.5 shadow-sm">
+                  <p className="text-sm leading-relaxed">{m.content}</p>
+                </div>
+              ) : (
+                /* AI message — clean card with markdown */
+                <div className="flex-1 min-w-0 bg-white border border-gray-100 rounded-2xl rounded-tl-none px-4 py-3 shadow-sm space-y-1">
+                  {renderMd(m.content)}
+                </div>
+              )}
+
+              {/* User avatar */}
+              {m.role === "user" && (
+                <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gray-200 flex items-center justify-center mt-0.5">
+                  <span className="text-[10px] font-bold text-gray-500">YOU</span>
+                </div>
+              )}
             </div>
           ))}
 
           {chatLoading && (
-            <div className="flex gap-2 justify-start">
-              <div className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0 mt-0.5">
-                <Bot style={{ width: 13, height: 13 }} className="text-indigo-600" />
+            <div className="flex gap-2.5 justify-start">
+              <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-sm mt-0.5">
+                <Bot style={{ width: 14, height: 14 }} className="text-white" />
               </div>
-              <div className="bg-gray-100 rounded-2xl rounded-tl-sm px-3.5 py-3">
-                <div className="flex gap-1">
-                  <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                  <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                  <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+              <div className="bg-white border border-gray-100 rounded-2xl rounded-tl-none px-4 py-3 shadow-sm">
+                <div className="flex gap-1.5 items-center">
+                  <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                  <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                  <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
                 </div>
               </div>
             </div>
