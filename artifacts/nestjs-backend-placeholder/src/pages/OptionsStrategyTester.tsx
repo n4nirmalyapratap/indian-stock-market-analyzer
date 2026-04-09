@@ -920,32 +920,16 @@ export default function OptionsStrategyTester() {
                 {analysisErr}
               </div>
             )}
-            <div className="px-4 pb-4 pt-3 border-t border-gray-100 bg-white">
-              <button
-                onClick={analyseStrategy}
-                disabled={loadingAnalysis || !legs.length}
-                className={`
-                  w-full flex items-center justify-center gap-2 py-2.5 rounded-xl
-                  text-sm font-semibold transition-all duration-200
-                  ${legs.length && !loadingAnalysis
-                    ? "bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-md hover:shadow-lg hover:from-indigo-700 hover:to-violet-700 active:scale-[0.98]"
-                    : "bg-gray-100 text-gray-400 cursor-not-allowed"}
-                `}
-              >
-                {loadingAnalysis
-                  ? <><RefreshCw className="w-4 h-4 animate-spin" /> Analysing…</>
-                  : <><Zap className="w-4 h-4" /> Analyse Strategy</>
-                }
-              </button>
-              {legs.length > 0 && (
+            {legs.length > 0 && (
+              <div className="px-4 pb-3 pt-2 border-t border-gray-100">
                 <button
                   onClick={() => setLegs([])}
-                  className="w-full text-center text-[10px] text-gray-300 hover:text-red-400 mt-2 transition"
+                  className="w-full text-center text-[10px] text-gray-300 hover:text-red-400 transition"
                 >
                   Clear all legs
                 </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
 
           {/* ── RIGHT: Payoff ────────────────────────────────────────── */}
@@ -1024,9 +1008,18 @@ export default function OptionsStrategyTester() {
                 <div className="flex-1 flex flex-col min-h-0">
                   <div className="flex items-center justify-between mb-1.5">
                     <p className="text-xs font-semibold text-gray-600">P&amp;L at Expiry</p>
-                    <div className="flex gap-3 text-[10px] text-gray-400">
-                      <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-indigo-500 inline-block rounded" /> P&amp;L</span>
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" /> Spot</span>
+                    <div className="flex items-center gap-3">
+                      <div className="flex gap-3 text-[10px] text-gray-400">
+                        <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-indigo-500 inline-block rounded" /> P&amp;L</span>
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" /> Spot</span>
+                      </div>
+                      <button
+                        onClick={() => setAnalysis(null)}
+                        title="Clear chart"
+                        className="flex items-center gap-1 text-[10px] text-gray-300 hover:text-red-400 transition px-1.5 py-0.5 rounded hover:bg-red-50"
+                      >
+                        <X className="w-3 h-3" /> Clear
+                      </button>
                     </div>
                   </div>
                   <ResponsiveContainer width="100%" height={230}>
