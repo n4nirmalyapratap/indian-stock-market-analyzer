@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import * as echarts from "echarts";
 import { calcEMA, calcSMA, calcRSI, calcMACD, calcBollingerBands } from "@/lib/indicators";
 
-export type DrawingTool = "none" | "trendline" | "hline" | "vline" | "rectangle" | "eraser";
+export type DrawingTool = "none" | "trendline" | "ray" | "extendedline" | "hline" | "hray" | "vline" | "crossline" | "rectangle" | "eraser";
 export type ChartType = "candles" | "bars" | "hollow" | "line" | "line_markers" | "step" | "area" | "baseline" | "columns" | "ha";
 
 export interface Drawing {
@@ -145,11 +145,18 @@ function computeHA(cs: Candle[]): Candle[] {
 
 interface SvgLine   { type: "line"; x1: number; y1: number; x2: number; y2: number }
 interface SvgRect   { type: "rect"; x: number;  y: number;  w: number;  h: number  }
-interface SvgPixels { id: string; el: SvgLine | SvgRect }
+type SvgEl = SvgLine | SvgRect;
+interface SvgPixels { id: string; els: SvgEl[] }
 
-function getGridBounds(chart: echarts.ECharts, n: number, candles: Candle[]) {
-  const [leftX]  = chart.convertToPixel({ gridIndex: 0 }, [0, 0]);
-  const [rightX] = chart.convertToPixel({ gridIndex: 0 }, [Math.max(0, n - 1), 0]);
+// GL / GR must stay in sync with the grid config in renderChart below
+const CHART_GL = 8, CHART_GR = 70;
+
+function getGridBounds(chart: echarts.ECharts, candles: Candle[]) {
+  // Use chart.getWidth() for reliable x bounds — avoids off-screen pixels after dataZoom
+  const W = chart.getWidth();
+  const leftX  = CHART_GL;
+  const rightX = W - CHART_GR;
+  // Derive y bounds from the full data range; convertToPixel respects current zoom scale
   const highs = candles.map(c => c.high);
   const lows  = candles.map(c => c.low);
   const maxH  = highs.length ? Math.max(...highs) : 0;
@@ -159,34 +166,73 @@ function getGridBounds(chart: echarts.ECharts, n: number, candles: Candle[]) {
   return { leftX, rightX, topY: Math.min(topY, botY), botY: Math.max(topY, botY) };
 }
 
+// Extend a ray (px,py) in direction (nx,ny) until it hits the box boundary [x0,y0,x1,y1]
+function extendRay(px: number, py: number, nx: number, ny: number, x0: number, y0: number, x1: number, y1: number): [number, number] {
+  let tMin = 1e9;
+  if (nx > 0)  tMin = Math.min(tMin, (x1 - px) / nx);
+  if (nx < 0)  tMin = Math.min(tMin, (x0 - px) / nx);
+  if (ny > 0)  tMin = Math.min(tMin, (y1 - py) / ny);
+  if (ny < 0)  tMin = Math.min(tMin, (y0 - py) / ny);
+  return [px + nx * tMin, py + ny * tMin];
+}
+
 function shapeToPixels(
   shape: Record<string, unknown>,
   chart: echarts.ECharts,
   candles: Candle[],
-): SvgLine | SvgRect | null {
+): SvgEl[] | null {
   const s = shape as any;
-  const n = candles.length;
-  const b = getGridBounds(chart, n, candles);
+  const b = getGridBounds(chart, candles);
+  const W = chart.getWidth(), H = chart.getHeight();
 
   if (s.type === "hline") {
     const [, py] = chart.convertToPixel({ gridIndex: 0 }, [0, s.y]);
-    if (py < b.topY - 4 || py > b.botY + 4) return null;
-    return { type: "line", x1: b.leftX, y1: py, x2: b.rightX, y2: py };
+    return [{ type: "line", x1: b.leftX, y1: py, x2: b.rightX, y2: py }];
+  }
+  if (s.type === "hray") {
+    const [startX, py] = chart.convertToPixel({ gridIndex: 0 }, [s.xIdx, s.y]);
+    return [{ type: "line", x1: startX, y1: py, x2: b.rightX, y2: py }];
   }
   if (s.type === "vline") {
     const [px] = chart.convertToPixel({ gridIndex: 0 }, [s.xIdx, 0]);
-    if (px < b.leftX - 4 || px > b.rightX + 4) return null;
-    return { type: "line", x1: px, y1: b.topY, x2: px, y2: b.botY };
+    return [{ type: "line", x1: px, y1: b.topY, x2: px, y2: b.botY }];
+  }
+  if (s.type === "crossline") {
+    const [px, py] = chart.convertToPixel({ gridIndex: 0 }, [s.xIdx, s.y]);
+    return [
+      { type: "line", x1: b.leftX, y1: py, x2: b.rightX, y2: py },
+      { type: "line", x1: px, y1: b.topY, x2: px, y2: b.botY },
+    ];
   }
   if (s.type === "trendline") {
     const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
     const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
-    return { type: "line", x1: px0, y1: py0, x2: px1, y2: py1 };
+    return [{ type: "line", x1: px0, y1: py0, x2: px1, y2: py1 }];
+  }
+  if (s.type === "ray") {
+    const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
+    const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
+    const dx = px1 - px0, dy = py1 - py0;
+    const len = Math.hypot(dx, dy);
+    if (len < 1) return [{ type: "line", x1: px0, y1: py0, x2: px1, y2: py1 }];
+    const [ex, ey] = extendRay(px0, py0, dx / len, dy / len, 0, 0, W, H);
+    return [{ type: "line", x1: px0, y1: py0, x2: ex, y2: ey }];
+  }
+  if (s.type === "extendedline") {
+    const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
+    const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
+    const dx = px1 - px0, dy = py1 - py0;
+    const len = Math.hypot(dx, dy);
+    if (len < 1) return [{ type: "line", x1: px0, y1: py0, x2: px1, y2: py1 }];
+    const nx = dx / len, ny = dy / len;
+    const [ex1, ey1] = extendRay(px0, py0,  nx,  ny, 0, 0, W, H);
+    const [ex2, ey2] = extendRay(px0, py0, -nx, -ny, 0, 0, W, H);
+    return [{ type: "line", x1: ex2, y1: ey2, x2: ex1, y2: ey1 }];
   }
   if (s.type === "rectangle") {
     const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
     const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
-    return { type: "rect", x: Math.min(px0, px1), y: Math.min(py0, py1), w: Math.abs(px1 - px0), h: Math.abs(py1 - py0) };
+    return [{ type: "rect", x: Math.min(px0, px1), y: Math.min(py0, py1), w: Math.abs(px1 - px0), h: Math.abs(py1 - py0) }];
   }
   return null;
 }
@@ -219,13 +265,15 @@ function hitTestDrawings(
   const THRESHOLD = 14;
   let best: { id: string; dist: number } | null = null;
   for (const d of drawings) {
-    const el = shapeToPixels(d.shape, chart, candles);
-    if (!el) continue;
-    const dist = el.type === "line"
-      ? distToSegment(px, py, el.x1, el.y1, el.x2, el.y2)
-      : distToRect(px, py, el.x, el.y, el.w, el.h);
-    if (dist < THRESHOLD && (!best || dist < best.dist)) {
-      best = { id: d.id, dist };
+    const els = shapeToPixels(d.shape, chart, candles);
+    if (!els) continue;
+    for (const el of els) {
+      const dist = el.type === "line"
+        ? distToSegment(px, py, el.x1, el.y1, el.x2, el.y2)
+        : distToRect(px, py, el.x, el.y, el.w, el.h);
+      if (dist < THRESHOLD && (!best || dist < best.dist)) {
+        best = { id: d.id, dist };
+      }
     }
   }
   return best?.id ?? null;
@@ -236,13 +284,13 @@ function hitTestDrawings(
 function renderSvg(
   svgEl: SVGSVGElement | null,
   pixels: SvgPixels[],
-  preview: SvgLine | SvgRect | null,
+  preview: SvgEl | SvgEl[] | null,
   eraserPixel: { x: number; y: number } | null,
 ) {
   if (!svgEl) return;
   while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
 
-  const add = (el: SvgLine | SvgRect, dash = false, alpha = 1) => {
+  const add = (el: SvgEl, dash = false, alpha = 1) => {
     const color = DRAW_CLR + (alpha < 1 ? "bb" : "");
     if (el.type === "line") {
       const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
@@ -263,8 +311,11 @@ function renderSvg(
     }
   };
 
-  for (const p of pixels) add(p.el);
-  if (preview) add(preview, preview.type === "line", 0.7);
+  for (const p of pixels) for (const el of p.els) add(el);
+  if (preview) {
+    const arr = Array.isArray(preview) ? preview : [preview];
+    for (const el of arr) add(el, el.type === "line", 0.7);
+  }
 
   // Eraser cursor circle
   if (eraserPixel) {
@@ -314,7 +365,7 @@ export default function ChartPanel({
 
   // ── Repaint SVG ────────────────────────────────────────────────────────────
   const paintSvg = useCallback((
-    preview: SvgLine | SvgRect | null = null,
+    preview: SvgEl | SvgEl[] | null = null,
     eraser: { x: number; y: number } | null = null,
   ) => {
     const chart = chartRef.current;
@@ -326,8 +377,8 @@ export default function ChartPanel({
 
     const pixels: SvgPixels[] = drawings
       .map(d => {
-        const el = shapeToPixels(d.shape, chart, candles.current);
-        return el ? { id: d.id, el } : null;
+        const els = shapeToPixels(d.shape, chart, candles.current);
+        return els ? { id: d.id, els } : null;
       })
       .filter(Boolean) as SvgPixels[];
 
@@ -618,10 +669,18 @@ export default function ChartPanel({
     return { px: e.clientX - r.left, py: e.clientY - r.top };
   };
 
+  // Convert pixel to data coords; clamps to grid boundary if cursor is in margins
   const pixelToData = (px: number, py: number) => {
     const chart = chartRef.current;
     if (!chart) return null;
-    const pt = chart.convertFromPixel({ gridIndex: 0 }, [px, py]);
+    let pt = chart.convertFromPixel({ gridIndex: 0 }, [px, py]);
+    if (!pt) {
+      // Cursor is in a chart margin — clamp to the nearest grid edge and retry
+      const W = chart.getWidth(), H = chart.getHeight();
+      const cx = Math.max(CHART_GL + 1, Math.min(W - CHART_GR - 1, px));
+      const cy = Math.max(2, Math.min(H * 0.95, py));
+      pt = chart.convertFromPixel({ gridIndex: 0 }, [cx, cy]);
+    }
     if (!pt) return null;
     const xIdx = Math.max(0, Math.min(Math.round(pt[0] as number), candles.current.length - 1));
     return { xIdx, y: pt[1] as number };
@@ -639,9 +698,7 @@ export default function ChartPanel({
       const chart = chartRef.current;
       if (!chart || !candles.current.length) return;
       const hitId = hitTestDrawings(pos.px, pos.py, drawings, chart, candles.current);
-      if (hitId) {
-        onDrawingErase(hitId);
-      }
+      if (hitId) onDrawingErase(hitId);
       return;
     }
 
@@ -654,7 +711,6 @@ export default function ChartPanel({
     const pos = getXY(e);
     if (!pos) return;
 
-    // Eraser hover: show circle cursor
     if (drawingTool === "eraser") {
       eraserPos.current = { x: pos.px, y: pos.py };
       paintSvg(null, eraserPos.current);
@@ -662,20 +718,40 @@ export default function ChartPanel({
     }
 
     if (!dragStart.current) return;
-    const data = pixelToData(pos.px, pos.py);
-    if (!data) return;
     const chart = chartRef.current;
     if (!chart) return;
 
-    let preview: SvgLine | SvgRect | null = null;
     const s = dragStart.current;
-    const b = getGridBounds(chart, candles.current.length, candles.current);
+    const b = getGridBounds(chart, candles.current);
+    const W = chart.getWidth(), H = chart.getHeight();
+
+    let preview: SvgEl | SvgEl[] | null = null;
     if (drawingTool === "hline")
       preview = { type: "line", x1: b.leftX, y1: s.py, x2: b.rightX, y2: s.py };
+    else if (drawingTool === "hray")
+      preview = { type: "line", x1: s.px, y1: s.py, x2: b.rightX, y2: s.py };
     else if (drawingTool === "vline")
       preview = { type: "line", x1: s.px, y1: b.topY, x2: s.px, y2: b.botY };
-    else if (drawingTool === "trendline")
-      preview = { type: "line", x1: s.px, y1: s.py, x2: pos.px, y2: pos.py };
+    else if (drawingTool === "crossline")
+      preview = [
+        { type: "line", x1: b.leftX, y1: s.py, x2: b.rightX, y2: s.py },
+        { type: "line", x1: s.px, y1: b.topY, x2: s.px, y2: b.botY },
+      ];
+    else if (drawingTool === "trendline" || drawingTool === "ray" || drawingTool === "extendedline") {
+      const dx = pos.px - s.px, dy = pos.py - s.py;
+      const len = Math.hypot(dx, dy);
+      if (drawingTool === "trendline" || len < 1)
+        preview = { type: "line", x1: s.px, y1: s.py, x2: pos.px, y2: pos.py };
+      else if (drawingTool === "ray") {
+        const [ex, ey] = extendRay(s.px, s.py, dx / len, dy / len, 0, 0, W, H);
+        preview = { type: "line", x1: s.px, y1: s.py, x2: ex, y2: ey };
+      } else {
+        const nx = dx / len, ny = dy / len;
+        const [ex1, ey1] = extendRay(s.px, s.py,  nx,  ny, 0, 0, W, H);
+        const [ex2, ey2] = extendRay(s.px, s.py, -nx, -ny, 0, 0, W, H);
+        preview = { type: "line", x1: ex2, y1: ey2, x2: ex1, y2: ey1 };
+      }
+    }
     else if (drawingTool === "rectangle")
       preview = { type: "rect", x: Math.min(s.px, pos.px), y: Math.min(s.py, pos.py), w: Math.abs(pos.px - s.px), h: Math.abs(pos.py - s.py) };
 
@@ -685,17 +761,35 @@ export default function ChartPanel({
   const handleMouseUp = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!dragStart.current) return;
     const pos = getXY(e);
-    const data = pos ? pixelToData(pos.px, pos.py) : null;
     const s = dragStart.current;
     dragStart.current = null;
 
+    // For tools that only need mousedown data (hline, vline, crossline, hray),
+    // save the shape immediately — don't require mouseup to be inside the grid.
+    let shape: Record<string, unknown> | null = null;
+    if (drawingTool === "hline")
+      shape = { type: "hline", y: s.y };
+    else if (drawingTool === "hray")
+      shape = { type: "hray", xIdx: s.xIdx, y: s.y };
+    else if (drawingTool === "vline")
+      shape = { type: "vline", xIdx: s.xIdx };
+    else if (drawingTool === "crossline")
+      shape = { type: "crossline", xIdx: s.xIdx, y: s.y };
+
+    if (shape) { onDrawingAdd({ id: uid(), shape }); paintSvg(); return; }
+
+    // Tools that need both endpoints — require valid mouseup position
+    const data = pos ? pixelToData(pos.px, pos.py) : null;
     if (!data || !pos) { paintSvg(); return; }
 
-    let shape: Record<string, unknown> | null = null;
-    if (drawingTool === "hline")        shape = { type: "hline", y: s.y };
-    else if (drawingTool === "vline")   shape = { type: "vline", xIdx: s.xIdx };
-    else if (drawingTool === "trendline") shape = { type: "trendline", x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y };
-    else if (drawingTool === "rectangle") shape = { type: "rectangle", x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y };
+    if (drawingTool === "trendline")
+      shape = { type: "trendline", x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y };
+    else if (drawingTool === "ray")
+      shape = { type: "ray", x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y };
+    else if (drawingTool === "extendedline")
+      shape = { type: "extendedline", x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y };
+    else if (drawingTool === "rectangle")
+      shape = { type: "rectangle", x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y };
 
     if (shape) onDrawingAdd({ id: uid(), shape });
     paintSvg();
