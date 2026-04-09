@@ -7,6 +7,10 @@ const Svg = ({ children, size = 16 }: { children: React.ReactNode; size?: number
 );
 
 const ICONS = {
+  cross:          <Svg><line x1="12" y1="3" x2="12" y2="10"/><line x1="12" y1="14" x2="12" y2="21"/><line x1="3" y1="12" x2="10" y2="12"/><line x1="14" y1="12" x2="21" y2="12"/></Svg>,
+  dot:            <Svg><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/><line x1="12" y1="3" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="21"/><line x1="3" y1="12" x2="8" y2="12"/><line x1="16" y1="12" x2="21" y2="12"/></Svg>,
+  arrowcursor:    <Svg><path d="M5 3l14 9-7 1-4 7z"/></Svg>,
+  demo:           <Svg><circle cx="12" cy="12" r="9"/><polygon points="10 8 16 12 10 16" fill="currentColor" stroke="none"/></Svg>,
   cursor:         <Svg><path d="M5 3l14 9-7 1-4 7z"/></Svg>,
   trendline:      <Svg><line x1="4" y1="20" x2="20" y2="4"/><circle cx="4" cy="20" r="1.5" fill="currentColor" stroke="none"/><circle cx="20" cy="4" r="1.5" fill="currentColor" stroke="none"/></Svg>,
   ray:            <Svg><line x1="4" y1="20" x2="22" y2="4"/><circle cx="4" cy="20" r="1.5" fill="currentColor" stroke="none"/></Svg>,
@@ -74,8 +78,14 @@ interface ToolGroup {
 
 const TOOL_GROUPS: ToolGroup[] = [
   {
-    id: "cursor", categoryIcon: ICONS.cursor, categoryLabel: "Cursor", single: true,
-    tools: [{ tool: "none", label: "Cursor", shortcut: "Esc", icon: ICONS.cursor }],
+    id: "cursor", categoryIcon: ICONS.cross, categoryLabel: "Cursor",
+    tools: [
+      { tool: "none",        label: "Cross",          shortcut: "Esc", icon: ICONS.cross },
+      { tool: "dot",         label: "Dot",                             icon: ICONS.dot },
+      { tool: "arrowcursor", label: "Arrow",                           icon: ICONS.arrowcursor },
+      { tool: "demo",        label: "Demonstration",                   icon: ICONS.demo },
+      { tool: "eraser",      label: "Eraser",                          icon: ICONS.eraser },
+    ],
   },
   {
     id: "lines", categoryIcon: ICONS.trendline, categoryLabel: "Lines",
@@ -244,6 +254,7 @@ interface Props {
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function LeftDrawingBar({ activeTool, onToolSelect, onClearDrawings, hasDrawings, isDark }: Props) {
   const [openGroupId, setOpenGroupId] = useState<string | null>(null);
+  const [flyoutStyle, setFlyoutStyle] = useState<React.CSSProperties>({});
   const barRef = useRef<HTMLDivElement>(null);
 
   const bg        = isDark ? "#131722" : "#ffffff";
@@ -265,13 +276,34 @@ export default function LeftDrawingBar({ activeTool, onToolSelect, onClearDrawin
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  function handleGroupClick(group: ToolGroup) {
+  function handleGroupClick(group: ToolGroup, e: React.MouseEvent<HTMLButtonElement>) {
     if (group.single) {
       onToolSelect(group.tools[0].tool as string);
       setOpenGroupId(null);
-    } else {
-      setOpenGroupId(id => id === group.id ? null : group.id);
+      return;
     }
+    if (openGroupId === group.id) {
+      setOpenGroupId(null);
+      return;
+    }
+    // Calculate smart flyout position: open upward if button is in the bottom half of the bar
+    const btn = e.currentTarget;
+    const bar = barRef.current;
+    if (btn && bar) {
+      const btnRect = btn.getBoundingClientRect();
+      const barRect = bar.getBoundingClientRect();
+      const relTop  = btnRect.top - barRect.top;
+      const barH    = barRect.height;
+      const FLYOUT_EST_H = group.tools.length * 40 + 36; // estimated flyout height
+      if (relTop + FLYOUT_EST_H > barH && relTop > FLYOUT_EST_H / 2) {
+        // Open upward: anchor bottom of flyout to bottom of button
+        const fromBottom = barH - (relTop + btn.offsetHeight);
+        setFlyoutStyle({ bottom: `${fromBottom}px`, top: "auto" });
+      } else {
+        setFlyoutStyle({ top: `${relTop}px`, bottom: "auto" });
+      }
+    }
+    setOpenGroupId(group.id);
   }
 
   function handleToolSelect(tool: string) {
@@ -304,7 +336,7 @@ export default function LeftDrawingBar({ activeTool, onToolSelect, onClearDrawin
 
               <button
                 title={group.categoryLabel}
-                onClick={() => handleGroupClick(group)}
+                onClick={(e) => handleGroupClick(group, e)}
                 className="w-8 h-8 flex items-center justify-center rounded transition-all relative"
                 style={
                   active || open
@@ -325,14 +357,15 @@ export default function LeftDrawingBar({ activeTool, onToolSelect, onClearDrawin
               {/* Flyout panel */}
               {open && (
                 <div
-                  className="absolute left-full top-0 ml-0.5 rounded shadow-2xl overflow-hidden"
+                  className="absolute left-full ml-0.5 rounded shadow-2xl overflow-hidden"
                   style={{
                     minWidth: 220,
                     background: flyoutBg,
                     border: `1px solid ${flyoutBor}`,
-                    top: `${gi * 36 + 8}px`,
                     maxHeight: "calc(100vh - 80px)",
                     overflowY: "auto",
+                    zIndex: 50,
+                    ...flyoutStyle,
                   }}
                 >
                   {/* Category header */}
