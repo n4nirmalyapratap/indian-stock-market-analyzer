@@ -38,6 +38,7 @@ LOT_SIZES: dict[str, int] = {
     "^BSESN":      10,
     "BANKEX":      15,
     "^BSXN":       15,
+    "BANKEX.BO":   15,
 }
 DEFAULT_LOT_SIZE = 100
 
