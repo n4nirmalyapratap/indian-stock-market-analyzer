@@ -1405,7 +1405,7 @@ export default function OptionsStrategyTester() {
 
       {/* Drawer */}
       <div
-        className={`fixed top-0 right-0 z-50 h-screen w-[380px] flex flex-col bg-white border-l border-gray-200 shadow-2xl
+        className={`dark-drawer fixed top-0 right-0 z-50 h-screen w-[380px] flex flex-col bg-white border-l border-gray-200 shadow-2xl
           transition-transform duration-300 ease-in-out
           ${chatOpen ? "translate-x-0" : "translate-x-full"}`}
       >
