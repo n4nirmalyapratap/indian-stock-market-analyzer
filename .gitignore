@@ -47,3 +47,6 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Market data disk cache (auto-generated, too large for git)
+artifacts/python-backend/market_cache/
