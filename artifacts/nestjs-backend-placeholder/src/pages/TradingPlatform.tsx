@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHand
 import {
   BarChart2, TrendingUp, Minus, Square, Eraser,
   LayoutTemplate, PanelRight, X, Search, Minus as Divider,
-  ChevronDown, Crosshair, Calendar,
+  ChevronDown, Crosshair, Calendar, Sun, Moon,
 } from "lucide-react";
 import ChartPanel, { type DrawingTool, type Drawing, type ChartType } from "@/components/trading/ChartPanel";
 import WatchlistPanel, { type WatchlistPanelHandle } from "@/components/trading/WatchlistPanel";
@@ -567,6 +567,7 @@ export default function TradingPlatform() {
   const [activePanelId, setActivePanelId] = useState(panels[0].id);
   const [intervalIdx, setIntervalIdx] = useState(7); // default: 1D
   const [chartType, setChartType] = useState<ChartType>("candles");
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [drawingTool, setDrawingTool] = useState<DrawingTool>("none");
   const [indicators, setIndicators] = useState<Set<string>>(new Set(["ema21"]));
   const [showRSI, setShowRSI] = useState(false);
@@ -703,10 +704,21 @@ export default function TradingPlatform() {
     return "flex flex-col";
   }
 
+  const isDark = theme === "dark";
+  const PT = {
+    rootBg:   isDark ? "#0f1117" : "#f1f5f9",
+    barBg:    isDark ? "#131722" : "#ffffff",
+    barBor:   isDark ? "#1e2632" : "#e2e8f0",
+    dropBg:   isDark ? "#111827" : "#ffffff",
+    dropBor:  isDark ? "#374151" : "#cbd5e1",
+    secTxt:   isDark ? "#6b7280" : "#94a3b8",
+    itemTxt:  isDark ? "#d1d5db" : "#334155",
+  };
+
   return (
-    <div className="flex flex-col h-full" style={{ background: "#0f1117" }}>
+    <div className="flex flex-col h-full" style={{ background: PT.rootBg }}>
       {/* ── Toolbar ─────────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-800 bg-[#131722] shrink-0 flex-wrap">
+      <div className="flex items-center gap-2 px-3 py-1.5 shrink-0 flex-wrap" style={{ background: PT.barBg, borderBottom: `1px solid ${PT.barBor}` }}>
 
         {/* Symbol name button — opens modal search (chart mode) */}
         <button
@@ -761,8 +773,8 @@ export default function TradingPlatform() {
             )}
           </button>
           {showIndMenu && (
-            <div className="absolute top-full left-0 mt-1 z-50 bg-gray-900 border border-gray-700 rounded shadow-2xl p-3 w-52">
-              <div className="text-[11px] text-gray-500 font-semibold mb-2">Moving Averages</div>
+            <div className="absolute top-full left-0 mt-1 z-50 rounded shadow-2xl p-3 w-52" style={{ background: PT.dropBg, border: `1px solid ${PT.dropBor}` }}>
+              <div className="text-[11px] font-semibold mb-2" style={{ color: PT.secTxt }}>Moving Averages</div>
               {IND_OPTS.map(opt => (
                 <label key={opt.key} className="flex items-center gap-2.5 py-1 cursor-pointer group">
                   <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${indicators.has(opt.key) ? "bg-indigo-600 border-indigo-600" : "border-gray-600 group-hover:border-gray-400"}`}>
@@ -770,11 +782,11 @@ export default function TradingPlatform() {
                   </div>
                   <input type="checkbox" checked={indicators.has(opt.key)} onChange={() => toggleIndicator(opt.key)} className="hidden" />
                   <div className="w-3 h-0.5 rounded" style={{ background: opt.color }} />
-                  <span className="text-xs text-gray-300 group-hover:text-white">{opt.label}</span>
+                  <span className="text-xs" style={{ color: PT.itemTxt }}>{opt.label}</span>
                 </label>
               ))}
-              <div className="border-t border-gray-700 mt-2 pt-2">
-                <div className="text-[11px] text-gray-500 font-semibold mb-2">Oscillators</div>
+              <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${PT.dropBor}` }}>
+                <div className="text-[11px] font-semibold mb-2" style={{ color: PT.secTxt }}>Oscillators</div>
                 {[
                   { key: "rsi", label: "RSI (14)", active: showRSI, toggle: () => setShowRSI(v => !v) },
                   { key: "macd", label: "MACD (12,26,9)", active: showMACD, toggle: () => setShowMACD(v => !v) },
@@ -786,7 +798,7 @@ export default function TradingPlatform() {
                     >
                       {opt.active && <div className="w-2 h-2 bg-white rounded-sm" />}
                     </div>
-                    <span className="text-xs text-gray-300 group-hover:text-white">{opt.label}</span>
+                    <span className="text-xs" style={{ color: PT.itemTxt }}>{opt.label}</span>
                   </label>
                 ))}
               </div>
@@ -803,7 +815,7 @@ export default function TradingPlatform() {
             <LayoutTemplate size={13} /> Layout
           </button>
           {showLayouts && (
-            <div className="absolute top-full right-0 mt-1 z-50 bg-gray-900 border border-gray-700 rounded shadow-2xl p-2 flex gap-1">
+            <div className="absolute top-full right-0 mt-1 z-50 rounded shadow-2xl p-2 flex gap-1" style={{ background: PT.dropBg, border: `1px solid ${PT.dropBor}` }}>
               {LAYOUTS.map(l => (
                 <button
                   key={l.mode}
@@ -819,6 +831,14 @@ export default function TradingPlatform() {
         </div>
 
         <div className="ml-auto flex items-center gap-1">
+          {/* Theme toggle */}
+          <button
+            onClick={() => setTheme(t => t === "dark" ? "light" : "dark")}
+            title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+            className="w-8 h-8 flex items-center justify-center rounded transition-all text-gray-400 hover:text-gray-200 hover:bg-white/8"
+          >
+            {isDark ? <Sun size={15} /> : <Moon size={15} />}
+          </button>
           {/* Watchlist toggle — TradingView-style icon button */}
           <button
             onClick={() => setShowWatchlist(v => !v)}
@@ -862,13 +882,14 @@ export default function TradingPlatform() {
                   onDrawingErase={(id) => eraseDrawing(panel.id, id)}
                   onClearDrawings={() => clearDrawings()}
                   onActivate={() => setActivePanelId(panel.id)}
+                  theme={theme}
                 />
               </div>
             ))}
           </div>
 
           {/* ── Bottom range bar (chart area only — clock lives here) ── */}
-          <div className="relative flex items-center justify-between px-3 py-1 border-t border-gray-800 bg-[#131722] shrink-0">
+          <div className="relative flex items-center justify-between px-3 py-1 shrink-0" style={{ background: PT.barBg, borderTop: `1px solid ${PT.barBor}` }}>
             {/* Range buttons + calendar */}
             <div className="flex items-center gap-0.5">
               {RANGES.map(r => (
@@ -897,10 +918,10 @@ export default function TradingPlatform() {
                   <Calendar size={12} />
                 </button>
                 {showCalendar && (
-                  <div className="absolute bottom-full mb-2 left-0 z-50 bg-gray-900 border border-gray-700 rounded shadow-2xl p-3 flex flex-col gap-2" style={{ minWidth: 240 }}>
-                    <div className="text-xs text-gray-400 font-medium">Custom range</div>
+                  <div className="absolute bottom-full mb-2 left-0 z-50 rounded shadow-2xl p-3 flex flex-col gap-2" style={{ minWidth: 240, background: PT.dropBg, border: `1px solid ${PT.dropBor}` }}>
+                    <div className="text-xs font-medium" style={{ color: PT.secTxt }}>Custom range</div>
                     <div className="flex items-center gap-2">
-                      <label className="text-[11px] text-gray-400 w-10">From</label>
+                      <label className="text-[11px] w-10" style={{ color: PT.secTxt }}>From</label>
                       <input
                         type="date"
                         value={calStart}
@@ -909,7 +930,7 @@ export default function TradingPlatform() {
                       />
                     </div>
                     <div className="flex items-center gap-2">
-                      <label className="text-[11px] text-gray-400 w-10">To</label>
+                      <label className="text-[11px] w-10" style={{ color: PT.secTxt }}>To</label>
                       <input
                         type="date"
                         value={calEnd}
@@ -931,8 +952,8 @@ export default function TradingPlatform() {
 
             {/* Live IST clock — now inside chart panel area, not watchlist */}
             <div className="flex items-center gap-2 select-none">
-              <span className="font-mono text-[12px] tracking-wide text-gray-100 tabular-nums">{clock}</span>
-              <span className="font-mono text-[12px] text-gray-400">UTC+5:30</span>
+              <span className="font-mono text-[12px] tracking-wide tabular-nums" style={{ color: PT.itemTxt }}>{clock}</span>
+              <span className="font-mono text-[12px]" style={{ color: PT.secTxt }}>UTC+5:30</span>
             </div>
           </div>
         </div>
@@ -944,6 +965,7 @@ export default function TradingPlatform() {
             onSymbolSelect={setSymbolForActivePanel}
             activeSymbol={activePanel?.symbol ?? ""}
             onRequestAdd={() => searchRef.current?.open({ mode: "watchlist" })}
+            theme={theme}
           />
         )}
       </div>

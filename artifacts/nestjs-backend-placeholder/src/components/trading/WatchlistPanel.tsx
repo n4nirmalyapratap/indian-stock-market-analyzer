@@ -69,10 +69,30 @@ interface Props {
   onSymbolSelect: (symbol: string) => void;
   activeSymbol: string;
   onRequestAdd: () => void;
+  theme: "dark" | "light";
 }
 
 const WatchlistPanel = forwardRef<WatchlistPanelHandle, Props>(
-function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd }, ref) {
+function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd, theme }, ref) {
+  const d = theme === "dark";
+  const WT = {
+    bg:       d ? "#0f1117"                  : "#f0f3fa",
+    border:   d ? "#1e2130"                  : "#e0e3eb",
+    dropBg:   d ? "#1a1d27"                  : "#f8f9fc",
+    dropBor:  d ? "rgba(255,255,255,0.08)"   : "rgba(0,0,0,0.1)",
+    itemBor:  d ? "rgba(255,255,255,0.04)"   : "rgba(0,0,0,0.06)",
+    itemHov:  d ? "rgba(255,255,255,0.04)"   : "rgba(0,0,0,0.04)",
+    hdrHov:   d ? "rgba(255,255,255,0.05)"   : "rgba(0,0,0,0.04)",
+    symTxt:   d ? "#ffffff"                  : "#131722",
+    coTxt:    d ? "#4b5563"                  : "#9ca3af",
+    muTxt:    d ? "#6b7280"                  : "#9ca3af",
+    detBor:   d ? "rgba(255,255,255,0.07)"   : "rgba(0,0,0,0.08)",
+    detVal:   d ? "#d1d4dc"                  : "#374151",
+    divider:  d ? "rgba(255,255,255,0.07)"   : "rgba(0,0,0,0.07)",
+    inp:      d ? "rgba(255,255,255,0.1)"    : "rgba(0,0,0,0.06)",
+    inpTxt:   d ? "#ffffff"                  : "#131722",
+    inpPh:    d ? "#6b7280"                  : "#9ca3af",
+  };
   const [watchlists, setWatchlists]   = useState<Watchlist[]>(loadWatchlists);
   const [activeId, setActiveId]       = useState(watchlists[0]?.id ?? "default");
   const [prices, setPrices]           = useState<Record<string, WatchlistItem>>({});
@@ -198,8 +218,8 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd }, ref) {
 
   return (
     <div
-      className="flex flex-col h-full select-none"
-      style={{ width: 220, background: "#0f1117", borderLeft: "1px solid #1e2130" }}
+      className="flex flex-col h-full select-none transition-colors"
+      style={{ width: 220, background: WT.bg, borderLeft: `1px solid ${WT.border}` }}
     >
 
       {/* ── Header: watchlist name + + button ── */}
@@ -207,7 +227,9 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd }, ref) {
         <div className="flex items-center px-1 py-1 gap-0.5">
           <button
             onClick={() => setShowMenu(v => !v)}
-            className="flex items-center gap-1.5 flex-1 min-w-0 px-3 py-2 rounded hover:bg-white/5 transition-colors text-left"
+            className="flex items-center gap-1.5 flex-1 min-w-0 px-3 py-2 rounded transition-colors text-left"
+            onMouseEnter={e => (e.currentTarget.style.background = WT.hdrHov)}
+            onMouseLeave={e => (e.currentTarget.style.background = "")}
           >
             {editingId === activeId ? (
               <input
@@ -216,12 +238,13 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd }, ref) {
                 onChange={e => setEditVal(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") renameList(); if (e.key === "Escape") setEditingId(null); }}
                 onClick={e => e.stopPropagation()}
-                className="flex-1 bg-white/10 text-white text-sm rounded px-2 py-0.5 focus:outline-none"
+                className="flex-1 text-sm rounded px-2 py-0.5 focus:outline-none"
+                style={{ background: WT.inp, color: WT.inpTxt }}
               />
             ) : (
               <>
-                <span className="flex-1 text-sm font-semibold text-white truncate">{activeWL?.name ?? "Watchlist"}</span>
-                <ChevronDown size={12} className={`text-gray-500 shrink-0 transition-transform ${showMenu ? "rotate-180" : ""}`} />
+                <span className="flex-1 text-sm font-semibold truncate" style={{ color: WT.symTxt }}>{activeWL?.name ?? "Watchlist"}</span>
+                <ChevronDown size={12} className={`shrink-0 transition-transform ${showMenu ? "rotate-180" : ""}`} style={{ color: WT.muTxt }} />
               </>
             )}
           </button>
@@ -230,7 +253,10 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd }, ref) {
           <button
             onClick={onRequestAdd}
             title="Add symbol to watchlist"
-            className="shrink-0 w-7 h-7 flex items-center justify-center rounded text-gray-500 hover:text-white hover:bg-white/8 transition-colors"
+            className="shrink-0 w-7 h-7 flex items-center justify-center rounded transition-colors"
+            style={{ color: WT.muTxt }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = WT.symTxt; (e.currentTarget as HTMLElement).style.background = WT.hdrHov; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = WT.muTxt; (e.currentTarget as HTMLElement).style.background = ""; }}
           >
             <Plus size={15} />
           </button>
@@ -238,24 +264,29 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd }, ref) {
 
         {/* Dropdown */}
         {showMenu && (
-          <div className="absolute top-full left-0 right-0 z-50 py-1 rounded-b-lg shadow-2xl" style={{ background: "#1a1d27", border: "1px solid rgba(255,255,255,0.08)", borderTop: "none" }}>
+          <div className="absolute top-full left-0 right-0 z-50 py-1 rounded-b-lg shadow-2xl" style={{ background: WT.dropBg, border: `1px solid ${WT.dropBor}`, borderTop: "none" }}>
             {watchlists.map(wl => (
               <div
                 key={wl.id}
                 onClick={() => { setActiveId(wl.id); setShowMenu(false); setNewListMode(false); }}
-                className={`flex items-center gap-2 px-4 py-2 cursor-pointer text-xs transition-colors ${wl.id === activeId ? "text-indigo-400 bg-indigo-500/10" : "text-gray-400 hover:bg-white/5 hover:text-white"}`}
+                className="flex items-center gap-2 px-4 py-2 cursor-pointer text-xs transition-colors"
+                style={{ color: wl.id === activeId ? "#6366f1" : WT.muTxt, background: wl.id === activeId ? "rgba(99,102,241,0.1)" : "" }}
+                onMouseEnter={e => { if (wl.id !== activeId) (e.currentTarget as HTMLElement).style.background = WT.itemHov; }}
+                onMouseLeave={e => { if (wl.id !== activeId) (e.currentTarget as HTMLElement).style.background = ""; }}
               >
                 <span className="flex-1 truncate">{wl.name}</span>
                 <button
                   onClick={e => { e.stopPropagation(); setEditingId(wl.id); setEditVal(wl.name); setShowMenu(false); }}
-                  className="text-gray-600 hover:text-white p-0.5 rounded"
+                  className="p-0.5 rounded transition-colors hover:text-white"
+                  style={{ color: WT.muTxt }}
                 >
                   <Pencil size={10} />
                 </button>
                 {watchlists.length > 1 && (
                   <button
                     onClick={e => { e.stopPropagation(); deleteList(wl.id); }}
-                    className="text-gray-600 hover:text-red-400 p-0.5 rounded"
+                    className="p-0.5 rounded hover:text-red-400 transition-colors"
+                    style={{ color: WT.muTxt }}
                   >
                     <Trash2 size={10} />
                   </button>
@@ -263,7 +294,7 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd }, ref) {
               </div>
             ))}
 
-            <div className="mx-3 my-1" style={{ height: 1, background: "rgba(255,255,255,0.07)" }} />
+            <div className="mx-3 my-1" style={{ height: 1, background: WT.divider }} />
 
             {newListMode ? (
               <div className="flex items-center gap-1 px-3 py-1.5">
@@ -273,10 +304,11 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd }, ref) {
                   onChange={e => setNewListName(e.target.value)}
                   onKeyDown={e => { if (e.key === "Enter") createList(); if (e.key === "Escape") setNewListMode(false); }}
                   placeholder="List name…"
-                  className="flex-1 bg-white/10 text-white text-xs rounded px-2 py-1 focus:outline-none placeholder-gray-600 min-w-0"
+                  className="flex-1 text-xs rounded px-2 py-1 focus:outline-none min-w-0"
+                  style={{ background: WT.inp, color: WT.inpTxt }}
                 />
                 <button onClick={createList} className="text-green-400 hover:text-green-300 p-0.5"><Check size={12} /></button>
-                <button onClick={() => setNewListMode(false)} className="text-gray-500 hover:text-white p-0.5"><X size={12} /></button>
+                <button onClick={() => setNewListMode(false)} className="hover:text-white p-0.5 transition-colors" style={{ color: WT.muTxt }}><X size={12} /></button>
               </div>
             ) : (
               <button
@@ -304,24 +336,24 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd }, ref) {
               style={{
                 paddingTop: 9, paddingBottom: 9,
                 background: isOn ? "rgba(99,102,241,0.12)" : undefined,
-                borderBottom: idx < (activeWL?.symbols.length ?? 0) - 1 ? "1px solid rgba(255,255,255,0.04)" : "none",
+                borderBottom: idx < (activeWL?.symbols.length ?? 0) - 1 ? `1px solid ${WT.itemBor}` : "none",
               }}
-              onMouseEnter={e => { if (!isOn) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.04)"; }}
+              onMouseEnter={e => { if (!isOn) (e.currentTarget as HTMLElement).style.background = WT.itemHov; }}
               onMouseLeave={e => { if (!isOn) (e.currentTarget as HTMLElement).style.background = ""; }}
             >
               {isOn && <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-r" style={{ background: "#6366f1" }} />}
 
               <div className="flex-1 min-w-0">
-                <div className="text-xs font-semibold text-white truncate">{sym}</div>
+                <div className="text-xs font-semibold truncate" style={{ color: WT.symTxt }}>{sym}</div>
                 {info?.company && (
-                  <div className="text-[10px] truncate mt-0.5" style={{ color: "#4b5563" }}>{info.company}</div>
+                  <div className="text-[10px] truncate mt-0.5" style={{ color: WT.coTxt }}>{info.company}</div>
                 )}
               </div>
 
               <div className="text-right shrink-0">
                 {info?.price != null ? (
                   <>
-                    <div className="text-xs text-white font-medium">
+                    <div className="text-xs font-medium" style={{ color: WT.symTxt }}>
                       ₹{info.price.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </div>
                     <div className={`text-[10px] font-medium mt-0.5 ${up ? "text-emerald-400" : "text-red-400"}`}>
@@ -329,13 +361,14 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd }, ref) {
                     </div>
                   </>
                 ) : (
-                  <div className="text-[11px]" style={{ color: "#374151" }}>—</div>
+                  <div className="text-[11px]" style={{ color: WT.muTxt }}>—</div>
                 )}
               </div>
 
               <button
                 onClick={e => { e.stopPropagation(); removeSymbol(sym); }}
-                className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-gray-600 hover:text-red-400"
+                className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:text-red-400"
+                style={{ color: WT.muTxt }}
               >
                 <X size={10} />
               </button>
@@ -346,9 +379,9 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd }, ref) {
 
       {/* ── Stock details panel ── */}
       {stockDetail && detailRows.length > 0 && (
-        <div className="shrink-0 overflow-y-auto" style={{ maxHeight: 200, borderTop: "1px solid rgba(255,255,255,0.07)", scrollbarWidth: "none" }}>
+        <div className="shrink-0 overflow-y-auto" style={{ maxHeight: 200, borderTop: `1px solid ${WT.detBor}`, scrollbarWidth: "none" }}>
           <div className="px-4 pt-3 pb-1">
-            <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-2">
+            <div className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: WT.muTxt }}>
               {activeSymbol} Details
             </div>
             {detailPrice != null && (
@@ -366,8 +399,8 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd }, ref) {
             <div className="flex flex-col gap-[5px]">
               {detailRows.map(([label, value]) => (
                 <div key={label} className="flex items-center justify-between gap-2">
-                  <span className="text-[10px] text-gray-500 shrink-0">{label}</span>
-                  <span className="text-[10px] text-gray-300 text-right truncate">{value}</span>
+                  <span className="text-[10px] shrink-0" style={{ color: WT.muTxt }}>{label}</span>
+                  <span className="text-[10px] text-right truncate" style={{ color: WT.detVal }}>{value}</span>
                 </div>
               ))}
             </div>
