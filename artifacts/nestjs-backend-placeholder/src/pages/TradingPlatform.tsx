@@ -730,7 +730,7 @@ export default function TradingPlatform() {
   const PT = {
     rootBg:   isDark ? "#0f1117"               : "#f1f5f9",
     barBg:    isDark ? "#131722"               : "#ffffff",
-    barBor:   isDark ? "#1e2632"               : "#e2e8f0",
+    barBor:   isDark ? "rgba(255,255,255,0.04)" : "#e2e8f0",
     dropBg:   isDark ? "#1e2130"               : "#ffffff",
     dropBor:  isDark ? "#374151"               : "#cbd5e1",
     secTxt:   isDark ? "#6b7280"               : "#94a3b8",
@@ -739,7 +739,7 @@ export default function TradingPlatform() {
     btnBor:   isDark ? "#374151"               : "#cbd5e1",
     btnTxt:   isDark ? "#e5e7eb"               : "#0f172a",
     toolsBg:  isDark ? "rgba(30,38,50,0.65)"   : "rgba(15,23,42,0.06)",
-    divider:  isDark ? "#374151"               : "#e2e8f0",
+    divider:  isDark ? "rgba(255,255,255,0.07)" : "#e2e8f0",
     iconTxt:  isDark ? "#9ca3af"               : "#475569",
   };
 

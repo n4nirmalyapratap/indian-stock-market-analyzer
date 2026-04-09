@@ -101,7 +101,7 @@ function Layout({ children }: { children: React.ReactNode }) {
     <div className="h-screen bg-gray-50 dark:bg-gray-950 flex overflow-hidden">
 
       {/* ── Sidebar ─────────────────────────────────────────────────────── */}
-      <aside className={`hidden md:flex flex-col bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-800 shadow-sm flex-shrink-0
+      <aside className={`hidden md:flex flex-col bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-900/60 shadow-sm flex-shrink-0
         transition-all duration-200 ease-in-out ${open ? "w-52" : "w-[52px]"}`}>
 
         {/* Logo */}

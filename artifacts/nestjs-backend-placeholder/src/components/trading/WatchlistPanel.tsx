@@ -77,7 +77,7 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd, theme }, r
   const d = theme === "dark";
   const WT = {
     bg:       d ? "#0f1117"                  : "#f0f3fa",
-    border:   d ? "#1e2130"                  : "#e0e3eb",
+    border:   d ? "rgba(255,255,255,0.05)"   : "#e0e3eb",
     dropBg:   d ? "#1a1d27"                  : "#f8f9fc",
     dropBor:  d ? "rgba(255,255,255,0.08)"   : "rgba(0,0,0,0.1)",
     itemBor:  d ? "rgba(255,255,255,0.04)"   : "rgba(0,0,0,0.06)",
