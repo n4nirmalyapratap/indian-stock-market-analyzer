@@ -1,12 +1,13 @@
 import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from "react";
 import { useSearch, useLocation } from "wouter";
 import {
-  BarChart2, TrendingUp, Minus, Square, Eraser,
-  LayoutTemplate, PanelRight, X, Search, Minus as Divider,
-  ChevronDown, Crosshair, Calendar,
+  BarChart2,
+  LayoutTemplate, PanelRight, X, Search,
+  ChevronDown, Calendar,
 } from "lucide-react";
 import ChartPanel, { type DrawingTool, type Drawing, type ChartType } from "@/components/trading/ChartPanel";
 import WatchlistPanel, { type WatchlistPanelHandle } from "@/components/trading/WatchlistPanel";
+import LeftDrawingBar from "@/components/trading/LeftDrawingBar";
 import { useTheme } from "@/context/ThemeContext";
 
 // ─── Symbol catalogue ────────────────────────────────────────────────────────
@@ -203,15 +204,6 @@ const IND_OPTS = [
   { key: "bb",     label: "BB (20)", color: "#3b82f6" },
 ];
 
-// ─── Drawing tools ───────────────────────────────────────────────────────────
-const DRAW_TOOLS: { tool: DrawingTool; icon: React.ReactNode; label: string }[] = [
-  { tool: "none",      icon: <Crosshair size={14} />,    label: "Cursor"    },
-  { tool: "trendline", icon: <TrendingUp size={14} />,   label: "Trend Line" },
-  { tool: "hline",     icon: <Minus size={14} />,        label: "H-Line"    },
-  { tool: "vline",     icon: <Divider size={14} className="rotate-90" />, label: "V-Line" },
-  { tool: "rectangle", icon: <Square size={14} />,       label: "Rectangle" },
-  { tool: "eraser",    icon: <Eraser size={14} />,       label: "Eraser"    },
-];
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -595,7 +587,7 @@ export default function TradingPlatform() {
   const [intervalIdx, setIntervalIdx] = useState(7); // default: 1D
   const [chartType, setChartType] = useState<ChartType>("candles");
   const { theme } = useTheme();
-  const [drawingTool, setDrawingTool] = useState<DrawingTool>("none");
+  const [drawingTool, setDrawingTool] = useState<string>("none");
   const [indicators, setIndicators] = useState<Set<string>>(new Set(["ema21"]));
   const [showRSI, setShowRSI] = useState(false);
   const [showMACD, setShowMACD] = useState(false);
@@ -760,7 +752,6 @@ export default function TradingPlatform() {
     btnBg:    isDark ? "rgba(30,38,50,0.85)"   : "rgba(15,23,42,0.06)",
     btnBor:   isDark ? "#374151"               : "#cbd5e1",
     btnTxt:   isDark ? "#e5e7eb"               : "#0f172a",
-    toolsBg:  isDark ? "rgba(30,38,50,0.65)"   : "rgba(15,23,42,0.06)",
     divider:  isDark ? "rgba(255,255,255,0.07)" : "#e2e8f0",
     iconTxt:  isDark ? "#9ca3af"               : "#475569",
   };
@@ -800,34 +791,6 @@ export default function TradingPlatform() {
 
         {/* Chart type selector */}
         <ChartTypeSelector chartType={chartType} onSelect={setChartType} theme={theme} />
-
-        <div className="w-px h-5" style={{ background: PT.divider }} />
-
-        {/* Drawing tools */}
-        <div className="flex items-center gap-0.5 rounded p-0.5" style={{ background: PT.toolsBg }}>
-          {DRAW_TOOLS.map(({ tool, icon, label }) => (
-            <button
-              key={tool}
-              onClick={() => setDrawingTool(t => t === tool ? "none" : tool)}
-              title={label}
-              className="w-7 h-7 flex items-center justify-center rounded transition-colors"
-              style={drawingTool === tool
-                ? { background: "#6366f1", color: "#ffffff" }
-                : { color: PT.iconTxt }}
-            >
-              {icon}
-            </button>
-          ))}
-          <button
-            onClick={clearDrawings}
-            title="Clear all drawings on active chart"
-            disabled={!activePanel?.drawings?.length}
-            className="text-xs px-2 py-0.5 rounded transition-colors"
-            style={{ color: activePanel?.drawings?.length ? "#f87171" : PT.iconTxt, opacity: activePanel?.drawings?.length ? 1 : 0.4, cursor: activePanel?.drawings?.length ? "pointer" : "not-allowed" }}
-          >
-            Clear
-          </button>
-        </div>
 
         <div className="w-px h-5" style={{ background: PT.divider }} />
 
@@ -924,6 +887,15 @@ export default function TradingPlatform() {
       {/* ── Chart area ──────────────────────────────────────────────────────── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
 
+        {/* Left drawing sidebar */}
+        <LeftDrawingBar
+          activeTool={drawingTool}
+          onToolSelect={setDrawingTool}
+          onClearDrawings={clearDrawings}
+          hasDrawings={!!(activePanel?.drawings?.length)}
+          isDark={isDark}
+        />
+
         {/* Chart column: grid + bottom bar (clock stays inside chart area) */}
         <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
           {/* Charts grid */}
@@ -935,7 +907,7 @@ export default function TradingPlatform() {
                   symbol={panel.symbol}
                   symbolName={SYMBOLS.find(s => s.symbol === panel.symbol)?.name}
                   periodCfg={customPeriodCfg ?? INTERVALS[intervalIdx]}
-                  drawingTool={drawingTool}
+                  drawingTool={(["none","trendline","hline","vline","rectangle","eraser"].includes(drawingTool) ? drawingTool : "none") as DrawingTool}
                   chartType={chartType}
                   indicators={indicators}
                   showRSI={showRSI}
