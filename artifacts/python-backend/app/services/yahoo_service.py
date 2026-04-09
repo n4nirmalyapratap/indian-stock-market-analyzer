@@ -3,6 +3,7 @@ import time
 from datetime import datetime
 from typing import Any, Optional
 import httpx
+from . import market_cache_service as _disk
 
 MAX_ENTRIES = 400
 _CACHE: dict[str, dict] = {}
@@ -98,6 +99,14 @@ class YahooService:
 
     async def get_historical_data(self, symbol: str, days: int = 90) -> list[dict]:
         cache_key = f"yh-{symbol}-{days}"
+
+        # --- Disk cache: when market is closed, serve from disk first ---
+        if not _disk.is_market_open():
+            disk_data = _disk.load_from_disk(symbol, days)
+            if disk_data:
+                _set_cache(cache_key, disk_data, 3600)
+                return disk_data
+
         cached = _get_cache(cache_key)
         if cached is not None:
             return cached
@@ -148,6 +157,8 @@ class YahooService:
                             "volume": volumes[i] if i < len(volumes) else 0,
                         })
                     _set_cache(cache_key, data, 3600)
+                    # Save to disk regardless of market state — always keep cache fresh
+                    _disk.save_to_disk(symbol, days, data)
                     return data
             except Exception:
                 return []

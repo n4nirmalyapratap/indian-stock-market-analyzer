@@ -154,6 +154,27 @@ scripts/                       ← post-merge.sh
 
 ---
 
+## Market Data Disk Cache
+
+**Location:** `artifacts/python-backend/market_cache/<YYYY-MM-DD>/<SYMBOL>_<days>.json`
+
+**How it works:**
+- NSE market hours are 9:15 AM – 3:30 PM IST (Mon–Fri).
+- When the market is **OPEN**: all data is fetched live from Yahoo Finance (in-memory cache, 1h TTL). Disk is not consulted.
+- When the market is **CLOSED**: `yahoo_service.get_historical_data()` checks the disk cache first. If the file exists for today's date, it's returned instantly — zero network calls.
+- Every successful live fetch also saves to disk automatically, so the cache builds up naturally.
+- On server startup, if market is closed and fewer than 50 symbols are cached, an auto-warmup runs in the background — fetching all NIFTY100 + MIDCAP + SMALLCAP symbols in parallel batches of 10.
+
+**Effect on scanner:** After warmup, running a full scanner (200+ stocks) takes **seconds** instead of 70+ seconds — each stock is served from disk rather than a 0.35s-delayed Yahoo Finance call.
+
+**API endpoints:**
+- `GET /api/cache/status` — returns market open/closed state, cache date, symbol count
+- `POST /api/cache/warmup` — manually trigger a warmup (runs in background)
+
+**Git:** The `market_cache/` folder is `.gitignore`d — it's auto-generated local data, not source code.
+
+---
+
 ## Design Rules (enforced — must not be violated)
 
 **NO horizontal scrollbars anywhere in the app. Ever.**

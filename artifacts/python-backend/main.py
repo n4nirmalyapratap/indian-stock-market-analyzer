@@ -18,6 +18,10 @@ from app.routes.analytics import router as analytics_router
 from app.routes.telegram import router as telegram_router, get_service as get_telegram_service
 from app.routes.universe import router as universe_router
 from app.routes.hydra import router as hydra_router
+from app.routes.cache import router as cache_router
+from app.services.market_cache_service import is_market_open, cache_status
+from app.services import market_cache_service as _mcs
+from app.services.yahoo_service import YahooService as _YahooService
 
 logger = logging.getLogger("telegram-poller")
 
@@ -47,14 +51,42 @@ async def _telegram_polling_loop() -> None:
             await asyncio.sleep(5)
 
 
+async def _cache_warmup_task() -> None:
+    """On startup, if market is closed and cache is thin, warm up disk cache."""
+    await asyncio.sleep(5)  # let the server fully start first
+    status = cache_status()
+    if not status["marketOpen"] and status["cachedSymbols"] < 50:
+        logger.info(
+            "Market is closed and disk cache has only %d symbols — running warmup…",
+            status["cachedSymbols"],
+        )
+        try:
+            result = await _mcs.warmup_cache(_YahooService())
+            logger.info(
+                "Cache warmup complete: %d files saved, %d errors (date=%s)",
+                result["filesSaved"], result["errors"], result["cacheDate"],
+            )
+        except Exception as e:
+            logger.warning("Cache warmup failed: %s", e)
+    else:
+        if status["marketOpen"]:
+            logger.info("Market is OPEN — skipping disk cache warmup (live data mode).")
+        else:
+            logger.info(
+                "Disk cache already warm — %d symbols cached for %s.",
+                status["cachedSymbols"], status["cacheDate"],
+            )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    poll_task       = asyncio.create_task(_telegram_polling_loop())
-    universe_task   = asyncio.create_task(_universe_scheduler())
+    poll_task    = asyncio.create_task(_telegram_polling_loop())
+    universe_task = asyncio.create_task(_universe_scheduler())
+    warmup_task  = asyncio.create_task(_cache_warmup_task())
     try:
         yield
     finally:
-        for t in (poll_task, universe_task):
+        for t in (poll_task, universe_task, warmup_task):
             t.cancel()
             try:
                 await t
@@ -153,3 +185,4 @@ app.include_router(analytics_router, prefix="/api")
 app.include_router(telegram_router,  prefix="/api")
 app.include_router(universe_router,  prefix="/api")
 app.include_router(hydra_router,     prefix="/api")
+app.include_router(cache_router,     prefix="/api")
