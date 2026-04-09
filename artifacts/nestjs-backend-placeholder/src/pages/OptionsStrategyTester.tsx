@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { fetchApi } from "@/lib/api";
+import { useTheme } from "@/context/ThemeContext";
 import {
   TrendingUp, TrendingDown, Plus, Trash2, Play, BarChart2,
   AlertTriangle, RefreshCw, ChevronDown, Target, Activity,
@@ -353,6 +354,8 @@ function PnlHeatmap({ spots, payoffs, currentSpot }: {
 type Tab = "strategy" | "backtest" | "risk";
 
 export default function OptionsStrategyTester() {
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
   const [tab, setTab] = useState<Tab>("strategy");
 
   // Symbol / spot state
@@ -574,9 +577,13 @@ export default function OptionsStrategyTester() {
   const tabCls = (t: Tab) =>
     `px-5 py-2.5 text-sm font-medium rounded-t-lg border-b-2 transition-colors ${
       tab === t
-        ? "border-indigo-600 text-indigo-700 bg-white"
-        : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+        ? `border-indigo-600 text-indigo-500 ${isDark ? "bg-slate-800" : "bg-white"}`
+        : `border-transparent ${isDark ? "text-slate-400 hover:text-slate-200 hover:border-slate-500" : "text-gray-500 hover:text-gray-700 hover:border-gray-300"}`
     }`;
+
+  const chartGrid  = isDark ? "#1e293b" : "#f0f0f0";
+  const chartTick  = { fontSize: 10, fill: isDark ? "#64748b" : "#6b7280" };
+  const tooltipStyle = { fontSize: 11, borderRadius: 8, backgroundColor: isDark ? "#1e293b" : "#fff", border: `1px solid ${isDark ? "#334155" : "#e5e7eb"}`, color: isDark ? "#e2e8f0" : "#111827" };
 
   return (
     <div className="space-y-4">
@@ -1026,13 +1033,13 @@ export default function OptionsStrategyTester() {
                     <LineChart data={analysis.payoff.spots.map((s: number, i: number) => ({
                       spot: s, pnl: analysis.payoff.payoffs[i],
                     }))}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f4f4f5" />
-                      <XAxis dataKey="spot" tickFormatter={(v: number) => `₹${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 10 }} />
-                      <YAxis tickFormatter={(v: number) => v >= 1e5 ? `${(v / 1e5).toFixed(1)}L` : v.toLocaleString("en-IN")} tick={{ fontSize: 10 }} width={55} />
+                      <CartesianGrid strokeDasharray="3 3" stroke={chartGrid} />
+                      <XAxis dataKey="spot" tickFormatter={(v: number) => `₹${(v / 1000).toFixed(0)}k`} tick={chartTick} />
+                      <YAxis tickFormatter={(v: number) => v >= 1e5 ? `${(v / 1e5).toFixed(1)}L` : v.toLocaleString("en-IN")} tick={chartTick} width={55} />
                       <Tooltip
                         formatter={(v: number) => [fmtINR(v), "P&L"]}
                         labelFormatter={(l: number) => `Spot: ₹${Number(l).toLocaleString("en-IN")}`}
-                        contentStyle={{ fontSize: 11, borderRadius: 8 }}
+                        contentStyle={tooltipStyle}
                       />
                       <ReferenceLine y={0} stroke="#d1d5db" strokeWidth={1} />
                       {spotInfo && (
@@ -1171,13 +1178,13 @@ export default function OptionsStrategyTester() {
                 <h3 className="font-semibold text-gray-800 mb-3">Equity Curve (Cumulative P&L)</h3>
                 <ResponsiveContainer width="100%" height={280}>
                   <LineChart data={btResult.equity_curve}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="date" tick={{ fontSize: 10 }}
+                    <CartesianGrid strokeDasharray="3 3" stroke={chartGrid} />
+                    <XAxis dataKey="date" tick={chartTick}
                            tickFormatter={(d: string) => d.slice(0, 7)} />
-                    <YAxis tickFormatter={(v: number) => fmtINR(v)} tick={{ fontSize: 10 }} />
+                    <YAxis tickFormatter={(v: number) => fmtINR(v)} tick={chartTick} />
                     <Tooltip
                       formatter={(v: number) => [fmtINR(v), "Cum P&L"]}
-                      contentStyle={{ fontSize: 11, borderRadius: 8 }}
+                      contentStyle={tooltipStyle}
                     />
                     <ReferenceLine y={0} stroke="#9ca3af" />
                     <Line type="monotone" dataKey="cumulative_pnl"
@@ -1311,15 +1318,15 @@ export default function OptionsStrategyTester() {
                 <ResponsiveContainer width="100%" height={250}>
                   <BarChart data={varResult.histogram}
                             margin={{ top: 5, right: 20, left: 20, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <CartesianGrid strokeDasharray="3 3" stroke={chartGrid} />
                     <XAxis dataKey="midpoint"
                            tickFormatter={(v: number) => v >= 1e5 ? `${(v / 1e5).toFixed(0)}L` : String(Math.round(v))}
-                           tick={{ fontSize: 10 }} />
-                    <YAxis tick={{ fontSize: 10 }} />
+                           tick={chartTick} />
+                    <YAxis tick={chartTick} />
                     <Tooltip
                       formatter={(v: number, n: string) => [v, "Scenarios"]}
                       labelFormatter={(l: number) => `P&L: ${fmtINR(l)}`}
-                      contentStyle={{ fontSize: 11, borderRadius: 8 }}
+                      contentStyle={tooltipStyle}
                     />
                     <ReferenceLine x={0} stroke="#9ca3af" />
                     <ReferenceLine x={-varResult.var} stroke="#ef4444" strokeDasharray="4 2"

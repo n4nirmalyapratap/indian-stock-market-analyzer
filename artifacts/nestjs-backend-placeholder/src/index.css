@@ -476,6 +476,56 @@ html.dark .dark-drawer textarea {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+   DARK MODE — FORM ELEMENTS (inputs, selects, textareas)
+   Applied globally in main so every page benefits
+   ═══════════════════════════════════════════════════════════════════ */
+html.dark main input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+html.dark main select,
+html.dark main textarea {
+  background-color: #0f1929 !important;
+  color:            #e2e8f0 !important;
+  border-color:     #334155 !important;
+  color-scheme:     dark;
+}
+html.dark main input::placeholder,
+html.dark main textarea::placeholder {
+  color: #475569 !important;
+}
+html.dark main select option {
+  background-color: #1e293b;
+  color:            #e2e8f0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DARK MODE — OPACITY-MODIFIED BG UTILITIES
+   Tailwind generates different class names for bg-*\/* variants so
+   they skip the plain .bg-gray-50 selector above — handle explicitly
+   ═══════════════════════════════════════════════════════════════════ */
+html.dark main .bg-gray-50\/40  { background-color: rgba(15, 23, 42, 0.55) !important; }
+html.dark main .bg-gray-50\/60  { background-color: rgba(15, 23, 42, 0.65) !important; }
+html.dark main .bg-gray-50\/70  { background-color: rgba(15, 23, 42, 0.70) !important; }
+html.dark main .bg-white\/60    { background-color: rgba(15, 23, 42, 0.65) !important; }
+html.dark main .bg-white\/40    { background-color: rgba(15, 23, 42, 0.50) !important; }
+
+/* hover opacity variants */
+html.dark main .hover\:bg-gray-50\/70:hover { background-color: rgba(30, 41, 59, 0.55) !important; }
+
+/* divide-gray-50 lines */
+html.dark main .divide-gray-50 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(51, 65, 85, 0.45) !important;
+}
+
+/* table row stripes */
+html.dark main tr.bg-white                    { background-color: #1e293b !important; }
+html.dark main tr.bg-slate-50\/60             { background-color: rgba(15,23,42,0.6) !important; }
+
+/* date / number input calendar icons */
+html.dark main input[type="date"]::-webkit-calendar-picker-indicator,
+html.dark main input[type="number"]::-webkit-inner-spin-button {
+  filter: invert(0.7);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
    ELEGANT SCROLLBARS  —  light & dark mode
    ═══════════════════════════════════════════════════════════════════ */
 
