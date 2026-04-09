@@ -135,16 +135,50 @@ assets >400 KB, or generated directories).
 | Date | Commit ID | Short SHA | Notes |
 |---|---|---|---|
 | 2026-04-09 | `a97cfcb7f42e08ee9fe97b016bb3ff2b668333a8` | `a97cfcb` | Initial Replit setup: NSE 403 fix (Yahoo Finance fallback), GitHub push script |
+| 2026-04-09 | `6ec022763babb548544f7cf959f0d11b58ef8f59` | `6ec0227` | Updated replit.md with GitHub push log; push script binary-asset exclusions |
 
 ---
 
 ## Environment Variables / Secrets
 
-| Key | Required | Purpose |
-|---|---|---|
-| `SESSION_SECRET` | Optional | Session security |
-| `TELEGRAM_BOT_TOKEN` | Optional | Telegram bot — bot will show unconfigured without it |
-| `TWILIO_*` | Optional | WhatsApp bot via Twilio |
+Add these in Replit **Secrets** (lock icon in the left sidebar → "New Secret") before starting the app.
+
+### Required for GitHub pushes
+
+| Secret Key | How to get it |
+|---|---|
+| `GITHUB_TOKEN` | Go to https://github.com/settings/tokens → Generate new token (classic) → tick `repo` → Generate → copy |
+
+Once added, set the git remote once in the Shell:
+```bash
+git remote set-url origin https://$GITHUB_TOKEN@github.com/n4nirmalyapratap/indian-stock-market-analyzer.git
+```
+Then push any time with:
+```bash
+git add -A && git commit -m "your message" && git push origin main
+```
+
+### Required for Telegram Bot
+
+| Secret Key | How to get it |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | Open Telegram → search `@BotFather` → send `/newbot` → follow prompts → copy the token |
+
+The Telegram bot will show "unconfigured" on the Telegram page until this secret is added and the API Server workflow is restarted.
+
+### Optional (WhatsApp bot via Twilio)
+
+| Secret Key | Purpose |
+|---|---|
+| `TWILIO_ACCOUNT_SID` | Twilio account SID |
+| `TWILIO_AUTH_TOKEN` | Twilio auth token |
+| `TWILIO_WHATSAPP_NUMBER` | Your Twilio WhatsApp number |
+
+### Other
+
+| Secret Key | Purpose |
+|---|---|
+| `SESSION_SECRET` | Session security (any random string works) |
 
 ---
 
