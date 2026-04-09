@@ -44,6 +44,37 @@ Thumbs.db
 .cursor/rules/nx-rules.mdc
 .github/instructions/nx.instructions.md
 
-# Replit
+# Replit — generated / large / platform-specific dirs
 .cache/
 .local/
+.pythonlibs/
+.pnpm-store/
+.upm/
+.agents/
+.venv/
+venv/
+env/
+
+# Python build artefacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+build/
+*.tox/
+
+# Runtime data / caches the app writes
+market_cache/
+hydra_prices.db
+*.db
+
+# Stub / shim packages vendored for Replit
+artifacts/python-backend/pandas_ta/
+
+# Lock files (generated, not needed in source review)
+pnpm-lock.yaml
+uv.lock
+package-lock.json
+yarn.lock
