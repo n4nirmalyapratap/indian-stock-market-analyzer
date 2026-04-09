@@ -232,7 +232,7 @@ function SupervisorTab() {
             )}
             <div className={`max-w-[80%] rounded-2xl px-3.5 py-2.5 ${m.role === "user"
               ? "bg-indigo-600 text-white rounded-br-none"
-              : "bg-gray-100 text-gray-800 rounded-bl-none"
+              : "bg-gray-100 dark:bg-slate-700 text-gray-800 dark:text-slate-100 rounded-bl-none"
             }`}>
               <p className="text-sm leading-relaxed whitespace-pre-line">
                 {m.text.split(/(\*\*[^*]+\*\*)/).map((part, pi) =>
@@ -249,7 +249,7 @@ function SupervisorTab() {
         {loading && (
           <div className="flex justify-start items-end gap-2">
             <img src="/niftynodes-logo.png" alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
-            <div className="bg-gray-100 rounded-2xl rounded-bl-none px-4 py-3">
+            <div className="bg-gray-100 dark:bg-slate-700 rounded-2xl rounded-bl-none px-4 py-3">
               <div className="flex gap-1 items-center">
                 {[0, 1, 2].map(i => (
                   <span key={i} className="w-2 h-2 rounded-full bg-indigo-400 animate-bounce"
@@ -267,18 +267,18 @@ function SupervisorTab() {
            onMouseLeave={() => setShowSugg(false)}>
         {/* Suggestion popup — appears on ⚡ hover */}
         {showSugg && (
-          <div className="absolute bottom-full left-3 right-3 mb-2 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-10">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-3 pt-2.5 pb-1">Try asking</p>
+          <div className="absolute bottom-full left-3 right-3 mb-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-xl shadow-lg overflow-hidden z-10">
+            <p className="text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-wide px-3 pt-2.5 pb-1">Try asking</p>
             {SUGGESTIONS.map(s => (
               <button key={s} onClick={() => send(s)} disabled={loading}
-                className="w-full text-left text-sm px-3 py-2 hover:bg-indigo-50 hover:text-indigo-700 transition text-gray-700 disabled:opacity-50">
+                className="w-full text-left text-sm px-3 py-2 hover:bg-indigo-50 dark:hover:bg-slate-700 hover:text-indigo-700 dark:hover:text-indigo-300 transition text-gray-700 dark:text-slate-200 disabled:opacity-50">
                 {s}
               </button>
             ))}
           </div>
         )}
 
-        <div className="flex gap-2 items-center bg-gray-100 rounded-xl px-3 py-1.5">
+        <div className="flex gap-2 items-center bg-gray-100 dark:bg-slate-700 rounded-xl px-3 py-1.5">
           {/* ⚡ suggestions — show popup on hover */}
           <button
             onMouseEnter={() => !loading && setShowSugg(true)}

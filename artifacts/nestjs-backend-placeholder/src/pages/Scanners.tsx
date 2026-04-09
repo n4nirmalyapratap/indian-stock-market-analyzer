@@ -529,7 +529,7 @@ export default function Scanners() {
                           className={`px-5 py-1.5 text-sm font-bold transition ${
                             draft.logic === l
                               ? l === "AND" ? "bg-indigo-600 text-white" : "bg-amber-500 text-white"
-                              : "bg-white text-gray-500 hover:bg-gray-50"
+                              : "bg-white dark:bg-slate-700 text-gray-500 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-600"
                           }`}>{l}</button>
                       ))}
                     </div>
