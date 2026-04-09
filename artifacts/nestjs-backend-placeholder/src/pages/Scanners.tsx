@@ -675,7 +675,7 @@ export default function Scanners() {
                     <span className="text-sm font-semibold text-gray-700">{result.results.length} matching stocks</span>
                     <span className="text-xs text-gray-400">Logic: {result.logic}</span>
                   </div>
-                  <div className="divide-y divide-gray-50">
+                  <div className="divide-y divide-gray-50 dark:divide-slate-800/80">
                     {result.results.map((r: any, i: number) => (
                       <div key={i} className="px-5 py-4 hover:bg-gray-50 transition">
                         <div className="flex items-center justify-between gap-4">

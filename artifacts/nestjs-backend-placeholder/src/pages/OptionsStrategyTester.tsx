@@ -675,7 +675,7 @@ export default function OptionsStrategyTester() {
 
             {/* Live market data strip */}
             {spotInfo && (
-              <div className="flex items-center divide-x divide-gray-100 px-1">
+              <div className="flex items-center divide-x divide-gray-100 dark:divide-slate-800/80 px-1">
                 <div className="flex items-baseline gap-1.5 px-4 py-3">
                   <span className="text-xl font-bold text-gray-900">
                     ₹{spotInfo.spot.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -834,7 +834,7 @@ export default function OptionsStrategyTester() {
                       <th className="px-3 py-2" />
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-50">
+                  <tbody className="divide-y divide-gray-50 dark:divide-slate-800/80">
                     {legs.map(leg => (
                       <tr key={leg.id} className="hover:bg-gray-50/70">
                         <td className="px-3 py-1.5">
@@ -1208,7 +1208,7 @@ export default function OptionsStrategyTester() {
                         ))}
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-100">
+                    <tbody className="divide-y divide-gray-100 dark:divide-slate-800/80">
                       {btResult.trades.map((t: any, i: number) => (
                         <tr key={i} className="hover:bg-gray-50">
                           <td className="px-3 py-2 font-mono">{t.entry_date}</td>
