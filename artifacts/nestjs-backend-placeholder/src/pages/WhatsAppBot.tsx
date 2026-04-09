@@ -8,7 +8,7 @@ const QUICK_COMMANDS = [
   "!analyze RELIANCE", "!analyze TCS", "!entry HDFCBANK", "!scanner list", "!status",
 ];
 
-export default function WhatsAppBot() {
+export default function WhatsAppBot({ embedded = false }: { embedded?: boolean }) {
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
@@ -41,25 +41,27 @@ export default function WhatsAppBot() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">WhatsApp Bot</h1>
-          <p className="text-sm text-gray-500">Test and preview bot responses before connecting to WhatsApp</p>
+      {!embedded && (
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">WhatsApp Bot</h1>
+            <p className="text-sm text-gray-500">Test and preview bot responses before connecting to WhatsApp</p>
+          </div>
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm">
+            {status?.enabled ? (
+              <>
+                <Wifi className="w-4 h-4 text-green-500" />
+                <span className="text-green-600 font-medium">{status.status}</span>
+              </>
+            ) : (
+              <>
+                <WifiOff className="w-4 h-4 text-gray-400" />
+                <span className="text-gray-500">DISABLED</span>
+              </>
+            )}
+          </div>
         </div>
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm">
-          {status?.enabled ? (
-            <>
-              <Wifi className="w-4 h-4 text-green-500" />
-              <span className="text-green-600 font-medium">{status.status}</span>
-            </>
-          ) : (
-            <>
-              <WifiOff className="w-4 h-4 text-gray-400" />
-              <span className="text-gray-500">DISABLED</span>
-            </>
-          )}
-        </div>
-      </div>
+      )}
 
       {status && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
