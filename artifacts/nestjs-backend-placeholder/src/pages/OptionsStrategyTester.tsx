@@ -380,26 +380,71 @@ export default function OptionsStrategyTester() {
       {/* Symbol bar */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
         <div className="flex flex-wrap items-end gap-4">
-          <div>
-            <label className="block text-xs text-gray-500 mb-1 font-medium uppercase tracking-wide">
-              Underlying
+          <div className="flex-1 min-w-0">
+            <label className="block text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">
+              Underlying Index
             </label>
-            <div className="flex gap-2">
-              <input
-                className="border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono w-40 uppercase"
-                value={symbol}
-                onChange={e => setSymbol(e.target.value.toUpperCase())}
-                onKeyDown={e => e.key === "Enter" && fetchSpot()}
-                placeholder="NIFTY / BANKNIFTY…"
-              />
-              <button
-                onClick={fetchSpot}
-                disabled={loadingSpot}
-                className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-60 transition"
-              >
-                {loadingSpot ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                Fetch
-              </button>
+            {/* Index pill selector */}
+            <div className="flex flex-wrap gap-2">
+              {[
+                { sym: "NIFTY",      label: "NIFTY 50",      sub: "NSE · Lot 75" },
+                { sym: "BANKNIFTY",  label: "BANK NIFTY",    sub: "NSE · Lot 30" },
+                { sym: "FINNIFTY",   label: "FIN NIFTY",     sub: "NSE · Lot 40" },
+                { sym: "MIDCPNIFTY", label: "MIDCAP NIFTY",  sub: "NSE · Lot 75" },
+                { sym: "SENSEX",     label: "SENSEX",         sub: "BSE · Lot 10" },
+              ].map(({ sym, label, sub }) => {
+                const active = symbol === sym;
+                return (
+                  <button
+                    key={sym}
+                    onClick={async () => {
+                      setSymbol(sym);
+                      setSpotInfo(null);
+                      setLegs([]);
+                      setAnalysis(null);
+                      // fetch immediately on selection
+                      setLoadingSpot(true);
+                      setSpotErr("");
+                      try {
+                        const info = await get<SpotInfo>(`/options/spot/${sym}`);
+                        setSpotInfo(info);
+                      } catch (e: any) {
+                        setSpotErr(e?.message || `Failed to fetch ${sym}`);
+                      } finally {
+                        setLoadingSpot(false);
+                      }
+                    }}
+                    disabled={loadingSpot}
+                    className={`flex flex-col items-start px-4 py-2.5 rounded-xl border text-left transition
+                      ${active
+                        ? "bg-indigo-600 border-indigo-600 text-white shadow-md"
+                        : "bg-white border-gray-200 text-gray-700 hover:border-indigo-300 hover:bg-indigo-50"
+                      } disabled:opacity-60`}
+                  >
+                    <span className="text-sm font-bold leading-tight">
+                      {active && loadingSpot
+                        ? <span className="flex items-center gap-1"><RefreshCw className="w-3 h-3 animate-spin inline" /> {label}</span>
+                        : label}
+                    </span>
+                    <span className={`text-xs leading-tight mt-0.5 ${active ? "text-indigo-200" : "text-gray-400"}`}>
+                      {sub}
+                    </span>
+                  </button>
+                );
+              })}
+
+              {/* Re-fetch button */}
+              {spotInfo && (
+                <button
+                  onClick={fetchSpot}
+                  disabled={loadingSpot}
+                  title="Refresh spot price"
+                  className="flex items-center gap-1 self-center px-3 py-2 rounded-xl border border-gray-200 text-gray-500 hover:border-indigo-300 hover:text-indigo-600 text-xs transition disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loadingSpot ? "animate-spin" : ""}`} />
+                  Refresh
+                </button>
+              )}
             </div>
           </div>
 
