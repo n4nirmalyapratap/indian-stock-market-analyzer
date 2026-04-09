@@ -510,9 +510,22 @@ html.dark main .bg-white\/40    { background-color: rgba(15, 23, 42, 0.50) !impo
 /* hover opacity variants */
 html.dark main .hover\:bg-gray-50\/70:hover { background-color: rgba(30, 41, 59, 0.55) !important; }
 
-/* divide-gray-50 lines */
-html.dark main .divide-gray-50 > :not([hidden]) ~ :not([hidden]) {
-  border-color: rgba(51, 65, 85, 0.45) !important;
+/* ── divide-* white-line fix ─────────────────────────────────────────────────
+   In dark mode, divide-gray-50 / divide-gray-100 produce near-white #f9fafb
+   borders that are brutally visible against dark backgrounds.
+   We override all divide-y border tops with a subtle dark tone.
+   Using both the Tailwind selector format AND a universal `* + *` fallback. */
+
+html.dark main .divide-y > * + *,
+html.dark main .divide-gray-50 > * + *,
+html.dark main .divide-gray-100 > * + *,
+html.dark main tbody > tr + tr {
+  border-top-color:    rgba(30, 41, 59, 0.9) !important;
+  border-bottom-color: transparent           !important;
+}
+html.dark main .divide-gray-50 > :not([hidden]) ~ :not([hidden]),
+html.dark main .divide-gray-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(30, 41, 59, 0.9) !important;
 }
 
 /* table row stripes */
