@@ -1,8 +1,10 @@
+import asyncio
 import random
 import string
 from datetime import datetime
 from typing import Optional
 from .price_service import PriceService
+from . import market_cache_service as _mcs
 from .indicators import (
     calculate_ema, calculate_sma, calculate_rsi,
     calculate_macd, calculate_bollinger_bands, calculate_atr,
@@ -284,44 +286,68 @@ class ScannersService:
             return {"error": "Scanner not found"}
 
         symbols = build_universe(scanner["universe"])
+        conditions = scanner["conditions"]
+        logic      = scanner["logic"]
+        market_open = _mcs.is_market_open()
+
+        def _evaluate(h: list) -> dict | None:
+            if len(h) < 30:
+                return None
+            closes = [d["close"] for d in h if d.get("close")]
+            lc = closes[-1]
+            pc = closes[-2]
+            change   = lc - pc
+            p_change = (change / pc) * 100 if pc else 0
+            cond_results = [_eval_condition(h, c) for c in conditions]
+            met_count    = sum(1 for r in cond_results if r["met"])
+            all_met = (
+                met_count == len(conditions) if logic == "AND" else met_count > 0
+            )
+            if not all_met:
+                return None
+            return {
+                "symbol": None,  # filled by caller
+                "lastPrice": lc,
+                "change": round(change, 2),
+                "pChange": round(p_change, 2),
+                "volume": h[-1].get("volume"),
+                "matchedConditions": [r["desc"] for r in cond_results if r["met"]],
+                "failedConditions":  [r["desc"] for r in cond_results if not r["met"]],
+                "conditionsMatched": met_count,
+                "totalConditions": len(conditions),
+                "score": round(met_count / len(conditions) * 100) if conditions else 0,
+            }
+
         results = []
 
-        for sym in symbols:
-            try:
-                h = await self.price.get_historical_data(sym, 90)
-                if len(h) < 30:
-                    continue
-                closes = [d["close"] for d in h if d.get("close")]
-                lc = closes[-1]
-                pc = closes[-2]
-                change = lc - pc
-                p_change = (change / pc) * 100 if pc else 0
+        if not market_open:
+            # ── FAST PATH: market closed → all data from disk → run fully parallel ──
+            async def _scan_one(sym: str):
+                try:
+                    h   = await self.price.get_historical_data(sym, 90)
+                    row = _evaluate(h)
+                    if row:
+                        row["symbol"] = sym
+                        return row
+                except Exception:
+                    pass
+                return None
 
-                cond_results = [_eval_condition(h, c) for c in scanner["conditions"]]
-                met_count = sum(1 for r in cond_results if r["met"])
-                all_met = (
-                    met_count == len(scanner["conditions"])
-                    if scanner["logic"] == "AND"
-                    else met_count > 0
-                )
+            raw = await asyncio.gather(*[_scan_one(s) for s in symbols])
+            results = [r for r in raw if r]
 
-                if all_met:
-                    results.append({
-                        "symbol": sym,
-                        "lastPrice": lc,
-                        "change": round(change, 2),
-                        "pChange": round(p_change, 2),
-                        "volume": h[-1].get("volume"),
-                        "matchedConditions": [r["desc"] for r in cond_results if r["met"]],
-                        "failedConditions":  [r["desc"] for r in cond_results if not r["met"]],
-                        "conditionsMatched": met_count,
-                        "totalConditions": len(scanner["conditions"]),
-                        "score": round(met_count / len(scanner["conditions"]) * 100) if scanner["conditions"] else 0,
-                    })
-                import asyncio
-                await asyncio.sleep(0.35)
-            except Exception:
-                pass
+        else:
+            # ── LIVE PATH: market open → sequential with rate-limit delay ──
+            for sym in symbols:
+                try:
+                    h   = await self.price.get_historical_data(sym, 90)
+                    row = _evaluate(h)
+                    if row:
+                        row["symbol"] = sym
+                        results.append(row)
+                    await asyncio.sleep(0.35)  # respect Yahoo / NSE rate limits
+                except Exception:
+                    pass
 
         results.sort(key=lambda r: r["score"], reverse=True)
         _scanners[sid] = {
