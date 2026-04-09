@@ -993,6 +993,7 @@ export default function TradingPlatform() {
                   onDrawingErase={(id) => eraseDrawing(panel.id, id)}
                   onClearDrawings={() => clearDrawings()}
                   onActivate={() => setActivePanelId(panel.id)}
+                  onDrawingDone={() => setDrawingTool("none")}
                   theme={theme}
                 />
               </div>
