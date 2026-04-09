@@ -66,34 +66,71 @@ const PRESET_LABELS: Record<string, string> = {
   iron_condor: "Iron Condor", butterfly: "Butterfly",
 };
 
-// otmMult: how many OTM steps away from ATM this leg sits (0 = ATM).
-// For iron condor the sell legs are 1× OTM and the buy (protection) legs are 2× OTM.
-type QuickLeg = Partial<Leg> & { otmMult?: number };
+// otmMult: offset = step×3 × mult  (e.g. 1 = 1 OTM wing)
+// spreadMult: offset = step × mult  (finer control, for butterfly wings)
+type QuickLeg = Partial<Leg> & { otmMult?: number; spreadMult?: number };
 
-const QUICK_STRATEGIES: { label: string; legs: QuickLeg[] }[] = [
-  {
-    label: "Long Straddle",
-    legs: [
-      { action: "buy", option_type: "call", lots: 1, otmMult: 0 },
-      { action: "buy", option_type: "put",  lots: 1, otmMult: 0 },
-    ],
-  },
-  {
-    label: "Short Strangle",
-    legs: [
-      { action: "sell", option_type: "call", lots: 1, otmMult: 1 },
-      { action: "sell", option_type: "put",  lots: 1, otmMult: 1 },
-    ],
-  },
-  {
-    label: "Iron Condor",
-    legs: [
-      { action: "sell", option_type: "call", lots: 1, otmMult: 1 }, // near OTM call (sold)
-      { action: "buy",  option_type: "call", lots: 1, otmMult: 2 }, // far  OTM call (protection)
-      { action: "sell", option_type: "put",  lots: 1, otmMult: 1 }, // near OTM put  (sold)
-      { action: "buy",  option_type: "put",  lots: 1, otmMult: 2 }, // far  OTM put  (protection)
-    ],
-  },
+type Outlook = "bullish" | "bearish" | "neutral" | "volatile";
+const OUTLOOK_CHIP: Record<Outlook, string> = {
+  bullish:  "text-emerald-700 bg-emerald-50  border-emerald-200 hover:bg-emerald-100",
+  bearish:  "text-rose-700   bg-rose-50    border-rose-200   hover:bg-rose-100",
+  neutral:  "text-indigo-700 bg-indigo-50  border-indigo-200 hover:bg-indigo-100",
+  volatile: "text-amber-700  bg-amber-50   border-amber-200  hover:bg-amber-100",
+};
+const OUTLOOK_DOT: Record<Outlook, string> = {
+  bullish:  "bg-emerald-400",
+  bearish:  "bg-rose-400",
+  neutral:  "bg-indigo-400",
+  volatile: "bg-amber-400",
+};
+
+const QUICK_STRATEGIES: { label: string; category: string; outlook: Outlook; legs: QuickLeg[] }[] = [
+  // ── Directional ──────────────────────────────────────────────────────────
+  { label: "Long Call",  category: "Directional", outlook: "bullish",
+    legs: [{ action: "buy",  option_type: "call", lots: 1, otmMult: 0 }] },
+  { label: "Short Put",  category: "Directional", outlook: "bullish",
+    legs: [{ action: "sell", option_type: "put",  lots: 1, otmMult: 1 }] },
+  { label: "Long Put",   category: "Directional", outlook: "bearish",
+    legs: [{ action: "buy",  option_type: "put",  lots: 1, otmMult: 0 }] },
+  { label: "Short Call", category: "Directional", outlook: "bearish",
+    legs: [{ action: "sell", option_type: "call", lots: 1, otmMult: 1 }] },
+  // ── Volatility ───────────────────────────────────────────────────────────
+  { label: "Long Straddle",  category: "Volatility", outlook: "volatile",
+    legs: [{ action: "buy", option_type: "call", lots: 1, otmMult: 0 },
+           { action: "buy", option_type: "put",  lots: 1, otmMult: 0 }] },
+  { label: "Long Strangle",  category: "Volatility", outlook: "volatile",
+    legs: [{ action: "buy", option_type: "call", lots: 1, otmMult: 1 },
+           { action: "buy", option_type: "put",  lots: 1, otmMult: 1 }] },
+  { label: "Short Straddle", category: "Volatility", outlook: "neutral",
+    legs: [{ action: "sell", option_type: "call", lots: 1, otmMult: 0 },
+           { action: "sell", option_type: "put",  lots: 1, otmMult: 0 }] },
+  { label: "Short Strangle", category: "Volatility", outlook: "neutral",
+    legs: [{ action: "sell", option_type: "call", lots: 1, otmMult: 1 },
+           { action: "sell", option_type: "put",  lots: 1, otmMult: 1 }] },
+  // ── Spreads ──────────────────────────────────────────────────────────────
+  { label: "Bull Call Spread", category: "Spreads", outlook: "bullish",
+    legs: [{ action: "buy",  option_type: "call", lots: 1, otmMult: 0 },
+           { action: "sell", option_type: "call", lots: 1, otmMult: 1 }] },
+  { label: "Bear Put Spread",  category: "Spreads", outlook: "bearish",
+    legs: [{ action: "buy",  option_type: "put",  lots: 1, otmMult: 0 },
+           { action: "sell", option_type: "put",  lots: 1, otmMult: 1 }] },
+  // ── Multi-leg ─────────────────────────────────────────────────────────────
+  { label: "Iron Condor", category: "Multi-leg", outlook: "neutral",
+    legs: [{ action: "sell", option_type: "call", lots: 1, otmMult: 1 },
+           { action: "buy",  option_type: "call", lots: 1, otmMult: 2 },
+           { action: "sell", option_type: "put",  lots: 1, otmMult: 1 },
+           { action: "buy",  option_type: "put",  lots: 1, otmMult: 2 }] },
+  { label: "Butterfly",   category: "Multi-leg", outlook: "neutral",
+    legs: [{ action: "buy",  option_type: "call", lots: 1, spreadMult: -1 },
+           { action: "sell", option_type: "call", lots: 2, spreadMult:  0 },
+           { action: "buy",  option_type: "call", lots: 1, spreadMult:  1 }] },
+];
+
+const STRATEGY_GROUPS = [
+  { label: "Directional", items: QUICK_STRATEGIES.filter(s => s.category === "Directional") },
+  { label: "Volatility",  items: QUICK_STRATEGIES.filter(s => s.category === "Volatility") },
+  { label: "Spreads",     items: QUICK_STRATEGIES.filter(s => s.category === "Spreads") },
+  { label: "Multi-leg",   items: QUICK_STRATEGIES.filter(s => s.category === "Multi-leg") },
 ];
 
 // ── Components ────────────────────────────────────────────────────────────────
@@ -704,48 +741,61 @@ export default function OptionsStrategyTester() {
           {/* ── LEFT: Builder ───────────────────────────────────────────── */}
           <div className="w-[44%] flex-shrink-0 flex flex-col border-r border-gray-100">
 
-            {/* Quick presets */}
-            <div className="px-4 py-3 border-b border-gray-100">
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Quick Add Strategy</p>
-              <div className="flex flex-wrap gap-1.5">
-                {QUICK_STRATEGIES.map(qs => (
-                  <button
-                    key={qs.label}
-                    onClick={async () => {
-                      const info = spotInfo ?? await doFetchSpot();
-                      if (!info) return;
-                      const atm  = info.atm;
-                      const step = atm >= 10000 ? 100 : atm >= 2000 ? 50 : 10;
-                      const otm  = step * 3;
-                      const newLegs = qs.legs.map((l) => {
-                        const mult   = l.otmMult ?? 0;
-                        const offset = otm * mult;
-                        const strike = l.option_type === "call" ? atm + offset : atm - offset;
-                        return {
-                          id:          crypto.randomUUID(),
-                          action:      l.action      ?? ("buy" as const),
-                          option_type: l.option_type ?? ("call" as const),
-                          strike,
-                          premium:     0,
-                          lots:        l.lots ?? 1,
-                          lot_size:    info.lot_size,
-                          iv:          info.hv30,
-                        };
-                      });
-                      setLegs(prev => [...prev, ...newLegs]);
-                    }}
-                    className="px-2.5 py-1 text-xs rounded-lg border border-indigo-200 text-indigo-700 hover:bg-indigo-50 transition font-medium"
-                  >
-                    {qs.label}
-                  </button>
-                ))}
-                <button
-                  onClick={() => addLeg()}
-                  className="flex items-center gap-1 px-2.5 py-1 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition"
-                >
-                  <Plus className="w-3 h-3" /> Custom
-                </button>
+            {/* Quick presets — categorised grid */}
+            <div className="px-3 pt-3 pb-2 border-b border-gray-100">
+              <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-2">Quick Add Strategy</p>
+              <div className="space-y-2">
+                {STRATEGY_GROUPS.map(group => {
+                  const addStrategy = async (qs: typeof QUICK_STRATEGIES[0]) => {
+                    const info = spotInfo ?? await doFetchSpot();
+                    if (!info) return;
+                    const atm  = info.atm;
+                    const step = atm >= 10000 ? 100 : atm >= 2000 ? 50 : 10;
+                    const otm  = step * 3;
+                    const newLegs = qs.legs.map((l) => {
+                      const offset =
+                        l.spreadMult !== undefined
+                          ? step * l.spreadMult
+                          : otm * (l.otmMult ?? 0);
+                      const strike = l.option_type === "call" ? atm + offset : atm - offset;
+                      return {
+                        id:          crypto.randomUUID(),
+                        action:      l.action      ?? ("buy" as const),
+                        option_type: l.option_type ?? ("call" as const),
+                        strike,
+                        premium:     0,
+                        lots:        l.lots ?? 1,
+                        lot_size:    info.lot_size,
+                        iv:          info.hv30,
+                      };
+                    });
+                    setLegs(prev => [...prev, ...newLegs]);
+                  };
+                  return (
+                    <div key={group.label}>
+                      <p className="text-[8px] font-bold text-gray-300 uppercase tracking-widest mb-1">{group.label}</p>
+                      <div className="grid grid-cols-2 gap-1">
+                        {group.items.map(qs => (
+                          <button
+                            key={qs.label}
+                            onClick={() => addStrategy(qs)}
+                            className={`flex items-center gap-1.5 px-2 py-1.5 text-[11px] font-medium rounded-lg border transition-colors ${OUTLOOK_CHIP[qs.outlook]}`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${OUTLOOK_DOT[qs.outlook]}`} />
+                            <span className="truncate">{qs.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
+              <button
+                onClick={() => addLeg()}
+                className="mt-2 w-full flex items-center justify-center gap-1.5 py-1.5 text-[11px] text-gray-400 rounded-lg border border-dashed border-gray-200 hover:bg-gray-50 hover:text-gray-600 transition"
+              >
+                <Plus className="w-3 h-3" /> Custom Leg
+              </button>
             </div>
 
             {/* Legs header */}
