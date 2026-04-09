@@ -68,11 +68,9 @@ catalog:
 autoInstallPeers: false
 
 onlyBuiltDependencies:
-  - '@nestjs/core'
   - '@swc/core'
   - esbuild
   - msw
-  - puppeteer
   - unrs-resolver
 
 overrides:

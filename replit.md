@@ -2,13 +2,11 @@
 
 ## Overview
 
-Real-time Indian stock market analysis platform — sector rotation tracking,
-candlestick pattern detection, custom stock scanners, NLP-powered natural
-language queries, analytics layer, WhatsApp bot, and Telegram bot integration.
-
-**Backend: Python FastAPI (only). No Node.js backend is active.**
+Real-time Indian stock market analysis platform — sector rotation tracking, candlestick pattern detection, custom stock scanners, NLP-powered natural language queries, analytics layer, WhatsApp bot, and Telegram bot integration.
 
 **Source:** https://github.com/n4nirmalyapratap/indian-stock-market-analyzer
+
+**Backend: Python FastAPI (only). No Node.js backend is active.**
 
 ---
 
@@ -19,7 +17,7 @@ Stock Market Frontend  (React + Vite, port 3002)
     ↓ Reverse proxy: / → port 3002
     ↓ Reverse proxy: /api → port 8090
 Python Backend         (FastAPI + uvicorn, port 8090)   ← ALL API routes
-    ↓ fetches market data from NSE India + Yahoo Finance
+    ↓ fetches market data from Yahoo Finance (primary) + NSE India (when available)
 ```
 
 ---
@@ -28,30 +26,58 @@ Python Backend         (FastAPI + uvicorn, port 8090)   ← ALL API routes
 
 | Workflow | Command | Port | Purpose |
 |---|---|---|---|
-| **Python Backend** | `cd artifacts/python-backend && PORT=8090 python run.py` | 8090 | FastAPI — all stock/analytics/NLP/Telegram APIs |
+| **API Server** | `bash -c 'cd /home/runner/workspace/artifacts/python-backend && PORT=8090 python run.py'` | 8090 | FastAPI — all stock/analytics/NLP/Telegram APIs |
 | **Stock Market Frontend** | `BASE_PATH=/ PORT=3002 pnpm --filter @workspace/nestjs-backend-placeholder run dev` | 3002 | React UI |
-
-## DEPRECATED Services (kept for reference, NOT started)
-
-| Directory | What it was |
-|---|---|
-| `artifacts/nestjs-backend/` | Original NestJS/WhatsApp backend — replaced by Python |
-| `artifacts/api-server/` | Original Express stock data API — replaced by Python |
 
 ---
 
-## Proxy Routing
+## Known Issues & Fixes
 
-The Replit reverse proxy routes traffic based on artifact.toml registrations:
+### ⚠️ NSE India Returns 403 on Replit (FIXED)
 
-| Path | Port | Service |
+**Symptom:** Dashboard shows all zeros — Advancing: 0, Declining: 0, sector prices all 0.
+
+**Root cause:** NSE India (`www.nseindia.com`) blocks requests from Replit's cloud IP addresses with a 403 Forbidden. The original `SectorsService.get_all_sectors()` only tried NSE and fell back to hardcoded zeros — no Yahoo Finance fallback.
+
+**Fix applied:** `artifacts/python-backend/app/services/sectors_service.py`
+- Added `_get_sectors_from_yahoo()` method that fetches all sector prices in parallel via Yahoo Finance
+- When NSE returns 403, sector prices now come from Yahoo Finance instead of being zeroed out
+- `source` field is set to `"YAHOO"` when Yahoo fallback is used (vs `"NSE"` when NSE works)
+
+**Yahoo Finance tickers for sectors:**
+
+| Sector | Yahoo Ticker | Type |
 |---|---|---|
-| `/api` | 8090 | Python FastAPI backend |
-| `/` | 3002 | React + Vite frontend |
+| Nifty Bank | `^NSEBANK` | True index |
+| Nifty IT | `^CNXIT` | True index |
+| Nifty Auto | `^CNXAUTO` | True index |
+| Nifty Pharma | `^CNXPHARMA` | True index |
+| Nifty FMCG | `^CNXFMCG` | True index |
+| Nifty Metal | `^CNXMETAL` | True index |
+| Nifty Realty | `^CNXREALTY` | True index |
+| Nifty Energy | `^CNXENERGY` | True index |
+| Nifty Media | `^CNXMEDIA` | True index |
+| Nifty PSU Bank | `^CNXPSUBANK` | True index |
+| NIFTY 50 | `^NSEI` | True index |
+| Nifty Financial Services | `HDFCBANK.NS` | Stock proxy (no Yahoo index ticker) |
+| Nifty Consumer Durables | `TITAN.NS` | Stock proxy (no Yahoo index ticker) |
+| Nifty Oil & Gas | `RELIANCE.NS` | Stock proxy (no Yahoo index ticker) |
+| Nifty Healthcare | `APOLLOHOSP.NS` | Stock proxy (no Yahoo index ticker) |
 
-Artifact configs:
-- `artifacts/api-server/.replit-artifact/artifact.toml` → routes `/api` to port 8090
-- `artifacts/stock-market-app/.replit-artifact/artifact.toml` → routes `/` to port 3002
+**Note:** Stock proxy sectors show the proxy stock price, not the index value — but % change is still accurate.
+
+**A/D counts** (advances/declines per sector) remain 0 when NSE is unavailable because that data only comes from NSE's API. Breadth is calculated from the `pChange > 0` count across all sectors instead.
+
+---
+
+## Stack
+
+- **Monorepo**: pnpm workspaces
+- **Python**: 3.11 · FastAPI · uvicorn · spaCy 3.8 · pandas · numpy · ta library
+- **Node.js**: 24 (frontend only — Vite + React + TailwindCSS + TanStack Query)
+- **Data sources**: Yahoo Finance (primary, always works) · NSE India REST API (secondary, may 403 on cloud IPs)
+- **NLP**: spaCy rule-based EntityRuler + Nifty100/sector vocabulary
+- **pandas-ta**: custom shim at `artifacts/python-backend/pandas_ta/` wrapping `ta` library
 
 ---
 
@@ -74,10 +100,9 @@ artifacts/
   nestjs-backend-placeholder/  ← ACTIVE: Vite + React frontend (port 3002)
     src/lib/api.ts             ← All frontend API calls (relative /api/*)
     src/pages/                 ← Dashboard, Sectors, Stocks, Patterns, Scanners, WhatsApp, Telegram
-  stock-market-app/            ← Artifact registration only (proxy config)
-    .replit-artifact/          ← Routes / to port 3002
+  stock-market-app/            ← Artifact registration (proxy config, routes / → port 3002)
+  api-server/                  ← Artifact registration (proxy config, routes /api → port 8090)
   nestjs-backend/              ← DEPRECATED (reference only)
-  api-server/                  ← DEPRECATED (reference only); artifact.toml routes /api → 8090
   mockup-sandbox/              ← Replit canvas tool (managed by artifact system)
 lib/
   api-zod/                     ← Zod schemas (unused in active code)
@@ -86,38 +111,16 @@ scripts/                       ← post-merge.sh
 
 ---
 
-## Python Backend — API Routes
+## Setup Instructions (fresh Replit account)
 
-| Group | Endpoint | Description |
-|---|---|---|
-| Health | `GET /api/healthz` | Health check |
-| Sectors | `GET /api/sectors` | All NSE sector indices |
-| Sectors | `GET /api/sectors/rotation` | Rotation phase + buy recommendations |
-| Sectors | `GET /api/sectors/:symbol` | Single sector |
-| Stocks | `GET /api/stocks/nifty100` | Nifty 100 quotes |
-| Stocks | `GET /api/stocks/midcap` | Midcap quotes |
-| Stocks | `GET /api/stocks/smallcap` | Smallcap quotes |
-| Stocks | `GET /api/stocks/:symbol` | Full detail + TA + entry recommendation |
-| Patterns | `GET /api/patterns` | Detected candlestick patterns |
-| Patterns | `POST /api/patterns/scan` | Trigger fresh scan |
-| Scanners | `GET/POST /api/scanners` | List / create custom scanners |
-| Scanners | `PUT/DELETE /api/scanners/:id` | Update / delete scanner |
-| Scanners | `POST /api/scanners/:id/run` | Execute scanner |
-| WhatsApp | `GET /api/whatsapp/status` | Bot status |
-| WhatsApp | `POST /api/whatsapp/status` | Update status |
-| WhatsApp | `GET /api/whatsapp/messages` | Message history |
-| WhatsApp | `POST /api/whatsapp/message` | Send/test message |
-| Telegram | `GET /api/telegram/status` | Bot status + polling mode |
-| Telegram | `GET /api/telegram/messages` | Message log |
-| Telegram | `POST /api/telegram/webhook` | Telegram webhook receiver |
-| Telegram | `POST /api/telegram/set-webhook` | Register webhook URL |
-| Telegram | `POST /api/telegram/test` | Send test message |
-| NLP | `POST /api/nlp/query` | Natural language query |
-| Analytics | `GET /api/analytics/sector-correlation` | 30-day Pearson correlation |
-| Analytics | `GET /api/analytics/breadth-history` | A/D ratio time series |
-| Analytics | `GET /api/analytics/top-movers` | Nifty100 gainers/losers |
-| Analytics | `GET /api/analytics/pattern-stats` | Pattern backtest stats |
-| Analytics | `GET /api/analytics/sector-heatmap` | Sector daily % change |
+1. **Install Python 3.11** — use Replit's package management (installProgrammingLanguage)
+2. **Install Python packages**: `fastapi uvicorn[standard] httpx pandas numpy ta spacy python-multipart openpyxl`
+3. **Install Node.js deps**: `pnpm install` from workspace root
+4. **Configure API Server workflow** to run: `bash -c 'cd /home/runner/workspace/artifacts/python-backend && PORT=8090 python run.py'`
+5. **Configure Stock Market Frontend workflow** to run: `BASE_PATH=/ PORT=3002 pnpm --filter @workspace/nestjs-backend-placeholder run dev`
+6. `run.py` auto-downloads spaCy's `en_core_web_sm` model on first start
+
+**Verify data is loading:** Call `/api/sectors` — if `source` field is `"NSE"` or `"YAHOO"`, data is live. If `source` is `"UNAVAILABLE"`, Yahoo Finance fetch is failing too (network issue).
 
 ---
 
@@ -131,69 +134,14 @@ scripts/                       ← post-merge.sh
 
 ---
 
-## Stack
-
-- **Monorepo**: pnpm workspaces
-- **Python**: 3.11 · FastAPI · uvicorn · spaCy 3.8 · pandas · numpy · ta library
-- **Node.js**: 24 (frontend only — Vite + React + TailwindCSS + TanStack Query)
-- **Data sources**: NSE India REST API · Yahoo Finance (httpx)
-- **NLP**: spaCy rule-based EntityRuler + Nifty100/sector vocabulary
-- **pandas-ta**: custom shim at `artifacts/python-backend/pandas_ta/` wrapping `ta` library
-
----
-
-## New Replit Account Setup
-
-1. Import repo from GitHub: `n4nirmalyapratap/indian-stock-market-analyzer`
-2. `pnpm install` (installs frontend dependencies)
-3. Install Python 3.11 module in Replit
-4. `cd artifacts/python-backend && pip install -r requirements.txt`
-5. The `run.py` auto-downloads `en_core_web_sm` (spaCy model) on first start
-6. Add `TELEGRAM_BOT_TOKEN` secret if you want Telegram bot active
-7. Hit **Run** — starts Python Backend + Stock Market Frontend
-
----
-
-## Market Data Disk Cache
-
-**Location:** `artifacts/python-backend/market_cache/<YYYY-MM-DD>/<SYMBOL>_<days>.json`
-
-**How it works:**
-- NSE market hours are 9:15 AM – 3:30 PM IST (Mon–Fri).
-- When the market is **OPEN**: all data is fetched live from Yahoo Finance (in-memory cache, 1h TTL). Disk is not consulted.
-- When the market is **CLOSED**: `yahoo_service.get_historical_data()` checks the disk cache first. If the file exists for today's date, it's returned instantly — zero network calls.
-- Every successful live fetch also saves to disk automatically, so the cache builds up naturally.
-- On server startup, if market is closed and fewer than 50 symbols are cached, an auto-warmup runs in the background — fetching all NIFTY100 + MIDCAP + SMALLCAP symbols in parallel batches of 10.
-
-**Effect on scanner:** After warmup, running a full scanner (200+ stocks) takes **seconds** instead of 70+ seconds — each stock is served from disk rather than a 0.35s-delayed Yahoo Finance call.
-
-**API endpoints:**
-- `GET /api/cache/status` — returns market open/closed state, cache date, symbol count
-- `POST /api/cache/warmup` — manually trigger a warmup (runs in background)
-
-**Git:** The `market_cache/` folder is `.gitignore`d — it's auto-generated local data, not source code.
-
----
-
-## Design Rules (enforced — must not be violated)
-
-**NO horizontal scrollbars anywhere in the app. Ever.**
-
-- Never use `overflow-x-auto` + `flex` or `overflow-x-scroll` to lay out a list of items inside a card or page section.
-- Instead, always use a wrapping grid (`grid grid-cols-N` or `grid-cols-[repeat(auto-fill,...)]`) so items wrap naturally to the next row.
-- This applies everywhere: sector tiles, stock lists, tag chips, button groups, indicator badges — any repeating item layout.
-- If content genuinely cannot fit, paginate it, truncate it, or show a "show more" toggle — never let it overflow horizontally.
-
----
-
 ## Features
 
 - **Dashboard**: Real-time sector rotation, market breadth, CALL/PUT signal count
-- **Sectors**: 15 NSE sector indices with performance and A/D rankings
+- **Sectors**: 15 NSE sector indices with performance, 3-phase economic cycle analysis, momentum tiers
 - **Stocks**: Individual stock lookup with EMA9/21/50/200, RSI, MACD, Bollinger Bands, ATR
 - **Patterns**: 20+ candlestick patterns with CALL/PUT signal classification
 - **Scanners**: Custom stock filters with condition builder + built-in templates
-- **NLP**: Plain-English queries ("analyze RELIANCE", "bullish IT stocks")
+- **NLP / AI Analyzer**: Plain-English queries ("analyze RELIANCE", "bullish IT stocks")
 - **Analytics**: Sector correlation matrix, breadth history, top movers, heatmap
 - **WhatsApp Bot**: Twilio webhook with NLP fallback
-- **Telegram Bot**: Long-poll bot with commands (/analyze, /sectors, /rotation, /patterns, /movers, /heatmap) + NLP fallback
+- **Telegram Bot**: Long-poll bot with commands + NLP fallback
