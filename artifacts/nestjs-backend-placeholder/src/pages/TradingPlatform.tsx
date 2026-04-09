@@ -723,6 +723,14 @@ export default function TradingPlatform() {
     ));
   }
 
+  function updateDrawing(panelId: string, id: string, shape: Record<string, unknown>) {
+    setPanels(prev => prev.map(p =>
+      p.id === panelId
+        ? { ...p, drawings: p.drawings.map(d => d.id === id ? { ...d, shape } : d) }
+        : p
+    ));
+  }
+
   function toggleIndicator(key: string) {
     setIndicators(prev => {
       const next = new Set(prev);
@@ -991,6 +999,7 @@ export default function TradingPlatform() {
                   drawings={panel.drawings}
                   onDrawingAdd={(d) => addDrawing(panel.id, d)}
                   onDrawingErase={(id) => eraseDrawing(panel.id, id)}
+                  onDrawingUpdate={(id, shape) => updateDrawing(panel.id, id, shape)}
                   onClearDrawings={() => clearDrawings()}
                   onActivate={() => setActivePanelId(panel.id)}
                   onDrawingDone={() => setDrawingTool("none")}

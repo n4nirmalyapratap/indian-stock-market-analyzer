@@ -48,6 +48,7 @@ interface Props {
   onClearDrawings?: () => void;
   onActivate: () => void;
   onDrawingDone?: () => void;
+  onDrawingUpdate?: (id: string, shape: Record<string, unknown>) => void;
   theme: "dark" | "light";
 }
 
@@ -272,21 +273,12 @@ function shapeToPixels(
     const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
     const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
     const [, py2] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y2 ?? s.y0]);
-    const dx = px1 - px0, dy = py1 - py0;
-    const len = Math.hypot(dx, dy);
-    if (len < 1) return null;
-    const nx = dx / len, ny = dy / len;
+    if (Math.hypot(px1 - px0, py1 - py0) < 1) return null;
     const off = py2 - py0;
-    const [e1x, e1y] = extendRay(px0, py0,  nx,  ny, 0, 0, W, H);
-    const [e2x, e2y] = extendRay(px0, py0, -nx, -ny, 0, 0, W, H);
-    const [e3x, e3y] = extendRay(px0, py0 + off,  nx,  ny, 0, 0, W, H);
-    const [e4x, e4y] = extendRay(px0, py0 + off, -nx, -ny, 0, 0, W, H);
-    const [e5x, e5y] = extendRay(px0, py0 + off / 2,  nx,  ny, 0, 0, W, H);
-    const [e6x, e6y] = extendRay(px0, py0 + off / 2, -nx, -ny, 0, 0, W, H);
     return [
-      { type: "line", x1: e2x, y1: e2y, x2: e1x, y2: e1y },
-      { type: "line", x1: e4x, y1: e4y, x2: e3x, y2: e3y },
-      { type: "line", x1: e6x, y1: e6y, x2: e5x, y2: e5y, dash: true, color: DRAW_CLR + "88" },
+      { type: "line", x1: px0, y1: py0,         x2: px1, y2: py1 },
+      { type: "line", x1: px0, y1: py0 + off,   x2: px1, y2: py1 + off },
+      { type: "line", x1: px0, y1: py0 + off/2, x2: px1, y2: py1 + off/2, dash: true, color: DRAW_CLR + "88" },
     ];
   }
   if (s.type === "pitchfork") {
@@ -299,17 +291,15 @@ function shapeToPixels(
     const frac = typeof s.spreadFrac === "number" ? s.spreadFrac : 0.3;
     const spread = len * frac;
     const perpX = -ny, perpY = nx;
-    const [me1x, me1y] = extendRay(px0, py0,  nx,  ny, 0, 0, W, H);
-    const [me2x, me2y] = extendRay(px0, py0, -nx, -ny, 0, 0, W, H);
-    const f1x = px1 + perpX * spread, f1y = py1 + perpY * spread;
-    const f2x = px1 - perpX * spread, f2y = py1 - perpY * spread;
-    const [f1ex, f1ey] = extendRay(f1x, f1y, nx, ny, 0, 0, W, H);
-    const [f2ex, f2ey] = extendRay(f2x, f2y, nx, ny, 0, 0, W, H);
+    // Handle: from start to end (not extended); prongs extend only forward
+    const [f1ex, f1ey] = extendRay(px1 + perpX * spread, py1 + perpY * spread, nx, ny, 0, 0, W, H);
+    const [f2ex, f2ey] = extendRay(px1 - perpX * spread, py1 - perpY * spread, nx, ny, 0, 0, W, H);
     return [
-      { type: "line", x1: me2x, y1: me2y, x2: me1x, y2: me1y },
-      { type: "line", x1: f1x, y1: f1y, x2: f1ex, y2: f1ey },
-      { type: "line", x1: f2x, y1: f2y, x2: f2ex, y2: f2ey },
-      { type: "line", x1: f1x, y1: f1y, x2: f2x, y2: f2y, dash: true, color: DRAW_CLR + "88" },
+      { type: "line", x1: px0, y1: py0, x2: px1, y2: py1 },
+      { type: "line", x1: px1 + perpX * spread, y1: py1 + perpY * spread, x2: f1ex, y2: f1ey },
+      { type: "line", x1: px1 - perpX * spread, y1: py1 - perpY * spread, x2: f2ex, y2: f2ey },
+      { type: "line", x1: px1 + perpX * spread, y1: py1 + perpY * spread,
+                      x2: px1 - perpX * spread, y2: py1 - perpY * spread, dash: true, color: DRAW_CLR + "88" },
     ];
   }
 
@@ -317,6 +307,7 @@ function shapeToPixels(
   if (s.type === "fibretracement" || s.type === "fibextension") {
     const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
     const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
+    const xLeft = Math.min(px0, px1), xRight = Math.max(px0, px1);
     const levels = s.type === "fibextension"
       ? [0, 0.236, 0.382, 0.618, 1, 1.272, 1.618, 2.618]
       : [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
@@ -328,8 +319,8 @@ function shapeToPixels(
       const ratio = levels[i];
       const py = py0 + (py1 - py0) * ratio;
       const col = colors[i % colors.length];
-      els.push({ type: "line", x1: b.leftX, y1: py, x2: b.rightX, y2: py, color: col });
-      els.push({ type: "text", x: b.rightX + 4, y: py - 3, text: `${(ratio * 100).toFixed(1)}%  ₹${fmtPrice(s.y0 + (s.y1 - s.y0) * ratio)}`, anchor: "start", size: 9, color: col });
+      els.push({ type: "line", x1: xLeft, y1: py, x2: xRight, y2: py, color: col });
+      els.push({ type: "text", x: xRight + 4, y: py - 3, text: `${(ratio * 100).toFixed(1)}%  ₹${fmtPrice(s.y0 + (s.y1 - s.y0) * ratio)}`, anchor: "start", size: 9, color: col });
     }
     return els;
   }
@@ -351,19 +342,14 @@ function shapeToPixels(
   if (s.type === "fibfan") {
     const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
     const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
-    const dx = px1 - px0, dy = py1 - py0;
+    const dy = py1 - py0;
     const ratios = [0.236, 0.382, 0.5, 0.618, 0.786];
     const colors = ["#f97316","#eab308","#22c55e","#3b82f6","#8b5cf6"];
     const els: SvgEl[] = [];
     for (let i = 0; i < ratios.length; i++) {
-      const fanDy = dy * ratios[i];
-      const fanLen = Math.hypot(dx, fanDy);
-      if (fanLen < 1) continue;
-      const [ex, ey] = extendRay(px0, py0, dx / fanLen, fanDy / fanLen, 0, 0, W, H);
-      els.push({ type: "line", x1: px0, y1: py0, x2: ex, y2: ey, dash: true, color: colors[i] });
-      if (ey >= 0 && ey <= H) {
-        els.push({ type: "text", x: ex - 28, y: ey, text: `${(ratios[i] * 100).toFixed(0)}%`, size: 9, color: colors[i] });
-      }
+      const ey = py0 + dy * ratios[i];
+      els.push({ type: "line", x1: px0, y1: py0, x2: px1, y2: ey, dash: true, color: colors[i] });
+      els.push({ type: "text", x: px1 + 4, y: ey, text: `${(ratios[i] * 100).toFixed(0)}%`, anchor: "start", size: 9, color: colors[i] });
     }
     return els.length ? els : null;
   }
@@ -372,7 +358,7 @@ function shapeToPixels(
   if (s.type === "gannfan") {
     const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
     const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
-    const dx = px1 - px0, dy = py1 - py0;
+    const dy = py1 - py0;
     const RATIOS = [
       { r: 1/4, label: "1×4" }, { r: 1/3, label: "1×3" }, { r: 1/2, label: "1×2" },
       { r: 1,   label: "1×1" },
@@ -380,15 +366,11 @@ function shapeToPixels(
     ];
     const els: SvgEl[] = [];
     for (const { r, label } of RATIOS) {
-      const fanDy = dy * r;
-      const fanLen = Math.hypot(dx, fanDy);
-      if (fanLen < 1) continue;
-      const [ex, ey] = extendRay(px0, py0, dx / fanLen, fanDy / fanLen, 0, 0, W, H);
+      const ey = py0 + dy * r;
       const isMain = r === 1;
-      els.push({ type: "line", x1: px0, y1: py0, x2: ex, y2: ey, dash: !isMain, color: isMain ? DRAW_CLR : DRAW_CLR + "99" });
-      if (ey >= 0 && ey <= H && ex >= 0 && ex <= W) {
-        els.push({ type: "text", x: ex - 20, y: ey - 3, text: label, anchor: "end", size: 8 });
-      }
+      els.push({ type: "line", x1: px0, y1: py0, x2: px1, y2: ey,
+        dash: !isMain, color: isMain ? DRAW_CLR : DRAW_CLR + "99" });
+      els.push({ type: "text", x: px1 + 4, y: ey, text: label, anchor: "start", size: 8 });
     }
     return els;
   }
@@ -555,6 +537,76 @@ function hitTestDrawings(
   return best?.id ?? null;
 }
 
+// ── Shape control handles ──────────────────────────────────────────────────────
+
+type HandleInfo = { px: number; py: number; kind: "move"|"p0"|"p1"|"p2"; cursor: string };
+
+function getShapeHandles(shape: Record<string, unknown>, chart: echarts.ECharts): HandleInfo[] | null {
+  const type = shape.type as string;
+  const toPx = (xIdx: number, y: number) => {
+    const r = chart.convertToPixel({ gridIndex: 0 }, [xIdx, y]) as [number, number];
+    return { px: r[0], py: r[1] };
+  };
+  if (["arrowmarker","arrowmarkup","arrowmarkdown","flag","note"].includes(type)) {
+    const p = toPx(shape.xIdx as number, shape.y as number);
+    return [{ ...p, kind: "p0", cursor: "move" }];
+  }
+  if (type === "hline" || type === "hray" || type === "crossline") {
+    const mid = chart.getWidth() / 2;
+    const [, py] = chart.convertToPixel({ gridIndex: 0 }, [0, shape.y as number]) as [number, number];
+    return [{ px: mid, py, kind: "p0", cursor: "ns-resize" }];
+  }
+  if (type === "vline") {
+    const mid = chart.getHeight() / 2;
+    const [px] = chart.convertToPixel({ gridIndex: 0 }, [shape.xIdx as number, 0]) as [number, number];
+    return [{ px, py: mid, kind: "p0", cursor: "ew-resize" }];
+  }
+  if (typeof shape.x0Idx === "number" && typeof shape.x1Idx === "number") {
+    const p0 = toPx(shape.x0Idx as number, shape.y0 as number);
+    const p1 = toPx(shape.x1Idx as number, shape.y1 as number);
+    const handles: HandleInfo[] = [
+      { ...p0, kind: "p0", cursor: "crosshair" },
+      { ...p1, kind: "p1", cursor: "crosshair" },
+    ];
+    if (type === "parallelch" && typeof shape.y2 === "number") {
+      const [, py2] = chart.convertToPixel({ gridIndex: 0 }, [shape.x0Idx as number, shape.y2 as number]) as [number, number];
+      handles.push({ px: (p0.px + p1.px) / 2, py: (p0.py + p1.py) / 2 + (py2 - p0.py), kind: "p2", cursor: "ns-resize" });
+    }
+    return handles;
+  }
+  return null;
+}
+
+function applyShapeDelta(
+  shape: Record<string, unknown>,
+  chart: echarts.ECharts,
+  startPx: number, startPy: number,
+  curPx: number, curPy: number,
+  kind: "move"|"p0"|"p1"|"p2",
+): Record<string, unknown> {
+  const from = chart.convertFromPixel({ gridIndex: 0 }, [startPx, startPy]) as [number, number] | null;
+  const to   = chart.convertFromPixel({ gridIndex: 0 }, [curPx,   curPy  ]) as [number, number] | null;
+  if (!from || !to) return shape;
+  const dIdx = Math.round(to[0] - from[0]);
+  const dY   = to[1] - from[1];
+  const s = { ...shape };
+  const shiftIdx = (k: string) => { if (typeof s[k] === "number") s[k] = Math.max(0, (s[k] as number) + dIdx); };
+  const shiftY   = (k: string) => { if (typeof s[k] === "number") s[k] = (s[k] as number) + dY; };
+  if (kind === "move") {
+    shiftIdx("xIdx"); shiftY("y");
+    shiftIdx("x0Idx"); shiftY("y0");
+    shiftIdx("x1Idx"); shiftY("y1"); shiftY("y2");
+  } else if (kind === "p0") {
+    shiftIdx("xIdx"); shiftY("y");
+    shiftIdx("x0Idx"); shiftY("y0");
+  } else if (kind === "p1") {
+    shiftIdx("x1Idx"); shiftY("y1");
+  } else if (kind === "p2") {
+    shiftY("y2");
+  }
+  return s;
+}
+
 // ── SVG renderer ──────────────────────────────────────────────────────────────
 
 function renderSvg(
@@ -562,6 +614,7 @@ function renderSvg(
   pixels: SvgPixels[],
   preview: SvgEl | SvgEl[] | null,
   eraserPixel: { x: number; y: number } | null,
+  handles?: HandleInfo[] | null,
 ) {
   if (!svgEl) return;
   while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
@@ -648,6 +701,22 @@ function renderSvg(
     c.setAttribute("fill", "rgba(239,68,68,0.08)");
     svgEl.appendChild(c);
   }
+
+  // Hover/selected drawing handles (small circles at control points)
+  if (handles) {
+    for (const h of handles) {
+      const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      c.setAttribute("cx", String(Math.round(h.px)));
+      c.setAttribute("cy", String(Math.round(h.py)));
+      c.setAttribute("r", "5");
+      c.setAttribute("fill", "white");
+      c.setAttribute("stroke", DRAW_CLR);
+      c.setAttribute("stroke-width", "1.5");
+      c.setAttribute("opacity", "0.92");
+      c.setAttribute("pointer-events", "none");
+      svgEl.appendChild(c);
+    }
+  }
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -659,7 +728,7 @@ interface HoverCandle {
 export default function ChartPanel({
   symbol, symbolName, periodCfg, drawingTool, chartType, indicators,
   showRSI, showMACD, isActive, drawings, onDrawingAdd, onDrawingErase, onClearDrawings, onActivate,
-  onDrawingDone, theme,
+  onDrawingDone, onDrawingUpdate, theme,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef       = useRef<SVGSVGElement>(null);
@@ -667,7 +736,8 @@ export default function ChartPanel({
   const candles      = useRef<Candle[]>([]);
   const dragStart    = useRef<{ px: number; py: number; xIdx: number; y: number } | null>(null);
   const eraserPos    = useRef<{ x: number; y: number } | null>(null);
-  const paintSvgRef  = useRef<((preview?: SvgEl | SvgEl[] | null, eraser?: { x: number; y: number } | null) => void) | null>(null);
+  const paintSvgRef  = useRef<((preview?: SvgEl | SvgEl[] | null, eraser?: { x: number; y: number } | null, skipId?: string | null, handles?: HandleInfo[] | null) => void) | null>(null);
+  const dragDrawingState = useRef<{ id: string; kind: "move"|"p0"|"p1"|"p2"; startPx: number; startPy: number; origShape: Record<string, unknown> } | null>(null);
   const phase2State  = useRef<{
     tool: "parallelch" | "pitchfork";
     x0Idx: number; y0: number; x1Idx: number; y1: number;
@@ -688,11 +758,14 @@ export default function ChartPanel({
   const [hoverIdx, setHoverIdx]         = useState(-1);
   const [lastCandle, setLastCandle]     = useState<{ c: number; pct: number } | null>(null);
   const [ctxMenu, setCtxMenu]           = useState<{ x: number; y: number } | null>(null);
+  const [hoveredDrawingId, setHoveredDrawingId] = useState<string | null>(null);
 
   // ── Repaint SVG ────────────────────────────────────────────────────────────
   const paintSvg = useCallback((
     preview: SvgEl | SvgEl[] | null = null,
     eraser: { x: number; y: number } | null = null,
+    skipId: string | null = null,
+    handles: HandleInfo[] | null = null,
   ) => {
     const chart = chartRef.current;
     const svg   = svgRef.current;
@@ -702,14 +775,29 @@ export default function ChartPanel({
     svg.setAttribute("height", String(div.offsetHeight));
 
     const pixels: SvgPixels[] = drawings
+      .filter(d => d.id !== skipId)
       .map(d => {
         const els = shapeToPixels(d.shape, chart, candles.current);
         return els ? { id: d.id, els } : null;
       })
       .filter(Boolean) as SvgPixels[];
 
-    renderSvg(svg, pixels, preview, eraser);
+    renderSvg(svg, pixels, preview, eraser, handles);
   }, [drawings]);
+
+  // Repaint SVG when hover changes (show/hide handles)
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !candles.current.length) return;
+    if (hoveredDrawingId) {
+      const hd = drawings.find(d => d.id === hoveredDrawingId);
+      const handles = hd ? getShapeHandles(hd.shape, chart) : null;
+      paintSvg(null, null, null, handles);
+    } else {
+      paintSvg();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hoveredDrawingId]);
 
   // ── Render ECharts ─────────────────────────────────────────────────────────
   const renderChart = useCallback(() => {
@@ -1021,8 +1109,53 @@ export default function ChartPanel({
     paintSvg();
   };
 
+  const forwardToChart = (e: React.MouseEvent, type?: string) => {
+    const canvas = containerRef.current?.querySelector("canvas");
+    if (!canvas) return;
+    canvas.dispatchEvent(new MouseEvent(type ?? e.type, {
+      bubbles: false, cancelable: true,
+      clientX: e.clientX, clientY: e.clientY,
+      button: e.button, buttons: e.buttons ?? 0,
+      shiftKey: e.shiftKey, ctrlKey: e.ctrlKey,
+    }));
+  };
+
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (drawingTool === "none") return;
+    // ── Pointer-mode: drag/resize drawings ──────────────────────────────────
+    if (drawingTool === "none") {
+      const chart = chartRef.current;
+      const pos = getXY(e);
+      if (!chart || !candles.current.length || !pos) { forwardToChart(e); return; }
+      const HANDLE_R = 10;
+      // Check if near a handle of the currently hovered drawing
+      if (hoveredDrawingId) {
+        const hd = drawings.find(d => d.id === hoveredDrawingId);
+        if (hd) {
+          const hls = getShapeHandles(hd.shape, chart);
+          if (hls) {
+            const near = hls.find(h => Math.hypot(h.px - pos.px, h.py - pos.py) < HANDLE_R);
+            if (near) {
+              e.preventDefault();
+              dragDrawingState.current = { id: hoveredDrawingId, kind: near.kind, startPx: pos.px, startPy: pos.py, origShape: { ...hd.shape } };
+              return;
+            }
+          }
+        }
+      }
+      // Check if clicking on a drawing body
+      const hitId = hitTestDrawings(pos.px, pos.py, drawings, chart, candles.current);
+      if (hitId) {
+        e.preventDefault();
+        const hd = drawings.find(d => d.id === hitId)!;
+        dragDrawingState.current = { id: hitId, kind: "move", startPx: pos.px, startPy: pos.py, origShape: { ...hd.shape } };
+        setHoveredDrawingId(hitId);
+        return;
+      }
+      // Nothing hit — forward to echart for pan/zoom
+      forwardToChart(e);
+      return;
+    }
+
     e.preventDefault();
     onActivate();
 
@@ -1085,6 +1218,26 @@ export default function ChartPanel({
     const pos = getXY(e);
     if (!pos) return;
 
+    // ── Pointer-mode: drag preview / hover hit-test ──────────────────────────
+    if (drawingTool === "none") {
+      const chart = chartRef.current;
+      if (!chart || !candles.current.length) { forwardToChart(e); return; }
+      // Dragging a drawing — show live preview
+      if (dragDrawingState.current) {
+        const ds = dragDrawingState.current;
+        const newShape = applyShapeDelta(ds.origShape, chart, ds.startPx, ds.startPy, pos.px, pos.py, ds.kind);
+        const previewEls = shapeToPixels(newShape as any, chart, candles.current);
+        paintSvgRef.current?.(previewEls ?? null, null, ds.id, null);
+        return;
+      }
+      // Hover hit-test to show handles
+      const hitId = hitTestDrawings(pos.px, pos.py, drawings, chart, candles.current);
+      if (hitId !== hoveredDrawingId) setHoveredDrawingId(hitId);
+      // Forward to echart so crosshair / tooltip still works
+      forwardToChart(e);
+      return;
+    }
+
     if (drawingTool === "eraser") {
       eraserPos.current = { x: pos.px, y: pos.py };
       paintSvg(null, eraserPos.current);
@@ -1105,27 +1258,19 @@ export default function ChartPanel({
 
       if (p2.tool === "parallelch") {
         const off = pos.py - p2.py0;
-        const [e1x, e1y] = extendRay(p2.px0, p2.py0,  nx,  ny, 0, 0, W, H);
-        const [e2x, e2y] = extendRay(p2.px0, p2.py0, -nx, -ny, 0, 0, W, H);
-        const [e3x, e3y] = extendRay(p2.px0, p2.py0 + off,  nx,  ny, 0, 0, W, H);
-        const [e4x, e4y] = extendRay(p2.px0, p2.py0 + off, -nx, -ny, 0, 0, W, H);
-        const [e5x, e5y] = extendRay(p2.px0, p2.py0 + off / 2,  nx,  ny, 0, 0, W, H);
-        const [e6x, e6y] = extendRay(p2.px0, p2.py0 + off / 2, -nx, -ny, 0, 0, W, H);
         paintSvg([
-          { type: "line", x1: e2x, y1: e2y, x2: e1x, y2: e1y },
-          { type: "line", x1: e4x, y1: e4y, x2: e3x, y2: e3y },
-          { type: "line", x1: e6x, y1: e6y, x2: e5x, y2: e5y, dash: true, color: DRAW_CLR + "88" },
+          { type: "line", x1: p2.px0, y1: p2.py0,         x2: p2.px1, y2: p2.py1 },
+          { type: "line", x1: p2.px0, y1: p2.py0 + off,   x2: p2.px1, y2: p2.py1 + off },
+          { type: "line", x1: p2.px0, y1: p2.py0 + off/2, x2: p2.px1, y2: p2.py1 + off/2, dash: true, color: DRAW_CLR + "88" },
         ]);
       } else {
         const spread = Math.abs(pos.py - p2.py1);
         const f1x = p2.px1 + perpX * spread, f1y = p2.py1 + perpY * spread;
         const f2x = p2.px1 - perpX * spread, f2y = p2.py1 - perpY * spread;
-        const [me1x, me1y] = extendRay(p2.px0, p2.py0,  nx,  ny, 0, 0, W, H);
-        const [me2x, me2y] = extendRay(p2.px0, p2.py0, -nx, -ny, 0, 0, W, H);
         const [f1ex, f1ey] = extendRay(f1x, f1y, nx, ny, 0, 0, W, H);
         const [f2ex, f2ey] = extendRay(f2x, f2y, nx, ny, 0, 0, W, H);
         paintSvg([
-          { type: "line", x1: me2x, y1: me2y, x2: me1x, y2: me1y },
+          { type: "line", x1: p2.px0, y1: p2.py0, x2: p2.px1, y2: p2.py1 },
           { type: "line", x1: f1x, y1: f1y, x2: f1ex, y2: f1ey },
           { type: "line", x1: f2x, y1: f2y, x2: f2ex, y2: f2ey },
           { type: "line", x1: f1x, y1: f1y, x2: f2x, y2: f2y, dash: true, color: DRAW_CLR + "88" },
@@ -1256,6 +1401,31 @@ export default function ChartPanel({
   };
 
   const handleMouseUp = (e: React.MouseEvent<HTMLDivElement>) => {
+    // ── Pointer-mode: finalize drag ──────────────────────────────────────────
+    if (drawingTool === "none") {
+      if (dragDrawingState.current) {
+        const ds = dragDrawingState.current;
+        const chart = chartRef.current;
+        const pos = getXY(e);
+        if (chart && pos) {
+          const newShape = applyShapeDelta(ds.origShape, chart, ds.startPx, ds.startPy, pos.px, pos.py, ds.kind);
+          onDrawingUpdate?.(ds.id, newShape);
+        }
+        dragDrawingState.current = null;
+        // Repaint with handles still shown if still hovering
+        const chart2 = chartRef.current;
+        if (chart2 && hoveredDrawingId) {
+          const hd = drawings.find(d => d.id === hoveredDrawingId);
+          const handles = hd ? getShapeHandles(hd.shape, chart2) : null;
+          paintSvgRef.current?.(null, null, null, handles);
+        } else {
+          paintSvgRef.current?.();
+        }
+      }
+      forwardToChart(e);
+      return;
+    }
+
     if (!dragStart.current) return;
     const pos = getXY(e);
     const s = dragStart.current;
@@ -1421,18 +1591,29 @@ export default function ChartPanel({
           <div className="absolute inset-0 z-30 pointer-events-none transition-opacity" style={{ background: TC.dimBg }} />
         )}
         <svg ref={svgRef} className="absolute inset-0" style={{ pointerEvents: "none", zIndex: 10 }} />
-        {drawingTool !== "none" && (
+        {(drawingTool !== "none" || drawings.length > 0) && (
           <div
             className="absolute inset-0"
-            style={{ zIndex: 20, cursor: drawingTool === "eraser" ? "none" : "crosshair" }}
+            style={{
+              zIndex: 20,
+              cursor: drawingTool === "eraser" ? "none"
+                : drawingTool === "none"
+                  ? (hoveredDrawingId ? "grab" : "default")
+                  : "crosshair",
+            }}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
-            onMouseLeave={() => {
+            onMouseLeave={(e) => {
               eraserPos.current = null;
               if (dragStart.current) { dragStart.current = null; }
+              if (dragDrawingState.current) { dragDrawingState.current = null; }
+              if (hoveredDrawingId) setHoveredDrawingId(null);
               // Don't cancel phase2 on leaf so user can re-enter the chart
               paintSvg();
+              // Let echart know we left so it can clear tooltip/crosshair
+              const canvas = containerRef.current?.querySelector("canvas");
+              if (canvas) canvas.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, clientX: e.clientX, clientY: e.clientY }));
             }}
           />
         )}
