@@ -10,15 +10,12 @@ name = "API Server"
 paths = ["/api"]
 
 [services.development]
-run = "cd artifacts/python-backend && PORT=8090 python run.py"
+run = "bash -c 'cd /home/runner/workspace/artifacts/python-backend && PORT=8090 python run.py'"
 
 [services.production]
 
 [services.production.run]
-args = ["python", "artifacts/python-backend/run.py"]
-
-[services.production.run.env]
-PORT = "8090"
+args = ["bash", "-c", "cd /home/runner/workspace/artifacts/python-backend && PORT=8090 python run.py"]
 
 [services.production.health.startup]
 path = "/api/healthz"

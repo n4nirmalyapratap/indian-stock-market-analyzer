@@ -174,7 +174,45 @@ class SectorsService:
                     return parsed
         except Exception:
             pass
-        return self._get_default_sectors()
+        # NSE unavailable — fall back to Yahoo Finance for live prices
+        return await self._get_sectors_from_yahoo()
+
+    async def _get_sectors_from_yahoo(self) -> list[dict]:
+        """Fetch sector index prices from Yahoo Finance when NSE is unavailable."""
+        tasks = [self.yahoo.get_quote(s["yahooTicker"]) for s in SECTOR_INDICES]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        sectors = []
+        for i, sector in enumerate(SECTOR_INDICES):
+            quote = results[i] if not isinstance(results[i], Exception) else None
+            if quote and quote.get("lastPrice"):
+                sectors.append({
+                    "name": sector["name"],
+                    "symbol": sector["symbol"],
+                    "category": sector["category"],
+                    "lastPrice": quote.get("lastPrice", 0),
+                    "change": quote.get("change", 0),
+                    "pChange": quote.get("pChange", 0),
+                    "open": quote.get("open"),
+                    "high": quote.get("dayHigh"),
+                    "low": quote.get("dayLow"),
+                    "previousClose": quote.get("previousClose"),
+                    "yearHigh": quote.get("fiftyTwoWeekHigh"),
+                    "yearLow": quote.get("fiftyTwoWeekLow"),
+                    "advances": 0,
+                    "declines": 0,
+                    "source": "YAHOO",
+                    "yahooTicker": sector["yahooTicker"],
+                })
+            else:
+                sectors.append({
+                    "name": sector["name"],
+                    "symbol": sector["symbol"],
+                    "category": sector["category"],
+                    "lastPrice": 0, "change": 0, "pChange": 0,
+                    "advances": 0, "declines": 0,
+                    "source": "UNAVAILABLE", "yahooTicker": sector["yahooTicker"],
+                })
+        return sorted(sectors, key=lambda s: s["pChange"], reverse=True)
 
     async def get_sector_rotation(self) -> dict:
         fresh = _get_cache()
