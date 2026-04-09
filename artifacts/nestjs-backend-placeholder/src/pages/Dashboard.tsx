@@ -180,17 +180,15 @@ export default function Dashboard() {
               <p className="text-sm font-medium text-indigo-800">{rotation.rotationPhase}</p>
               <p className="text-xs text-indigo-600 mt-1">{rotation.recommendation}</p>
             </div>
-            <div className="overflow-x-auto">
-              <div className="flex gap-2 pb-2">
-                {rotation.sectors?.slice(0, 8).map((s: any, i: number) => (
-                  <div key={i} className={`flex-shrink-0 w-32 rounded-lg p-2.5 text-center ${s.pChange >= 0 ? "bg-green-50 border border-green-100" : "bg-red-50 border border-red-100"}`}>
-                    <p className="text-xs font-medium text-gray-700 truncate">{s.name.replace("Nifty ", "")}</p>
-                    <p className={`text-sm font-bold ${s.pChange >= 0 ? "text-green-600" : "text-red-500"}`}>
-                      {s.pChange >= 0 ? "+" : ""}{s.pChange?.toFixed(2) || "0"}%
-                    </p>
-                  </div>
-                ))}
-              </div>
+            <div className="grid grid-cols-4 gap-2">
+              {rotation.sectors?.slice(0, 8).map((s: any, i: number) => (
+                <div key={i} className={`rounded-lg p-2.5 text-center ${s.pChange >= 0 ? "bg-green-50 border border-green-100" : "bg-red-50 border border-red-100"}`}>
+                  <p className="text-xs font-medium text-gray-700 truncate">{s.name.replace("Nifty ", "")}</p>
+                  <p className={`text-sm font-bold ${s.pChange >= 0 ? "text-green-600" : "text-red-500"}`}>
+                    {s.pChange >= 0 ? "+" : ""}{s.pChange?.toFixed(2) || "0"}%
+                  </p>
+                </div>
+              ))}
             </div>
           </div>
         ) : (

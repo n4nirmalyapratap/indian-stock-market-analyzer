@@ -154,6 +154,17 @@ scripts/                       ← post-merge.sh
 
 ---
 
+## Design Rules (enforced — must not be violated)
+
+**NO horizontal scrollbars anywhere in the app. Ever.**
+
+- Never use `overflow-x-auto` + `flex` or `overflow-x-scroll` to lay out a list of items inside a card or page section.
+- Instead, always use a wrapping grid (`grid grid-cols-N` or `grid-cols-[repeat(auto-fill,...)]`) so items wrap naturally to the next row.
+- This applies everywhere: sector tiles, stock lists, tag chips, button groups, indicator badges — any repeating item layout.
+- If content genuinely cannot fit, paginate it, truncate it, or show a "show more" toggle — never let it overflow horizontally.
+
+---
+
 ## Features
 
 - **Dashboard**: Real-time sector rotation, market breadth, CALL/PUT signal count
