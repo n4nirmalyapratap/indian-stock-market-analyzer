@@ -220,21 +220,18 @@ function SupervisorTab() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-180px)] min-h-[500px]">
-      <div className="flex-1 overflow-y-auto space-y-3 p-2">
+    <div className="flex flex-col h-full">
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-            <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 ${m.role === "user"
-              ? "bg-indigo-600 text-white rounded-br-sm"
-              : "bg-white border border-gray-200 text-gray-800 rounded-bl-sm shadow-sm"
+            {m.role === "hydra" && (
+              <img src="/niftynodes-logo.png" alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0 self-start mt-1 mr-2" />
+            )}
+            <div className={`max-w-[80%] rounded-2xl px-3.5 py-2.5 ${m.role === "user"
+              ? "bg-indigo-600 text-white rounded-br-none"
+              : "bg-gray-100 text-gray-800 rounded-bl-none"
             }`}>
-              {m.role === "hydra" && (
-                <div className="flex items-center gap-1.5 mb-1">
-                  <img src="/niftynodes-logo.png" alt="" className="w-4 h-4 rounded-full object-cover" />
-                  <span className="text-xs font-semibold text-indigo-600">Nifty Node Bot</span>
-                  <span className="text-xs text-gray-400">{m.time}</span>
-                </div>
-              )}
               <p className="text-sm leading-relaxed whitespace-pre-line">
                 {m.text.split(/(\*\*[^*]+\*\*)/).map((part, pi) =>
                   part.startsWith("**") && part.endsWith("**")
@@ -243,22 +240,19 @@ function SupervisorTab() {
                 )}
               </p>
               {m.data && renderData(m.data)}
-              {m.role === "user" && <p className="text-xs text-indigo-200 mt-1 text-right">{m.time}</p>}
+              <p className={`text-[10px] mt-1 ${m.role === "user" ? "text-indigo-200 text-right" : "text-gray-400"}`}>{m.time}</p>
             </div>
           </div>
         ))}
         {loading && (
-          <div className="flex justify-start">
-            <div className="bg-white border border-gray-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
-              <div className="flex items-center gap-2">
-                <Brain className="w-3 h-3 text-indigo-600 animate-pulse" />
-                <span className="text-xs text-gray-500">Nifty Node Bot processing</span>
-                <div className="flex gap-1">
-                  {[0, 1, 2].map(i => (
-                    <span key={i} className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce"
-                      style={{ animationDelay: `${i * 0.2}s` }} />
-                  ))}
-                </div>
+          <div className="flex justify-start items-end gap-2">
+            <img src="/niftynodes-logo.png" alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
+            <div className="bg-gray-100 rounded-2xl rounded-bl-none px-4 py-3">
+              <div className="flex gap-1 items-center">
+                {[0, 1, 2].map(i => (
+                  <span key={i} className="w-2 h-2 rounded-full bg-indigo-400 animate-bounce"
+                    style={{ animationDelay: `${i * 0.15}s` }} />
+                ))}
               </div>
             </div>
           </div>
@@ -266,19 +260,22 @@ function SupervisorTab() {
         <div ref={bottomRef} />
       </div>
 
-      <div className="mt-3 space-y-2">
-        <div className="flex flex-wrap gap-1.5">
-          {SUGGESTIONS.map(s => (
-            <button key={s} onClick={() => send(s)} disabled={loading}
-              className="text-xs px-2.5 py-1 rounded-full border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition disabled:opacity-50">
-              {s}
-            </button>
-          ))}
-        </div>
-        <div className="flex gap-2">
+      {/* Suggestions */}
+      <div className="px-3 pt-1 flex gap-1.5 overflow-x-auto pb-1 flex-shrink-0">
+        {SUGGESTIONS.map(s => (
+          <button key={s} onClick={() => send(s)} disabled={loading}
+            className="text-xs px-3 py-1.5 rounded-full border border-indigo-200 bg-white text-indigo-600 hover:bg-indigo-50 whitespace-nowrap transition disabled:opacity-50 flex-shrink-0">
+            {s}
+          </button>
+        ))}
+      </div>
+
+      {/* Input */}
+      <div className="px-3 py-2.5 border-t border-gray-100 flex-shrink-0">
+        <div className="flex gap-2 items-center bg-gray-100 rounded-xl px-3 py-1.5">
           <input
-            className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
-            placeholder="Ask Nifty Node Bot anything — forecast, pairs, VaR, backtest, sentiment..."
+            className="flex-1 bg-transparent text-sm focus:outline-none placeholder:text-gray-400"
+            placeholder="Ask anything — forecast, pairs, risk, sentiment..."
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === "Enter" && !e.shiftKey && send()}
@@ -859,12 +856,12 @@ function MetricCard({ label, value, color = "text-gray-800", icon }: any) {
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
-const TABS: { id: Tab; label: string; icon: any; description: string }[] = [
-  { id: "supervisor", label: "Ask AI",         icon: Brain,      description: "Ask anything about stocks in plain English" },
-  { id: "pairs",      label: "Paired Stocks",  icon: Target,     description: "Find two stocks that move together" },
-  { id: "backtest",   label: "Test Strategy",  icon: Play,       description: "See how a strategy performed in the past" },
-  { id: "var",        label: "Portfolio Risk", icon: Shield,     description: "See potential losses before they happen" },
-  { id: "forecast",   label: "Price Forecast", icon: TrendingUp, description: "See where a stock price might go" },
+const TABS: { id: Tab; label: string; icon: any }[] = [
+  { id: "supervisor", label: "Ask AI",   icon: Brain      },
+  { id: "pairs",      label: "Pairs",    icon: Target     },
+  { id: "backtest",   label: "Backtest", icon: Play       },
+  { id: "var",        label: "Risk",     icon: Shield     },
+  { id: "forecast",   label: "Forecast", icon: TrendingUp },
 ];
 
 export default function HydraAlpha() {
@@ -876,76 +873,52 @@ export default function HydraAlpha() {
   }, []);
 
   return (
-    <div className="space-y-5 max-w-5xl mx-auto">
-      {/* Header */}
-      <div className="bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-800 rounded-2xl p-6 text-white">
-        <div className="flex items-start justify-between">
-          <div>
-            <div className="flex items-center gap-3 mb-2">
-              <div className="w-10 h-10 rounded-xl overflow-hidden bg-white/10 flex items-center justify-center flex-shrink-0">
-                <img src="/niftynodes-logo.png" alt="NiftyNodes" className="w-10 h-10 object-cover" />
-              </div>
-              <div>
-                <h1 className="text-2xl font-bold">Nifty Node</h1>
-                <p className="text-indigo-300 text-sm">Professional-Grade Stock Analysis — Made Simple</p>
-              </div>
-            </div>
-            <p className="text-indigo-200 text-sm mt-2 max-w-2xl">
-              Ask questions in plain English · Find related stock pairs · Test strategies on real past data · 
-              Measure portfolio risk · Get probabilistic price forecasts with bear, base, and bull scenarios.
-            </p>
-          </div>
-          {status && (
-            <div className="text-right flex-shrink-0">
-              <span className="inline-flex items-center gap-1.5 text-xs bg-green-500/20 text-green-300 px-2.5 py-1 rounded-full">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-                {status.status}
-              </span>
-              {status.database && (
-                <p className="text-xs text-indigo-400 mt-1">
-                  <Database className="w-3 h-3 inline mr-1" />
-                  {status.database.totalRows?.toLocaleString() || 0} price rows cached
-                </p>
-              )}
-            </div>
-          )}
-        </div>
+    <div className="flex flex-col bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden"
+         style={{ height: "calc(100vh - 48px)" }}>
 
-        {/* Module pills */}
-        <div className="flex flex-wrap gap-2 mt-4">
-          {["Price Database", "Sentiment Scoring", "Pair Analysis", "Mean Reversion", "Strategy Tester", "Risk Calculator", "Price Forecast"].map(m => (
-            <span key={m} className="text-xs bg-white/10 text-indigo-200 px-2.5 py-0.5 rounded-full">{m}</span>
-          ))}
+      {/* ── Slim header ───────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 flex-shrink-0">
+        <div className="flex items-center gap-2.5">
+          <img src="/niftynodes-logo.png" alt="NiftyNodes" className="w-8 h-8 rounded-full object-cover" />
+          <div className="leading-tight">
+            <p className="text-sm font-bold text-gray-900">Nifty Node Bot</p>
+            <p className="text-[11px] text-gray-400">AI-powered stock analysis</p>
+          </div>
         </div>
+        {status && (
+          <span className="flex items-center gap-1.5 text-[11px] text-green-700 bg-green-50 border border-green-100 px-2.5 py-1 rounded-full font-medium">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+            Live
+          </span>
+        )}
       </div>
 
-      {/* Tab bar */}
-      <div className="flex gap-1 bg-gray-100 p-1 rounded-xl overflow-x-auto">
+      {/* ── Compact tab strip ─────────────────────────────────────────── */}
+      <div className="flex border-b border-gray-100 flex-shrink-0">
         {TABS.map(t => {
           const Icon = t.icon;
           const active = tab === t.id;
           return (
             <button key={t.id} onClick={() => setTab(t.id)}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition flex-shrink-0 ${
-                active ? "bg-white text-indigo-700 shadow-sm" : "text-gray-600 hover:text-gray-900"
+              className={`flex-1 flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium transition-colors border-b-2 ${
+                active
+                  ? "border-indigo-600 text-indigo-700 bg-indigo-50/60"
+                  : "border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50"
               }`}>
               <Icon className={`w-4 h-4 ${active ? "text-indigo-600" : "text-gray-400"}`} />
-              <div className="text-left">
-                <div>{t.label}</div>
-                {active && <div className="text-xs font-normal text-indigo-400 hidden md:block">{t.description}</div>}
-              </div>
+              {t.label}
             </button>
           );
         })}
       </div>
 
-      {/* Tab content */}
-      <div>
+      {/* ── Tab content fills remaining height ───────────────────────── */}
+      <div className="flex-1 min-h-0 overflow-hidden">
         {tab === "supervisor" && <SupervisorTab />}
-        {tab === "pairs"      && <PairsTab />}
-        {tab === "backtest"   && <BacktestTab />}
-        {tab === "var"        && <VaRTab />}
-        {tab === "forecast"   && <ForecastTab />}
+        {tab === "pairs"      && <div className="h-full overflow-y-auto p-4"><PairsTab /></div>}
+        {tab === "backtest"   && <div className="h-full overflow-y-auto p-4"><BacktestTab /></div>}
+        {tab === "var"        && <div className="h-full overflow-y-auto p-4"><VaRTab /></div>}
+        {tab === "forecast"   && <div className="h-full overflow-y-auto p-4"><ForecastTab /></div>}
       </div>
     </div>
   );
