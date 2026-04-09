@@ -162,22 +162,31 @@ function renderMd(text: string) {
       const headers = parseRow(header);
 
       return (
-        <div key={bi} className="my-2 rounded-xl overflow-hidden border border-gray-100 shadow-sm">
-          <table className="w-full text-xs border-collapse">
+        <div key={bi} className="my-3 -mx-1 overflow-x-auto rounded-2xl shadow-md border border-indigo-100/60">
+          <table className="w-full border-collapse text-[11px]" style={{ minWidth: 260 }}>
             <thead>
-              <tr className="bg-indigo-50 border-b border-indigo-100">
+              <tr style={{ background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)" }}>
                 {headers.map((h, hi) => (
-                  <th key={hi} className="px-3 py-2 text-left text-[10px] font-bold text-indigo-700 uppercase tracking-wide whitespace-nowrap">
+                  <th key={hi}
+                    className={`px-3 py-2.5 text-left font-bold text-white tracking-wide whitespace-nowrap
+                      ${hi === 0 ? "rounded-tl-2xl" : ""} ${hi === headers.length - 1 ? "rounded-tr-2xl" : ""}`}>
                     {h}
                   </th>
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-50">
+            <tbody>
               {dataRows.map((row, ri) => (
-                <tr key={ri} className={ri % 2 === 0 ? "bg-white" : "bg-gray-50/70"}>
+                <tr key={ri}
+                  className={`border-t border-indigo-50 transition-colors hover:bg-indigo-50/50
+                    ${ri % 2 === 0 ? "bg-white" : "bg-slate-50/60"}
+                    ${ri === dataRows.length - 1 ? "last-row" : ""}`}>
                   {parseRow(row).map((cell, ci) => (
-                    <td key={ci} className="px-3 py-1.5 text-gray-700 leading-snug">
+                    <td key={ci}
+                      className={`px-3 py-2 leading-snug
+                        ${ci === 0
+                          ? "font-semibold text-indigo-700 whitespace-nowrap"
+                          : "text-gray-600"}`}>
                       {parseInline(cell)}
                     </td>
                   ))}
