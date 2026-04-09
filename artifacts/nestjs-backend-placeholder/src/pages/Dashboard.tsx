@@ -3,13 +3,22 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { TrendingUp, TrendingDown, Activity, AlertCircle, RefreshCw } from "lucide-react";
 
-function StatCard({ title, value, sub, trend }: any) {
+function CardLoader() {
+  return (
+    <span className="w-3 h-3 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin inline-block" />
+  );
+}
+
+function StatCard({ title, value, sub, trend, loading }: any) {
   const isUp = trend === "up";
   const isDown = trend === "down";
   return (
-    <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
-      <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">{title}</p>
-      <p className="mt-1 text-2xl font-bold text-gray-900">{value}</p>
+    <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 relative overflow-hidden">
+      <div className="flex items-center justify-between mb-1">
+        <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">{title}</p>
+        {loading && <CardLoader />}
+      </div>
+      <p className="text-2xl font-bold text-gray-900">{value}</p>
       {sub && (
         <p className={`mt-1 text-sm flex items-center gap-1 ${isUp ? "text-green-600" : isDown ? "text-red-500" : "text-gray-500"}`}>
           {isUp && <TrendingUp className="w-3 h-3" />}
@@ -17,6 +26,7 @@ function StatCard({ title, value, sub, trend }: any) {
           {sub}
         </p>
       )}
+      {loading && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-100"><div className="h-full bg-indigo-400 animate-pulse" /></div>}
     </div>
   );
 }
@@ -25,18 +35,20 @@ export default function Dashboard() {
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
 
-  const { data: rotation, isLoading: rotLoading, error: rotErr } = useQuery({
+  const { data: rotation, isLoading: rotLoading, isFetching: rotFetching, error: rotErr } = useQuery({
     queryKey: ["rotation"],
     queryFn: api.sectorRotation,
     staleTime: 5 * 60 * 1000,
   });
-  const { data: patterns, isLoading: patLoading } = useQuery({
+  const { data: patterns, isLoading: patLoading, isFetching: patFetching } = useQuery({
     queryKey: ["patterns-overview"],
     queryFn: () => api.patterns(),
     staleTime: 10 * 60 * 1000,
   });
 
-  const isRefreshing = refreshing || rotLoading || patLoading;
+  const rotBusy = rotLoading || rotFetching;
+  const patBusy = patLoading || patFetching;
+  const isRefreshing = refreshing || rotBusy || patBusy;
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -77,17 +89,20 @@ export default function Dashboard() {
       )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard title="Market Phase" value={rotLoading ? "…" : (rotation?.rotationPhase?.split(" -")[0] || "N/A")} sub={rotation?.rotationPhase?.split(" - ")[1]} />
-        <StatCard title="Advancing" value={rotLoading ? "…" : breadth?.advancing ?? "-"} trend="up" sub="sectors gaining" />
-        <StatCard title="Declining" value={rotLoading ? "…" : breadth?.declining ?? "-"} trend="down" sub="sectors falling" />
-        <StatCard title="A/D Ratio" value={rotLoading ? "…" : adRatio} sub={`Breadth: ${breadth?.breadthScore || "-"}%`} />
+        <StatCard loading={rotBusy} title="Market Phase" value={rotLoading ? "…" : (rotation?.rotationPhase?.split(" -")[0] || "N/A")} sub={rotation?.rotationPhase?.split(" - ")[1]} />
+        <StatCard loading={rotBusy} title="Advancing" value={rotLoading ? "…" : breadth?.advancing ?? "-"} trend="up" sub="sectors gaining" />
+        <StatCard loading={rotBusy} title="Declining" value={rotLoading ? "…" : breadth?.declining ?? "-"} trend="down" sub="sectors falling" />
+        <StatCard loading={rotBusy} title="A/D Ratio" value={rotLoading ? "…" : adRatio} sub={`Breadth: ${breadth?.breadthScore || "-"}%`} />
       </div>
 
       <div className="grid md:grid-cols-2 gap-6">
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
-          <h2 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
-            <TrendingUp className="w-4 h-4 text-green-500" /> Where to Buy Now
-          </h2>
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 relative overflow-hidden">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold text-gray-800 flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-green-500" /> Where to Buy Now
+            </h2>
+            {rotBusy && <CardLoader />}
+          </div>
           {rotLoading ? (
             <div className="space-y-2">
               {[1,2,3].map(i => <div key={i} className="h-8 bg-gray-100 animate-pulse rounded" />)}
@@ -106,12 +121,16 @@ export default function Dashboard() {
           ) : (
             <p className="text-sm text-gray-500">No data available</p>
           )}
+          {rotBusy && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-green-100"><div className="h-full bg-green-400 animate-pulse" /></div>}
         </div>
 
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
-          <h2 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
-            <Activity className="w-4 h-4 text-indigo-500" /> Pattern Signals
-          </h2>
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 relative overflow-hidden">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold text-gray-800 flex items-center gap-2">
+              <Activity className="w-4 h-4 text-indigo-500" /> Pattern Signals
+            </h2>
+            {patBusy && <CardLoader />}
+          </div>
           {patLoading ? (
             <div className="space-y-2">
               {[1,2,3].map(i => <div key={i} className="h-8 bg-gray-100 animate-pulse rounded" />)}
@@ -144,11 +163,15 @@ export default function Dashboard() {
           ) : (
             <p className="text-sm text-gray-500">Run a pattern scan to see signals</p>
           )}
+          {patBusy && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-100"><div className="h-full bg-indigo-400 animate-pulse" /></div>}
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
-        <h2 className="font-semibold text-gray-800 mb-3">Sector Rotation Analysis</h2>
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 relative overflow-hidden">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold text-gray-800">Sector Rotation Analysis</h2>
+          {rotBusy && <CardLoader />}
+        </div>
         {rotLoading ? (
           <div className="h-16 bg-gray-100 animate-pulse rounded-lg" />
         ) : rotation ? (
@@ -173,6 +196,7 @@ export default function Dashboard() {
         ) : (
           <p className="text-sm text-gray-500">No rotation data</p>
         )}
+        {rotBusy && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-100"><div className="h-full bg-indigo-400 animate-pulse" /></div>}
       </div>
     </div>
   );
