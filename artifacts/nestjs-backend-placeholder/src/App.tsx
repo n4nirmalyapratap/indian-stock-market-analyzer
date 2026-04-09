@@ -73,7 +73,7 @@ function Layout({ children }: { children: React.ReactNode }) {
       {/* ── Sidebar (desktop) ─────────────────────────────────────────── */}
       <aside
         className={`hidden md:flex flex-col bg-white border-r border-gray-100 shadow-sm flex-shrink-0
-          transition-all duration-200 ease-in-out overflow-hidden
+          transition-all duration-200 ease-in-out
           ${open ? "w-52" : "w-[52px]"}`}
       >
         {/* Logo */}
