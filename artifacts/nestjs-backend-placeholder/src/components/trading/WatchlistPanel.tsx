@@ -14,6 +14,23 @@ export interface Watchlist {
   symbols: string[];
 }
 
+interface StockDetail {
+  companyName?: string;
+  lastPrice?: number;
+  currentPrice?: number;
+  pChange?: number;
+  open?: number;
+  dayHigh?: number;
+  dayLow?: number;
+  previousClose?: number;
+  volume?: number;
+  fiftyTwoWeekHigh?: number;
+  fiftyTwoWeekLow?: number;
+  marketCap?: number;
+  trailingPE?: number;
+  dividendYield?: number;
+}
+
 const STORAGE_KEY = "tv_watchlists_v2";
 
 function loadWatchlists(): Watchlist[] {
@@ -31,6 +48,19 @@ function saveWatchlists(lists: Watchlist[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(lists));
 }
 
+function fmtVol(v: number): string {
+  if (v >= 1e9) return (v / 1e9).toFixed(2) + "B";
+  if (v >= 1e6) return (v / 1e6).toFixed(2) + "M";
+  if (v >= 1e3) return (v / 1e3).toFixed(1) + "K";
+  return String(v);
+}
+
+function fmtCrore(v: number): string {
+  if (v >= 1e7) return "₹" + (v / 1e7).toFixed(2) + " Cr";
+  if (v >= 1e5) return "₹" + (v / 1e5).toFixed(2) + " L";
+  return "₹" + v.toLocaleString("en-IN");
+}
+
 interface Props {
   onSymbolSelect: (symbol: string) => void;
   activeSymbol: string;
@@ -46,6 +76,7 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
   const [editVal, setEditVal]         = useState("");
   const [newListMode, setNewListMode] = useState(false);
   const [newListName, setNewListName] = useState("");
+  const [stockDetail, setStockDetail] = useState<StockDetail | null>(null);
   const menuRef      = useRef<HTMLDivElement>(null);
   const addRef       = useRef<HTMLInputElement>(null);
   const fetchGenRef  = useRef(0);
@@ -64,10 +95,10 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
 
   const fetchPrices = useCallback(async (symbols: string[], gen: number) => {
     for (const sym of symbols) {
-      if (fetchGenRef.current !== gen) return; // stale — abandon
+      if (fetchGenRef.current !== gen) return;
       try {
         const r = await fetch(`/api/stocks/${sym}`);
-        if (fetchGenRef.current !== gen) return; // stale after await
+        if (fetchGenRef.current !== gen) return;
         if (!r.ok) continue;
         const d = await r.json();
         if (fetchGenRef.current !== gen) return;
@@ -85,6 +116,17 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
     const gen = ++fetchGenRef.current;
     fetchPrices(activeWL.symbols, gen);
   }, [activeWL?.id, activeWL?.symbols.join(",")]);
+
+  // Fetch stock details for the active symbol
+  useEffect(() => {
+    if (!activeSymbol) return;
+    let cancelled = false;
+    fetch(`/api/stocks/${activeSymbol}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (!cancelled && d) setStockDetail(d); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeSymbol]);
 
   function save(lists: Watchlist[]) { setWatchlists(lists); saveWatchlists(lists); }
 
@@ -121,8 +163,29 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
     setEditingId(null);
   }
 
+  const detailPrice = stockDetail?.lastPrice ?? stockDetail?.currentPrice;
+  const detailChange = stockDetail?.pChange;
+  const detailUp = (detailChange ?? 0) >= 0;
+  const detailColor = detailUp ? "#26a69a" : "#ef5350";
+
+  const detailRows: [string, string | undefined][] = [
+    ["Open",       stockDetail?.open != null ? `₹${stockDetail.open.toFixed(2)}` : undefined],
+    ["High",       stockDetail?.dayHigh != null ? `₹${stockDetail.dayHigh.toFixed(2)}` : undefined],
+    ["Low",        stockDetail?.dayLow != null ? `₹${stockDetail.dayLow.toFixed(2)}` : undefined],
+    ["Prev Close", stockDetail?.previousClose != null ? `₹${stockDetail.previousClose.toFixed(2)}` : undefined],
+    ["52W High",   stockDetail?.fiftyTwoWeekHigh != null ? `₹${stockDetail.fiftyTwoWeekHigh.toFixed(2)}` : undefined],
+    ["52W Low",    stockDetail?.fiftyTwoWeekLow != null ? `₹${stockDetail.fiftyTwoWeekLow.toFixed(2)}` : undefined],
+    ["Volume",     stockDetail?.volume != null ? fmtVol(stockDetail.volume) : undefined],
+    ["Mkt Cap",    stockDetail?.marketCap != null ? fmtCrore(stockDetail.marketCap) : undefined],
+    ["P/E",        stockDetail?.trailingPE != null ? stockDetail.trailingPE.toFixed(2) : undefined],
+    ["Div Yield",  stockDetail?.dividendYield != null ? (stockDetail.dividendYield * 100).toFixed(2) + "%" : undefined],
+  ].filter(([, v]) => v !== undefined) as [string, string][];
+
   return (
-    <div className="flex flex-col h-full select-none" style={{ width: 220, background: "#0f1117" }}>
+    <div
+      className="flex flex-col h-full select-none"
+      style={{ width: 220, background: "#0f1117", borderLeft: "1px solid #1e2130" }}
+    >
 
       {/* ── Header: watchlist switcher ── */}
       <div className="relative shrink-0" ref={menuRef}>
@@ -225,10 +288,8 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
               onMouseEnter={e => { if (!isOn) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.04)"; }}
               onMouseLeave={e => { if (!isOn) (e.currentTarget as HTMLElement).style.background = ""; }}
             >
-              {/* Active indicator — thin left highlight only */}
               {isOn && <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-r" style={{ background: "#6366f1" }} />}
 
-              {/* Symbol & company */}
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-semibold text-white truncate">{sym}</div>
                 {info?.company && (
@@ -236,7 +297,6 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
                 )}
               </div>
 
-              {/* Price & change */}
               <div className="text-right shrink-0">
                 {info?.price != null ? (
                   <>
@@ -252,7 +312,6 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
                 )}
               </div>
 
-              {/* Remove button (appears on hover) */}
               <button
                 onClick={e => { e.stopPropagation(); removeSymbol(sym); }}
                 className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-gray-600 hover:text-red-400"
@@ -263,6 +322,36 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
           );
         })}
       </div>
+
+      {/* ── Stock details panel ── */}
+      {stockDetail && detailRows.length > 0 && (
+        <div className="shrink-0 overflow-y-auto" style={{ maxHeight: 200, borderTop: "1px solid rgba(255,255,255,0.07)", scrollbarWidth: "none" }}>
+          <div className="px-4 pt-3 pb-1">
+            <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-2">{activeSymbol} Details</div>
+            {detailPrice != null && (
+              <div className="flex items-baseline gap-1.5 mb-2">
+                <span className="text-sm font-bold" style={{ color: detailColor }}>
+                  ₹{detailPrice.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+                {detailChange != null && (
+                  <span className="text-[11px] font-medium" style={{ color: detailColor }}>
+                    {detailUp ? "+" : ""}{detailChange.toFixed(2)}%
+                  </span>
+                )}
+              </div>
+            )}
+            <div className="flex flex-col gap-[5px]">
+              {detailRows.map(([label, value]) => (
+                <div key={label} className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-gray-500 shrink-0">{label}</span>
+                  <span className="text-[10px] text-gray-300 text-right truncate">{value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="pb-2" />
+        </div>
+      )}
 
       {/* ── Add symbol ── */}
       <div className="shrink-0 px-3 py-3" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
