@@ -8,6 +8,10 @@ Real-time Indian stock market analysis platform — sector rotation tracking, ca
 
 **Backend: Python FastAPI (only). No Node.js backend is active.**
 
+> **GitHub push always needs two runs** — the first run times out at ~130/166 blobs (takes 70–100 s),
+> the second run finishes in ~15 s because blobs are cached. Always re-run if it times out.
+> See **[GITHUB_PUSH.md](./GITHUB_PUSH.md)** for full explanation and rules.
+
 ---
 
 ## Features
