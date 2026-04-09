@@ -4,7 +4,7 @@ import {
   LayoutTemplate, PanelRight, X, Search, Minus as Divider,
   ChevronDown, Crosshair,
 } from "lucide-react";
-import ChartPanel, { type DrawingTool, type Drawing } from "@/components/trading/ChartPanel";
+import ChartPanel, { type DrawingTool, type Drawing, type ChartType } from "@/components/trading/ChartPanel";
 import WatchlistPanel from "@/components/trading/WatchlistPanel";
 
 // ─── Symbol catalogue ────────────────────────────────────────────────────────
@@ -133,17 +133,133 @@ function makePanel(symbol: string): PanelState {
   return { id: uid(), symbol, drawings: [] };
 }
 
-// ─── Symbol Search ────────────────────────────────────────────────────────────
+// ─── Symbol Search (API-backed — full universe) ───────────────────────────────
+interface SearchResult { symbol: string; name: string }
+
 function SymbolSearch({ onSelect, placeholder }: { onSelect: (sym: string) => void; placeholder?: string }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [loading, setLoading] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const filtered = q.length > 0
-    ? SYMBOLS.filter(s =>
-        s.symbol.includes(q.toUpperCase()) || s.name.toLowerCase().includes(q.toLowerCase())
-      ).slice(0, 10)
-    : [];
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  function handleChange(val: string) {
+    setQ(val);
+    setOpen(true);
+    if (debounce.current) clearTimeout(debounce.current);
+    if (!val.trim()) { setResults([]); return; }
+    debounce.current = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/stocks/search?q=${encodeURIComponent(val.trim())}`);
+        if (res.ok) {
+          const data = await res.json();
+          setResults(data.results ?? []);
+        }
+      } catch { setResults([]); }
+      finally { setLoading(false); }
+    }, 180);
+  }
+
+  const INDEX_SYMS = new Set(["NIFTY 50", "NIFTY50", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]);
+
+  return (
+    <div ref={ref} className="relative">
+      <div className="flex items-center gap-1.5 bg-gray-800 border border-gray-700 rounded px-2 py-1 focus-within:border-indigo-500 transition-colors">
+        <Search size={13} className="text-gray-500" />
+        <input
+          value={q}
+          onChange={e => handleChange(e.target.value)}
+          onFocus={() => { setOpen(true); if (q) handleChange(q); }}
+          placeholder={placeholder ?? "Search symbol…"}
+          className="bg-transparent text-white text-xs placeholder-gray-600 focus:outline-none w-36"
+          onKeyDown={e => {
+            if (e.key === "Enter" && results[0]) { onSelect(results[0].symbol); setQ(""); setOpen(false); }
+            if (e.key === "Escape") setOpen(false);
+          }}
+        />
+        {loading && <div className="w-3 h-3 border border-indigo-400 border-t-transparent rounded-full animate-spin" />}
+        {q && !loading && <button onClick={() => { setQ(""); setResults([]); setOpen(false); }} className="text-gray-600 hover:text-white"><X size={11} /></button>}
+      </div>
+      {open && results.length > 0 && (
+        <div className="absolute top-full left-0 mt-1 z-50 bg-gray-900 border border-gray-700 rounded shadow-2xl w-80 max-h-80 overflow-y-auto">
+          {results.map(s => (
+            <button
+              key={s.symbol}
+              className="w-full flex items-center gap-3 px-3 py-2 hover:bg-gray-800 text-left group"
+              onClick={() => { onSelect(s.symbol); setQ(""); setResults([]); setOpen(false); }}
+            >
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-white group-hover:text-indigo-300">{s.symbol}</div>
+                {s.name && <div className="text-xs text-gray-500 truncate">{s.name}</div>}
+              </div>
+              <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded ${INDEX_SYMS.has(s.symbol) ? "bg-purple-900/50 text-purple-300" : "bg-gray-800 text-gray-400"}`}>
+                {INDEX_SYMS.has(s.symbol) ? "INDEX" : "NSE"}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      {open && q.length > 0 && results.length === 0 && !loading && (
+        <div className="absolute top-full left-0 mt-1 z-50 bg-gray-900 border border-gray-700 rounded shadow-2xl w-80 px-4 py-3">
+          <p className="text-xs text-gray-500">No results for "{q}"</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Chart Type definitions ───────────────────────────────────────────────────
+interface ChartTypeEntry { type: ChartType; label: string; icon: string }
+
+const CHART_TYPE_GROUPS: { group: string; items: ChartTypeEntry[] }[] = [
+  {
+    group: "OHLC",
+    items: [
+      { type: "candles",      label: "Candles",          icon: "🕯" },
+      { type: "hollow",       label: "Hollow candles",   icon: "◻" },
+      { type: "bars",         label: "Bars",             icon: "┤" },
+      { type: "ha",           label: "Heikin Ashi",      icon: "🕯" },
+    ],
+  },
+  {
+    group: "Line",
+    items: [
+      { type: "line",         label: "Line",             icon: "∕" },
+      { type: "line_markers", label: "Line + markers",   icon: "∕•" },
+      { type: "step",         label: "Step line",        icon: "⌐" },
+    ],
+  },
+  {
+    group: "Area / Bar",
+    items: [
+      { type: "area",         label: "Area",             icon: "▲" },
+      { type: "baseline",     label: "Baseline",         icon: "⊟" },
+      { type: "columns",      label: "Columns",          icon: "▋" },
+    ],
+  },
+];
+
+// ─── Chart Type Selector dropdown ─────────────────────────────────────────────
+function ChartTypeSelector({
+  chartType,
+  onSelect,
+}: {
+  chartType: ChartType;
+  onSelect: (t: ChartType) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const current = CHART_TYPE_GROUPS.flatMap(g => g.items).find(i => i.type === chartType);
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -155,38 +271,48 @@ function SymbolSearch({ onSelect, placeholder }: { onSelect: (sym: string) => vo
 
   return (
     <div ref={ref} className="relative">
-      <div className="flex items-center gap-1.5 bg-gray-800 border border-gray-700 rounded px-2 py-1 focus-within:border-indigo-500 transition-colors">
-        <Search size={13} className="text-gray-500" />
-        <input
-          value={q}
-          onChange={e => { setQ(e.target.value); setOpen(true); }}
-          onFocus={() => setOpen(true)}
-          placeholder={placeholder ?? "Search symbol…"}
-          className="bg-transparent text-white text-xs placeholder-gray-600 focus:outline-none w-36"
-          onKeyDown={e => {
-            if (e.key === "Enter" && filtered[0]) { onSelect(filtered[0].symbol); setQ(""); setOpen(false); }
-            if (e.key === "Escape") setOpen(false);
-          }}
-        />
-        {q && <button onClick={() => { setQ(""); setOpen(false); }} className="text-gray-600 hover:text-white"><X size={11} /></button>}
-      </div>
-      {open && filtered.length > 0 && (
-        <div className="absolute top-full left-0 mt-1 z-50 bg-gray-900 border border-gray-700 rounded shadow-2xl w-72 max-h-72 overflow-y-auto">
-          {filtered.map(s => (
-            <button
-              key={s.symbol}
-              className="w-full flex items-center gap-3 px-3 py-2 hover:bg-gray-800 text-left group"
-              onClick={() => { onSelect(s.symbol); setQ(""); setOpen(false); }}
-            >
-              <div>
-                <div className="text-sm font-semibold text-white group-hover:text-indigo-300">{s.symbol}</div>
-                <div className="text-xs text-gray-500">{s.name}</div>
+      <button
+        onClick={() => setOpen(v => !v)}
+        title="Chart type"
+        className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold transition-colors border ${
+          open
+            ? "bg-indigo-600 text-white border-indigo-500"
+            : "bg-gray-800/80 text-gray-200 border-gray-700 hover:border-gray-500 hover:text-white"
+        }`}
+      >
+        <span className="font-mono text-[13px] leading-none">{current?.icon ?? "🕯"}</span>
+        <ChevronDown size={11} className={`transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && (
+        <div
+          className="absolute top-full left-0 mt-1 z-50 rounded-lg shadow-2xl border border-gray-700/80 min-w-[200px]"
+          style={{ background: "#1e2130" }}
+        >
+          <div className="px-4 pt-3 pb-2 border-b border-gray-700/60">
+            <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Chart Type</span>
+          </div>
+          <div className="p-2">
+            {CHART_TYPE_GROUPS.map(({ group, items }) => (
+              <div key={group} className="mb-1">
+                <div className="px-2 py-1 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{group}</div>
+                {items.map(item => (
+                  <button
+                    key={item.type}
+                    onClick={() => { onSelect(item.type); setOpen(false); }}
+                    className={`w-full flex items-center gap-3 px-3 py-1.5 rounded text-xs transition-colors ${
+                      chartType === item.type
+                        ? "bg-indigo-600 text-white"
+                        : "text-gray-300 hover:bg-gray-700 hover:text-white"
+                    }`}
+                  >
+                    <span className="font-mono w-5 text-center text-[13px] leading-none">{item.icon}</span>
+                    <span>{item.label}</span>
+                  </button>
+                ))}
               </div>
-              <span className={`ml-auto text-[10px] px-1.5 py-0.5 rounded ${s.type === "index" ? "bg-purple-900/50 text-purple-300" : "bg-gray-800 text-gray-400"}`}>
-                {s.type === "index" ? "INDEX" : "NSE"}
-              </span>
-            </button>
-          ))}
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -283,6 +409,7 @@ export default function TradingPlatform() {
   const [panels, setPanels] = useState<PanelState[]>([makePanel("RELIANCE")]);
   const [activePanelId, setActivePanelId] = useState(panels[0].id);
   const [intervalIdx, setIntervalIdx] = useState(7); // default: 1D
+  const [chartType, setChartType] = useState<ChartType>("candles");
   const [drawingTool, setDrawingTool] = useState<DrawingTool>("none");
   const [indicators, setIndicators] = useState<Set<string>>(new Set(["ema21"]));
   const [showRSI, setShowRSI] = useState(false);
@@ -354,6 +481,9 @@ export default function TradingPlatform() {
 
         {/* Interval selector — dropdown like TradingView */}
         <IntervalSelector intervalIdx={intervalIdx} onSelect={setIntervalIdx} />
+
+        {/* Chart type selector */}
+        <ChartTypeSelector chartType={chartType} onSelect={setChartType} />
 
         <div className="w-px h-5 bg-gray-700" />
 
@@ -473,6 +603,7 @@ export default function TradingPlatform() {
                 symbolName={SYMBOLS.find(s => s.symbol === panel.symbol)?.name}
                 periodCfg={INTERVALS[intervalIdx]}
                 drawingTool={drawingTool}
+                chartType={chartType}
                 indicators={indicators}
                 showRSI={showRSI}
                 showMACD={showMACD}

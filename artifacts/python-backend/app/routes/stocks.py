@@ -41,6 +41,28 @@ async def get_smallcap():
     return await _service.get_smallcap_stocks()
 
 
+@router.get("/search")
+async def search_stocks(q: str = Query(default="")):
+    """Search ALL_SYMBOLS universe by ticker or company name. Returns up to 20 results."""
+    from ..lib.universe import ALL_SYMBOLS, COMPANY_MAP
+    if not q or len(q.strip()) < 1:
+        return {"results": []}
+    q_upper = q.strip().upper()
+    q_lower = q.strip().lower()
+    # Tier 1: symbol starts-with (highest priority)
+    starts   = [s for s in ALL_SYMBOLS if s.startswith(q_upper)]
+    # Tier 2: symbol contains
+    contains = [s for s in ALL_SYMBOLS if q_upper in s and not s.startswith(q_upper)]
+    # Tier 3: company name contains
+    name_set = set(starts + contains)
+    by_name  = [s for s in ALL_SYMBOLS if s not in name_set
+                and q_lower in COMPANY_MAP.get(s, "").lower()]
+    combined = (starts + contains + by_name)[:20]
+    return {
+        "results": [{"symbol": s, "name": COMPANY_MAP.get(s, "")} for s in combined]
+    }
+
+
 @router.get("/{symbol}/history")
 async def get_stock_history(
     symbol: str,
