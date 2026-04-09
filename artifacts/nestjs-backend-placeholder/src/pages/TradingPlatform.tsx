@@ -588,7 +588,7 @@ export default function TradingPlatform() {
   const [chartType, setChartType] = useState<ChartType>("candles");
   const { theme } = useTheme();
   const [drawingTool, setDrawingTool] = useState<string>("none");
-  const [indicators, setIndicators] = useState<Set<string>>(new Set(["ema21"]));
+  const [indicators, setIndicators] = useState<Set<string>>(new Set());
   const [showRSI, setShowRSI] = useState(false);
   const [showMACD, setShowMACD] = useState(false);
   const [showWatchlist, setShowWatchlist] = useState(true);
