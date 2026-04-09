@@ -19,6 +19,7 @@ from app.routes.telegram import router as telegram_router, get_service as get_te
 from app.routes.universe import router as universe_router
 from app.routes.hydra import router as hydra_router
 from app.routes.cache import router as cache_router
+from app.routes.options import router as options_router
 from app.services.market_cache_service import is_market_open, cache_status
 from app.services import market_cache_service as _mcs
 from app.services.yahoo_service import YahooService as _YahooService
@@ -179,3 +180,4 @@ app.include_router(telegram_router,  prefix="/api")
 app.include_router(universe_router,  prefix="/api")
 app.include_router(hydra_router,     prefix="/api")
 app.include_router(cache_router,     prefix="/api")
+app.include_router(options_router,   prefix="/api")
