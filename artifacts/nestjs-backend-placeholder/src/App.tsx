@@ -15,9 +15,10 @@ import HydraAlpha from "@/pages/HydraAlpha";
 import OptionsStrategyTester from "@/pages/OptionsStrategyTester";
 import SettingsPage from "@/pages/SettingsPage";
 import NotFound from "@/pages/not-found";
+import TradingPlatform from "@/pages/TradingPlatform";
 import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
-  MessageCircle, Send, Brain, TrendingUp,
+  MessageCircle, Send, Brain, TrendingUp, CandlestickChart,
   Settings, ChevronRight, ChevronLeft, ChevronDown
 } from "lucide-react";
 
@@ -27,6 +28,7 @@ const queryClient = new QueryClient({
 
 const MAIN_NAV = [
   { path: "/",         label: "Dashboard",      icon: LayoutDashboard },
+  { path: "/trading",  label: "TV Charts",      icon: CandlestickChart },
   { path: "/sectors",  label: "Market Sectors", icon: BarChart3 },
   { path: "/stocks",   label: "Stock Lookup",   icon: Search },
   { path: "/patterns", label: "Patterns",       icon: Scan },
@@ -171,7 +173,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           })}
         </div>
 
-        <main className="flex-1 p-4 md:p-6 overflow-auto">
+        <main className={`flex-1 overflow-auto ${loc.startsWith("/trading") ? "p-0 overflow-hidden" : "p-4 md:p-6"}`}>
           {children}
         </main>
       </div>
@@ -184,6 +186,7 @@ function Router() {
     <Layout>
       <Switch>
         <Route path="/"                component={Dashboard} />
+        <Route path="/trading"         component={TradingPlatform} />
         <Route path="/sectors"         component={Sectors} />
         <Route path="/stocks"          component={StockLookup} />
         <Route path="/patterns"        component={Patterns} />
