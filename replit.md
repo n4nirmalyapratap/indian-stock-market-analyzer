@@ -31,20 +31,162 @@ Python Backend         (FastAPI + uvicorn, port 8090)   ← ALL API routes
 
 ---
 
+## First-Time Setup (Fresh Replit Account)
+
+Follow these steps in order after forking/cloning the repo into a new Replit workspace.
+
+### Step 1 — Add Secrets
+
+Open **Secrets** (lock icon in the left sidebar → "New Secret") and add all tokens before doing anything else.
+
+#### GITHUB_TOKEN (required for git push)
+1. Go to https://github.com/settings/tokens
+2. Click **Generate new token (classic)**
+3. Give it a name (e.g. "Replit push")
+4. Tick the **`repo`** checkbox (full repo access)
+5. Scroll down → click **Generate token**
+6. Copy the token immediately (it is shown only once)
+7. In Replit Secrets: Key = `GITHUB_TOKEN`, Value = the token you copied
+
+#### TELEGRAM_BOT_TOKEN (required for Telegram bot)
+1. Open Telegram and search for **@BotFather**
+2. Send `/newbot`
+3. Follow the prompts — choose a name and username for your bot
+4. BotFather will reply with a token like `123456:ABC-DEF...`
+5. In Replit Secrets: Key = `TELEGRAM_BOT_TOKEN`, Value = the token
+
+#### TWILIO secrets (optional — only needed for WhatsApp bot)
+Get these from your Twilio console (https://console.twilio.com):
+
+| Secret Key | Where to find it |
+|---|---|
+| `TWILIO_ACCOUNT_SID` | Twilio Console → Account Info |
+| `TWILIO_AUTH_TOKEN` | Twilio Console → Account Info |
+| `TWILIO_WHATSAPP_NUMBER` | Twilio Console → Messaging → WhatsApp Senders |
+
+#### SESSION_SECRET (optional)
+Any random string works. In Replit Secrets: Key = `SESSION_SECRET`, Value = any long random string.
+
+---
+
+### Step 2 — Install Python 3.11
+
+In the Replit package manager, install **Python 3.11** as the programming language runtime.
+
+---
+
+### Step 3 — Install Python packages
+
+Open the **Shell** tab and run:
+
+```bash
+pip install fastapi "uvicorn[standard]" httpx pandas numpy ta spacy python-multipart openpyxl yfinance
+python -m spacy download en_core_web_sm
+```
+
+> `run.py` will also auto-download `en_core_web_sm` on first start, but running it manually here avoids a slow first boot.
+
+---
+
+### Step 4 — Install Node.js packages
+
+In the Shell, run:
+
+```bash
+pnpm install
+```
+
+This installs all frontend and scripts dependencies across the pnpm workspace.
+
+---
+
+### Step 5 — Configure Workflows
+
+Go to the **Workflows** panel (wrench icon) and create or verify two workflows:
+
+**Workflow 1 — API Server**
+- Name: `artifacts/api-server: API Server`
+- Command:
+  ```
+  bash -c 'cd /home/runner/workspace/artifacts/python-backend && PORT=8090 python run.py'
+  ```
+
+**Workflow 2 — Stock Market Frontend**
+- Name: `artifacts/stock-market-app: web`
+- Command:
+  ```
+  BASE_PATH=/ PORT=3002 pnpm --filter @workspace/nestjs-backend-placeholder run dev
+  ```
+
+Start both workflows. The API Server takes ~30 seconds on first boot (downloading the spaCy model).
+
+---
+
+### Step 6 — Configure Git Remote for Pushing
+
+In the Shell, run once:
+
+```bash
+git remote add origin https://$GITHUB_TOKEN@github.com/n4nirmalyapratap/indian-stock-market-analyzer.git
+```
+
+> If `origin` already exists, use `set-url` instead of `add`:
+> ```bash
+> git remote set-url origin https://$GITHUB_TOKEN@github.com/n4nirmalyapratap/indian-stock-market-analyzer.git
+> ```
+
+After this, pushing to GitHub any time is just:
+
+```bash
+git add -A
+git commit -m "describe your changes"
+git push origin main
+```
+
+---
+
+### Step 7 — Verify Everything is Working
+
+**Check the API is live:**
+```bash
+curl http://localhost:8090/api/sectors
+```
+Look for `"source": "YAHOO"` or `"source": "NSE"` in the response. If you see `"source": "UNAVAILABLE"` something is wrong with the network.
+
+**Check the frontend:** Open the Replit preview pane — the dashboard should show live sector data with non-zero values (e.g. Auto +6.69%, IT +1.2%, etc.).
+
+**Check Telegram bot:** Navigate to the Telegram page in the app. If `TELEGRAM_BOT_TOKEN` is set correctly, the bot status will show active.
+
+---
+
+## Pushing Changes to GitHub
+
+After making any changes:
+
+```bash
+git add -A
+git commit -m "describe what changed"
+git push origin main
+```
+
+The `GITHUB_TOKEN` secret handles authentication automatically. No password prompt will appear.
+
+---
+
 ## Known Issues & Fixes
 
-### ⚠️ NSE India Returns 403 on Replit (FIXED)
+### NSE India Returns 403 on Replit (FIXED)
 
 **Symptom:** Dashboard shows all zeros — Advancing: 0, Declining: 0, sector prices all 0.
 
 **Root cause:** NSE India (`www.nseindia.com`) blocks requests from Replit's cloud IP addresses with a 403 Forbidden. The original `SectorsService.get_all_sectors()` only tried NSE and fell back to hardcoded zeros — no Yahoo Finance fallback.
 
 **Fix applied:** `artifacts/python-backend/app/services/sectors_service.py`
-- Added `_get_sectors_from_yahoo()` method that fetches all sector prices in parallel via Yahoo Finance
+- Added `_get_sectors_from_yahoo()` that fetches all sector prices in parallel via Yahoo Finance
 - When NSE returns 403, sector prices now come from Yahoo Finance instead of being zeroed out
-- `source` field is set to `"YAHOO"` when Yahoo fallback is used (vs `"NSE"` when NSE works)
+- `source` field is `"YAHOO"` when Yahoo fallback is used, `"NSE"` when NSE works
 
-**Yahoo Finance tickers for sectors:**
+**Yahoo Finance tickers per sector:**
 
 | Sector | Yahoo Ticker | Type |
 |---|---|---|
@@ -59,21 +201,21 @@ Python Backend         (FastAPI + uvicorn, port 8090)   ← ALL API routes
 | Nifty Media | `^CNXMEDIA` | True index |
 | Nifty PSU Bank | `^CNXPSUBANK` | True index |
 | NIFTY 50 | `^NSEI` | True index |
-| Nifty Financial Services | `HDFCBANK.NS` | Stock proxy (no Yahoo index ticker) |
-| Nifty Consumer Durables | `TITAN.NS` | Stock proxy (no Yahoo index ticker) |
-| Nifty Oil & Gas | `RELIANCE.NS` | Stock proxy (no Yahoo index ticker) |
-| Nifty Healthcare | `APOLLOHOSP.NS` | Stock proxy (no Yahoo index ticker) |
+| Nifty Financial Services | `HDFCBANK.NS` | Stock proxy |
+| Nifty Consumer Durables | `TITAN.NS` | Stock proxy |
+| Nifty Oil & Gas | `RELIANCE.NS` | Stock proxy |
+| Nifty Healthcare | `APOLLOHOSP.NS` | Stock proxy |
 
-**Note:** Stock proxy sectors show the proxy stock price, not the index value — but % change is still accurate.
+> Stock proxy sectors show the proxy stock's % change, not the index value — but directional accuracy is the same.
 
-**A/D counts** (advances/declines per sector) remain 0 when NSE is unavailable because that data only comes from NSE's API. Breadth is calculated from the `pChange > 0` count across all sectors instead.
+**A/D counts** remain 0 when NSE is unavailable — breadth is calculated from `pChange > 0` count across all sectors instead.
 
 ---
 
 ## Stack
 
 - **Monorepo**: pnpm workspaces
-- **Python**: 3.11 · FastAPI · uvicorn · spaCy 3.8 · pandas · numpy · ta library
+- **Python**: 3.11 · FastAPI · uvicorn · spaCy 3.8 · pandas · numpy · ta · yfinance
 - **Node.js**: 24 (frontend only — Vite + React + TailwindCSS + TanStack Query)
 - **Data sources**: Yahoo Finance (primary, always works) · NSE India REST API (secondary, may 403 on cloud IPs)
 - **NLP**: spaCy rule-based EntityRuler + Nifty100/sector vocabulary
@@ -102,83 +244,12 @@ artifacts/
     src/pages/                 ← Dashboard, Sectors, Stocks, Patterns, Scanners, WhatsApp, Telegram
   stock-market-app/            ← Artifact registration (proxy config, routes / → port 3002)
   api-server/                  ← Artifact registration (proxy config, routes /api → port 8090)
-  nestjs-backend/              ← DEPRECATED (reference only)
   mockup-sandbox/              ← Replit canvas tool (managed by artifact system)
 lib/
   api-zod/                     ← Zod schemas (unused in active code)
 scripts/
-  src/push-github.ts           ← GitHub push script (uses Replit OAuth connector)
+  src/push-github.ts           ← GitHub push script (used internally by agent for API-based pushes)
 ```
-
----
-
-## Setup Instructions (fresh Replit account)
-
-1. **Install Python 3.11** — use Replit's package management (installProgrammingLanguage)
-2. **Install Python packages**: `fastapi uvicorn[standard] httpx pandas numpy ta spacy python-multipart openpyxl`
-3. **Install Node.js deps**: `pnpm install` from workspace root
-4. **Configure API Server workflow** to run: `bash -c 'cd /home/runner/workspace/artifacts/python-backend && PORT=8090 python run.py'`
-5. **Configure Stock Market Frontend workflow** to run: `BASE_PATH=/ PORT=3002 pnpm --filter @workspace/nestjs-backend-placeholder run dev`
-6. `run.py` auto-downloads spaCy's `en_core_web_sm` model on first start
-
-**Verify data is loading:** Call `/api/sectors` — if `source` field is `"NSE"` or `"YAHOO"`, data is live. If `source` is `"UNAVAILABLE"`, Yahoo Finance fetch is failing too (network issue).
-
----
-
-## GitHub Push Log
-
-Pushes are performed via `pnpm --filter @workspace/scripts run push-github`  
-This script uses the Replit GitHub OAuth connector (no PAT needed) to create commits  
-via the GitHub REST API. Source-only files are synced (no node_modules, .pythonlibs, binary  
-assets >400 KB, or generated directories).
-
-| Date | Commit ID | Short SHA | Notes |
-|---|---|---|---|
-| 2026-04-09 | `a97cfcb7f42e08ee9fe97b016bb3ff2b668333a8` | `a97cfcb` | Initial Replit setup: NSE 403 fix (Yahoo Finance fallback), GitHub push script |
-| 2026-04-09 | `6ec022763babb548544f7cf959f0d11b58ef8f59` | `6ec0227` | Updated replit.md with GitHub push log; push script binary-asset exclusions |
-
----
-
-## Environment Variables / Secrets
-
-Add these in Replit **Secrets** (lock icon in the left sidebar → "New Secret") before starting the app.
-
-### Required for GitHub pushes
-
-| Secret Key | How to get it |
-|---|---|
-| `GITHUB_TOKEN` | Go to https://github.com/settings/tokens → Generate new token (classic) → tick `repo` → Generate → copy |
-
-Once added, set the git remote once in the Shell:
-```bash
-git remote set-url origin https://$GITHUB_TOKEN@github.com/n4nirmalyapratap/indian-stock-market-analyzer.git
-```
-Then push any time with:
-```bash
-git add -A && git commit -m "your message" && git push origin main
-```
-
-### Required for Telegram Bot
-
-| Secret Key | How to get it |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | Open Telegram → search `@BotFather` → send `/newbot` → follow prompts → copy the token |
-
-The Telegram bot will show "unconfigured" on the Telegram page until this secret is added and the API Server workflow is restarted.
-
-### Optional (WhatsApp bot via Twilio)
-
-| Secret Key | Purpose |
-|---|---|
-| `TWILIO_ACCOUNT_SID` | Twilio account SID |
-| `TWILIO_AUTH_TOKEN` | Twilio auth token |
-| `TWILIO_WHATSAPP_NUMBER` | Your Twilio WhatsApp number |
-
-### Other
-
-| Secret Key | Purpose |
-|---|---|
-| `SESSION_SECRET` | Session security (any random string works) |
 
 ---
 
