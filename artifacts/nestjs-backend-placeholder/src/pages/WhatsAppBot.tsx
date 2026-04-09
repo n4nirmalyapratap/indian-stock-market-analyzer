@@ -28,6 +28,7 @@ export default function WhatsAppBot() {
   });
 
   useEffect(() => {
+    if (messages.length === 0) return;
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
