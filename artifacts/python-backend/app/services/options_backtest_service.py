@@ -80,13 +80,24 @@ def _to_yf_sym(symbol: str) -> str:
         "FINNIFTY":   "^CNXFIN",
         "MIDCPNIFTY": "^NSMIDCP",
         "SENSEX":     "^BSESN",
-        "BANKEX":     "^BSXN",
+        "BANKEX":     "BANKEX.BO",   # BSE BANKEX — try .BO format
     }
     if upper in _MAP:
         return _MAP[upper]
     if upper.startswith("^") or "." in upper:
         return upper
     return f"{upper}.NS"
+
+
+def _to_yf_sym_candidates(symbol: str) -> list[str]:
+    """Return ordered list of Yahoo Finance tickers to try for a symbol."""
+    upper = symbol.upper()
+    _FALLBACKS = {
+        "BANKEX": ["BANKEX.BO", "^BSXN", "^BSESN"],  # last resort: use SENSEX
+    }
+    if upper in _FALLBACKS:
+        return _FALLBACKS[upper]
+    return [_to_yf_sym(symbol)]
 
 
 def _strike_step(S: float) -> float:
