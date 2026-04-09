@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from "react";
-import { useSearch } from "wouter";
+import { useSearch, useLocation } from "wouter";
 import {
   BarChart2, TrendingUp, Minus, Square, Eraser,
   LayoutTemplate, PanelRight, X, Search, Minus as Divider,
@@ -613,6 +613,10 @@ export default function TradingPlatform() {
   const searchRef    = useRef<SearchModalHandle>(null);
   const watchlistRef = useRef<WatchlistPanelHandle>(null);
 
+  // ── Back-navigation: show back button only when opened from another page ─────
+  const [, navigate] = useLocation();
+  const cameFromLink = useRef(!!new URLSearchParams(window.location.search).get("symbol"));
+
   // ── Sync symbol from URL ?symbol= query param ───────────────────────────────
   const search = useSearch();
   useEffect(() => {
@@ -765,6 +769,21 @@ export default function TradingPlatform() {
     <div className="flex flex-col h-full" style={{ background: PT.rootBg }}>
       {/* ── Toolbar ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 px-3 py-1.5 shrink-0 flex-wrap" style={{ background: PT.barBg, borderBottom: `1px solid ${PT.barBor}` }}>
+
+        {/* Back button — only when opened via ?symbol= from another page */}
+        {cameFromLink.current && (
+          <button
+            onClick={() => window.history.back()}
+            title="Go back"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors"
+            style={{ background: PT.btnBg, border: `1px solid ${PT.btnBor}`, color: PT.btnTxt }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 12H5M12 5l-7 7 7 7"/>
+            </svg>
+            Back
+          </button>
+        )}
 
         {/* Symbol name button — opens modal search (chart mode) */}
         <button
