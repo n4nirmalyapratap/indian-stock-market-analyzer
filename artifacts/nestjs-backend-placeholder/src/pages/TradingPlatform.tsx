@@ -907,7 +907,12 @@ export default function TradingPlatform() {
                   symbol={panel.symbol}
                   symbolName={SYMBOLS.find(s => s.symbol === panel.symbol)?.name}
                   periodCfg={customPeriodCfg ?? INTERVALS[intervalIdx]}
-                  drawingTool={(["none","trendline","hline","vline","rectangle","eraser"].includes(drawingTool) ? drawingTool : "none") as DrawingTool}
+                  drawingTool={(((): DrawingTool => {
+                    const direct = ["none","trendline","ray","extendedline","hline","hray","vline","crossline","rectangle","eraser"];
+                    if (direct.includes(drawingTool)) return drawingTool as DrawingTool;
+                    if (drawingTool === "infoline" || drawingTool === "trendangle") return "trendline";
+                    return "none";
+                  })())}
                   chartType={chartType}
                   indicators={indicators}
                   showRSI={showRSI}
