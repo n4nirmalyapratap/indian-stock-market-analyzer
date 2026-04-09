@@ -198,7 +198,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           })}
         </div>
 
-        <main className={`flex-1 overflow-auto bg-gray-50 dark:bg-gray-950 ${loc.startsWith("/trading") ? "p-0 overflow-hidden" : "p-4 md:p-6"}`}>
+        <main className={`flex-1 overflow-auto bg-gray-50 dark:bg-gray-950 ${(loc.startsWith("/trading") || loc.startsWith("/chart")) ? "p-0 overflow-hidden" : "p-4 md:p-6"}`}>
           {children}
         </main>
       </div>

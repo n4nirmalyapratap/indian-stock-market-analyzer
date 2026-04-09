@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from "react";
+import { useSearch } from "wouter";
 import {
   BarChart2, TrendingUp, Minus, Square, Eraser,
   LayoutTemplate, PanelRight, X, Search, Minus as Divider,
@@ -585,7 +586,11 @@ function IntervalSelector({
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function TradingPlatform() {
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("1");
-  const [panels, setPanels] = useState<PanelState[]>([makePanel("RELIANCE")]);
+  const [panels, setPanels] = useState<PanelState[]>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sym = params.get("symbol")?.toUpperCase() || "RELIANCE";
+    return [makePanel(sym)];
+  });
   const [activePanelId, setActivePanelId] = useState(panels[0].id);
   const [intervalIdx, setIntervalIdx] = useState(7); // default: 1D
   const [chartType, setChartType] = useState<ChartType>("candles");
@@ -607,6 +612,19 @@ export default function TradingPlatform() {
 
   const searchRef    = useRef<SearchModalHandle>(null);
   const watchlistRef = useRef<WatchlistPanelHandle>(null);
+
+  // ── Sync symbol from URL ?symbol= query param ───────────────────────────────
+  const search = useSearch();
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    const sym = params.get("symbol")?.toUpperCase();
+    if (!sym) return;
+    setPanels(prev => {
+      const active = prev.find(p => p.id === activePanelId) ?? prev[0];
+      if (active.symbol === sym) return prev;
+      return prev.map(p => p.id === active.id ? { ...p, symbol: sym } : p);
+    });
+  }, [search]);
 
   // ── Live IST clock ─────────────────────────────────────────────────────────
   useEffect(() => {
