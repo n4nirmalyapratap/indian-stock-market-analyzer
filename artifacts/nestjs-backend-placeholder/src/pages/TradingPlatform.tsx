@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHand
 import {
   BarChart2, TrendingUp, Minus, Square, Eraser,
   LayoutTemplate, PanelRight, X, Search, Minus as Divider,
-  ChevronDown, Crosshair,
+  ChevronDown, Crosshair, Calendar,
 } from "lucide-react";
 import ChartPanel, { type DrawingTool, type Drawing, type ChartType } from "@/components/trading/ChartPanel";
 import WatchlistPanel from "@/components/trading/WatchlistPanel";
@@ -89,6 +89,27 @@ const INTERVAL_GROUPS: { group: string; labels: string[] }[] = [
   { group: "Days",    labels: ["1D"] },
   { group: "Weeks",   labels: ["1W"] },
   { group: "Months",  labels: ["1M"] },
+];
+
+// ─── Range-selector presets (bottom bar) ──────────────────────────────────────
+interface RangeEntry { label: string; p: string; i: string; start?: string; end?: string }
+
+function getYTDStart(): string {
+  return `${new Date().getFullYear()}-01-01`;
+}
+function getTodayStr(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+const RANGES: RangeEntry[] = [
+  { label: "1D",  p: "1d",  i: "5m"  },
+  { label: "5D",  p: "5d",  i: "15m" },
+  { label: "1M",  p: "1mo", i: "1d"  },
+  { label: "3M",  p: "3mo", i: "1d"  },
+  { label: "6M",  p: "6mo", i: "1d"  },
+  { label: "YTD", p: "ytd", i: "1d"  }, // resolved dynamically
+  { label: "1Y",  p: "1y",  i: "1d"  },
+  { label: "All", p: "5y",  i: "1wk" },
 ];
 
 // ─── Layout modes ────────────────────────────────────────────────────────────
@@ -436,7 +457,54 @@ export default function TradingPlatform() {
   const [showLayouts, setShowLayouts] = useState(false);
   const [showIndMenu, setShowIndMenu] = useState(false);
 
+  const [customPeriodCfg, setCustomPeriodCfg] = useState<{ p: string; i: string; start?: string; end?: string } | null>(null);
+  const [activeRange, setActiveRange] = useState<string | null>(null);
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [calStart, setCalStart] = useState("");
+  const [calEnd, setCalEnd] = useState("");
+  const [clock, setClock] = useState("");
+
   const searchRef = useRef<SymbolSearchHandle>(null);
+
+  // ── Live IST clock ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    function tick() {
+      const now = new Date();
+      const ist = new Date(now.getTime() + 5.5 * 3600 * 1000);
+      const hh = String(ist.getUTCHours()).padStart(2, "0");
+      const mm = String(ist.getUTCMinutes()).padStart(2, "0");
+      const ss = String(ist.getUTCSeconds()).padStart(2, "0");
+      setClock(`${hh}:${mm}:${ss}`);
+    }
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Reset customPeriod when user picks from the interval dropdown
+  function handleIntervalSelect(idx: number) {
+    setIntervalIdx(idx);
+    setCustomPeriodCfg(null);
+    setActiveRange(null);
+    setShowCalendar(false);
+  }
+
+  function applyRange(r: RangeEntry) {
+    if (r.label === "YTD") {
+      setCustomPeriodCfg({ p: "1y", i: r.i, start: getYTDStart(), end: getTodayStr() });
+    } else {
+      setCustomPeriodCfg({ p: r.p, i: r.i });
+    }
+    setActiveRange(r.label);
+    setShowCalendar(false);
+  }
+
+  function applyCustomRange() {
+    if (!calStart || !calEnd) return;
+    setCustomPeriodCfg({ p: "1y", i: INTERVALS[intervalIdx].i, start: calStart, end: calEnd });
+    setActiveRange("custom");
+    setShowCalendar(false);
+  }
 
   // ── Global keyboard shortcuts ──────────────────────────────────────────────
   useEffect(() => {
@@ -525,7 +593,7 @@ export default function TradingPlatform() {
         <SymbolSearch ref={searchRef} onSelect={setSymbolForActivePanel} placeholder={activePanel?.symbol ?? "Search…"} />
 
         {/* Interval selector — dropdown like TradingView */}
-        <IntervalSelector intervalIdx={intervalIdx} onSelect={setIntervalIdx} />
+        <IntervalSelector intervalIdx={intervalIdx} onSelect={handleIntervalSelect} />
 
         {/* Chart type selector */}
         <ChartTypeSelector chartType={chartType} onSelect={setChartType} />
@@ -646,7 +714,7 @@ export default function TradingPlatform() {
                 panelId={panel.id}
                 symbol={panel.symbol}
                 symbolName={SYMBOLS.find(s => s.symbol === panel.symbol)?.name}
-                periodCfg={INTERVALS[intervalIdx]}
+                periodCfg={customPeriodCfg ?? INTERVALS[intervalIdx]}
                 drawingTool={drawingTool}
                 chartType={chartType}
                 indicators={indicators}
@@ -670,6 +738,75 @@ export default function TradingPlatform() {
             activeSymbol={activePanel?.symbol ?? ""}
           />
         )}
+      </div>
+
+      {/* ── Bottom range bar ─────────────────────────────────────────────────── */}
+      <div className="relative flex items-center justify-between px-3 py-1 border-t border-gray-800 bg-[#131722] shrink-0">
+        {/* Range buttons + calendar */}
+        <div className="flex items-center gap-0.5">
+          {RANGES.map(r => (
+            <button
+              key={r.label}
+              onClick={() => applyRange(r)}
+              className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                activeRange === r.label
+                  ? "bg-indigo-600 text-white"
+                  : "text-gray-400 hover:text-white hover:bg-gray-800"
+              }`}
+            >
+              {r.label}
+            </button>
+          ))}
+          <div className="relative ml-1">
+            <button
+              onClick={() => setShowCalendar(v => !v)}
+              title="Custom date range"
+              className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] transition-colors ${
+                activeRange === "custom"
+                  ? "bg-indigo-600 text-white"
+                  : "text-gray-400 hover:text-white hover:bg-gray-800"
+              }`}
+            >
+              <Calendar size={12} />
+            </button>
+            {showCalendar && (
+              <div className="absolute bottom-full mb-2 left-0 z-50 bg-gray-900 border border-gray-700 rounded shadow-2xl p-3 flex flex-col gap-2" style={{ minWidth: 240 }}>
+                <div className="text-xs text-gray-400 font-medium">Custom range</div>
+                <div className="flex items-center gap-2">
+                  <label className="text-[11px] text-gray-400 w-10">From</label>
+                  <input
+                    type="date"
+                    value={calStart}
+                    onChange={e => setCalStart(e.target.value)}
+                    className="flex-1 bg-gray-800 text-gray-200 rounded px-2 py-0.5 text-xs border border-gray-700 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-[11px] text-gray-400 w-10">To</label>
+                  <input
+                    type="date"
+                    value={calEnd}
+                    onChange={e => setCalEnd(e.target.value)}
+                    className="flex-1 bg-gray-800 text-gray-200 rounded px-2 py-0.5 text-xs border border-gray-700 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <button
+                  onClick={applyCustomRange}
+                  disabled={!calStart || !calEnd}
+                  className="mt-0.5 w-full py-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs rounded transition-colors"
+                >
+                  Apply
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Live IST clock */}
+        <div className="flex items-center gap-3 text-[11px] text-gray-400 font-mono select-none">
+          <span className="text-gray-200">{clock}</span>
+          <span>UTC+5:30</span>
+        </div>
       </div>
     </div>
   );

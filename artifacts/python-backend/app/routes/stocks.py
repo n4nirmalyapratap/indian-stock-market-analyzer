@@ -68,10 +68,13 @@ async def get_stock_history(
     symbol: str,
     period:   str = Query(default="1mo",  description="yfinance period, e.g. 1d 5d 1mo 3mo 6mo 1y"),
     interval: str = Query(default="1d",   description="yfinance interval, e.g. 5m 15m 1h 1d 1wk"),
+    start:    str = Query(default=None,   description="Start date YYYY-MM-DD (overrides period)"),
+    end:      str = Query(default=None,   description="End date YYYY-MM-DD (used with start)"),
 ):
     symbol = symbol.upper()
-    if period   not in VALID_PERIODS:   period   = "1mo"
     if interval not in VALID_INTERVALS: interval = "1d"
+    use_range = bool(start and end)
+    if not use_range and period not in VALID_PERIODS: period = "1mo"
 
     import yfinance as yf
 
@@ -86,8 +89,11 @@ async def get_stock_history(
 
         for ticker_sym in candidates:
             try:
-                tk   = yf.Ticker(ticker_sym)
-                hist = tk.history(period=period, interval=interval, auto_adjust=True)
+                tk = yf.Ticker(ticker_sym)
+                if use_range:
+                    hist = tk.history(start=start, end=end, interval=interval, auto_adjust=True)
+                else:
+                    hist = tk.history(period=period, interval=interval, auto_adjust=True)
                 if not hist.empty:
                     return tk.info, hist
             except Exception:

@@ -23,7 +23,7 @@ interface Props {
   panelId: string;
   symbol: string;
   symbolName?: string;
-  periodCfg: { p: string; i: string };
+  periodCfg: { p: string; i: string; start?: string; end?: string };
   drawingTool: DrawingTool;
   chartType: ChartType;
   indicators: Set<string>;
@@ -55,13 +55,45 @@ function uid() { return Math.random().toString(36).slice(2, 9); }
 
 const INTRADAY_INTERVALS = new Set(["1m", "2m", "5m", "15m", "30m", "60m", "90m"]);
 
-function toDateStr(ts: number, showTime = true) {
-  const d = new Date(ts * 1000);
-  const date = d.toISOString().slice(0, 10);
-  if (!showTime) return date;
+const IST_OFFSET_SEC = 5.5 * 3600; // UTC+5:30
+const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const DAYS_SHORT   = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+// Convert Unix timestamp to IST date string: "2026-04-02" or "2026-04-02 09:15"
+function toDateStr(ts: number, showTime = true): string {
+  const d = new Date((ts + IST_OFFSET_SEC) * 1000);
+  const dateISO = d.toISOString().slice(0, 10);
+  if (!showTime) return dateISO;
   const hh = d.getUTCHours();
   const mm = d.getUTCMinutes();
-  return hh === 0 && mm === 0 ? date : `${date} ${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+  return (hh === 0 && mm === 0)
+    ? dateISO
+    : `${dateISO} ${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}`;
+}
+
+// Short label for x-axis ticks: "09:15" for intraday, "02 Apr" for daily
+function fmtXLabel(dateStr: string, showTime: boolean): string {
+  const [datePart, timePart] = dateStr.split(" ");
+  if (showTime && timePart) return timePart;
+  const parts = datePart.split("-");
+  const mo = Number(parts[1]);
+  const dd = parts[2];
+  return `${dd} ${MONTHS_SHORT[mo - 1]}`;
+}
+
+// Full label for the crosshair bubble on x-axis: "Thu 02 Apr '26  09:15"
+function fmtCrosshairLabel(dateStr: string): string {
+  const [datePart, timePart] = dateStr.split(" ");
+  const parts = datePart.split("-").map(Number);
+  const [year, mo, dd] = parts;
+  const d = new Date(`${datePart}T12:00:00Z`);
+  const dayName = DAYS_SHORT[d.getUTCDay()];
+  const monthName = MONTHS_SHORT[mo - 1];
+  const yr = String(year).slice(2);
+  const dayStr = String(dd).padStart(2,"0");
+  return timePart
+    ? `${dayName} ${dayStr} ${monthName} '${yr}  ${timePart}`
+    : `${dayName} ${dayStr} ${monthName} '${yr}`;
 }
 
 function fmtVol(v: number): string {
@@ -317,10 +349,10 @@ export default function ChartPanel({
     const xBase = { axisLine: { lineStyle: { color: GRID_CLR } }, axisTick: { show: false } };
     const xAxes: object[] = [
       { ...xBase, gridIndex: 0, data: dates, axisLabel: { show: false }, splitLine: { lineStyle: { color: GRID_CLR } } },
-      { ...xBase, gridIndex: 1, data: dates, axisLabel: hasSub ? { show: false } : { color: TEXT_CLR, fontSize: 9, margin: 6 }, splitLine: { show: false } },
+      { ...xBase, gridIndex: 1, data: dates, axisLabel: hasSub ? { show: false } : { color: TEXT_CLR, fontSize: 9, margin: 6, formatter: (v: string) => fmtXLabel(v, showTime) }, splitLine: { show: false } },
     ];
     if (hasSub) {
-      xAxes.push({ ...xBase, gridIndex: 2, data: dates, axisLabel: { color: TEXT_CLR, fontSize: 9, margin: 6 }, splitLine: { lineStyle: { color: GRID_CLR } } });
+      xAxes.push({ ...xBase, gridIndex: 2, data: dates, axisLabel: { color: TEXT_CLR, fontSize: 9, margin: 6, formatter: (v: string) => fmtXLabel(v, showTime) }, splitLine: { lineStyle: { color: GRID_CLR } } });
     }
 
     // y-axis — all positioned on the RIGHT side
@@ -461,7 +493,7 @@ export default function ChartPanel({
             backgroundColor: "#2a2e39",
             color: "#d1d4dc",
             fontSize: 10,
-            formatter: ({ value }: any) => typeof value === "number" ? fmtPrice(value) : String(value),
+            formatter: ({ value }: any) => typeof value === "number" ? fmtPrice(value) : fmtCrosshairLabel(String(value)),
           },
         },
         backgroundColor: "#1e2130",
@@ -487,7 +519,10 @@ export default function ChartPanel({
     if (!symbol) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/stocks/${encodeURIComponent(symbol)}/history?period=${periodCfg.p}&interval=${periodCfg.i}`);
+      const qs = periodCfg.start && periodCfg.end
+        ? `start=${periodCfg.start}&end=${periodCfg.end}&interval=${periodCfg.i}`
+        : `period=${periodCfg.p}&interval=${periodCfg.i}`;
+      const res = await fetch(`/api/stocks/${encodeURIComponent(symbol)}/history?${qs}`);
       if (!res.ok) throw new Error();
       const data = await res.json();
       candles.current = data.candles ?? [];
