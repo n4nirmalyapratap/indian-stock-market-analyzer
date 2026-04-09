@@ -10,6 +10,44 @@ Real-time Indian stock market analysis platform — sector rotation tracking, ca
 
 ---
 
+## Features
+
+| Feature | Status | Notes |
+|---|---|---|
+| Sector Rotation Tracking | Live | Yahoo Finance via `/api/sectors/rotation` |
+| Candlestick Pattern Detection | Live | 50+ patterns, 3 universes |
+| Custom Stock Scanners | Live | Condition builder, save/run/test |
+| NLP Queries | Live | `/api/nlp/query` |
+| Telegram Bot | Live | Requires `TELEGRAM_BOT_TOKEN` secret |
+| WhatsApp Bot | Partial | Requires Twilio credentials |
+| Options Strategy Tester | Live | `/api/options/*` |
+| Analytics | Live | `/api/analytics/*` |
+| **Per-Stock Chat** | **Live** | **WebSocket rooms per symbol — see below** |
+
+### Per-Stock Chat System
+
+Real-time community chat attached to every stock symbol across the app.
+
+**Backend:** `artifacts/python-backend/app/routes/chat.py`
+- `GET /api/chat/history/{symbol}` — last 50 messages (in-memory, survives restarts only within same server process)
+- `WebSocket /api/chat/ws/{symbol}` — joins per-symbol room; messages broadcast to all connected clients in that room
+
+**Frontend:** Three components
+- `src/lib/chatStore.ts` — Zustand store; `open(symbol)` / `close()` global state
+- `src/components/ChatButton.tsx` — small `MessageCircle` icon button; placed next to every stock symbol
+- `src/components/StockChat.tsx` — full slide-in panel (fixed right side); WebSocket connection, message history, send input
+
+**Chat is integrated on:**
+- Dashboard — Pattern Signal top calls
+- Dashboard — Where to Buy Now sector list
+- Patterns page — every pattern card
+- Stock Lookup page — company name header
+- Scanners page — every matched stock in results
+
+**Anonymous usernames:** auto-generated on first visit (e.g. `BullTrader421`), stored in `localStorage` as `nifty-chat-username`.
+
+---
+
 ## Architecture
 
 ```

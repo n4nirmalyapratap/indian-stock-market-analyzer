@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Scan, TrendingUp, TrendingDown, Filter, Activity } from "lucide-react";
+import ChatButton from "@/components/ChatButton";
 
 const UNIVERSES  = ["ALL", "NIFTY100", "MIDCAP", "SMALLCAP"];
 const SIGNALS    = ["ALL", "CALL", "PUT", "WAIT"];
@@ -165,6 +166,7 @@ export default function Patterns() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="font-bold text-gray-900">{p.symbol}</span>
+                    <ChatButton symbol={p.symbol} />
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${SIG_COLORS[p.signal] ?? "bg-gray-100 text-gray-600"}`}>
                       {p.signal}
                     </span>

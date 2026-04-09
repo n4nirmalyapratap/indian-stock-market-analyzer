@@ -3,6 +3,8 @@ import { Switch, Route, Router as WouterRouter, Link, useLocation } from "wouter
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import StockChat from "@/components/StockChat";
+import { useChatStore } from "@/lib/chatStore";
 import Dashboard from "@/pages/Dashboard";
 import Sectors from "@/pages/Sectors";
 import StockLookup from "@/pages/StockLookup";
@@ -198,12 +200,19 @@ function Router() {
   );
 }
 
+function ChatOverlay() {
+  const { symbol, close } = useChatStore();
+  if (!symbol) return null;
+  return <StockChat symbol={symbol} onClose={close} />;
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
           <Router />
+          <ChatOverlay />
         </WouterRouter>
         <Toaster />
       </TooltipProvider>

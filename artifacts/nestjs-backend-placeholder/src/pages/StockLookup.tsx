@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Search, TrendingUp, TrendingDown, AlertCircle, Target } from "lucide-react";
+import ChatButton from "@/components/ChatButton";
 
 const NIFTY100_QUICK = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","ITC","SBIN","BHARTIARTL","KOTAKBANK","BAJFINANCE","AXISBANK","MARUTI","HCLTECH","WIPRO","TITAN","SUNPHARMA"];
 
@@ -84,7 +85,10 @@ export default function StockLookup() {
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
             <div className="flex items-start justify-between">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">{data.companyName || data.symbol}</h2>
+                <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                  {data.companyName || data.symbol}
+                  <ChatButton symbol={data.symbol} />
+                </h2>
                 <p className="text-sm text-gray-500">{data.symbol} • {data.industry || data.sector || "NSE"}</p>
               </div>
               <div className="text-right">

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { TrendingUp, TrendingDown, Activity, AlertCircle, RefreshCw } from "lucide-react";
+import ChatButton from "@/components/ChatButton";
 
 function CardLoader() {
   return (
@@ -109,9 +110,12 @@ export default function Dashboard() {
             </div>
           ) : (rotation?.whereToBuyNow?.length ?? 0) > 0 ? (
             <div className="space-y-2">
-              {rotation?.whereToBuyNow?.slice(0, 5).map((s: { name: string; pChange?: number }, i: number) => (
+              {rotation?.whereToBuyNow?.slice(0, 5).map((s: any, i: number) => (
                 <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-green-50">
-                  <span className="text-sm font-medium text-gray-800">{s.name}</span>
+                  <span className="text-sm font-medium text-gray-800 flex items-center gap-1">
+                    {s.name}
+                    {s.symbol && <ChatButton symbol={s.symbol} />}
+                  </span>
                   <span className={`text-sm font-semibold ${(s.pChange ?? 0) >= 0 ? "text-green-600" : "text-red-500"}`}>
                     {(s.pChange ?? 0) >= 0 ? "+" : ""}{s.pChange?.toFixed(2) ?? "0"}%
                   </span>
@@ -153,8 +157,12 @@ export default function Dashboard() {
               </div>
               <div className="space-y-1.5">
                 {patterns.topCalls?.slice(0, 3).map((p: any, i: number) => (
-                  <div key={i} className="flex justify-between text-sm">
-                    <span className="text-gray-700">{p.symbol} — <span className="text-gray-500">{p.pattern}</span></span>
+                  <div key={i} className="flex justify-between items-center text-sm">
+                    <span className="text-gray-700 flex items-center gap-1">
+                      {p.symbol}
+                      <ChatButton symbol={p.symbol} />
+                      — <span className="text-gray-500">{p.pattern}</span>
+                    </span>
                     <span className="text-green-600 font-medium">{p.confidence}%</span>
                   </div>
                 ))}
