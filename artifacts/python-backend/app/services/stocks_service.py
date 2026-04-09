@@ -1,5 +1,6 @@
 from .nse_service import NseService
 from .yahoo_service import YahooService
+from .price_service import PriceService
 from .indicators import (
     calculate_ema, calculate_rsi, calculate_macd,
     calculate_bollinger_bands, calculate_atr, detect_sr,
@@ -8,8 +9,9 @@ from .indicators import (
 
 class StocksService:
     def __init__(self, nse: NseService, yahoo: YahooService):
-        self.nse = nse
+        self.nse   = nse
         self.yahoo = yahoo
+        self.price = PriceService(nse, yahoo)
 
     async def get_stock_details(self, symbol: str) -> dict:
         upper = symbol.upper()
@@ -43,7 +45,8 @@ class StocksService:
             return {"error": f"Stock {upper} not found", "symbol": upper}
 
         try:
-            h = await self.yahoo.get_historical_data(upper, 300)  # 300 calendar days ≈ 210 trading days — enough for EMA 200
+            # PriceService: NSE primary → Yahoo fallback → disk cache when market closed
+            h = await self.price.get_historical_data(upper, 300)  # 300 days ≈ 210 trading days — enough for EMA 200
             if h:
                 history = h
         except Exception:

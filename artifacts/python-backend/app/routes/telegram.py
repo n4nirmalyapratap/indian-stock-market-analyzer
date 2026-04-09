@@ -17,17 +17,19 @@ from ..services.patterns_service import PatternsService
 from ..services.scanners_service import ScannersService
 from ..services.nse_service import NseService
 from ..services.yahoo_service import YahooService
+from ..services.price_service import PriceService
 from ..services.nlp_service import NlpService
 
 router = APIRouter(prefix="/telegram", tags=["telegram"])
 
 _nse      = NseService()
 _yahoo    = YahooService()
+_price    = PriceService(_nse, _yahoo)
 _nlp      = NlpService()
 _sectors  = SectorsService(_nse, _yahoo)
 _stocks   = StocksService(_nse, _yahoo)
 _patterns = PatternsService(_yahoo, _nse)
-_scanners = ScannersService(_yahoo, _nse)
+_scanners = ScannersService(_price)
 _service  = TelegramService(_sectors, _stocks, _patterns, _scanners, _nlp)
 
 

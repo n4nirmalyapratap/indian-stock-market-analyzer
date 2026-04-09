@@ -22,6 +22,8 @@ from app.routes.cache import router as cache_router
 from app.services.market_cache_service import is_market_open, cache_status
 from app.services import market_cache_service as _mcs
 from app.services.yahoo_service import YahooService as _YahooService
+from app.services.nse_service import NseService as _NseService
+from app.services.price_service import PriceService as _PriceService
 
 logger = logging.getLogger("telegram-poller")
 
@@ -59,7 +61,7 @@ async def _cache_warmup_task() -> None:
     # This block forces a full warmup on every server start regardless of market hours.
     logger.info("[TEST MODE] Forcing cache warmup on startup regardless of market hours…")
     try:
-        result = await _mcs.warmup_cache(_YahooService())
+        result = await _mcs.warmup_cache(_PriceService(_NseService(), _YahooService()))
         logger.info(
             "[TEST MODE] Cache warmup complete: %d files saved, %d errors (date=%s)",
             result["filesSaved"], result["errors"], result["cacheDate"],
