@@ -106,7 +106,8 @@ artifacts/
   mockup-sandbox/              ← Replit canvas tool (managed by artifact system)
 lib/
   api-zod/                     ← Zod schemas (unused in active code)
-scripts/                       ← post-merge.sh
+scripts/
+  src/push-github.ts           ← GitHub push script (uses Replit OAuth connector)
 ```
 
 ---
@@ -121,6 +122,19 @@ scripts/                       ← post-merge.sh
 6. `run.py` auto-downloads spaCy's `en_core_web_sm` model on first start
 
 **Verify data is loading:** Call `/api/sectors` — if `source` field is `"NSE"` or `"YAHOO"`, data is live. If `source` is `"UNAVAILABLE"`, Yahoo Finance fetch is failing too (network issue).
+
+---
+
+## GitHub Push Log
+
+Pushes are performed via `pnpm --filter @workspace/scripts run push-github`  
+This script uses the Replit GitHub OAuth connector (no PAT needed) to create commits  
+via the GitHub REST API. Source-only files are synced (no node_modules, .pythonlibs, binary  
+assets >400 KB, or generated directories).
+
+| Date | Commit ID | Short SHA | Notes |
+|---|---|---|---|
+| 2026-04-09 | `a97cfcb7f42e08ee9fe97b016bb3ff2b668333a8` | `a97cfcb` | Initial Replit setup: NSE 403 fix (Yahoo Finance fallback), GitHub push script |
 
 ---
 
