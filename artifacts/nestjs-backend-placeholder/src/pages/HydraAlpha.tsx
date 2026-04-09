@@ -263,33 +263,37 @@ function SupervisorTab() {
       </div>
 
       {/* Input bar + suggestion popup */}
-      <div className="px-3 py-2.5 border-t border-gray-100 dark:border-gray-800 flex-shrink-0 relative"
+      <div className="px-4 pt-2 pb-4 flex-shrink-0 relative"
            onMouseLeave={() => setShowSugg(false)}>
         {/* Suggestion popup — appears on ⚡ hover */}
         {showSugg && (
-          <div className="absolute bottom-full left-3 right-3 mb-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg overflow-hidden z-10">
-            <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide px-3 pt-2.5 pb-1">Try asking</p>
+          <div className="absolute bottom-full left-4 right-4 mb-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-xl overflow-hidden z-10">
+            <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-widest px-4 pt-3 pb-1.5">
+              Suggestions
+            </p>
             {SUGGESTIONS.map(s => (
               <button key={s} onClick={() => send(s)} disabled={loading}
-                className="w-full text-left text-sm px-3 py-2 hover:bg-indigo-50 dark:hover:bg-gray-700 hover:text-indigo-700 dark:hover:text-indigo-300 transition text-gray-700 dark:text-gray-200 disabled:opacity-50">
+                className="w-full text-left text-sm px-4 py-2.5 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 hover:text-indigo-700 dark:hover:text-indigo-300 transition-colors text-gray-700 dark:text-gray-300 disabled:opacity-50 flex items-center gap-2 group">
+                <Zap className="w-3 h-3 text-indigo-400 group-hover:text-indigo-500 flex-shrink-0" />
                 {s}
               </button>
             ))}
+            <div className="h-1.5" />
           </div>
         )}
 
-        <div className="flex gap-2 items-center bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-3 py-1.5">
-          {/* ⚡ suggestions — show popup on hover */}
+        <div className="flex items-center gap-3 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl px-4 py-3 shadow-sm transition-all focus-within:border-indigo-400 dark:focus-within:border-indigo-500 focus-within:shadow-indigo-100 dark:focus-within:shadow-indigo-950">
+          {/* ⚡ suggestions trigger */}
           <button
             onMouseEnter={() => !loading && setShowSugg(true)}
             disabled={loading}
             title="Quick suggestions"
-            className={`text-gray-400 hover:text-indigo-600 transition flex-shrink-0 disabled:opacity-40 ${showSugg ? "text-indigo-600" : ""}`}>
+            className={`flex-shrink-0 transition-colors disabled:opacity-30 ${showSugg ? "text-indigo-500" : "text-gray-400 hover:text-indigo-500"}`}>
             <Zap className="w-4 h-4" />
           </button>
 
           <input
-            className="flex-1 bg-transparent text-sm text-gray-900 dark:text-gray-100 focus:outline-none placeholder:text-gray-400 dark:placeholder:text-gray-500"
+            className="flex-1 bg-transparent text-sm text-gray-900 dark:text-gray-100 focus:outline-none placeholder:text-gray-400 dark:placeholder:text-gray-600 min-w-0"
             placeholder="Ask anything about stocks..."
             value={input}
             onChange={e => setInput(e.target.value)}
@@ -297,9 +301,12 @@ function SupervisorTab() {
             onFocus={() => setShowSugg(false)}
             disabled={loading}
           />
-          <button onClick={() => send()} disabled={loading || !input.trim()}
-            className="w-8 h-8 flex items-center justify-center bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-40 transition flex-shrink-0">
-            <Send className="w-3.5 h-3.5" />
+
+          <button
+            onClick={() => send()}
+            disabled={loading || !input.trim()}
+            className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed transition-all active:scale-95 shadow-sm">
+            <Send className="w-3.5 h-3.5 text-white" />
           </button>
         </div>
       </div>
