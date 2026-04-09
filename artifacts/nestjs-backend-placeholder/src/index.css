@@ -459,6 +459,10 @@ html.dark main { color: #f1f5f9; }
 /* Differentiate alternating-row bg from card bg so table rows are visible */
 html.dark main .bg-gray-50  { background-color: #243044; }
 
+/* Make hover states clearly visible in dark mode */
+html.dark main .hover\:bg-gray-50:hover  { background-color: #334155 !important; }
+html.dark main .hover\:bg-gray-100:hover { background-color: #3e4f69 !important; }
+
 /* Brighter semantic text colours on dark backgrounds */
 html.dark main .text-green-700 { color: #4ade80; }
 html.dark main .text-green-600 { color: #4ade80; }
