@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { Switch, Route, Router as WouterRouter, Link, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -12,11 +12,12 @@ import WhatsAppBot from "@/pages/WhatsAppBot";
 import TelegramBot from "@/pages/TelegramBot";
 import HydraAlpha from "@/pages/HydraAlpha";
 import OptionsStrategyTester from "@/pages/OptionsStrategyTester";
+import SettingsPage from "@/pages/SettingsPage";
 import NotFound from "@/pages/not-found";
 import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
   MessageCircle, Send, Brain, TrendingUp,
-  Settings, ChevronRight, ChevronLeft
+  Settings, ChevronRight, ChevronLeft, ChevronDown
 } from "lucide-react";
 
 const queryClient = new QueryClient({
@@ -38,52 +39,53 @@ const SETTINGS_NAV = [
   { path: "/telegram", label: "Telegram Bot", icon: Send },
 ];
 
+function NavLink({ path, label, icon: Icon, open, indent = false }: {
+  path: string; label: string; icon: React.ElementType; open: boolean; indent?: boolean;
+}) {
+  const [loc] = useLocation();
+  const active = loc === path || (path !== "/" && loc.startsWith(path));
+  return (
+    <Link
+      href={path}
+      title={!open ? label : undefined}
+      className={`flex items-center gap-2.5 transition rounded-lg mx-1.5
+        ${indent && open ? "pl-7 pr-2.5 py-1.5" : open ? "px-2.5 py-2" : "px-0 py-2 justify-center"}
+        ${active
+          ? "bg-indigo-50 text-indigo-700"
+          : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
+        }`}
+    >
+      <Icon className={`flex-shrink-0 ${indent ? "w-4 h-4" : "w-[18px] h-[18px]"} ${active ? "text-indigo-600" : ""}`} />
+      {open && <span className={`font-medium whitespace-nowrap ${indent ? "text-xs" : "text-sm"}`}>{label}</span>}
+    </Link>
+  );
+}
+
 function Layout({ children }: { children: React.ReactNode }) {
   const [loc] = useLocation();
-
-  // Sidebar open/closed — persisted, default collapsed
-  const [open, setOpen] = useState(
-    () => localStorage.getItem("sidebar-open") === "true"
-  );
-
-  // Settings popover
+  const [open, setOpen]           = useState(() => localStorage.getItem("sidebar-open") === "true");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const settingsRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => { localStorage.setItem("sidebar-open", String(open)); }, [open]);
+
+  // Auto-open accordion if currently on a settings sub-page
   useEffect(() => {
-    localStorage.setItem("sidebar-open", String(open));
-  }, [open]);
+    if (SETTINGS_NAV.some(({ path }) => loc === path)) setSettingsOpen(true);
+  }, [loc]);
 
-  // Close settings popover on outside click
-  useEffect(() => {
-    function handler(e: MouseEvent) {
-      if (settingsRef.current && !settingsRef.current.contains(e.target as Node)) {
-        setSettingsOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
-
-  const inSettings = SETTINGS_NAV.some(({ path }) => loc === path);
+  const inSettings = SETTINGS_NAV.some(({ path }) => loc === path) || loc === "/settings";
 
   return (
     <div className="h-screen bg-gray-50 flex overflow-hidden">
 
-      {/* ── Sidebar (desktop) ─────────────────────────────────────────── */}
-      <aside
-        className={`hidden md:flex flex-col bg-white border-r border-gray-100 shadow-sm flex-shrink-0
-          transition-all duration-200 ease-in-out
-          ${open ? "w-52" : "w-[52px]"}`}
-      >
+      {/* ── Sidebar ─────────────────────────────────────────────────────── */}
+      <aside className={`hidden md:flex flex-col bg-white border-r border-gray-100 shadow-sm flex-shrink-0
+        transition-all duration-200 ease-in-out ${open ? "w-52" : "w-[52px]"}`}>
+
         {/* Logo */}
         <div className={`flex items-center gap-2.5 border-b border-gray-100 flex-shrink-0 h-[57px]
           ${open ? "px-4" : "justify-center"}`}>
-          <img
-            src="/niftynodes-logo.png"
-            alt="NiftyNodes"
-            className="w-8 h-8 rounded-full object-cover flex-shrink-0"
-          />
+          <img src="/niftynodes-logo.png" alt="NiftyNodes" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
           {open && (
             <div className="overflow-hidden">
               <p className="font-bold text-gray-900 text-sm whitespace-nowrap">Nifty Node</p>
@@ -93,100 +95,57 @@ function Layout({ children }: { children: React.ReactNode }) {
         </div>
 
         {/* Main nav */}
-        <nav className="flex-1 py-2 space-y-0.5 overflow-hidden">
-          {MAIN_NAV.map(({ path, label, icon: Icon }) => {
-            const active = loc === path || (path !== "/" && loc.startsWith(path));
-            return (
-              <Link
-                key={path}
-                href={path}
-                title={!open ? label : undefined}
-                className={`flex items-center gap-2.5 transition rounded-lg mx-1.5
-                  ${open ? "px-2.5 py-2" : "px-0 py-2 justify-center"}
-                  ${active
-                    ? "bg-indigo-50 text-indigo-700"
-                    : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
-                  }`}
-              >
-                <Icon className={`w-[18px] h-[18px] flex-shrink-0 ${active ? "text-indigo-600" : ""}`} />
-                {open && (
-                  <span className="text-sm font-medium whitespace-nowrap">{label}</span>
-                )}
-              </Link>
-            );
-          })}
+        <nav className="flex-1 py-2 space-y-0.5 overflow-y-auto overflow-x-hidden">
+          {MAIN_NAV.map((item) => (
+            <NavLink key={item.path} {...item} open={open} />
+          ))}
         </nav>
 
-        {/* Bottom actions */}
-        <div className="border-t border-gray-100 py-2 space-y-0.5 flex-shrink-0">
+        {/* Bottom: Settings + toggle */}
+        <div className="border-t border-gray-100 py-2 flex-shrink-0">
 
-          {/* Settings / integrations */}
-          <div ref={settingsRef} className="relative mx-1.5">
-            <button
-              onClick={() => setSettingsOpen(o => !o)}
-              title={!open ? "Settings" : undefined}
-              className={`w-full flex items-center gap-2.5 rounded-lg transition py-2
-                ${open ? "px-2.5" : "px-0 justify-center"}
-                ${inSettings || settingsOpen
-                  ? "bg-indigo-50 text-indigo-700"
-                  : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
-                }`}
-            >
-              <Settings className="w-[18px] h-[18px] flex-shrink-0" />
-              {open && (
-                <>
-                  <span className="text-sm font-medium">Settings</span>
-                  <ChevronRight className={`w-3.5 h-3.5 ml-auto transition-transform ${settingsOpen ? "rotate-90" : ""}`} />
-                </>
+          {/* Settings — inline accordion when open, link to /settings when collapsed */}
+          {open ? (
+            <div className="space-y-0.5">
+              <button
+                onClick={() => setSettingsOpen(s => !s)}
+                className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg mx-1.5 transition
+                  ${inSettings ? "bg-indigo-50 text-indigo-700" : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"}
+                  w-[calc(100%-12px)]`}
+              >
+                <Settings className="w-[18px] h-[18px] flex-shrink-0" />
+                <span className="text-sm font-medium flex-1 text-left">Settings</span>
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-150 ${settingsOpen ? "rotate-180" : ""}`} />
+              </button>
+              {settingsOpen && (
+                <div className="space-y-0.5 pb-0.5">
+                  {SETTINGS_NAV.map((item) => (
+                    <NavLink key={item.path} {...item} open={open} indent />
+                  ))}
+                </div>
               )}
-            </button>
+            </div>
+          ) : (
+            <NavLink path="/settings" label="Settings" icon={Settings} open={false} />
+          )}
 
-            {settingsOpen && (
-              <div className={`absolute bottom-full mb-1 bg-white rounded-xl shadow-lg border border-gray-200 py-1.5 z-50 min-w-[180px]
-                ${open ? "left-0" : "left-12"}`}>
-                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-3 pt-1 pb-1.5">
-                  Integrations
-                </p>
-                {SETTINGS_NAV.map(({ path, label, icon: Icon }) => {
-                  const active = loc === path;
-                  return (
-                    <Link
-                      key={path}
-                      href={path}
-                      onClick={() => setSettingsOpen(false)}
-                      className={`flex items-center gap-2.5 px-3 py-2 text-sm transition
-                        ${active ? "text-indigo-700 bg-indigo-50" : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"}`}
-                    >
-                      <Icon className="w-4 h-4 flex-shrink-0" />
-                      {label}
-                    </Link>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Expand / collapse toggle */}
+          {/* Expand / collapse */}
           <button
             onClick={() => setOpen(o => !o)}
             title={open ? "Collapse sidebar" : "Expand sidebar"}
-            className={`w-full flex items-center gap-2.5 rounded-lg transition py-2 mx-1.5
-              ${open ? "px-2.5 w-[calc(100%-12px)]" : "px-0 justify-center w-[calc(100%-12px)]"}
+            className={`w-full flex items-center gap-2.5 rounded-lg transition py-2 mt-0.5
+              ${open ? "px-2.5 w-[calc(100%-12px)] mx-1.5" : "px-0 justify-center"}
               text-gray-400 hover:text-indigo-600 hover:bg-gray-50`}
           >
             {open
-              ? <ChevronLeft  className="w-[16px] h-[16px] flex-shrink-0" />
-              : <ChevronRight className="w-[16px] h-[16px] flex-shrink-0" />}
-            {open && (
-              <span className="text-xs font-medium whitespace-nowrap text-gray-400">
-                Collapse
-              </span>
-            )}
+              ? <ChevronLeft  className="w-4 h-4 flex-shrink-0" />
+              : <ChevronRight className="w-4 h-4 flex-shrink-0" />}
+            {open && <span className="text-xs font-medium text-gray-400 whitespace-nowrap">Collapse</span>}
           </button>
         </div>
       </aside>
 
-      {/* ── Content ────────────────────────────────────────────────────── */}
+      {/* ── Content ─────────────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col min-w-0">
 
         {/* Mobile header */}
@@ -197,12 +156,10 @@ function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Mobile nav strip */}
         <div className="md:hidden bg-white border-b border-gray-100 px-2 py-2 flex gap-1 overflow-x-auto">
-          {[...MAIN_NAV, ...SETTINGS_NAV].map(({ path, label, icon: Icon }) => {
+          {[...MAIN_NAV, { path: "/settings", label: "Settings", icon: Settings }].map(({ path, label, icon: Icon }) => {
             const active = loc === path || (path !== "/" && loc.startsWith(path));
             return (
-              <Link
-                key={path}
-                href={path}
+              <Link key={path} href={path}
                 className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg text-xs transition flex-shrink-0
                   ${active ? "bg-indigo-50 text-indigo-700 font-medium" : "text-gray-500"}`}
               >
@@ -234,6 +191,7 @@ function Router() {
         <Route path="/telegram" component={TelegramBot} />
         <Route path="/hydra"    component={HydraAlpha} />
         <Route path="/options"  component={OptionsStrategyTester} />
+        <Route path="/settings" component={SettingsPage} />
         <Route component={NotFound} />
       </Switch>
     </Layout>
