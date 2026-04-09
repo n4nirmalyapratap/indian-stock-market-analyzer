@@ -21,6 +21,7 @@ export interface Candle {
 interface Props {
   panelId: string;
   symbol: string;
+  symbolName?: string;
   periodCfg: { p: string; i: string };
   drawingTool: DrawingTool;
   indicators: Set<string>;
@@ -33,30 +34,43 @@ interface Props {
   onActivate: () => void;
 }
 
-const DARK      = "#131722";
-const GRID_CLR  = "rgba(255,255,255,0.06)";
-const TEXT_CLR  = "#c4cfd8";
-const DRAW_CLR  = "#6366f1";
+const DARK     = "#131722";
+const GRID_CLR = "rgba(255,255,255,0.06)";
+const TEXT_CLR = "#787b86";
+const DRAW_CLR = "#6366f1";
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
-function toDateStr(ts: number) {
+const INTRADAY_INTERVALS = new Set(["1m", "2m", "5m", "15m", "30m", "60m", "90m"]);
+
+function toDateStr(ts: number, showTime = true) {
   const d = new Date(ts * 1000);
   const date = d.toISOString().slice(0, 10);
+  if (!showTime) return date;
   const hh = d.getUTCHours();
   const mm = d.getUTCMinutes();
   return hh === 0 && mm === 0 ? date : `${date} ${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
 
+function fmtVol(v: number): string {
+  if (v >= 1e9) return (v / 1e9).toFixed(2) + "B";
+  if (v >= 1e6) return (v / 1e6).toFixed(2) + "M";
+  if (v >= 1e3) return (v / 1e3).toFixed(1) + "K";
+  return String(v);
+}
+
+function fmtPrice(v: number): string {
+  return v.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 // ── SVG overlay helpers ────────────────────────────────────────────────────────
 
-interface SvgLine   { type: "line";   x1: number; y1: number; x2: number; y2: number }
-interface SvgRect   { type: "rect";   x: number;  y: number;  w: number;  h: number  }
+interface SvgLine   { type: "line"; x1: number; y1: number; x2: number; y2: number }
+interface SvgRect   { type: "rect"; x: number;  y: number;  w: number;  h: number  }
 interface SvgPixels { id: string; el: SvgLine | SvgRect }
 
 function getGridBounds(chart: echarts.ECharts, n: number, candles: Candle[]) {
-  // Derive actual pixel bounds from the chart's own coordinate system
-  const [leftX] = chart.convertToPixel({ gridIndex: 0 }, [0, 0]);
+  const [leftX]  = chart.convertToPixel({ gridIndex: 0 }, [0, 0]);
   const [rightX] = chart.convertToPixel({ gridIndex: 0 }, [Math.max(0, n - 1), 0]);
   const highs = candles.map(c => c.high);
   const lows  = candles.map(c => c.low);
@@ -99,10 +113,53 @@ function shapeToPixels(
   return null;
 }
 
+// ── Eraser hit-testing ────────────────────────────────────────────────────────
+
+function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+  const dx = x2 - x1, dy = y2 - y1;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return Math.hypot(px - x1, py - y1);
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / len2));
+  return Math.hypot(px - x1 - t * dx, py - y1 - t * dy);
+}
+
+function distToRect(px: number, py: number, rx: number, ry: number, rw: number, rh: number): number {
+  const insideX = px >= rx && px <= rx + rw;
+  const insideY = py >= ry && py <= ry + rh;
+  if (insideX && insideY) return Math.min(px - rx, rx + rw - px, py - ry, ry + rh - py);
+  const cx = Math.max(rx, Math.min(px, rx + rw));
+  const cy = Math.max(ry, Math.min(py, ry + rh));
+  return Math.hypot(px - cx, py - cy);
+}
+
+function hitTestDrawings(
+  px: number, py: number,
+  drawings: Drawing[],
+  chart: echarts.ECharts,
+  candles: Candle[],
+): string | null {
+  const THRESHOLD = 14;
+  let best: { id: string; dist: number } | null = null;
+  for (const d of drawings) {
+    const el = shapeToPixels(d.shape, chart, candles);
+    if (!el) continue;
+    const dist = el.type === "line"
+      ? distToSegment(px, py, el.x1, el.y1, el.x2, el.y2)
+      : distToRect(px, py, el.x, el.y, el.w, el.h);
+    if (dist < THRESHOLD && (!best || dist < best.dist)) {
+      best = { id: d.id, dist };
+    }
+  }
+  return best?.id ?? null;
+}
+
+// ── SVG renderer ──────────────────────────────────────────────────────────────
+
 function renderSvg(
   svgEl: SVGSVGElement | null,
   pixels: SvgPixels[],
   preview: SvgLine | SvgRect | null,
+  eraserPixel: { x: number; y: number } | null,
 ) {
   if (!svgEl) return;
   while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
@@ -128,33 +185,57 @@ function renderSvg(
     }
   };
 
-  for (const p of pixels) add(p.el, p.el.type === "line");
+  for (const p of pixels) add(p.el);
   if (preview) add(preview, preview.type === "line", 0.7);
+
+  // Eraser cursor circle
+  if (eraserPixel) {
+    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    c.setAttribute("cx", String(eraserPixel.x));
+    c.setAttribute("cy", String(eraserPixel.y));
+    c.setAttribute("r", "12");
+    c.setAttribute("stroke", "rgba(239,68,68,0.7)");
+    c.setAttribute("stroke-width", "1.5");
+    c.setAttribute("fill", "rgba(239,68,68,0.08)");
+    svgEl.appendChild(c);
+  }
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
+interface HoverCandle {
+  date: string; o: number; h: number; l: number; c: number; v: number;
+}
+
 export default function ChartPanel({
-  symbol, periodCfg, drawingTool, indicators,
+  symbol, symbolName, periodCfg, drawingTool, indicators,
   showRSI, showMACD, isActive, drawings, onDrawingAdd, onDrawingErase, onActivate,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef       = useRef<SVGSVGElement>(null);
   const chartRef     = useRef<echarts.ECharts | null>(null);
   const candles      = useRef<Candle[]>([]);
-  const dragStart       = useRef<{ px: number; py: number; xIdx: number; y: number } | null>(null);
-  const drawingToolRef  = useRef<DrawingTool>(drawingTool);
+  const dragStart    = useRef<{ px: number; py: number; xIdx: number; y: number } | null>(null);
+  const eraserPos    = useRef<{ x: number; y: number } | null>(null);
+  const drawingToolRef = useRef<DrawingTool>(drawingTool);
+  const intervalRef    = useRef<string>(periodCfg.i);
   useEffect(() => { drawingToolRef.current = drawingTool; }, [drawingTool]);
+  useEffect(() => { intervalRef.current = periodCfg.i; }, [periodCfg.i]);
 
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading]       = useState(true);
+  const [hoverCandle, setHoverCandle] = useState<HoverCandle | null>(null);
+  const [lastCandle, setLastCandle]   = useState<{ c: number; pct: number } | null>(null);
 
-  // ── Repaint SVG (called after chart render or drawings change) ─────────────
-  const paintSvg = useCallback((preview: SvgLine | SvgRect | null = null) => {
+  // ── Repaint SVG ────────────────────────────────────────────────────────────
+  const paintSvg = useCallback((
+    preview: SvgLine | SvgRect | null = null,
+    eraser: { x: number; y: number } | null = null,
+  ) => {
     const chart = chartRef.current;
     const svg   = svgRef.current;
     const div   = containerRef.current;
     if (!chart || !svg || !div || !candles.current.length) return;
-    svg.setAttribute("width", String(div.offsetWidth));
+    svg.setAttribute("width",  String(div.offsetWidth));
     svg.setAttribute("height", String(div.offsetHeight));
 
     const pixels: SvgPixels[] = drawings
@@ -164,48 +245,94 @@ export default function ChartPanel({
       })
       .filter(Boolean) as SvgPixels[];
 
-    renderSvg(svg, pixels, preview);
+    renderSvg(svg, pixels, preview, eraser);
   }, [drawings]);
 
-  // ── Render ECharts (chart data only, NO graphic component) ────────────────
+  // ── Render ECharts ─────────────────────────────────────────────────────────
   const renderChart = useCallback(() => {
     const chart = chartRef.current;
     if (!chart || !candles.current.length) return;
 
-    const cs     = candles.current;
-    const dates  = cs.map(c => toDateStr(c.time));
-    const closes = cs.map(c => c.close);
+    const cs       = candles.current;
+    const showTime = INTRADAY_INTERVALS.has(intervalRef.current);
+    const dates    = cs.map(c => toDateStr(c.time, showTime));
+    const closes   = cs.map(c => c.close);
     const ohlc   = cs.map(c => [c.open, c.close, c.low, c.high]);
 
     const hasSub = showRSI || showMACD;
-    const grids: object[] = [
-      { top: "6%", left: 50, right: 8, height: hasSub ? "55%" : "75%" },
-      { top: hasSub ? "57%" : "77%", left: 50, right: 8, height: "8%" },
-    ];
-    if (hasSub) grids.push({ top: "70%", left: 50, right: 8, height: "18%" });
 
+    // ── Grid layout: main chart / volume / sub-panel ──────────────────────
+    // Main chart — ends well above volume so x-axis labels don't overlap bars
+    // Volume — dates shown only here when no sub-panel, hidden otherwise
+    const mainHeight = hasSub ? "48%" : "68%";
+    const mainBottom = hasSub ? "44%" : "24%";
+    const volTop     = hasSub ? "54%" : "76%";
+    const volHeight  = hasSub ? "8%"  : "16%";
+    const subTop     = "68%";
+    const subHeight  = "26%";
+
+    const grids: object[] = [
+      { top: "4%",  left: 60, right: 60, height: mainHeight },
+      { top: volTop, left: 60, right: 60, height: volHeight  },
+    ];
+    if (hasSub) grids.push({ top: subTop, left: 60, right: 60, height: subHeight });
+
+    // x-axis: labels ONLY on the bottom-most grid
     const xBase = { axisLine: { lineStyle: { color: GRID_CLR } }, axisTick: { show: false } };
     const xAxes: object[] = [
-      { ...xBase, gridIndex: 0, data: dates, axisLabel: { color: TEXT_CLR, fontSize: 10 }, splitLine: { lineStyle: { color: GRID_CLR } } },
-      { ...xBase, gridIndex: 1, data: dates, axisLabel: { show: false }, splitLine: { show: false } },
+      // Main chart — no date labels (they'd overlap volume bars)
+      { ...xBase, gridIndex: 0, data: dates, axisLabel: { show: false }, splitLine: { lineStyle: { color: GRID_CLR } } },
+      // Volume — show dates here only when there's no sub-panel
+      { ...xBase, gridIndex: 1, data: dates, axisLabel: hasSub ? { show: false } : { color: TEXT_CLR, fontSize: 9, margin: 6 }, splitLine: { show: false } },
     ];
-    if (hasSub) xAxes.push({ ...xBase, gridIndex: 2, data: dates, axisLabel: { color: TEXT_CLR, fontSize: 9 }, splitLine: { lineStyle: { color: GRID_CLR } } });
+    if (hasSub) {
+      // Sub-panel always shows date labels at very bottom
+      xAxes.push({ ...xBase, gridIndex: 2, data: dates, axisLabel: { color: TEXT_CLR, fontSize: 9, margin: 6 }, splitLine: { lineStyle: { color: GRID_CLR } } });
+    }
 
-    const yBase = { axisLine: { lineStyle: { color: GRID_CLR } } };
+    // y-axis
+    const yBase = { axisLine: { show: false }, axisTick: { show: false } };
     const yAxes: object[] = [
-      { ...yBase, gridIndex: 0, scale: true, axisLabel: { color: TEXT_CLR, fontSize: 10 }, splitLine: { lineStyle: { color: GRID_CLR } } },
-      { ...yBase, gridIndex: 1, scale: true, axisLabel: { show: false }, splitLine: { show: false } },
+      {
+        ...yBase, gridIndex: 0, scale: true,
+        axisLabel: { color: TEXT_CLR, fontSize: 10, margin: 6 },
+        splitLine: { lineStyle: { color: GRID_CLR } },
+      },
+      {
+        ...yBase, gridIndex: 1, scale: true,
+        axisLabel: {
+          show: true, color: TEXT_CLR, fontSize: 9, margin: 6,
+          formatter: (v: number) => fmtVol(v),
+        },
+        splitLine: { show: false },
+        splitNumber: 2,
+      },
     ];
-    if (hasSub) yAxes.push({ ...yBase, gridIndex: 2, scale: true, axisLabel: { color: TEXT_CLR, fontSize: 9 }, splitLine: { lineStyle: { color: GRID_CLR } } });
+    if (hasSub) {
+      yAxes.push({
+        ...yBase, gridIndex: 2, scale: true,
+        axisLabel: { color: TEXT_CLR, fontSize: 9, margin: 6 },
+        splitLine: { lineStyle: { color: GRID_CLR } },
+        splitNumber: 3,
+      });
+    }
 
+    // Series
     const series: object[] = [
       {
         name: "Price", type: "candlestick", xAxisIndex: 0, yAxisIndex: 0, data: ohlc,
-        itemStyle: { color: "#22c55e", color0: "#ef4444", borderColor: "#22c55e", borderColor0: "#ef4444", borderWidth: 1 },
+        itemStyle: {
+          color: "#26a69a", color0: "#ef5350",
+          borderColor: "#26a69a", borderColor0: "#ef5350",
+          borderWidth: 1,
+        },
       },
       {
-        name: "Volume", type: "bar", xAxisIndex: 1, yAxisIndex: 1, barMaxWidth: 12,
-        data: cs.map(c => ({ value: c.volume, itemStyle: { color: c.close >= c.open ? "rgba(34,197,94,0.45)" : "rgba(239,68,68,0.45)" } })),
+        name: "Volume", type: "bar", xAxisIndex: 1, yAxisIndex: 1, barMaxWidth: 10,
+        data: cs.map(c => ({
+          value: c.volume,
+          itemStyle: { color: c.close >= c.open ? "rgba(38,166,154,0.5)" : "rgba(239,83,80,0.5)" },
+        })),
       },
     ];
 
@@ -223,25 +350,26 @@ export default function ChartPanel({
     if (indicators.has("bb")) {
       const bb = calcBollingerBands(closes);
       series.push(
-        { name: "BB+", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: bb.upper.map(v => v ?? null), lineStyle: { color: "#3b82f6", width: 1, type: "dashed" }, showSymbol: false, connectNulls: false },
-        { name: "BBm", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: bb.middle.map(v => v ?? null), lineStyle: { color: "#64748b", width: 1, type: "dashed" }, showSymbol: false, connectNulls: false },
-        { name: "BB-", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: bb.lower.map(v => v ?? null), lineStyle: { color: "#3b82f6", width: 1, type: "dashed" }, showSymbol: false, connectNulls: false },
+        { name: "BB+", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: bb.upper.map(v => v ?? null), lineStyle: { color: "#3b82f6", width: 1, type: "dashed" }, showSymbol: false },
+        { name: "BBm", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: bb.middle.map(v => v ?? null), lineStyle: { color: "#64748b", width: 1, type: "dashed" }, showSymbol: false },
+        { name: "BB-", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: bb.lower.map(v => v ?? null), lineStyle: { color: "#3b82f6", width: 1, type: "dashed" }, showSymbol: false },
       );
     }
     if (showRSI && !showMACD) {
       const rv = calcRSI(closes);
       series.push(
-        { name: "RSI", type: "line", xAxisIndex: 2, yAxisIndex: 2, data: rv.map(v => v !== null ? +(v as number).toFixed(2) : null), lineStyle: { color: "#f59e0b", width: 1.5 }, showSymbol: false, connectNulls: false },
-        { name: "OB",  type: "line", xAxisIndex: 2, yAxisIndex: 2, data: dates.map(() => 70), lineStyle: { color: "rgba(239,68,68,0.4)", width: 1, type: "dashed" }, showSymbol: false },
-        { name: "OS",  type: "line", xAxisIndex: 2, yAxisIndex: 2, data: dates.map(() => 30), lineStyle: { color: "rgba(34,197,94,0.4)", width: 1, type: "dashed" }, showSymbol: false },
+        { name: "RSI",  type: "line", xAxisIndex: 2, yAxisIndex: 2, data: rv.map(v => v !== null ? +(v as number).toFixed(2) : null), lineStyle: { color: "#f59e0b", width: 1.5 }, showSymbol: false },
+        { name: "OB",   type: "line", xAxisIndex: 2, yAxisIndex: 2, data: dates.map(() => 70), lineStyle: { color: "rgba(239,68,68,0.35)", width: 1, type: "dashed" }, showSymbol: false },
+        { name: "OS",   type: "line", xAxisIndex: 2, yAxisIndex: 2, data: dates.map(() => 30), lineStyle: { color: "rgba(38,166,154,0.35)", width: 1, type: "dashed" }, showSymbol: false },
       );
     }
     if (showMACD) {
       const mac = calcMACD(closes);
       series.push(
-        { name: "MACD",   type: "line", xAxisIndex: 2, yAxisIndex: 2, data: mac.macd.map(v => v !== null ? +(v as number).toFixed(4) : null), lineStyle: { color: "#3b82f6", width: 1.2 }, showSymbol: false, connectNulls: false },
-        { name: "Signal", type: "line", xAxisIndex: 2, yAxisIndex: 2, data: mac.signal.map(v => v !== null ? +(v as number).toFixed(4) : null), lineStyle: { color: "#f97316", width: 1.2 }, showSymbol: false, connectNulls: false },
-        { name: "Hist",   type: "bar",  xAxisIndex: 2, yAxisIndex: 2, barMaxWidth: 6, data: mac.histogram.map(v => ({ value: v !== null ? +(v as number).toFixed(4) : null, itemStyle: { color: (v ?? 0) >= 0 ? "rgba(34,197,94,0.7)" : "rgba(239,68,68,0.7)" } })) },
+        { name: "MACD",   type: "line", xAxisIndex: 2, yAxisIndex: 2, data: mac.macd.map(v => v !== null ? +(v as number).toFixed(4) : null), lineStyle: { color: "#2962ff", width: 1.3 }, showSymbol: false },
+        { name: "Signal", type: "line", xAxisIndex: 2, yAxisIndex: 2, data: mac.signal.map(v => v !== null ? +(v as number).toFixed(4) : null), lineStyle: { color: "#ff6d00", width: 1.3 }, showSymbol: false },
+        { name: "Hist",   type: "bar",  xAxisIndex: 2, yAxisIndex: 2, barMaxWidth: 5,
+          data: mac.histogram.map(v => ({ value: v !== null ? +(v as number).toFixed(4) : null, itemStyle: { color: (v ?? 0) >= 0 ? "rgba(38,166,154,0.7)" : "rgba(239,83,80,0.7)" } })) },
       );
     }
 
@@ -249,24 +377,32 @@ export default function ChartPanel({
       backgroundColor: DARK, animation: false,
       tooltip: {
         trigger: "axis",
-        axisPointer: { type: "cross", crossStyle: { color: "rgba(255,255,255,0.25)" } },
-        backgroundColor: "#1e2131", borderColor: "#374151",
-        textStyle: { color: TEXT_CLR, fontSize: 10 },
-        formatter: (params: any) => {
-          const c = Array.isArray(params) ? params.find((p: any) => p.seriesName === "Price") : null;
-          if (!c || !c.data) return "";
-          const [o, cl, l, h] = c.data as number[];
-          const p = (((cl - o) / o) * 100).toFixed(2);
-          const col = cl >= o ? "#22c55e" : "#ef4444";
-          return `<div style="font-size:10px;line-height:1.6"><b style="color:#fff">${c.name}</b><br/>O<b>${o.toFixed(2)}</b> H<b style="color:#22c55e">${h.toFixed(2)}</b> L<b style="color:#ef4444">${l.toFixed(2)}</b> C<b>${cl.toFixed(2)}</b> <span style="color:${col}">${Number(p)>=0?"+":""}${p}%</span></div>`;
+        axisPointer: {
+          type: "cross",
+          crossStyle: { color: "rgba(255,255,255,0.2)", width: 1 },
+          lineStyle: { color: "rgba(255,255,255,0.2)", width: 1, type: "solid" },
+          label: {
+            backgroundColor: "#2a2e39",
+            color: "#d1d4dc",
+            fontSize: 10,
+            formatter: ({ value }: any) => typeof value === "number" ? fmtPrice(value) : String(value),
+          },
         },
+        backgroundColor: "#1e2130",
+        borderColor: "#2a2e39",
+        borderWidth: 1,
+        padding: [6, 10],
+        textStyle: { color: "#d1d4dc", fontSize: 11 },
+        // Suppress default tooltip — we show OHLCV in the header instead
+        formatter: () => "",
       },
       axisPointer: { link: [{ xAxisIndex: "all" }] },
-      dataZoom: [{ type: "inside", xAxisIndex: hasSub ? [0, 1, 2] : [0, 1], start: 0, end: 100 }],
+      dataZoom: [
+        { type: "inside", xAxisIndex: hasSub ? [0, 1, 2] : [0, 1], start: 60, end: 100, zoomOnMouseWheel: true, moveOnMouseMove: true },
+      ],
       grid: grids, xAxis: xAxes, yAxis: yAxes, series,
     }, true);
 
-    // repaint SVG after chart re-renders
     requestAnimationFrame(() => paintSvg());
   }, [indicators, showRSI, showMACD, paintSvg]);
 
@@ -279,7 +415,20 @@ export default function ChartPanel({
       if (!res.ok) throw new Error();
       const data = await res.json();
       candles.current = data.candles ?? [];
-    } catch {} finally { setLoading(false); }
+      // Compute last close + daily change
+      const cs = candles.current;
+      if (cs.length >= 2) {
+        const last = cs[cs.length - 1];
+        const prev = cs[cs.length - 2];
+        setLastCandle({ c: last.close, pct: ((last.close - prev.close) / prev.close) * 100 });
+      } else if (cs.length === 1) {
+        setLastCandle({ c: cs[0].close, pct: 0 });
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
     renderChart();
   }, [symbol, periodCfg, renderChart]);
 
@@ -290,12 +439,29 @@ export default function ChartPanel({
     const chart = echarts.init(div, null, { renderer: "canvas" });
     chartRef.current = chart;
 
-    // Repaint SVG after any zoom/pan (only resize chart, never re-render full setOption)
     chart.on("dataZoom", () => requestAnimationFrame(() => paintSvg()));
-    chart.on("rendered", () => requestAnimationFrame(() => paintSvg()));
+    chart.on("rendered",  () => requestAnimationFrame(() => paintSvg()));
 
-    // ResizeObserver: ONLY resize chart, do NOT call renderChart (avoids layout loop)
-    const ro = new ResizeObserver(() => { chart.resize(); requestAnimationFrame(() => paintSvg()); });
+    // Update OHLCV header on crosshair move
+    chart.on("updateAxisPointer", (e: any) => {
+      const axesInfo = e?.axesInfo;
+      if (!axesInfo?.length) { setHoverCandle(null); return; }
+      const info = axesInfo.find((a: any) => a.axisDim === "x" && a.axisIndex === 0);
+      if (!info) { setHoverCandle(null); return; }
+      const idx = typeof info.value === "number" ? info.value : parseInt(String(info.value));
+      if (idx >= 0 && idx < candles.current.length) {
+        const c = candles.current[idx];
+        const showTime = INTRADAY_INTERVALS.has(intervalRef.current);
+        setHoverCandle({ date: toDateStr(c.time, showTime), o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume });
+      } else {
+        setHoverCandle(null);
+      }
+    });
+
+    const ro = new ResizeObserver(() => {
+      chart.resize();
+      requestAnimationFrame(() => paintSvg());
+    });
     ro.observe(div);
 
     fetchData();
@@ -319,8 +485,7 @@ export default function ChartPanel({
     if (!chart) return null;
     const pt = chart.convertFromPixel({ gridIndex: 0 }, [px, py]);
     if (!pt) return null;
-    const dates = candles.current.map(c => toDateStr(c.time));
-    const xIdx = Math.max(0, Math.min(Math.round(pt[0] as number), dates.length - 1));
+    const xIdx = Math.max(0, Math.min(Math.round(pt[0] as number), candles.current.length - 1));
     return { xIdx, y: pt[1] as number };
   };
 
@@ -328,28 +493,42 @@ export default function ChartPanel({
     if (drawingTool === "none") return;
     e.preventDefault();
     onActivate();
-    if (drawingTool === "eraser") {
-      if (drawings.length > 0) onDrawingErase(drawings[drawings.length - 1].id);
-      return;
-    }
+
     const pos = getXY(e);
     if (!pos) return;
+
+    if (drawingTool === "eraser") {
+      const chart = chartRef.current;
+      if (!chart || !candles.current.length) return;
+      const hitId = hitTestDrawings(pos.px, pos.py, drawings, chart, candles.current);
+      if (hitId) {
+        onDrawingErase(hitId);
+      }
+      return;
+    }
+
     const data = pixelToData(pos.px, pos.py);
     if (!data) return;
     dragStart.current = { px: pos.px, py: pos.py, xIdx: data.xIdx, y: data.y };
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!dragStart.current) return;
     const pos = getXY(e);
     if (!pos) return;
+
+    // Eraser hover: show circle cursor
+    if (drawingTool === "eraser") {
+      eraserPos.current = { x: pos.px, y: pos.py };
+      paintSvg(null, eraserPos.current);
+      return;
+    }
+
+    if (!dragStart.current) return;
     const data = pixelToData(pos.px, pos.py);
     if (!data) return;
     const chart = chartRef.current;
-    const div = containerRef.current;
-    if (!chart || !div) return;
+    if (!chart) return;
 
-    // Build preview pixel shape directly — NO ECharts re-render
     let preview: SvgLine | SvgRect | null = null;
     const s = dragStart.current;
     const b = getGridBounds(chart, candles.current.length, candles.current);
@@ -375,8 +554,8 @@ export default function ChartPanel({
     if (!data || !pos) { paintSvg(); return; }
 
     let shape: Record<string, unknown> | null = null;
-    if (drawingTool === "hline")     shape = { type: "hline", y: s.y };
-    else if (drawingTool === "vline") shape = { type: "vline", xIdx: s.xIdx };
+    if (drawingTool === "hline")        shape = { type: "hline", y: s.y };
+    else if (drawingTool === "vline")   shape = { type: "vline", xIdx: s.xIdx };
     else if (drawingTool === "trendline") shape = { type: "trendline", x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y };
     else if (drawingTool === "rectangle") shape = { type: "rectangle", x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y };
 
@@ -384,37 +563,78 @@ export default function ChartPanel({
     paintSvg();
   };
 
+  // ── Derived display values ─────────────────────────────────────────────────
+  const display = hoverCandle ?? (lastCandle ? {
+    date: "", o: 0, h: 0, l: 0, c: lastCandle.c, v: 0,
+  } : null);
+
+  const priceColor = lastCandle
+    ? (lastCandle.pct >= 0 ? "#26a69a" : "#ef5350")
+    : "#d1d4dc";
+
   return (
     <div
-      className={`flex flex-col h-full rounded border transition-colors ${isActive ? "border-indigo-500" : "border-gray-800"}`}
+      className={`flex flex-col h-full rounded overflow-hidden border transition-colors ${isActive ? "border-indigo-500/60" : "border-transparent"}`}
       style={{ background: DARK }}
       onClick={onActivate}
     >
-      {/* Header */}
-      <div className="flex items-center gap-2 px-3 py-1 border-b border-gray-800 min-h-[32px] shrink-0">
-        <span className="font-bold text-white text-sm tracking-wide">{symbol}</span>
-        {loading && <span className="ml-auto text-[11px] text-gray-600 animate-pulse">Loading…</span>}
+      {/* ── Header ──────────────────────────────────────────────────────── */}
+      <div className="flex items-start gap-3 px-3 py-1.5 border-b border-white/[0.06] shrink-0 min-h-[42px]">
+        {/* Symbol + name */}
+        <div className="flex flex-col justify-center min-w-0">
+          <div className="flex items-baseline gap-1.5">
+            <span className="font-bold text-white text-sm tracking-wide leading-tight">{symbol}</span>
+            {symbolName && <span className="text-[11px] text-gray-500 truncate max-w-[130px] leading-tight">{symbolName}</span>}
+          </div>
+          {lastCandle && (
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <span className="text-[13px] font-semibold" style={{ color: priceColor }}>
+                ₹{fmtPrice(lastCandle.c)}
+              </span>
+              <span className="text-[11px]" style={{ color: priceColor }}>
+                {lastCandle.pct >= 0 ? "+" : ""}{lastCandle.pct.toFixed(2)}%
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* OHLCV on hover (TradingView-style) */}
+        {hoverCandle && (
+          <div className="flex items-center gap-2.5 text-[11px] mt-0.5 flex-wrap">
+            <span className="text-gray-500">{hoverCandle.date}</span>
+            <span><span className="text-gray-500">O</span> <span className="text-white">{fmtPrice(hoverCandle.o)}</span></span>
+            <span><span className="text-[#26a69a]">H</span> <span className="text-white">{fmtPrice(hoverCandle.h)}</span></span>
+            <span><span className="text-[#ef5350]">L</span> <span className="text-white">{fmtPrice(hoverCandle.l)}</span></span>
+            <span><span className="text-gray-500">C</span> <span className="text-white">{fmtPrice(hoverCandle.c)}</span></span>
+            <span><span className="text-gray-500">V</span> <span className="text-white">{fmtVol(hoverCandle.v)}</span></span>
+          </div>
+        )}
+
+        {loading && (
+          <span className="ml-auto text-[10px] text-gray-600 animate-pulse self-center">Loading…</span>
+        )}
       </div>
 
-      {/* Chart + SVG overlay + drawing capture overlay */}
+      {/* ── Chart + SVG overlay ──────────────────────────────────────────── */}
       <div className="flex-1 relative min-h-0">
-        {/* ECharts canvas */}
         <div ref={containerRef} className="absolute inset-0" />
-        {/* SVG drawing layer — always present, pointer-events: none so ECharts works normally */}
         <svg
           ref={svgRef}
           className="absolute inset-0"
           style={{ pointerEvents: "none", zIndex: 10 }}
         />
-        {/* Mouse capture layer — only active when a drawing tool is selected */}
         {drawingTool !== "none" && (
           <div
             className="absolute inset-0"
-            style={{ zIndex: 20, cursor: drawingTool === "eraser" ? "cell" : "crosshair" }}
+            style={{ zIndex: 20, cursor: drawingTool === "eraser" ? "none" : "crosshair" }}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
-            onMouseLeave={() => { if (dragStart.current) { dragStart.current = null; paintSvg(); } }}
+            onMouseLeave={() => {
+              eraserPos.current = null;
+              if (dragStart.current) { dragStart.current = null; }
+              paintSvg();
+            }}
           />
         )}
       </div>
