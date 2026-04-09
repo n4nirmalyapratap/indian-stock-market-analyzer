@@ -117,19 +117,22 @@ function Pill({ label, value, color = "gray" }: { label: string; value: string; 
 
 function GreeksBar({ g }: { g: Greeks }) {
   const items = [
-    { label: "Δ Delta",  val: g.delta,  tip: "Price sensitivity per ₹1 move in underlying" },
-    { label: "Γ Gamma",  val: g.gamma,  tip: "Rate of change of Delta" },
-    { label: "Θ Theta",  val: g.theta,  tip: "Daily time decay in ₹" },
-    { label: "ν Vega",   val: g.vega,   tip: "Sensitivity to 1% change in IV" },
-    { label: "ρ Rho",    val: g.rho,    tip: "Sensitivity to 1% change in rate" },
+    { sym: "Δ", label: "Delta", val: g.delta, tip: "Price sensitivity per ₹1 move" },
+    { sym: "Γ", label: "Gamma", val: g.gamma, tip: "Rate of change of Delta" },
+    { sym: "Θ", label: "Theta", val: g.theta, tip: "Daily time decay (₹)" },
+    { sym: "ν", label: "Vega",  val: g.vega,  tip: "Sensitivity to 1% IV change" },
+    { sym: "ρ", label: "Rho",   val: g.rho,   tip: "Sensitivity to 1% rate change" },
   ];
   return (
-    <div className="grid grid-cols-5 gap-2">
-      {items.map(({ label, val, tip }) => (
+    <div className="grid grid-cols-2 gap-1.5">
+      {items.map(({ sym, label, val, tip }) => (
         <div key={label} title={tip}
-             className="bg-gray-50 rounded-lg p-2 text-center border border-gray-100 cursor-help">
-          <p className="text-xs text-gray-400 font-mono">{label}</p>
-          <p className={`text-sm font-bold font-mono ${clr(val)}`}>{fmt(val, 4)}</p>
+             className="flex items-center justify-between bg-white rounded-lg px-2.5 py-1.5 border border-gray-100 cursor-help">
+          <span className="text-[10px] text-gray-500">
+            <span className="font-bold">{sym}</span>
+            <span className="ml-1 text-gray-400">{label}</span>
+          </span>
+          <span className={`text-xs font-bold font-mono ml-2 ${clr(val)}`}>{fmt(val, 3)}</span>
         </div>
       ))}
     </div>
