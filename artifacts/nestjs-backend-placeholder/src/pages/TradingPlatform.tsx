@@ -410,13 +410,26 @@ const CHART_TYPE_GROUPS: { group: string; items: ChartTypeEntry[] }[] = [
 function ChartTypeSelector({
   chartType,
   onSelect,
+  theme,
 }: {
   chartType: ChartType;
   onSelect: (t: ChartType) => void;
+  theme: "dark" | "light";
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const current = CHART_TYPE_GROUPS.flatMap(g => g.items).find(i => i.type === chartType);
+  const d = theme === "dark";
+  const C = {
+    btnBg:  d ? "rgba(30,38,50,0.85)" : "rgba(15,23,42,0.06)",
+    btnBor: d ? "#374151" : "#cbd5e1",
+    btnTxt: d ? "#e5e7eb" : "#0f172a",
+    dropBg: d ? "#1e2130" : "#ffffff",
+    dropBor: d ? "#374151" : "#cbd5e1",
+    secTxt: d ? "#6b7280" : "#94a3b8",
+    itemTxt: d ? "#d1d5db" : "#334155",
+    itemHov: d ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)",
+  };
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -431,11 +444,10 @@ function ChartTypeSelector({
       <button
         onClick={() => setOpen(v => !v)}
         title="Chart type"
-        className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold transition-colors border ${
-          open
-            ? "bg-indigo-600 text-white border-indigo-500"
-            : "bg-gray-800/80 text-gray-200 border-gray-700 hover:border-gray-500 hover:text-white"
-        }`}
+        className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold transition-colors"
+        style={open
+          ? { background: "#6366f1", color: "#ffffff", border: "1px solid #6366f1" }
+          : { background: C.btnBg, color: C.btnTxt, border: `1px solid ${C.btnBor}` }}
       >
         <span className="font-mono text-[13px] leading-none">{current?.icon ?? "🕯"}</span>
         <ChevronDown size={11} className={`transition-transform ${open ? "rotate-180" : ""}`} />
@@ -443,25 +455,24 @@ function ChartTypeSelector({
 
       {open && (
         <div
-          className="absolute top-full left-0 mt-1 z-50 rounded-lg shadow-2xl border border-gray-700/80 min-w-[200px]"
-          style={{ background: "#1e2130" }}
+          className="absolute top-full left-0 mt-1 z-50 rounded-lg shadow-2xl min-w-[200px]"
+          style={{ background: C.dropBg, border: `1px solid ${C.dropBor}` }}
         >
-          <div className="px-4 pt-3 pb-2 border-b border-gray-700/60">
-            <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Chart Type</span>
+          <div className="px-4 pt-3 pb-2" style={{ borderBottom: `1px solid ${C.dropBor}` }}>
+            <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: C.secTxt }}>Chart Type</span>
           </div>
           <div className="p-2">
             {CHART_TYPE_GROUPS.map(({ group, items }) => (
               <div key={group} className="mb-1">
-                <div className="px-2 py-1 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{group}</div>
+                <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider" style={{ color: C.secTxt }}>{group}</div>
                 {items.map(item => (
                   <button
                     key={item.type}
                     onClick={() => { onSelect(item.type); setOpen(false); }}
-                    className={`w-full flex items-center gap-3 px-3 py-1.5 rounded text-xs transition-colors ${
-                      chartType === item.type
-                        ? "bg-indigo-600 text-white"
-                        : "text-gray-300 hover:bg-gray-700 hover:text-white"
-                    }`}
+                    className="w-full flex items-center gap-3 px-3 py-1.5 rounded text-xs transition-colors"
+                    style={chartType === item.type
+                      ? { background: "#6366f1", color: "#ffffff" }
+                      : { color: C.itemTxt }}
                   >
                     <span className="font-mono w-5 text-center text-[13px] leading-none">{item.icon}</span>
                     <span>{item.label}</span>
@@ -480,13 +491,25 @@ function ChartTypeSelector({
 function IntervalSelector({
   intervalIdx,
   onSelect,
+  theme,
 }: {
   intervalIdx: number;
   onSelect: (idx: number) => void;
+  theme: "dark" | "light";
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const current = INTERVALS[intervalIdx];
+  const d = theme === "dark";
+  const C = {
+    btnBg:   d ? "rgba(30,38,50,0.85)" : "rgba(15,23,42,0.06)",
+    btnBor:  d ? "#374151" : "#cbd5e1",
+    btnTxt:  d ? "#e5e7eb" : "#0f172a",
+    dropBg:  d ? "#1e2130" : "#ffffff",
+    dropBor: d ? "#374151" : "#cbd5e1",
+    secTxt:  d ? "#6b7280" : "#94a3b8",
+    itemTxt: d ? "#d1d5db" : "#334155",
+  };
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -501,11 +524,10 @@ function IntervalSelector({
       {/* Trigger button */}
       <button
         onClick={() => setOpen(v => !v)}
-        className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold transition-colors border ${
-          open
-            ? "bg-indigo-600 text-white border-indigo-500"
-            : "bg-gray-800/80 text-gray-200 border-gray-700 hover:border-gray-500 hover:text-white"
-        }`}
+        className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold transition-colors"
+        style={open
+          ? { background: "#6366f1", color: "#ffffff", border: "1px solid #6366f1" }
+          : { background: C.btnBg, color: C.btnTxt, border: `1px solid ${C.btnBor}` }}
       >
         {current.label}
         <ChevronDown size={11} className={`transition-transform ${open ? "rotate-180" : ""}`} />
@@ -514,12 +536,12 @@ function IntervalSelector({
       {/* Dropdown panel */}
       {open && (
         <div
-          className="absolute top-full left-0 mt-1 z-50 rounded-lg shadow-2xl border border-gray-700/80"
-          style={{ background: "#1e2130", minWidth: 260 }}
+          className="absolute top-full left-0 mt-1 z-50 rounded-lg shadow-2xl"
+          style={{ background: C.dropBg, border: `1px solid ${C.dropBor}`, minWidth: 260 }}
         >
           {/* Header */}
-          <div className="px-4 pt-3 pb-2 border-b border-gray-700/60">
-            <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Interval</span>
+          <div className="px-4 pt-3 pb-2" style={{ borderBottom: `1px solid ${C.dropBor}` }}>
+            <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: C.secTxt }}>Interval</span>
           </div>
 
           {/* Groups */}
@@ -533,18 +555,17 @@ function IntervalSelector({
               return (
                 <div key={group} className="flex items-center gap-3">
                   {/* Group label */}
-                  <span className="text-[11px] text-gray-500 w-14 shrink-0">{group}</span>
+                  <span className="text-[11px] w-14 shrink-0" style={{ color: C.secTxt }}>{group}</span>
                   {/* Interval buttons */}
                   <div className="flex items-center gap-1 flex-wrap">
                     {items.map(({ idx, entry }) => (
                       <button
                         key={entry.label}
                         onClick={() => { onSelect(idx); setOpen(false); }}
-                        className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                          idx === intervalIdx
-                            ? "bg-indigo-600 text-white"
-                            : "text-gray-300 hover:bg-gray-700 hover:text-white"
-                        }`}
+                        className="px-2.5 py-1 rounded text-xs font-medium transition-colors"
+                        style={idx === intervalIdx
+                          ? { background: "#6366f1", color: "#ffffff" }
+                          : { color: C.itemTxt }}
                       >
                         {entry.label}
                       </button>
@@ -706,13 +727,19 @@ export default function TradingPlatform() {
 
   const isDark = theme === "dark";
   const PT = {
-    rootBg:   isDark ? "#0f1117" : "#f1f5f9",
-    barBg:    isDark ? "#131722" : "#ffffff",
-    barBor:   isDark ? "#1e2632" : "#e2e8f0",
-    dropBg:   isDark ? "#111827" : "#ffffff",
-    dropBor:  isDark ? "#374151" : "#cbd5e1",
-    secTxt:   isDark ? "#6b7280" : "#94a3b8",
-    itemTxt:  isDark ? "#d1d5db" : "#334155",
+    rootBg:   isDark ? "#0f1117"               : "#f1f5f9",
+    barBg:    isDark ? "#131722"               : "#ffffff",
+    barBor:   isDark ? "#1e2632"               : "#e2e8f0",
+    dropBg:   isDark ? "#1e2130"               : "#ffffff",
+    dropBor:  isDark ? "#374151"               : "#cbd5e1",
+    secTxt:   isDark ? "#6b7280"               : "#94a3b8",
+    itemTxt:  isDark ? "#d1d5db"               : "#334155",
+    btnBg:    isDark ? "rgba(30,38,50,0.85)"   : "rgba(15,23,42,0.06)",
+    btnBor:   isDark ? "#374151"               : "#cbd5e1",
+    btnTxt:   isDark ? "#e5e7eb"               : "#0f172a",
+    toolsBg:  isDark ? "rgba(30,38,50,0.65)"   : "rgba(15,23,42,0.06)",
+    divider:  isDark ? "#374151"               : "#e2e8f0",
+    iconTxt:  isDark ? "#9ca3af"               : "#475569",
   };
 
   return (
@@ -723,28 +750,32 @@ export default function TradingPlatform() {
         {/* Symbol name button — opens modal search (chart mode) */}
         <button
           onClick={() => searchRef.current?.open({ mode: "chart" })}
-          className="flex items-center gap-2 bg-gray-800/80 border border-gray-700 hover:border-gray-500 rounded px-3 py-1.5 transition-colors group"
+          className="flex items-center gap-2 rounded px-3 py-1.5 transition-colors"
+          style={{ background: PT.btnBg, border: `1px solid ${PT.btnBor}` }}
         >
-          <span className="text-sm font-bold text-white tracking-wide">{activePanel?.symbol ?? "—"}</span>
-          <Search size={12} className="text-gray-500 group-hover:text-gray-300 transition-colors" />
+          <span className="text-sm font-bold tracking-wide" style={{ color: PT.btnTxt }}>{activePanel?.symbol ?? "—"}</span>
+          <Search size={12} style={{ color: PT.iconTxt }} />
         </button>
 
         {/* Interval selector — dropdown like TradingView */}
-        <IntervalSelector intervalIdx={intervalIdx} onSelect={handleIntervalSelect} />
+        <IntervalSelector intervalIdx={intervalIdx} onSelect={handleIntervalSelect} theme={theme} />
 
         {/* Chart type selector */}
-        <ChartTypeSelector chartType={chartType} onSelect={setChartType} />
+        <ChartTypeSelector chartType={chartType} onSelect={setChartType} theme={theme} />
 
-        <div className="w-px h-5 bg-gray-700" />
+        <div className="w-px h-5" style={{ background: PT.divider }} />
 
         {/* Drawing tools */}
-        <div className="flex items-center gap-0.5 bg-gray-800/60 rounded p-0.5">
+        <div className="flex items-center gap-0.5 rounded p-0.5" style={{ background: PT.toolsBg }}>
           {DRAW_TOOLS.map(({ tool, icon, label }) => (
             <button
               key={tool}
               onClick={() => setDrawingTool(t => t === tool ? "none" : tool)}
               title={label}
-              className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${drawingTool === tool ? "bg-indigo-600 text-white" : "text-gray-400 hover:text-white hover:bg-gray-700"}`}
+              className="w-7 h-7 flex items-center justify-center rounded transition-colors"
+              style={drawingTool === tool
+                ? { background: "#6366f1", color: "#ffffff" }
+                : { color: PT.iconTxt }}
             >
               {icon}
             </button>
@@ -753,19 +784,21 @@ export default function TradingPlatform() {
             onClick={clearDrawings}
             title="Clear all drawings on active chart"
             disabled={!activePanel?.drawings?.length}
-            className={`text-xs px-2 py-0.5 rounded transition-colors ${activePanel?.drawings?.length ? "text-red-400 hover:text-white hover:bg-red-600/30" : "text-gray-700 cursor-not-allowed"}`}
+            className="text-xs px-2 py-0.5 rounded transition-colors"
+            style={{ color: activePanel?.drawings?.length ? "#f87171" : PT.iconTxt, opacity: activePanel?.drawings?.length ? 1 : 0.4, cursor: activePanel?.drawings?.length ? "pointer" : "not-allowed" }}
           >
             Clear
           </button>
         </div>
 
-        <div className="w-px h-5 bg-gray-700" />
+        <div className="w-px h-5" style={{ background: PT.divider }} />
 
         {/* Indicators */}
         <div className="relative">
           <button
             onClick={() => setShowIndMenu(v => !v)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors ${showIndMenu ? "bg-indigo-600 text-white" : "bg-gray-800 text-gray-300 hover:text-white"}`}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors"
+            style={showIndMenu ? { background: "#6366f1", color: "#ffffff" } : { background: PT.btnBg, color: PT.itemTxt }}
           >
             <BarChart2 size={13} /> Indicators
             {indicators.size > 0 && (
@@ -810,7 +843,8 @@ export default function TradingPlatform() {
         <div className="relative">
           <button
             onClick={() => setShowLayouts(v => !v)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors ${showLayouts ? "bg-indigo-600 text-white" : "bg-gray-800 text-gray-300 hover:text-white"}`}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors"
+            style={showLayouts ? { background: "#6366f1", color: "#ffffff" } : { background: PT.btnBg, color: PT.itemTxt }}
           >
             <LayoutTemplate size={13} /> Layout
           </button>
@@ -821,7 +855,8 @@ export default function TradingPlatform() {
                   key={l.mode}
                   onClick={() => setLayout(l.mode)}
                   title={l.label}
-                  className={`w-9 h-9 flex items-center justify-center rounded transition-colors ${layoutMode === l.mode ? "bg-indigo-600 text-white" : "text-gray-400 hover:text-white hover:bg-gray-800"}`}
+                  className="w-9 h-9 flex items-center justify-center rounded transition-colors"
+                  style={layoutMode === l.mode ? { background: "#6366f1", color: "#ffffff" } : { color: PT.iconTxt }}
                 >
                   {l.icon}
                 </button>
@@ -835,7 +870,8 @@ export default function TradingPlatform() {
           <button
             onClick={() => setTheme(t => t === "dark" ? "light" : "dark")}
             title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-            className="w-8 h-8 flex items-center justify-center rounded transition-all text-gray-400 hover:text-gray-200 hover:bg-white/8"
+            className="w-8 h-8 flex items-center justify-center rounded transition-all"
+            style={{ color: PT.iconTxt }}
           >
             {isDark ? <Sun size={15} /> : <Moon size={15} />}
           </button>
@@ -843,11 +879,10 @@ export default function TradingPlatform() {
           <button
             onClick={() => setShowWatchlist(v => !v)}
             title={showWatchlist ? "Hide watchlist" : "Show watchlist"}
-            className={`relative w-8 h-8 flex items-center justify-center rounded transition-all ${
-              showWatchlist
-                ? "text-indigo-400 bg-indigo-500/15 hover:bg-indigo-500/25"
-                : "text-gray-400 hover:text-gray-200 hover:bg-white/8"
-            }`}
+            className="relative w-8 h-8 flex items-center justify-center rounded transition-all"
+            style={showWatchlist
+              ? { color: "#818cf8", background: "rgba(99,102,241,0.12)" }
+              : { color: PT.iconTxt }}
           >
             <PanelRight size={15} />
             {showWatchlist && (
@@ -896,11 +931,10 @@ export default function TradingPlatform() {
                 <button
                   key={r.label}
                   onClick={() => applyRange(r)}
-                  className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
-                    activeRange === r.label
-                      ? "bg-indigo-600 text-white"
-                      : "text-gray-400 hover:text-white hover:bg-gray-800"
-                  }`}
+                  className="px-2 py-0.5 rounded text-[11px] font-medium transition-colors"
+                  style={activeRange === r.label
+                    ? { background: "#6366f1", color: "#ffffff" }
+                    : { color: PT.iconTxt }}
                 >
                   {r.label}
                 </button>
@@ -909,11 +943,10 @@ export default function TradingPlatform() {
                 <button
                   onClick={() => setShowCalendar(v => !v)}
                   title="Custom date range"
-                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] transition-colors ${
-                    activeRange === "custom"
-                      ? "bg-indigo-600 text-white"
-                      : "text-gray-400 hover:text-white hover:bg-gray-800"
-                  }`}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] transition-colors"
+                  style={activeRange === "custom"
+                    ? { background: "#6366f1", color: "#ffffff" }
+                    : { color: PT.iconTxt }}
                 >
                   <Calendar size={12} />
                 </button>
