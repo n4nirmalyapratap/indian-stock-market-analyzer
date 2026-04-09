@@ -765,7 +765,7 @@ export default function OptionsStrategyTester() {
               <div className="border-b border-gray-100 px-4 py-2 flex flex-wrap items-center gap-x-1.5 gap-y-1.5">
                 <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mr-1 shrink-0">Add</span>
                 {STRATEGY_GROUPS.map((group, gi) => (
-                  <React.Fragment key={group.label}>
+                  <span key={group.label} className="contents">
                     {gi > 0 && <span className="text-gray-200 mx-0.5 select-none text-sm leading-none">·</span>}
                     <span className="text-[8px] font-bold text-gray-300 uppercase tracking-widest shrink-0">{group.label}:</span>
                     {group.items.map(qs => (
@@ -775,7 +775,7 @@ export default function OptionsStrategyTester() {
                         {qs.label}
                       </button>
                     ))}
-                  </React.Fragment>
+                  </span>
                 ))}
                 <button onClick={() => addLeg()}
                   className="ml-auto flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-md border border-dashed border-gray-200 text-gray-400 hover:bg-gray-50 transition shrink-0">
