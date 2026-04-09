@@ -474,5 +474,55 @@ html.dark .dark-drawer textarea {
   color:            #f1f5f9 !important;
   border-color:     #475569 !important;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   ELEGANT SCROLLBARS  —  light & dark mode
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Firefox ────────────────────────────────────────────────────── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.35) transparent;
+}
+html.dark * {
+  scrollbar-color: rgba(148, 163, 184, 0.22) transparent;
+}
+
+/* ── WebKit (Chrome / Safari / Edge) ───────────────────────────── */
+::-webkit-scrollbar {
+  width:  5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb {
+  background:    rgba(100, 116, 139, 0.32);
+  border-radius: 999px;
+  border:        1px solid transparent;
+  background-clip: content-box;
+  transition: background 0.2s ease;
+}
+::-webkit-scrollbar-thumb:hover {
+  background:    rgba(100, 116, 139, 0.6);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Dark mode overrides */
+html.dark ::-webkit-scrollbar-thumb {
+  background:    rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+  background-clip: content-box;
+}
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background:    rgba(148, 163, 184, 0.45);
+  background-clip: content-box;
+}
 html.dark .dark-drawer input::placeholder,
 html.dark .dark-drawer textarea::placeholder { color: #64748b !important; }
