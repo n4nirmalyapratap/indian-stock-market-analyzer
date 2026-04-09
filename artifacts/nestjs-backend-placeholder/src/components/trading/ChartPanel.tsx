@@ -33,6 +33,7 @@ interface Props {
   drawings: Drawing[];
   onDrawingAdd: (d: Drawing) => void;
   onDrawingErase: (id: string) => void;
+  onClearDrawings?: () => void;
   onActivate: () => void;
 }
 
@@ -40,6 +41,15 @@ const DARK     = "#131722";
 const GRID_CLR = "rgba(255,255,255,0.06)";
 const TEXT_CLR = "#787b86";
 const DRAW_CLR = "#6366f1";
+
+const IND_META: Record<string, { label: string; color: string }> = {
+  ema9:   { label: "EMA 9",   color: "#f59e0b" },
+  ema21:  { label: "EMA 21",  color: "#6366f1" },
+  ema50:  { label: "EMA 50",  color: "#10b981" },
+  ema200: { label: "EMA 200", color: "#ef4444" },
+  sma50:  { label: "SMA 50",  color: "#a78bfa" },
+  bb:     { label: "BB (20)", color: "#3b82f6" },
+};
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -225,7 +235,7 @@ interface HoverCandle {
 
 export default function ChartPanel({
   symbol, symbolName, periodCfg, drawingTool, chartType, indicators,
-  showRSI, showMACD, isActive, drawings, onDrawingAdd, onDrawingErase, onActivate,
+  showRSI, showMACD, isActive, drawings, onDrawingAdd, onDrawingErase, onClearDrawings, onActivate,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef       = useRef<SVGSVGElement>(null);
@@ -233,6 +243,7 @@ export default function ChartPanel({
   const candles      = useRef<Candle[]>([]);
   const dragStart    = useRef<{ px: number; py: number; xIdx: number; y: number } | null>(null);
   const eraserPos    = useRef<{ x: number; y: number } | null>(null);
+  const indicatorDataRef = useRef<Record<string, (number | null)[]>>({});
   const drawingToolRef = useRef<DrawingTool>(drawingTool);
   const intervalRef    = useRef<string>(periodCfg.i);
   const chartTypeRef   = useRef<ChartType>(chartType);
@@ -240,9 +251,11 @@ export default function ChartPanel({
   useEffect(() => { intervalRef.current = periodCfg.i; }, [periodCfg.i]);
   useEffect(() => { chartTypeRef.current = chartType; }, [chartType]);
 
-  const [loading, setLoading]       = useState(true);
-  const [hoverCandle, setHoverCandle] = useState<HoverCandle | null>(null);
-  const [lastCandle, setLastCandle]   = useState<{ c: number; pct: number } | null>(null);
+  const [loading, setLoading]           = useState(true);
+  const [hoverCandle, setHoverCandle]   = useState<HoverCandle | null>(null);
+  const [hoverIdx, setHoverIdx]         = useState(-1);
+  const [lastCandle, setLastCandle]     = useState<{ c: number; pct: number } | null>(null);
+  const [ctxMenu, setCtxMenu]           = useState<{ x: number; y: number } | null>(null);
 
   // ── Repaint SVG ────────────────────────────────────────────────────────────
   const paintSvg = useCallback((
@@ -292,27 +305,26 @@ export default function ChartPanel({
     const subTop     = "68%";
     const subHeight  = "26%";
 
+    // Prices on right side — narrow left margin, wider right margin for labels
+    const GL = 8, GR = 70;
     const grids: object[] = [
-      { top: "4%",  left: 60, right: 60, height: mainHeight },
-      { top: volTop, left: 60, right: 60, height: volHeight  },
+      { top: "4%",  left: GL, right: GR, height: mainHeight },
+      { top: volTop, left: GL, right: GR, height: volHeight  },
     ];
-    if (hasSub) grids.push({ top: subTop, left: 60, right: 60, height: subHeight });
+    if (hasSub) grids.push({ top: subTop, left: GL, right: GR, height: subHeight });
 
     // x-axis: labels ONLY on the bottom-most grid
     const xBase = { axisLine: { lineStyle: { color: GRID_CLR } }, axisTick: { show: false } };
     const xAxes: object[] = [
-      // Main chart — no date labels (they'd overlap volume bars)
       { ...xBase, gridIndex: 0, data: dates, axisLabel: { show: false }, splitLine: { lineStyle: { color: GRID_CLR } } },
-      // Volume — show dates here only when there's no sub-panel
       { ...xBase, gridIndex: 1, data: dates, axisLabel: hasSub ? { show: false } : { color: TEXT_CLR, fontSize: 9, margin: 6 }, splitLine: { show: false } },
     ];
     if (hasSub) {
-      // Sub-panel always shows date labels at very bottom
       xAxes.push({ ...xBase, gridIndex: 2, data: dates, axisLabel: { color: TEXT_CLR, fontSize: 9, margin: 6 }, splitLine: { lineStyle: { color: GRID_CLR } } });
     }
 
-    // y-axis
-    const yBase = { axisLine: { show: false }, axisTick: { show: false } };
+    // y-axis — all positioned on the RIGHT side
+    const yBase = { axisLine: { show: false }, axisTick: { show: false }, position: "right" };
     const yAxes: object[] = [
       {
         ...yBase, gridIndex: 0, scale: true,
@@ -321,10 +333,7 @@ export default function ChartPanel({
       },
       {
         ...yBase, gridIndex: 1, scale: true,
-        axisLabel: {
-          show: true, color: TEXT_CLR, fontSize: 9, margin: 6,
-          formatter: (v: number) => fmtVol(v),
-        },
+        axisLabel: { show: true, color: TEXT_CLR, fontSize: 9, margin: 6, formatter: (v: number) => fmtVol(v) },
         splitLine: { show: false },
         splitNumber: 2,
       },
@@ -392,6 +401,9 @@ export default function ChartPanel({
       },
     ];
 
+    // Reset indicator cache for this render
+    indicatorDataRef.current = {};
+
     const MA = [
       { key: "ema9",   label: "EMA 9",   color: "#f59e0b", fn: () => calcEMA(closes, 9)   },
       { key: "ema21",  label: "EMA 21",  color: "#6366f1", fn: () => calcEMA(closes, 21)  },
@@ -401,29 +413,37 @@ export default function ChartPanel({
     ];
     for (const m of MA) {
       if (!indicators.has(m.key)) continue;
-      series.push({ name: m.label, type: "line", xAxisIndex: 0, yAxisIndex: 0, data: m.fn().map(v => v ?? null), lineStyle: { color: m.color, width: 1.5 }, showSymbol: false, connectNulls: false });
+      const vals = m.fn().map(v => v ?? null);
+      indicatorDataRef.current[m.key] = vals;
+      series.push({ name: m.label, type: "line", xAxisIndex: 0, yAxisIndex: 0, data: vals, lineStyle: { color: m.color, width: 1.5 }, showSymbol: false, connectNulls: false });
     }
     if (indicators.has("bb")) {
       const bb = calcBollingerBands(closes);
+      indicatorDataRef.current["bb_upper"]  = bb.upper.map(v => v ?? null);
+      indicatorDataRef.current["bb_middle"] = bb.middle.map(v => v ?? null);
+      indicatorDataRef.current["bb_lower"]  = bb.lower.map(v => v ?? null);
       series.push(
-        { name: "BB+", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: bb.upper.map(v => v ?? null), lineStyle: { color: "#3b82f6", width: 1, type: "dashed" }, showSymbol: false },
-        { name: "BBm", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: bb.middle.map(v => v ?? null), lineStyle: { color: "#64748b", width: 1, type: "dashed" }, showSymbol: false },
-        { name: "BB-", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: bb.lower.map(v => v ?? null), lineStyle: { color: "#3b82f6", width: 1, type: "dashed" }, showSymbol: false },
+        { name: "BB+", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: indicatorDataRef.current["bb_upper"],  lineStyle: { color: "#3b82f6", width: 1, type: "dashed" }, showSymbol: false },
+        { name: "BBm", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: indicatorDataRef.current["bb_middle"], lineStyle: { color: "#64748b", width: 1, type: "dashed" }, showSymbol: false },
+        { name: "BB-", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: indicatorDataRef.current["bb_lower"],  lineStyle: { color: "#3b82f6", width: 1, type: "dashed" }, showSymbol: false },
       );
     }
     if (showRSI && !showMACD) {
       const rv = calcRSI(closes);
+      indicatorDataRef.current["rsi"] = rv.map(v => v !== null ? +(v as number).toFixed(2) as any : null);
       series.push(
-        { name: "RSI",  type: "line", xAxisIndex: 2, yAxisIndex: 2, data: rv.map(v => v !== null ? +(v as number).toFixed(2) : null), lineStyle: { color: "#f59e0b", width: 1.5 }, showSymbol: false },
+        { name: "RSI",  type: "line", xAxisIndex: 2, yAxisIndex: 2, data: indicatorDataRef.current["rsi"], lineStyle: { color: "#f59e0b", width: 1.5 }, showSymbol: false },
         { name: "OB",   type: "line", xAxisIndex: 2, yAxisIndex: 2, data: dates.map(() => 70), lineStyle: { color: "rgba(239,68,68,0.35)", width: 1, type: "dashed" }, showSymbol: false },
         { name: "OS",   type: "line", xAxisIndex: 2, yAxisIndex: 2, data: dates.map(() => 30), lineStyle: { color: "rgba(38,166,154,0.35)", width: 1, type: "dashed" }, showSymbol: false },
       );
     }
     if (showMACD) {
       const mac = calcMACD(closes);
+      indicatorDataRef.current["macd"]   = mac.macd.map(v => v !== null ? +(v as number).toFixed(4) as any : null);
+      indicatorDataRef.current["signal"] = mac.signal.map(v => v !== null ? +(v as number).toFixed(4) as any : null);
       series.push(
-        { name: "MACD",   type: "line", xAxisIndex: 2, yAxisIndex: 2, data: mac.macd.map(v => v !== null ? +(v as number).toFixed(4) : null), lineStyle: { color: "#2962ff", width: 1.3 }, showSymbol: false },
-        { name: "Signal", type: "line", xAxisIndex: 2, yAxisIndex: 2, data: mac.signal.map(v => v !== null ? +(v as number).toFixed(4) : null), lineStyle: { color: "#ff6d00", width: 1.3 }, showSymbol: false },
+        { name: "MACD",   type: "line", xAxisIndex: 2, yAxisIndex: 2, data: indicatorDataRef.current["macd"],   lineStyle: { color: "#2962ff", width: 1.3 }, showSymbol: false },
+        { name: "Signal", type: "line", xAxisIndex: 2, yAxisIndex: 2, data: indicatorDataRef.current["signal"], lineStyle: { color: "#ff6d00", width: 1.3 }, showSymbol: false },
         { name: "Hist",   type: "bar",  xAxisIndex: 2, yAxisIndex: 2, barMaxWidth: 5,
           data: mac.histogram.map(v => ({ value: v !== null ? +(v as number).toFixed(4) : null, itemStyle: { color: (v ?? 0) >= 0 ? "rgba(38,166,154,0.7)" : "rgba(239,83,80,0.7)" } })) },
       );
@@ -501,16 +521,18 @@ export default function ChartPanel({
     // Update OHLCV header on crosshair move
     chart.on("updateAxisPointer", (e: any) => {
       const axesInfo = e?.axesInfo;
-      if (!axesInfo?.length) { setHoverCandle(null); return; }
+      if (!axesInfo?.length) { setHoverCandle(null); setHoverIdx(-1); return; }
       const info = axesInfo.find((a: any) => a.axisDim === "x" && a.axisIndex === 0);
-      if (!info) { setHoverCandle(null); return; }
+      if (!info) { setHoverCandle(null); setHoverIdx(-1); return; }
       const idx = typeof info.value === "number" ? info.value : parseInt(String(info.value));
       if (idx >= 0 && idx < candles.current.length) {
         const c = candles.current[idx];
         const showTime = INTRADAY_INTERVALS.has(intervalRef.current);
         setHoverCandle({ date: toDateStr(c.time, showTime), o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume });
+        setHoverIdx(idx);
       } else {
         setHoverCandle(null);
+        setHoverIdx(-1);
       }
     });
 
@@ -628,57 +650,107 @@ export default function ChartPanel({
     ? (lastCandle.pct >= 0 ? "#26a69a" : "#ef5350")
     : "#d1d4dc";
 
+  // ── Indicator pill value at hover (or last candle) ──────────────────────────
+  const indVal = (key: string): number | null => {
+    const arr = indicatorDataRef.current[key];
+    if (!arr) return null;
+    const i = hoverIdx >= 0 ? hoverIdx : candles.current.length - 1;
+    return i >= 0 && i < arr.length ? arr[i] : null;
+  };
+
+  const hasAnyInd = indicators.size > 0 || showRSI || showMACD;
+
   return (
     <div
       className={`flex flex-col h-full rounded overflow-hidden border transition-colors ${isActive ? "border-indigo-500/60" : "border-transparent"}`}
       style={{ background: DARK }}
-      onClick={onActivate}
+      onClick={() => { setCtxMenu(null); onActivate(); }}
     >
       {/* ── Header ──────────────────────────────────────────────────────── */}
-      <div className="flex items-start gap-3 px-3 py-1.5 border-b border-white/[0.06] shrink-0 min-h-[42px]">
-        {/* Symbol + name */}
+      <div className="flex items-start gap-3 px-3 py-1.5 border-b border-white/[0.06] shrink-0">
+        {/* Symbol + price + OHLCV */}
         <div className="flex flex-col justify-center min-w-0">
-          <div className="flex items-baseline gap-1.5">
+          {/* Row 1: symbol name + OHLCV on hover */}
+          <div className="flex items-baseline gap-2 flex-wrap">
             <span className="font-bold text-white text-sm tracking-wide leading-tight">{symbol}</span>
-            {symbolName && <span className="text-[11px] text-gray-500 truncate max-w-[130px] leading-tight">{symbolName}</span>}
+            {symbolName && !hoverCandle && <span className="text-[11px] text-gray-500 truncate max-w-[130px] leading-tight">{symbolName}</span>}
+            {hoverCandle && (
+              <>
+                <span className="text-[11px] text-gray-500">{hoverCandle.date}</span>
+                <span className="text-[11px]"><span className="text-gray-500">O</span> <span className="text-white">{fmtPrice(hoverCandle.o)}</span></span>
+                <span className="text-[11px]"><span className="text-[#26a69a]">H</span> <span className="text-white">{fmtPrice(hoverCandle.h)}</span></span>
+                <span className="text-[11px]"><span className="text-[#ef5350]">L</span> <span className="text-white">{fmtPrice(hoverCandle.l)}</span></span>
+                <span className="text-[11px]"><span className="text-gray-500">C</span> <span className="text-white">{fmtPrice(hoverCandle.c)}</span></span>
+                <span className="text-[11px]"><span className="text-gray-500">V</span> <span className="text-white">{fmtVol(hoverCandle.v)}</span></span>
+              </>
+            )}
           </div>
+          {/* Row 2: price + pct */}
           {lastCandle && (
             <div className="flex items-center gap-1.5 mt-0.5">
-              <span className="text-[13px] font-semibold" style={{ color: priceColor }}>
-                ₹{fmtPrice(lastCandle.c)}
-              </span>
-              <span className="text-[11px]" style={{ color: priceColor }}>
-                {lastCandle.pct >= 0 ? "+" : ""}{lastCandle.pct.toFixed(2)}%
-              </span>
+              <span className="text-[13px] font-semibold" style={{ color: priceColor }}>₹{fmtPrice(lastCandle.c)}</span>
+              <span className="text-[11px]" style={{ color: priceColor }}>{lastCandle.pct >= 0 ? "+" : ""}{lastCandle.pct.toFixed(2)}%</span>
+            </div>
+          )}
+          {/* Row 3: active indicator pills (TradingView-style) */}
+          {hasAnyInd && (
+            <div className="flex items-center gap-2.5 mt-0.5 flex-wrap">
+              {[...indicators].map(key => {
+                const meta = IND_META[key];
+                if (!meta) return null;
+                if (key === "bb") {
+                  const mid = indVal("bb_middle");
+                  return (
+                    <span key={key} className="flex items-center gap-1 text-[10px]">
+                      <span style={{ color: meta.color }} className="font-medium">{meta.label}</span>
+                      {mid !== null && <span className="text-gray-400">{fmtPrice(mid)}</span>}
+                    </span>
+                  );
+                }
+                const val = indVal(key);
+                return (
+                  <span key={key} className="flex items-center gap-1 text-[10px]">
+                    <span style={{ color: meta.color }} className="font-medium">{meta.label}</span>
+                    {val !== null && <span className="text-gray-400">{fmtPrice(val)}</span>}
+                  </span>
+                );
+              })}
+              {showRSI && !showMACD && (() => {
+                const val = indVal("rsi");
+                return (
+                  <span className="flex items-center gap-1 text-[10px]">
+                    <span style={{ color: "#f59e0b" }} className="font-medium">RSI</span>
+                    {val !== null && <span className="text-gray-400">{(val as number).toFixed(2)}</span>}
+                  </span>
+                );
+              })()}
+              {showMACD && (() => {
+                const m = indVal("macd"), s = indVal("signal");
+                return (
+                  <span className="flex items-center gap-1.5 text-[10px]">
+                    <span style={{ color: "#2962ff" }} className="font-medium">MACD</span>
+                    {m !== null && <span className="text-gray-400">{(m as number).toFixed(2)}</span>}
+                    {s !== null && <span style={{ color: "#ff6d00" }}>{(s as number).toFixed(2)}</span>}
+                  </span>
+                );
+              })()}
             </div>
           )}
         </div>
-
-        {/* OHLCV on hover (TradingView-style) */}
-        {hoverCandle && (
-          <div className="flex items-center gap-2.5 text-[11px] mt-0.5 flex-wrap">
-            <span className="text-gray-500">{hoverCandle.date}</span>
-            <span><span className="text-gray-500">O</span> <span className="text-white">{fmtPrice(hoverCandle.o)}</span></span>
-            <span><span className="text-[#26a69a]">H</span> <span className="text-white">{fmtPrice(hoverCandle.h)}</span></span>
-            <span><span className="text-[#ef5350]">L</span> <span className="text-white">{fmtPrice(hoverCandle.l)}</span></span>
-            <span><span className="text-gray-500">C</span> <span className="text-white">{fmtPrice(hoverCandle.c)}</span></span>
-            <span><span className="text-gray-500">V</span> <span className="text-white">{fmtVol(hoverCandle.v)}</span></span>
-          </div>
-        )}
-
-        {loading && (
-          <span className="ml-auto text-[10px] text-gray-600 animate-pulse self-center">Loading…</span>
-        )}
+        {loading && <span className="ml-auto text-[10px] text-gray-600 animate-pulse self-center">Loading…</span>}
       </div>
 
       {/* ── Chart + SVG overlay ──────────────────────────────────────────── */}
-      <div className="flex-1 relative min-h-0">
+      <div
+        className="flex-1 relative min-h-0"
+        onContextMenu={e => {
+          e.preventDefault();
+          const r = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+          setCtxMenu({ x: e.clientX - r.left, y: e.clientY - r.top });
+        }}
+      >
         <div ref={containerRef} className="absolute inset-0" />
-        <svg
-          ref={svgRef}
-          className="absolute inset-0"
-          style={{ pointerEvents: "none", zIndex: 10 }}
-        />
+        <svg ref={svgRef} className="absolute inset-0" style={{ pointerEvents: "none", zIndex: 10 }} />
         {drawingTool !== "none" && (
           <div
             className="absolute inset-0"
@@ -692,6 +764,32 @@ export default function ChartPanel({
               paintSvg();
             }}
           />
+        )}
+
+        {/* ── Right-click context menu ──────────────────────────────── */}
+        {ctxMenu && (
+          <div
+            className="absolute z-50 rounded-lg shadow-2xl border border-gray-700 py-1 min-w-[160px]"
+            style={{ left: Math.min(ctxMenu.x, (containerRef.current?.offsetWidth ?? 300) - 170), top: ctxMenu.y, background: "#1e2130" }}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <button
+              className="w-full text-left px-4 py-1.5 text-xs text-gray-200 hover:bg-gray-700 hover:text-white"
+              onClick={() => {
+                chartRef.current?.dispatchAction({ type: "dataZoom", start: 60, end: 100 });
+                setCtxMenu(null);
+              }}
+            >Reset zoom</button>
+            <button
+              className="w-full text-left px-4 py-1.5 text-xs text-gray-200 hover:bg-gray-700 hover:text-white"
+              onClick={() => { onClearDrawings?.(); setCtxMenu(null); }}
+            >Clear drawings</button>
+            <div className="h-px bg-gray-700 my-1" />
+            <button
+              className="w-full text-left px-4 py-1.5 text-xs text-gray-200 hover:bg-gray-700 hover:text-white"
+              onClick={() => { fetchData(); setCtxMenu(null); }}
+            >Reload data</button>
+          </div>
         )}
       </div>
     </div>

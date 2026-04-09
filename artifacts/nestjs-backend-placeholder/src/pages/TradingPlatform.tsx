@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from "react";
 import {
   BarChart2, TrendingUp, Minus, Square, Eraser,
   LayoutTemplate, PanelRight, X, Search, Minus as Divider,
@@ -136,13 +136,30 @@ function makePanel(symbol: string): PanelState {
 // ─── Symbol Search (API-backed — full universe) ───────────────────────────────
 interface SearchResult { symbol: string; name: string }
 
-function SymbolSearch({ onSelect, placeholder }: { onSelect: (sym: string) => void; placeholder?: string }) {
+export interface SymbolSearchHandle { open: (char?: string) => void }
+
+const SymbolSearch = forwardRef<SymbolSearchHandle, { onSelect: (sym: string) => void; placeholder?: string }>(
+function SymbolSearch({ onSelect, placeholder }, fwdRef) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useImperativeHandle(fwdRef, () => ({
+    open: (char?: string) => {
+      if (char) {
+        setQ(char);
+        setOpen(true);
+        handleChange(char);
+      } else {
+        setOpen(true);
+      }
+      requestAnimationFrame(() => inputRef.current?.focus());
+    },
+  }));
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -177,6 +194,7 @@ function SymbolSearch({ onSelect, placeholder }: { onSelect: (sym: string) => vo
       <div className="flex items-center gap-1.5 bg-gray-800 border border-gray-700 rounded px-2 py-1 focus-within:border-indigo-500 transition-colors">
         <Search size={13} className="text-gray-500" />
         <input
+          ref={inputRef}
           value={q}
           onChange={e => handleChange(e.target.value)}
           onFocus={() => { setOpen(true); if (q) handleChange(q); }}
@@ -184,7 +202,7 @@ function SymbolSearch({ onSelect, placeholder }: { onSelect: (sym: string) => vo
           className="bg-transparent text-white text-xs placeholder-gray-600 focus:outline-none w-36"
           onKeyDown={e => {
             if (e.key === "Enter" && results[0]) { onSelect(results[0].symbol); setQ(""); setOpen(false); }
-            if (e.key === "Escape") setOpen(false);
+            if (e.key === "Escape") { setOpen(false); inputRef.current?.blur(); }
           }}
         />
         {loading && <div className="w-3 h-3 border border-indigo-400 border-t-transparent rounded-full animate-spin" />}
@@ -216,7 +234,7 @@ function SymbolSearch({ onSelect, placeholder }: { onSelect: (sym: string) => vo
       )}
     </div>
   );
-}
+});
 
 // ─── Chart Type definitions ───────────────────────────────────────────────────
 interface ChartTypeEntry { type: ChartType; label: string; icon: string }
@@ -418,6 +436,33 @@ export default function TradingPlatform() {
   const [showLayouts, setShowLayouts] = useState(false);
   const [showIndMenu, setShowIndMenu] = useState(false);
 
+  const searchRef = useRef<SymbolSearchHandle>(null);
+
+  // ── Global keyboard shortcuts ──────────────────────────────────────────────
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement).tagName;
+      const inInput = tag === "INPUT" || tag === "TEXTAREA";
+
+      // Ctrl/Cmd+Z — undo last drawing on active panel
+      if ((e.ctrlKey || e.metaKey) && e.key === "z") {
+        if (inInput) return;
+        e.preventDefault();
+        setPanels(prev => prev.map(p =>
+          p.id === activePanelId ? { ...p, drawings: p.drawings.slice(0, -1) } : p
+        ));
+        return;
+      }
+
+      // Printable character (no modifier) — open symbol search like TradingView
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1 && !inInput) {
+        searchRef.current?.open(e.key);
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [activePanelId]);
+
   const activePanel = panels.find(p => p.id === activePanelId) ?? panels[0];
 
   function setLayout(mode: LayoutMode) {
@@ -477,7 +522,7 @@ export default function TradingPlatform() {
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-800 bg-[#131722] shrink-0 flex-wrap">
 
         {/* Symbol search */}
-        <SymbolSearch onSelect={setSymbolForActivePanel} placeholder={activePanel?.symbol ?? "Search…"} />
+        <SymbolSearch ref={searchRef} onSelect={setSymbolForActivePanel} placeholder={activePanel?.symbol ?? "Search…"} />
 
         {/* Interval selector — dropdown like TradingView */}
         <IntervalSelector intervalIdx={intervalIdx} onSelect={setIntervalIdx} />
@@ -611,6 +656,7 @@ export default function TradingPlatform() {
                 drawings={panel.drawings}
                 onDrawingAdd={(d) => addDrawing(panel.id, d)}
                 onDrawingErase={(id) => eraseDrawing(panel.id, id)}
+                onClearDrawings={() => clearDrawings()}
                 onActivate={() => setActivePanelId(panel.id)}
               />
             </div>
