@@ -907,27 +907,37 @@ export default function OptionsStrategyTester() {
               </div>
             )}
 
-            {/* Footer: error + actions */}
+            {/* Footer: error + CTA */}
             {analysisErr && (
               <div className="px-4 py-2 bg-red-50 border-t border-red-100 text-red-600 text-xs">
                 {analysisErr}
               </div>
             )}
-            <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-between">
-              <button
-                onClick={() => setLegs([])}
-                className="text-xs text-gray-400 hover:text-red-500 transition"
-              >
-                Clear all
-              </button>
+            <div className="px-4 pb-4 pt-3 border-t border-gray-100 bg-white">
               <button
                 onClick={analyseStrategy}
                 disabled={loadingAnalysis || !legs.length}
-                className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 transition"
+                className={`
+                  w-full flex items-center justify-center gap-2 py-2.5 rounded-xl
+                  text-sm font-semibold transition-all duration-200
+                  ${legs.length && !loadingAnalysis
+                    ? "bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-md hover:shadow-lg hover:from-indigo-700 hover:to-violet-700 active:scale-[0.98]"
+                    : "bg-gray-100 text-gray-400 cursor-not-allowed"}
+                `}
               >
-                {loadingAnalysis ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-                Analyse Strategy
+                {loadingAnalysis
+                  ? <><RefreshCw className="w-4 h-4 animate-spin" /> Analysing…</>
+                  : <><Zap className="w-4 h-4" /> Analyse Strategy</>
+                }
               </button>
+              {legs.length > 0 && (
+                <button
+                  onClick={() => setLegs([])}
+                  className="w-full text-center text-[10px] text-gray-300 hover:text-red-400 mt-2 transition"
+                >
+                  Clear all legs
+                </button>
+              )}
             </div>
           </div>
 
@@ -935,9 +945,27 @@ export default function OptionsStrategyTester() {
           <div className="flex-1 flex flex-col min-w-0 p-5">
             {!analysis ? (
               <div className="flex flex-col items-center justify-center h-full text-gray-300">
-                <BarChart2 className="w-14 h-14 mb-3" />
-                <p className="text-sm font-semibold text-gray-400">No strategy yet</p>
-                <p className="text-xs text-gray-300 mt-1">Add legs on the left and click Analyse Strategy</p>
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-50 to-violet-100 flex items-center justify-center mb-4 shadow-sm">
+                  <BarChart2 className="w-8 h-8 text-indigo-300" />
+                </div>
+                <p className="text-sm font-semibold text-gray-400 mb-1">
+                  {legs.length ? "Ready to analyse" : "No strategy yet"}
+                </p>
+                <p className="text-xs text-gray-300 mb-4">
+                  {legs.length
+                    ? `${legs.length} leg${legs.length > 1 ? "s" : ""} added — run analysis to see payoff`
+                    : "Pick a strategy from the bar above to get started"}
+                </p>
+                {legs.length > 0 && (
+                  <button
+                    onClick={analyseStrategy}
+                    disabled={loadingAnalysis}
+                    className="flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-semibold bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow hover:shadow-md hover:from-indigo-700 hover:to-violet-700 transition-all active:scale-[0.97]"
+                  >
+                    {loadingAnalysis ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                    {loadingAnalysis ? "Analysing…" : "Analyse Strategy"}
+                  </button>
+                )}
               </div>
             ) : (
               <div className="flex flex-col gap-3 h-full">
