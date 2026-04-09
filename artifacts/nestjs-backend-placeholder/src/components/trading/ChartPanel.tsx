@@ -35,12 +35,32 @@ interface Props {
   onDrawingErase: (id: string) => void;
   onClearDrawings?: () => void;
   onActivate: () => void;
+  theme: "dark" | "light";
 }
 
-const DARK     = "#131722";
-const GRID_CLR = "rgba(255,255,255,0.06)";
-const TEXT_CLR = "#787b86";
 const DRAW_CLR = "#6366f1";
+
+function getThemeColors(theme: "dark" | "light") {
+  const d = theme === "dark";
+  return {
+    bg:      d ? "#131722"                : "#ffffff",
+    grid:    d ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.07)",
+    text:    d ? "#787b86"                : "#9ca3af",
+    cross:   d ? "rgba(255,255,255,0.2)"  : "rgba(0,0,0,0.25)",
+    labBg:   d ? "#2a2e39"                : "#e0e4ef",
+    labText: d ? "#d1d4dc"                : "#131722",
+    tipBg:   d ? "#1e2130"                : "#f5f7fc",
+    tipBor:  d ? "#2a2e39"                : "#d0d4e0",
+    tipText: d ? "#d1d4dc"                : "#131722",
+    dimBg:   d ? "rgba(19,23,34,0.65)"    : "rgba(240,243,250,0.7)",
+    ctxBg:   d ? "#1e2130"                : "#f0f2f8",
+    ctxBor:  d ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.12)",
+    headBor: d ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)",
+    symTxt:  d ? "#ffffff"                : "#131722",
+    muTxt:   d ? "#9ca3af"                : "#6b7280",
+    ohlcVal: d ? "#ffffff"                : "#1e293b",
+  };
+}
 
 const IND_META: Record<string, { label: string; color: string }> = {
   ema9:   { label: "EMA 9",   color: "#f59e0b" },
@@ -268,6 +288,7 @@ interface HoverCandle {
 export default function ChartPanel({
   symbol, symbolName, periodCfg, drawingTool, chartType, indicators,
   showRSI, showMACD, isActive, drawings, onDrawingAdd, onDrawingErase, onClearDrawings, onActivate,
+  theme,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef       = useRef<SVGSVGElement>(null);
@@ -279,8 +300,10 @@ export default function ChartPanel({
   const drawingToolRef = useRef<DrawingTool>(drawingTool);
   const intervalRef    = useRef<string>(periodCfg.i);
   const chartTypeRef   = useRef<ChartType>(chartType);
+  const themeRef       = useRef<"dark" | "light">(theme);
   useEffect(() => { drawingToolRef.current = drawingTool; }, [drawingTool]);
   useEffect(() => { intervalRef.current = periodCfg.i; }, [periodCfg.i]);
+  useEffect(() => { themeRef.current = theme; }, [theme]);
   useEffect(() => { chartTypeRef.current = chartType; }, [chartType]);
 
   const [loading, setLoading]           = useState(true);
@@ -315,6 +338,7 @@ export default function ChartPanel({
   const renderChart = useCallback(() => {
     const chart = chartRef.current;
     if (!chart || !candles.current.length) return;
+    const T = getThemeColors(themeRef.current);
 
     const cs       = candles.current;
     const showTime = INTRADAY_INTERVALS.has(intervalRef.current);
@@ -346,13 +370,13 @@ export default function ChartPanel({
     if (hasSub) grids.push({ top: subTop, left: GL, right: GR, height: subHeight });
 
     // x-axis: labels ONLY on the bottom-most grid
-    const xBase = { axisLine: { lineStyle: { color: GRID_CLR } }, axisTick: { show: false } };
+    const xBase = { axisLine: { lineStyle: { color: T.grid } }, axisTick: { show: false } };
     const xAxes: object[] = [
-      { ...xBase, gridIndex: 0, data: dates, axisLabel: { show: false }, splitLine: { lineStyle: { color: GRID_CLR } }, axisPointer: { label: { show: false } } },
-      { ...xBase, gridIndex: 1, data: dates, axisLabel: hasSub ? { show: false } : { color: TEXT_CLR, fontSize: 9, margin: 6, formatter: (v: string) => fmtXLabel(v, showTime) }, splitLine: { show: false }, axisPointer: hasSub ? { label: { show: false } } : {} },
+      { ...xBase, gridIndex: 0, data: dates, axisLabel: { show: false }, splitLine: { lineStyle: { color: T.grid } }, axisPointer: { label: { show: false } } },
+      { ...xBase, gridIndex: 1, data: dates, axisLabel: hasSub ? { show: false } : { color: T.text, fontSize: 9, margin: 6, formatter: (v: string) => fmtXLabel(v, showTime) }, splitLine: { show: false }, axisPointer: hasSub ? { label: { show: false } } : {} },
     ];
     if (hasSub) {
-      xAxes.push({ ...xBase, gridIndex: 2, data: dates, axisLabel: { color: TEXT_CLR, fontSize: 9, margin: 6, formatter: (v: string) => fmtXLabel(v, showTime) }, splitLine: { lineStyle: { color: GRID_CLR } } });
+      xAxes.push({ ...xBase, gridIndex: 2, data: dates, axisLabel: { color: T.text, fontSize: 9, margin: 6, formatter: (v: string) => fmtXLabel(v, showTime) }, splitLine: { lineStyle: { color: T.grid } } });
     }
 
     // y-axis — all positioned on the RIGHT side
@@ -360,12 +384,12 @@ export default function ChartPanel({
     const yAxes: object[] = [
       {
         ...yBase, gridIndex: 0, scale: true,
-        axisLabel: { color: TEXT_CLR, fontSize: 10, margin: 6 },
-        splitLine: { lineStyle: { color: GRID_CLR } },
+        axisLabel: { color: T.text, fontSize: 10, margin: 6 },
+        splitLine: { lineStyle: { color: T.grid } },
       },
       {
         ...yBase, gridIndex: 1, scale: true,
-        axisLabel: { show: true, color: TEXT_CLR, fontSize: 9, margin: 6, formatter: (v: number) => fmtVol(v) },
+        axisLabel: { show: true, color: T.text, fontSize: 9, margin: 6, formatter: (v: number) => fmtVol(v) },
         splitLine: { show: false },
         splitNumber: 2,
       },
@@ -373,8 +397,8 @@ export default function ChartPanel({
     if (hasSub) {
       yAxes.push({
         ...yBase, gridIndex: 2, scale: true,
-        axisLabel: { color: TEXT_CLR, fontSize: 9, margin: 6 },
-        splitLine: { lineStyle: { color: GRID_CLR } },
+        axisLabel: { color: T.text, fontSize: 9, margin: 6 },
+        splitLine: { lineStyle: { color: T.grid } },
         splitNumber: 3,
       });
     }
@@ -482,25 +506,25 @@ export default function ChartPanel({
     }
 
     chart.setOption({
-      backgroundColor: DARK, animation: false,
+      backgroundColor: T.bg, animation: false,
       tooltip: {
         trigger: "axis",
         axisPointer: {
           type: "cross",
-          crossStyle: { color: "rgba(255,255,255,0.2)", width: 1 },
-          lineStyle: { color: "rgba(255,255,255,0.2)", width: 1, type: "solid" },
+          crossStyle: { color: T.cross, width: 1 },
+          lineStyle: { color: T.cross, width: 1, type: "solid" },
           label: {
-            backgroundColor: "#2a2e39",
-            color: "#d1d4dc",
+            backgroundColor: T.labBg,
+            color: T.labText,
             fontSize: 10,
             formatter: ({ value }: any) => typeof value === "number" ? fmtPrice(value) : fmtCrosshairLabel(String(value)),
           },
         },
-        backgroundColor: "#1e2130",
-        borderColor: "#2a2e39",
+        backgroundColor: T.tipBg,
+        borderColor: T.tipBor,
         borderWidth: 1,
         padding: [6, 10],
-        textStyle: { color: "#d1d4dc", fontSize: 11 },
+        textStyle: { color: T.tipText, fontSize: 11 },
         // Suppress default tooltip — we show OHLCV in the header instead
         formatter: () => "",
       },
@@ -583,6 +607,7 @@ export default function ChartPanel({
 
   useEffect(() => { fetchData(); }, [symbol, periodCfg]);
   useEffect(() => { renderChart(); }, [indicators, showRSI, showMACD, chartType]);
+  useEffect(() => { if (candles.current.length) renderChart(); }, [theme]);
   useEffect(() => { paintSvg(); }, [drawings]);
 
   // ── Drawing helpers ────────────────────────────────────────────────────────
@@ -694,29 +719,30 @@ export default function ChartPanel({
   };
 
   const hasAnyInd = indicators.size > 0 || showRSI || showMACD;
+  const TC = getThemeColors(theme);
 
   return (
     <div
       className={`flex flex-col h-full rounded overflow-hidden border transition-colors ${isActive ? "border-indigo-500/60" : "border-transparent"}`}
-      style={{ background: DARK }}
+      style={{ background: TC.bg }}
       onClick={() => { setCtxMenu(null); onActivate(); }}
     >
       {/* ── Header ──────────────────────────────────────────────────────── */}
-      <div className="flex items-start gap-3 px-3 py-1.5 border-b border-white/[0.06] shrink-0">
+      <div className="flex items-start gap-3 px-3 py-1.5 shrink-0" style={{ borderBottom: `1px solid ${TC.headBor}` }}>
         {/* Symbol + price + OHLCV */}
         <div className="flex flex-col justify-center min-w-0">
           {/* Row 1: symbol name + OHLCV on hover */}
           <div className="flex items-baseline gap-2 flex-wrap">
-            <span className="font-bold text-white text-sm tracking-wide leading-tight">{symbol}</span>
-            {symbolName && !hoverCandle && <span className="text-[11px] text-gray-500 truncate max-w-[130px] leading-tight">{symbolName}</span>}
+            <span className="font-bold text-sm tracking-wide leading-tight" style={{ color: TC.symTxt }}>{symbol}</span>
+            {symbolName && !hoverCandle && <span className="text-[11px] truncate max-w-[130px] leading-tight" style={{ color: TC.muTxt }}>{symbolName}</span>}
             {hoverCandle && (
               <>
-                <span className="text-[11px] text-gray-500">{hoverCandle.date}</span>
-                <span className="text-[11px]"><span className="text-gray-500">O</span> <span className="text-white">{fmtPrice(hoverCandle.o)}</span></span>
-                <span className="text-[11px]"><span className="text-[#26a69a]">H</span> <span className="text-white">{fmtPrice(hoverCandle.h)}</span></span>
-                <span className="text-[11px]"><span className="text-[#ef5350]">L</span> <span className="text-white">{fmtPrice(hoverCandle.l)}</span></span>
-                <span className="text-[11px]"><span className="text-gray-500">C</span> <span className="text-white">{fmtPrice(hoverCandle.c)}</span></span>
-                <span className="text-[11px]"><span className="text-gray-500">V</span> <span className="text-white">{fmtVol(hoverCandle.v)}</span></span>
+                <span className="text-[11px]" style={{ color: TC.muTxt }}>{hoverCandle.date}</span>
+                <span className="text-[11px]"><span style={{ color: TC.muTxt }}>O</span> <span style={{ color: TC.ohlcVal }}>{fmtPrice(hoverCandle.o)}</span></span>
+                <span className="text-[11px]"><span style={{ color: "#26a69a" }}>H</span> <span style={{ color: TC.ohlcVal }}>{fmtPrice(hoverCandle.h)}</span></span>
+                <span className="text-[11px]"><span style={{ color: "#ef5350" }}>L</span> <span style={{ color: TC.ohlcVal }}>{fmtPrice(hoverCandle.l)}</span></span>
+                <span className="text-[11px]"><span style={{ color: TC.muTxt }}>C</span> <span style={{ color: TC.ohlcVal }}>{fmtPrice(hoverCandle.c)}</span></span>
+                <span className="text-[11px]"><span style={{ color: TC.muTxt }}>V</span> <span style={{ color: TC.ohlcVal }}>{fmtVol(hoverCandle.v)}</span></span>
               </>
             )}
           </div>
@@ -786,7 +812,7 @@ export default function ChartPanel({
       >
         <div ref={containerRef} className="absolute inset-0" />
         {loading && (
-          <div className="absolute inset-0 z-30 pointer-events-none transition-opacity" style={{ background: "rgba(19,23,34,0.65)" }} />
+          <div className="absolute inset-0 z-30 pointer-events-none transition-opacity" style={{ background: TC.dimBg }} />
         )}
         <svg ref={svgRef} className="absolute inset-0" style={{ pointerEvents: "none", zIndex: 10 }} />
         {drawingTool !== "none" && (
@@ -807,26 +833,24 @@ export default function ChartPanel({
         {/* ── Right-click context menu ──────────────────────────────── */}
         {ctxMenu && (
           <div
-            className="absolute z-50 rounded-lg shadow-2xl border border-gray-700 py-1 min-w-[160px]"
-            style={{ left: Math.min(ctxMenu.x, (containerRef.current?.offsetWidth ?? 300) - 170), top: ctxMenu.y, background: "#1e2130" }}
+            className="absolute z-50 rounded-lg shadow-2xl py-1 min-w-[160px]"
+            style={{ left: Math.min(ctxMenu.x, (containerRef.current?.offsetWidth ?? 300) - 170), top: ctxMenu.y, background: TC.ctxBg, border: `1px solid ${TC.ctxBor}` }}
             onMouseDown={e => e.stopPropagation()}
           >
-            <button
-              className="w-full text-left px-4 py-1.5 text-xs text-gray-200 hover:bg-gray-700 hover:text-white"
-              onClick={() => {
-                chartRef.current?.dispatchAction({ type: "dataZoom", start: 60, end: 100 });
-                setCtxMenu(null);
-              }}
-            >Reset zoom</button>
-            <button
-              className="w-full text-left px-4 py-1.5 text-xs text-gray-200 hover:bg-gray-700 hover:text-white"
-              onClick={() => { onClearDrawings?.(); setCtxMenu(null); }}
-            >Clear drawings</button>
-            <div className="h-px bg-gray-700 my-1" />
-            <button
-              className="w-full text-left px-4 py-1.5 text-xs text-gray-200 hover:bg-gray-700 hover:text-white"
-              onClick={() => { fetchData(); setCtxMenu(null); }}
-            >Reload data</button>
+            {[
+              { label: "Reset zoom",    action: () => { chartRef.current?.dispatchAction({ type: "dataZoom", start: 60, end: 100 }); setCtxMenu(null); } },
+              { label: "Clear drawings",action: () => { onClearDrawings?.(); setCtxMenu(null); } },
+              { label: "Reload data",   action: () => { fetchData(); setCtxMenu(null); } },
+            ].map((item, i) => (
+              <button
+                key={item.label}
+                className="w-full text-left px-4 py-1.5 text-xs transition-colors"
+                style={{ color: TC.tipText, ...(i === 1 ? { borderTop: `1px solid ${TC.ctxBor}`, borderBottom: `1px solid ${TC.ctxBor}` } : {}) }}
+                onMouseEnter={e => (e.currentTarget.style.background = TC.grid)}
+                onMouseLeave={e => (e.currentTarget.style.background = "")}
+                onClick={item.action}
+              >{item.label}</button>
+            ))}
           </div>
         )}
       </div>
