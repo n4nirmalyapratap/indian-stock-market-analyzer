@@ -112,6 +112,7 @@ function SupervisorTab() {
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showSugg, setShowSugg] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const SUGGESTIONS = [
@@ -128,6 +129,7 @@ function SupervisorTab() {
     const q = (text || input).trim();
     if (!q) return;
     setInput("");
+    setShowSugg(false);
     setMessages(m => [...m, { role: "user", text: q, time: new Date().toLocaleTimeString() }]);
     setLoading(true);
     try {
@@ -260,30 +262,43 @@ function SupervisorTab() {
         <div ref={bottomRef} />
       </div>
 
-      {/* Suggestions */}
-      <div className="px-3 pt-1 flex gap-1.5 overflow-x-auto pb-1 flex-shrink-0">
-        {SUGGESTIONS.map(s => (
-          <button key={s} onClick={() => send(s)} disabled={loading}
-            className="text-xs px-3 py-1.5 rounded-full border border-indigo-200 bg-white text-indigo-600 hover:bg-indigo-50 whitespace-nowrap transition disabled:opacity-50 flex-shrink-0">
-            {s}
-          </button>
-        ))}
-      </div>
+      {/* Input bar + suggestion popup */}
+      <div className="px-3 py-2.5 border-t border-gray-100 flex-shrink-0 relative">
+        {/* Suggestion popup — floats above the input, anchored to the ⚡ button */}
+        {showSugg && (
+          <div className="absolute bottom-full left-3 right-3 mb-2 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-10">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-3 pt-2.5 pb-1">Try asking</p>
+            {SUGGESTIONS.map(s => (
+              <button key={s} onClick={() => send(s)} disabled={loading}
+                className="w-full text-left text-sm px-3 py-2 hover:bg-indigo-50 hover:text-indigo-700 transition text-gray-700 disabled:opacity-50">
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
 
-      {/* Input */}
-      <div className="px-3 py-2.5 border-t border-gray-100 flex-shrink-0">
         <div className="flex gap-2 items-center bg-gray-100 rounded-xl px-3 py-1.5">
+          {/* ⚡ suggestions toggle */}
+          <button
+            onClick={() => setShowSugg(v => !v)}
+            disabled={loading}
+            title="Quick suggestions"
+            className={`text-gray-400 hover:text-indigo-600 transition flex-shrink-0 disabled:opacity-40 ${showSugg ? "text-indigo-600" : ""}`}>
+            <Zap className="w-4 h-4" />
+          </button>
+
           <input
             className="flex-1 bg-transparent text-sm focus:outline-none placeholder:text-gray-400"
-            placeholder="Ask anything — forecast, pairs, risk, sentiment..."
+            placeholder="Ask anything about stocks..."
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === "Enter" && !e.shiftKey && send()}
+            onFocus={() => setShowSugg(false)}
             disabled={loading}
           />
           <button onClick={() => send()} disabled={loading || !input.trim()}
-            className="px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 transition">
-            <Send className="w-4 h-4" />
+            className="w-8 h-8 flex items-center justify-center bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-40 transition flex-shrink-0">
+            <Send className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
