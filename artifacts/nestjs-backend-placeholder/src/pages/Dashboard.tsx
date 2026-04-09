@@ -21,16 +21,23 @@ function StatCard({ title, value, sub, trend }: any) {
 }
 
 export default function Dashboard() {
-  const { data: rotation, isLoading: rotLoading, error: rotErr, refetch } = useQuery({
+  const { data: rotation, isLoading: rotLoading, error: rotErr, refetch: refetchRotation } = useQuery({
     queryKey: ["rotation"],
     queryFn: api.sectorRotation,
     staleTime: 5 * 60 * 1000,
   });
-  const { data: patterns, isLoading: patLoading } = useQuery({
+  const { data: patterns, isLoading: patLoading, refetch: refetchPatterns } = useQuery({
     queryKey: ["patterns-overview"],
     queryFn: () => api.patterns(),
     staleTime: 10 * 60 * 1000,
   });
+
+  const isRefreshing = rotLoading || patLoading;
+
+  function handleRefresh() {
+    refetchRotation();
+    refetchPatterns();
+  }
 
   const breadth = rotation?.marketBreadth;
   const adRatio = breadth ? (breadth.advancing / (breadth.declining || 1)).toFixed(2) : "-";
@@ -43,10 +50,12 @@ export default function Dashboard() {
           <p className="text-sm text-gray-500">Indian Stock Market Analysis Platform</p>
         </div>
         <button
-          onClick={() => refetch()}
-          className="flex items-center gap-2 text-sm text-indigo-600 hover:text-indigo-800 border border-indigo-200 rounded-lg px-3 py-1.5 hover:bg-indigo-50 transition"
+          onClick={handleRefresh}
+          disabled={isRefreshing}
+          className="flex items-center gap-2 text-sm text-indigo-600 hover:text-indigo-800 border border-indigo-200 rounded-lg px-3 py-1.5 hover:bg-indigo-50 transition disabled:opacity-60"
         >
-          <RefreshCw className="w-4 h-4" /> Refresh
+          <RefreshCw className={`w-4 h-4 ${isRefreshing ? "animate-spin" : ""}`} />
+          {isRefreshing ? "Refreshing…" : "Refresh"}
         </button>
       </div>
 
