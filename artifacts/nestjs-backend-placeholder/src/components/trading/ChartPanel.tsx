@@ -2,7 +2,19 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import * as echarts from "echarts";
 import { calcEMA, calcSMA, calcRSI, calcMACD, calcBollingerBands } from "@/lib/indicators";
 
-export type DrawingTool = "none" | "trendline" | "ray" | "extendedline" | "hline" | "hray" | "vline" | "crossline" | "rectangle" | "eraser";
+export type DrawingTool =
+  "none" |
+  "trendline" | "ray" | "extendedline" |
+  "hline" | "hray" | "vline" | "crossline" |
+  "rectangle" | "circle" | "ellipse" |
+  "parallelch" | "pitchfork" |
+  "fibretracement" | "fibextension" | "fibtimezone" | "fibfan" |
+  "gannfan" | "gannbox" |
+  "longposition" | "shortposition" |
+  "cycliclines" |
+  "arrowmarker" | "arrowmarkup" | "arrowmarkdown" |
+  "flag" | "measure" | "note" |
+  "eraser";
 export type ChartType = "candles" | "bars" | "hollow" | "line" | "line_markers" | "step" | "area" | "baseline" | "columns" | "ha";
 
 export interface Drawing {
@@ -143,9 +155,13 @@ function computeHA(cs: Candle[]): Candle[] {
 
 // ── SVG overlay helpers ────────────────────────────────────────────────────────
 
-interface SvgLine   { type: "line"; x1: number; y1: number; x2: number; y2: number }
-interface SvgRect   { type: "rect"; x: number;  y: number;  w: number;  h: number  }
-type SvgEl = SvgLine | SvgRect;
+interface SvgLine    { type: "line";    x1: number; y1: number; x2: number; y2: number; dash?: boolean; color?: string }
+interface SvgRect    { type: "rect";    x: number;  y: number;  w: number;  h: number;  fill?: string; stroke?: string }
+interface SvgCircle  { type: "circle";  cx: number; cy: number; r: number;  fill?: string }
+interface SvgEllipse { type: "ellipse"; cx: number; cy: number; rx: number; ry: number; fill?: string }
+interface SvgText    { type: "text";    x: number;  y: number;  text: string; anchor?: "start"|"middle"|"end"; size?: number; color?: string }
+interface SvgPath    { type: "path";    d: string;  fill?: string; stroke?: string }
+type SvgEl = SvgLine | SvgRect | SvgCircle | SvgEllipse | SvgText | SvgPath;
 interface SvgPixels { id: string; els: SvgEl[] }
 
 // GL / GR must stay in sync with the grid config in renderChart below
@@ -185,6 +201,7 @@ function shapeToPixels(
   const b = getGridBounds(chart, candles);
   const W = chart.getWidth(), H = chart.getHeight();
 
+  // ── Lines ──────────────────────────────────────────────────────────────────
   if (s.type === "hline") {
     const [, py] = chart.convertToPixel({ gridIndex: 0 }, [0, s.y]);
     return [{ type: "line", x1: b.leftX, y1: py, x2: b.rightX, y2: py }];
@@ -229,10 +246,254 @@ function shapeToPixels(
     const [ex2, ey2] = extendRay(px0, py0, -nx, -ny, 0, 0, W, H);
     return [{ type: "line", x1: ex2, y1: ey2, x2: ex1, y2: ey1 }];
   }
+
+  // ── Shapes ─────────────────────────────────────────────────────────────────
   if (s.type === "rectangle") {
     const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
     const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
     return [{ type: "rect", x: Math.min(px0, px1), y: Math.min(py0, py1), w: Math.abs(px1 - px0), h: Math.abs(py1 - py0) }];
+  }
+  if (s.type === "circle") {
+    const [cx, cy] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
+    const [ex, ey] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
+    const r = Math.hypot(ex - cx, ey - cy);
+    return [{ type: "circle", cx, cy, r, fill: "rgba(99,102,241,0.08)" }];
+  }
+  if (s.type === "ellipse") {
+    const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
+    const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
+    const cx = (px0 + px1) / 2, cy = (py0 + py1) / 2;
+    return [{ type: "ellipse", cx, cy, rx: Math.abs(px1 - px0) / 2, ry: Math.abs(py1 - py0) / 2, fill: "rgba(99,102,241,0.08)" }];
+  }
+
+  // ── Channels ───────────────────────────────────────────────────────────────
+  if (s.type === "parallelch") {
+    const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
+    const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
+    const [, py2] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y2 ?? s.y0]);
+    const dx = px1 - px0, dy = py1 - py0;
+    const len = Math.hypot(dx, dy);
+    if (len < 1) return null;
+    const nx = dx / len, ny = dy / len;
+    const off = py2 - py0;
+    const [e1x, e1y] = extendRay(px0, py0,  nx,  ny, 0, 0, W, H);
+    const [e2x, e2y] = extendRay(px0, py0, -nx, -ny, 0, 0, W, H);
+    const [e3x, e3y] = extendRay(px0, py0 + off,  nx,  ny, 0, 0, W, H);
+    const [e4x, e4y] = extendRay(px0, py0 + off, -nx, -ny, 0, 0, W, H);
+    const [e5x, e5y] = extendRay(px0, py0 + off / 2,  nx,  ny, 0, 0, W, H);
+    const [e6x, e6y] = extendRay(px0, py0 + off / 2, -nx, -ny, 0, 0, W, H);
+    return [
+      { type: "line", x1: e2x, y1: e2y, x2: e1x, y2: e1y },
+      { type: "line", x1: e4x, y1: e4y, x2: e3x, y2: e3y },
+      { type: "line", x1: e6x, y1: e6y, x2: e5x, y2: e5y, dash: true, color: DRAW_CLR + "88" },
+    ];
+  }
+  if (s.type === "pitchfork") {
+    const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
+    const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
+    const dx = px1 - px0, dy = py1 - py0;
+    const len = Math.hypot(dx, dy);
+    if (len < 1) return null;
+    const nx = dx / len, ny = dy / len;
+    const spread = len * 0.3;
+    const perpX = -ny, perpY = nx;
+    const [me1x, me1y] = extendRay(px0, py0,  nx,  ny, 0, 0, W, H);
+    const [me2x, me2y] = extendRay(px0, py0, -nx, -ny, 0, 0, W, H);
+    const f1x = px1 + perpX * spread, f1y = py1 + perpY * spread;
+    const f2x = px1 - perpX * spread, f2y = py1 - perpY * spread;
+    const [f1ex, f1ey] = extendRay(f1x, f1y, nx, ny, 0, 0, W, H);
+    const [f2ex, f2ey] = extendRay(f2x, f2y, nx, ny, 0, 0, W, H);
+    return [
+      { type: "line", x1: me2x, y1: me2y, x2: me1x, y2: me1y },
+      { type: "line", x1: f1x, y1: f1y, x2: f1ex, y2: f1ey },
+      { type: "line", x1: f2x, y1: f2y, x2: f2ex, y2: f2ey },
+      { type: "line", x1: f1x, y1: f1y, x2: f2x, y2: f2y, dash: true, color: DRAW_CLR + "88" },
+    ];
+  }
+
+  // ── Fibonacci ──────────────────────────────────────────────────────────────
+  if (s.type === "fibretracement" || s.type === "fibextension") {
+    const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
+    const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
+    const levels = s.type === "fibextension"
+      ? [0, 0.236, 0.382, 0.618, 1, 1.272, 1.618, 2.618]
+      : [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+    const colors = ["#ef4444","#f97316","#eab308","#22c55e","#3b82f6","#8b5cf6","#ef4444","#f97316"];
+    const els: SvgEl[] = [
+      { type: "line", x1: px0, y1: py0, x2: px1, y2: py1, dash: true, color: DRAW_CLR + "66" },
+    ];
+    for (let i = 0; i < levels.length; i++) {
+      const ratio = levels[i];
+      const py = py0 + (py1 - py0) * ratio;
+      const col = colors[i % colors.length];
+      els.push({ type: "line", x1: b.leftX, y1: py, x2: b.rightX, y2: py, color: col });
+      els.push({ type: "text", x: b.rightX + 4, y: py - 3, text: `${(ratio * 100).toFixed(1)}%  ₹${fmtPrice(s.y0 + (s.y1 - s.y0) * ratio)}`, anchor: "start", size: 9, color: col });
+    }
+    return els;
+  }
+  if (s.type === "fibtimezone") {
+    const [startX] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
+    const [endX]   = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
+    const interval = endX - startX;
+    if (Math.abs(interval) < 2) return null;
+    const fibNums = [1, 2, 3, 5, 8, 13, 21, 34, 55];
+    const els: SvgEl[] = [{ type: "line", x1: startX, y1: b.topY, x2: startX, y2: b.botY }];
+    for (const n of fibNums) {
+      const x = startX + n * interval;
+      if (x > W + 50 || x < -50) continue;
+      els.push({ type: "line", x1: x, y1: b.topY, x2: x, y2: b.botY, dash: true });
+      els.push({ type: "text", x: x + 3, y: b.topY + 14, text: String(n), anchor: "start", size: 9 });
+    }
+    return els;
+  }
+  if (s.type === "fibfan") {
+    const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
+    const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
+    const dx = px1 - px0, dy = py1 - py0;
+    const ratios = [0.236, 0.382, 0.5, 0.618, 0.786];
+    const colors = ["#f97316","#eab308","#22c55e","#3b82f6","#8b5cf6"];
+    const els: SvgEl[] = [];
+    for (let i = 0; i < ratios.length; i++) {
+      const fanDy = dy * ratios[i];
+      const fanLen = Math.hypot(dx, fanDy);
+      if (fanLen < 1) continue;
+      const [ex, ey] = extendRay(px0, py0, dx / fanLen, fanDy / fanLen, 0, 0, W, H);
+      els.push({ type: "line", x1: px0, y1: py0, x2: ex, y2: ey, dash: true, color: colors[i] });
+      if (ey >= 0 && ey <= H) {
+        els.push({ type: "text", x: ex - 28, y: ey, text: `${(ratios[i] * 100).toFixed(0)}%`, size: 9, color: colors[i] });
+      }
+    }
+    return els.length ? els : null;
+  }
+
+  // ── Gann ───────────────────────────────────────────────────────────────────
+  if (s.type === "gannfan") {
+    const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
+    const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
+    const dx = px1 - px0, dy = py1 - py0;
+    const RATIOS = [
+      { r: 1/4, label: "1×4" }, { r: 1/3, label: "1×3" }, { r: 1/2, label: "1×2" },
+      { r: 1,   label: "1×1" },
+      { r: 2,   label: "2×1" }, { r: 3,   label: "3×1" }, { r: 4,   label: "4×1" },
+    ];
+    const els: SvgEl[] = [];
+    for (const { r, label } of RATIOS) {
+      const fanDy = dy * r;
+      const fanLen = Math.hypot(dx, fanDy);
+      if (fanLen < 1) continue;
+      const [ex, ey] = extendRay(px0, py0, dx / fanLen, fanDy / fanLen, 0, 0, W, H);
+      const isMain = r === 1;
+      els.push({ type: "line", x1: px0, y1: py0, x2: ex, y2: ey, dash: !isMain, color: isMain ? DRAW_CLR : DRAW_CLR + "99" });
+      if (ey >= 0 && ey <= H && ex >= 0 && ex <= W) {
+        els.push({ type: "text", x: ex - 20, y: ey - 3, text: label, anchor: "end", size: 8 });
+      }
+    }
+    return els;
+  }
+  if (s.type === "gannbox") {
+    const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
+    const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
+    const minX = Math.min(px0, px1), maxX = Math.max(px0, px1);
+    const minY = Math.min(py0, py1), maxY = Math.max(py0, py1);
+    const w = maxX - minX, h = maxY - minY;
+    return [
+      { type: "rect", x: minX, y: minY, w, h, fill: "rgba(99,102,241,0.05)" },
+      { type: "line", x1: minX, y1: minY, x2: maxX, y2: maxY, dash: true },
+      { type: "line", x1: minX, y1: maxY, x2: maxX, y2: minY, dash: true },
+      { type: "line", x1: minX, y1: (minY + maxY) / 2, x2: maxX, y2: (minY + maxY) / 2, dash: true, color: DRAW_CLR + "66" },
+      { type: "line", x1: (minX + maxX) / 2, y1: minY, x2: (minX + maxX) / 2, y2: maxY, dash: true, color: DRAW_CLR + "66" },
+    ];
+  }
+
+  // ── Forecasting ────────────────────────────────────────────────────────────
+  if (s.type === "longposition" || s.type === "shortposition") {
+    const isLong = s.type === "longposition";
+    const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
+    const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
+    const stopPrice = s.y0 - (s.y1 - s.y0) * 0.5;
+    const [, pyStop] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, stopPrice]);
+    const left = Math.min(px0, px1), right = Math.max(px0, px1);
+    const entryY = py0, targetY = py1, stopY = pyStop;
+    return [
+      { type: "rect", x: left, y: Math.min(entryY, targetY), w: right - left, h: Math.abs(targetY - entryY), fill: isLong ? "rgba(38,166,154,0.18)" : "rgba(239,83,80,0.18)", stroke: "none" },
+      { type: "rect", x: left, y: Math.min(entryY, stopY),   w: right - left, h: Math.abs(stopY - entryY),   fill: isLong ? "rgba(239,83,80,0.18)" : "rgba(38,166,154,0.18)", stroke: "none" },
+      { type: "line", x1: left, y1: entryY,  x2: right, y2: entryY, color: "#aaa" },
+      { type: "line", x1: left, y1: targetY, x2: right, y2: targetY, color: isLong ? "#26a69a" : "#ef5350" },
+      { type: "line", x1: left, y1: stopY,   x2: right, y2: stopY,   color: isLong ? "#ef5350" : "#26a69a", dash: true },
+      { type: "text", x: left + 4, y: targetY - 4,  text: `T ₹${fmtPrice(s.y1 as number)}`, size: 9, color: isLong ? "#26a69a" : "#ef5350" },
+      { type: "text", x: left + 4, y: entryY  + 11, text: `E ₹${fmtPrice(s.y0 as number)}`, size: 9, color: "#ccc" },
+      { type: "text", x: left + 4, y: stopY   + 11, text: `S ₹${fmtPrice(stopPrice)}`,       size: 9, color: isLong ? "#ef5350" : "#26a69a" },
+    ];
+  }
+
+  // ── Cycles ─────────────────────────────────────────────────────────────────
+  if (s.type === "cycliclines") {
+    const [px0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
+    const [px1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
+    const interval = Math.abs(px1 - px0);
+    if (interval < 2) return null;
+    const els: SvgEl[] = [{ type: "line", x1: px0, y1: b.topY, x2: px0, y2: b.botY }];
+    for (let x = px0 + interval; x <= W + 10; x += interval) {
+      els.push({ type: "line", x1: x, y1: b.topY, x2: x, y2: b.botY, dash: true });
+    }
+    for (let x = px0 - interval; x >= -10; x -= interval) {
+      els.push({ type: "line", x1: x, y1: b.topY, x2: x, y2: b.botY, dash: true });
+    }
+    return els;
+  }
+
+  // ── Arrows ─────────────────────────────────────────────────────────────────
+  if (s.type === "arrowmarker") {
+    const [px, py] = chart.convertToPixel({ gridIndex: 0 }, [s.xIdx, s.y]);
+    return [{ type: "path", d: `M${px - 12},${py} L${px + 12},${py} M${px + 6},${py - 6} L${px + 12},${py} L${px + 6},${py + 6}` }];
+  }
+  if (s.type === "arrowmarkup") {
+    const [px, py] = chart.convertToPixel({ gridIndex: 0 }, [s.xIdx, s.y]);
+    return [
+      { type: "path", d: `M${px},${py + 12} L${px},${py - 12} M${px - 6},${py - 6} L${px},${py - 12} L${px + 6},${py - 6}` },
+      { type: "path", d: `M${px - 6},${py + 16} L${px + 6},${py + 16}`, stroke: DRAW_CLR + "88" },
+    ];
+  }
+  if (s.type === "arrowmarkdown") {
+    const [px, py] = chart.convertToPixel({ gridIndex: 0 }, [s.xIdx, s.y]);
+    return [
+      { type: "path", d: `M${px},${py - 12} L${px},${py + 12} M${px - 6},${py + 6} L${px},${py + 12} L${px + 6},${py + 6}` },
+      { type: "path", d: `M${px - 6},${py - 16} L${px + 6},${py - 16}`, stroke: DRAW_CLR + "88" },
+    ];
+  }
+
+  // ── Misc ───────────────────────────────────────────────────────────────────
+  if (s.type === "flag") {
+    const [px, py] = chart.convertToPixel({ gridIndex: 0 }, [s.xIdx, s.y]);
+    return [
+      { type: "line", x1: px, y1: py, x2: px, y2: b.botY },
+      { type: "path", d: `M${px},${py} L${px + 18},${py + 6} L${px},${py + 12} Z`, fill: DRAW_CLR + "88" },
+    ];
+  }
+  if (s.type === "measure") {
+    const [px0, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.x0Idx, s.y0]);
+    const [px1, py1] = chart.convertToPixel({ gridIndex: 0 }, [s.x1Idx, s.y1]);
+    const minX = Math.min(px0, px1), maxX = Math.max(px0, px1);
+    const minY = Math.min(py0, py1), maxY = Math.max(py0, py1);
+    const w = maxX - minX, h = maxY - minY;
+    const priceDiff = Math.abs((s.y1 as number) - (s.y0 as number));
+    const barCount = Math.abs((s.x1Idx as number) - (s.x0Idx as number));
+    const pricePct = (priceDiff / Math.max(s.y0 as number, s.y1 as number)) * 100;
+    const isUp = (s.y1 as number) > (s.y0 as number);
+    return [
+      { type: "rect", x: minX, y: minY, w, h, fill: isUp ? "rgba(38,166,154,0.12)" : "rgba(239,83,80,0.12)" },
+      { type: "text", x: minX + w / 2, y: minY + h / 2 - 8, text: `${isUp ? "+" : ""}${pricePct.toFixed(2)}%`, anchor: "middle", size: 10, color: isUp ? "#26a69a" : "#ef5350" },
+      { type: "text", x: minX + w / 2, y: minY + h / 2 + 8, text: `${barCount} bars`, anchor: "middle", size: 9 },
+    ];
+  }
+  if (s.type === "note") {
+    const [px, py] = chart.convertToPixel({ gridIndex: 0 }, [s.xIdx, s.y]);
+    const txt = String(s.text ?? "Note");
+    const tw = Math.max(60, txt.length * 6.5 + 12);
+    return [
+      { type: "path", d: `M${px},${py} L${px + 8},${py - 10} L${px + tw},${py - 10} L${px + tw},${py - 28} L${px},${py - 28} Z`, fill: "rgba(30,33,48,0.9)", stroke: DRAW_CLR },
+      { type: "text", x: px + 6, y: py - 15, text: txt, anchor: "start", size: 10 },
+    ];
   }
   return null;
 }
@@ -256,6 +517,21 @@ function distToRect(px: number, py: number, rx: number, ry: number, rw: number, 
   return Math.hypot(px - cx, py - cy);
 }
 
+function hitTestEl(px: number, py: number, el: SvgEl): number {
+  if (el.type === "line") return distToSegment(px, py, el.x1, el.y1, el.x2, el.y2);
+  if (el.type === "rect") return distToRect(px, py, el.x, el.y, el.w, el.h);
+  if (el.type === "circle") return Math.abs(Math.hypot(px - el.cx, py - el.cy) - el.r);
+  if (el.type === "ellipse") {
+    const a = el.rx, b = el.ry;
+    if (a < 1 || b < 1) return 999;
+    const nx = (px - el.cx) / a, ny = (py - el.cy) / b;
+    return Math.abs(Math.hypot(nx, ny) - 1) * Math.min(a, b);
+  }
+  if (el.type === "text") return distToRect(px, py, el.x, el.y - 14, (el.text?.length ?? 4) * 7, 16);
+  if (el.type === "path") return 20; // not easily hittable; just use a fixed threshold
+  return 999;
+}
+
 function hitTestDrawings(
   px: number, py: number,
   drawings: Drawing[],
@@ -268,9 +544,7 @@ function hitTestDrawings(
     const els = shapeToPixels(d.shape, chart, candles);
     if (!els) continue;
     for (const el of els) {
-      const dist = el.type === "line"
-        ? distToSegment(px, py, el.x1, el.y1, el.x2, el.y2)
-        : distToRect(px, py, el.x, el.y, el.w, el.h);
+      const dist = hitTestEl(px, py, el);
       if (dist < THRESHOLD && (!best || dist < best.dist)) {
         best = { id: d.id, dist };
       }
@@ -290,31 +564,75 @@ function renderSvg(
   if (!svgEl) return;
   while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
 
-  const add = (el: SvgEl, dash = false, alpha = 1) => {
-    const color = DRAW_CLR + (alpha < 1 ? "bb" : "");
+  const add = (el: SvgEl, isPreview = false) => {
+    const baseColor = DRAW_CLR + (isPreview ? "bb" : "");
+    const opacity = isPreview ? "0.75" : "1";
     if (el.type === "line") {
       const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
       line.setAttribute("x1", String(el.x1)); line.setAttribute("y1", String(el.y1));
       line.setAttribute("x2", String(el.x2)); line.setAttribute("y2", String(el.y2));
-      line.setAttribute("stroke", color);
+      line.setAttribute("stroke", el.color ?? baseColor);
       line.setAttribute("stroke-width", "1.5");
-      if (dash) line.setAttribute("stroke-dasharray", "5 4");
+      line.setAttribute("opacity", opacity);
+      if (el.dash) line.setAttribute("stroke-dasharray", "5 4");
       svgEl.appendChild(line);
-    } else {
+    } else if (el.type === "rect") {
       const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
       rect.setAttribute("x", String(el.x)); rect.setAttribute("y", String(el.y));
       rect.setAttribute("width", String(el.w)); rect.setAttribute("height", String(el.h));
-      rect.setAttribute("stroke", color);
-      rect.setAttribute("stroke-width", "1.5");
-      rect.setAttribute("fill", "rgba(99,102,241,0.08)");
+      if (el.stroke !== "none") {
+        rect.setAttribute("stroke", el.stroke ?? baseColor);
+        rect.setAttribute("stroke-width", "1.5");
+      } else {
+        rect.setAttribute("stroke", "none");
+      }
+      rect.setAttribute("fill", el.fill ?? "rgba(99,102,241,0.08)");
+      rect.setAttribute("opacity", opacity);
       svgEl.appendChild(rect);
+    } else if (el.type === "circle") {
+      const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      c.setAttribute("cx", String(el.cx)); c.setAttribute("cy", String(el.cy));
+      c.setAttribute("r", String(Math.max(0, el.r)));
+      c.setAttribute("stroke", baseColor); c.setAttribute("stroke-width", "1.5");
+      c.setAttribute("fill", el.fill ?? "rgba(99,102,241,0.08)");
+      c.setAttribute("opacity", opacity);
+      svgEl.appendChild(c);
+    } else if (el.type === "ellipse") {
+      const e = document.createElementNS("http://www.w3.org/2000/svg", "ellipse");
+      e.setAttribute("cx", String(el.cx)); e.setAttribute("cy", String(el.cy));
+      e.setAttribute("rx", String(Math.max(0, el.rx))); e.setAttribute("ry", String(Math.max(0, el.ry)));
+      e.setAttribute("stroke", baseColor); e.setAttribute("stroke-width", "1.5");
+      e.setAttribute("fill", el.fill ?? "rgba(99,102,241,0.08)");
+      e.setAttribute("opacity", opacity);
+      svgEl.appendChild(e);
+    } else if (el.type === "text") {
+      const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      t.setAttribute("x", String(el.x)); t.setAttribute("y", String(el.y));
+      t.setAttribute("text-anchor", el.anchor ?? "start");
+      t.setAttribute("font-size", String(el.size ?? 10));
+      t.setAttribute("fill", el.color ?? baseColor);
+      t.setAttribute("font-family", "monospace");
+      t.setAttribute("pointer-events", "none");
+      t.setAttribute("opacity", opacity);
+      t.textContent = el.text;
+      svgEl.appendChild(t);
+    } else if (el.type === "path") {
+      const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      p.setAttribute("d", el.d);
+      p.setAttribute("stroke", el.stroke ?? baseColor);
+      p.setAttribute("stroke-width", "1.5");
+      p.setAttribute("fill", el.fill ?? "none");
+      p.setAttribute("stroke-linecap", "round");
+      p.setAttribute("stroke-linejoin", "round");
+      p.setAttribute("opacity", opacity);
+      svgEl.appendChild(p);
     }
   };
 
-  for (const p of pixels) for (const el of p.els) add(el);
+  for (const p of pixels) for (const el of p.els) add(el, false);
   if (preview) {
     const arr = Array.isArray(preview) ? preview : [preview];
-    for (const el of arr) add(el, el.type === "line", 0.7);
+    for (const el of arr) add(el, true);
   }
 
   // Eraser cursor circle
@@ -625,8 +943,8 @@ export default function ChartPanel({
     const chart = echarts.init(div, null, { renderer: "canvas" });
     chartRef.current = chart;
 
-    chart.on("dataZoom", () => requestAnimationFrame(() => paintSvg()));
-    chart.on("rendered",  () => requestAnimationFrame(() => paintSvg()));
+    chart.on("dataZoom", () => { requestAnimationFrame(() => paintSvg()); });
+    chart.on("rendered",  () => { requestAnimationFrame(() => paintSvg()); });
 
     // Update OHLCV header on crosshair move
     chart.on("updateAxisPointer", (e: any) => {
@@ -704,6 +1022,22 @@ export default function ChartPanel({
 
     const data = pixelToData(pos.px, pos.py);
     if (!data) return;
+
+    // Click-only tools — create shape immediately, no drag needed
+    if (drawingTool === "arrowmarker")
+      { onDrawingAdd({ id: uid(), shape: { type: "arrowmarker", xIdx: data.xIdx, y: data.y } }); return; }
+    if (drawingTool === "arrowmarkup")
+      { onDrawingAdd({ id: uid(), shape: { type: "arrowmarkup", xIdx: data.xIdx, y: data.y } }); return; }
+    if (drawingTool === "arrowmarkdown")
+      { onDrawingAdd({ id: uid(), shape: { type: "arrowmarkdown", xIdx: data.xIdx, y: data.y } }); return; }
+    if (drawingTool === "flag")
+      { onDrawingAdd({ id: uid(), shape: { type: "flag", xIdx: data.xIdx, y: data.y } }); return; }
+    if (drawingTool === "note") {
+      const text = window.prompt("Enter note text:") ?? "";
+      if (text.trim()) onDrawingAdd({ id: uid(), shape: { type: "note", xIdx: data.xIdx, y: data.y, text: text.trim() } });
+      return;
+    }
+
     dragStart.current = { px: pos.px, py: pos.py, xIdx: data.xIdx, y: data.y };
   };
 
@@ -726,6 +1060,7 @@ export default function ChartPanel({
     const W = chart.getWidth(), H = chart.getHeight();
 
     let preview: SvgEl | SvgEl[] | null = null;
+
     if (drawingTool === "hline")
       preview = { type: "line", x1: b.leftX, y1: s.py, x2: b.rightX, y2: s.py };
     else if (drawingTool === "hray")
@@ -752,8 +1087,119 @@ export default function ChartPanel({
         preview = { type: "line", x1: ex2, y1: ey2, x2: ex1, y2: ey1 };
       }
     }
-    else if (drawingTool === "rectangle")
+    else if (drawingTool === "rectangle" || drawingTool === "gannbox" || drawingTool === "measure" || drawingTool === "longposition" || drawingTool === "shortposition")
       preview = { type: "rect", x: Math.min(s.px, pos.px), y: Math.min(s.py, pos.py), w: Math.abs(pos.px - s.px), h: Math.abs(pos.py - s.py) };
+    else if (drawingTool === "circle") {
+      const r = Math.hypot(pos.px - s.px, pos.py - s.py);
+      preview = [{ type: "circle", cx: s.px, cy: s.py, r }];
+    }
+    else if (drawingTool === "ellipse") {
+      const rx = Math.abs(pos.px - s.px) / 2, ry = Math.abs(pos.py - s.py) / 2;
+      preview = [{ type: "ellipse", cx: (s.px + pos.px) / 2, cy: (s.py + pos.py) / 2, rx, ry }];
+    }
+    else if (drawingTool === "parallelch") {
+      const dx = pos.px - s.px, dy = pos.py - s.py;
+      const len = Math.hypot(dx, dy);
+      if (len > 1) {
+        const nx = dx / len, ny = dy / len;
+        const off = len * 0.22;
+        const perpX = -ny, perpY = nx;
+        const [e1x, e1y] = extendRay(s.px, s.py,  nx,  ny, 0, 0, W, H);
+        const [e2x, e2y] = extendRay(s.px, s.py, -nx, -ny, 0, 0, W, H);
+        const [e3x, e3y] = extendRay(s.px + perpX * off, s.py + perpY * off,  nx,  ny, 0, 0, W, H);
+        const [e4x, e4y] = extendRay(s.px + perpX * off, s.py + perpY * off, -nx, -ny, 0, 0, W, H);
+        preview = [
+          { type: "line", x1: e2x, y1: e2y, x2: e1x, y2: e1y },
+          { type: "line", x1: e4x, y1: e4y, x2: e3x, y2: e3y, dash: true },
+        ];
+      }
+    }
+    else if (drawingTool === "pitchfork") {
+      const dx = pos.px - s.px, dy = pos.py - s.py;
+      const len = Math.hypot(dx, dy);
+      if (len > 1) {
+        const nx = dx / len, ny = dy / len;
+        const spread = len * 0.3;
+        const perpX = -ny, perpY = nx;
+        const [me1x, me1y] = extendRay(s.px, s.py,  nx,  ny, 0, 0, W, H);
+        const [me2x, me2y] = extendRay(s.px, s.py, -nx, -ny, 0, 0, W, H);
+        const [f1ex, f1ey] = extendRay(pos.px + perpX * spread, pos.py + perpY * spread, nx, ny, 0, 0, W, H);
+        const [f2ex, f2ey] = extendRay(pos.px - perpX * spread, pos.py - perpY * spread, nx, ny, 0, 0, W, H);
+        preview = [
+          { type: "line", x1: me2x, y1: me2y, x2: me1x, y2: me1y },
+          { type: "line", x1: pos.px + perpX * spread, y1: pos.py + perpY * spread, x2: f1ex, y2: f1ey },
+          { type: "line", x1: pos.px - perpX * spread, y1: pos.py - perpY * spread, x2: f2ex, y2: f2ey },
+        ];
+      }
+    }
+    else if (drawingTool === "fibretracement" || drawingTool === "fibextension") {
+      const levels = drawingTool === "fibextension"
+        ? [0, 0.236, 0.382, 0.618, 1, 1.272, 1.618, 2.618]
+        : [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+      const colors = ["#ef4444","#f97316","#eab308","#22c55e","#3b82f6","#8b5cf6","#ef4444","#f97316"];
+      preview = [
+        { type: "line", x1: s.px, y1: s.py, x2: pos.px, y2: pos.py, dash: true, color: DRAW_CLR + "66" },
+        ...levels.map((r, i) => ({
+          type: "line" as const,
+          x1: b.leftX, y1: s.py + (pos.py - s.py) * r,
+          x2: b.rightX, y2: s.py + (pos.py - s.py) * r,
+          color: colors[i % colors.length],
+        } as SvgEl)),
+      ];
+    }
+    else if (drawingTool === "fibtimezone") {
+      const interval = Math.abs(pos.px - s.px);
+      if (interval > 2) {
+        const fibNums = [1, 2, 3, 5, 8, 13, 21, 34];
+        preview = [
+          { type: "line", x1: s.px, y1: b.topY, x2: s.px, y2: b.botY },
+          ...fibNums.map(n => {
+            const x = s.px + n * Math.sign(pos.px - s.px) * interval;
+            return { type: "line" as const, x1: x, y1: b.topY, x2: x, y2: b.botY, dash: true } as SvgEl;
+          }).filter(l => l.type === "line" && l.x1 >= 0 && l.x1 <= W),
+        ];
+      }
+    }
+    else if (drawingTool === "fibfan") {
+      const dx = pos.px - s.px, dy = pos.py - s.py;
+      const ratios = [0.236, 0.382, 0.5, 0.618, 0.786];
+      const colors = ["#f97316","#eab308","#22c55e","#3b82f6","#8b5cf6"];
+      const els: SvgEl[] = [];
+      for (let i = 0; i < ratios.length; i++) {
+        const fanDy = dy * ratios[i];
+        const fanLen = Math.hypot(dx, fanDy);
+        if (fanLen < 1) continue;
+        const [ex, ey] = extendRay(s.px, s.py, dx / fanLen, fanDy / fanLen, 0, 0, W, H);
+        els.push({ type: "line", x1: s.px, y1: s.py, x2: ex, y2: ey, dash: true, color: colors[i] });
+      }
+      preview = els;
+    }
+    else if (drawingTool === "gannfan") {
+      const dx = pos.px - s.px, dy = pos.py - s.py;
+      const ratios = [1/4, 1/3, 1/2, 1, 2, 3, 4];
+      const els: SvgEl[] = [];
+      for (const r of ratios) {
+        const fanDy = dy * r;
+        const fanLen = Math.hypot(dx, fanDy);
+        if (fanLen < 1) continue;
+        const [ex, ey] = extendRay(s.px, s.py, dx / fanLen, fanDy / fanLen, 0, 0, W, H);
+        els.push({ type: "line", x1: s.px, y1: s.py, x2: ex, y2: ey, dash: r !== 1, color: r === 1 ? DRAW_CLR : DRAW_CLR + "99" });
+      }
+      preview = els;
+    }
+    else if (drawingTool === "cycliclines") {
+      const interval = Math.abs(pos.px - s.px);
+      if (interval > 2) {
+        const els: SvgEl[] = [{ type: "line", x1: s.px, y1: b.topY, x2: s.px, y2: b.botY }];
+        for (let x = s.px + interval; x <= W + 10; x += interval) {
+          els.push({ type: "line", x1: x, y1: b.topY, x2: x, y2: b.botY, dash: true });
+        }
+        for (let x = s.px - interval; x >= -10; x -= interval) {
+          els.push({ type: "line", x1: x, y1: b.topY, x2: x, y2: b.botY, dash: true });
+        }
+        preview = els;
+      }
+    }
 
     paintSvg(preview);
   };
@@ -782,14 +1228,25 @@ export default function ChartPanel({
     const data = pos ? pixelToData(pos.px, pos.py) : null;
     if (!data || !pos) { paintSvg(); return; }
 
-    if (drawingTool === "trendline")
-      shape = { type: "trendline", x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y };
-    else if (drawingTool === "ray")
-      shape = { type: "ray", x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y };
-    else if (drawingTool === "extendedline")
-      shape = { type: "extendedline", x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y };
-    else if (drawingTool === "rectangle")
-      shape = { type: "rectangle", x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y };
+    const two = { x0Idx: s.xIdx, y0: s.y, x1Idx: data.xIdx, y1: data.y };
+    if      (drawingTool === "trendline")     shape = { type: "trendline",     ...two };
+    else if (drawingTool === "ray")           shape = { type: "ray",           ...two };
+    else if (drawingTool === "extendedline")  shape = { type: "extendedline",  ...two };
+    else if (drawingTool === "rectangle")     shape = { type: "rectangle",     ...two };
+    else if (drawingTool === "circle")        shape = { type: "circle",        ...two };
+    else if (drawingTool === "ellipse")       shape = { type: "ellipse",       ...two };
+    else if (drawingTool === "parallelch")    shape = { type: "parallelch",    ...two, y2: s.y + (data.y - s.y) * 0.35 };
+    else if (drawingTool === "pitchfork")     shape = { type: "pitchfork",     ...two };
+    else if (drawingTool === "fibretracement") shape = { type: "fibretracement", ...two };
+    else if (drawingTool === "fibextension")  shape = { type: "fibextension",  ...two };
+    else if (drawingTool === "fibtimezone")   shape = { type: "fibtimezone",   ...two };
+    else if (drawingTool === "fibfan")        shape = { type: "fibfan",        ...two };
+    else if (drawingTool === "gannfan")       shape = { type: "gannfan",       ...two };
+    else if (drawingTool === "gannbox")       shape = { type: "gannbox",       ...two };
+    else if (drawingTool === "longposition")  shape = { type: "longposition",  ...two };
+    else if (drawingTool === "shortposition") shape = { type: "shortposition", ...two };
+    else if (drawingTool === "cycliclines")   shape = { type: "cycliclines",   ...two };
+    else if (drawingTool === "measure")       shape = { type: "measure",       ...two };
 
     if (shape) onDrawingAdd({ id: uid(), shape });
     paintSvg();
