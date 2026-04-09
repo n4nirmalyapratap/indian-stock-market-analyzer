@@ -1,8 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
-  BarChart2, TrendingUp, Minus, Square, Eraser, RefreshCw,
+  BarChart2, TrendingUp, Minus, Square, Eraser,
   LayoutTemplate, PanelRight, X, Search, Minus as Divider,
-  ChevronLeft, ChevronRight, Crosshair,
+  ChevronDown, Crosshair,
 } from "lucide-react";
 import ChartPanel, { type DrawingTool, type Drawing } from "@/components/trading/ChartPanel";
 import WatchlistPanel from "@/components/trading/WatchlistPanel";
@@ -66,10 +66,10 @@ const SYMBOLS = [
   { symbol: "BANDHANBNK",  name: "Bandhan Bank",                 type: "stock"  },
 ];
 
-// ─── Interval / timeframe configs (TradingView-style) ────────────────────────
-// Each entry sets the candlestick interval AND a sensible default look-back period.
-// Yahoo Finance supported intervals: 1m 2m 5m 15m 30m 60m 90m 1d 5d 1wk 1mo 3mo
-const INTERVALS = [
+// ─── Interval / timeframe configs ─────────────────────────────────────────────
+interface IntervalEntry { label: string; p: string; i: string }
+
+const INTERVALS: IntervalEntry[] = [
   { label: "1m",  p: "1d",   i: "1m"  },
   { label: "2m",  p: "1d",   i: "2m"  },
   { label: "5m",  p: "2d",   i: "5m"  },
@@ -79,6 +79,16 @@ const INTERVALS = [
   { label: "2H",  p: "3mo",  i: "90m" },
   { label: "1D",  p: "1y",   i: "1d"  },
   { label: "1W",  p: "5y",   i: "1wk" },
+  { label: "1M",  p: "5y",   i: "1mo" },
+];
+
+// Groups shown in the dropdown — labels must match INTERVALS[n].label
+const INTERVAL_GROUPS: { group: string; labels: string[] }[] = [
+  { group: "Minutes", labels: ["1m", "2m", "5m", "15m", "30m"] },
+  { group: "Hours",   labels: ["1H", "2H"] },
+  { group: "Days",    labels: ["1D"] },
+  { group: "Weeks",   labels: ["1W"] },
+  { group: "Months",  labels: ["1M"] },
 ];
 
 // ─── Layout modes ────────────────────────────────────────────────────────────
@@ -183,6 +193,90 @@ function SymbolSearch({ onSelect, placeholder }: { onSelect: (sym: string) => vo
   );
 }
 
+// ─── Interval Selector dropdown (TradingView-style) ──────────────────────────
+function IntervalSelector({
+  intervalIdx,
+  onSelect,
+}: {
+  intervalIdx: number;
+  onSelect: (idx: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const current = INTERVALS[intervalIdx];
+
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  return (
+    <div ref={ref} className="relative">
+      {/* Trigger button */}
+      <button
+        onClick={() => setOpen(v => !v)}
+        className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold transition-colors border ${
+          open
+            ? "bg-indigo-600 text-white border-indigo-500"
+            : "bg-gray-800/80 text-gray-200 border-gray-700 hover:border-gray-500 hover:text-white"
+        }`}
+      >
+        {current.label}
+        <ChevronDown size={11} className={`transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {/* Dropdown panel */}
+      {open && (
+        <div
+          className="absolute top-full left-0 mt-1 z-50 rounded-lg shadow-2xl border border-gray-700/80"
+          style={{ background: "#1e2130", minWidth: 260 }}
+        >
+          {/* Header */}
+          <div className="px-4 pt-3 pb-2 border-b border-gray-700/60">
+            <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Interval</span>
+          </div>
+
+          {/* Groups */}
+          <div className="p-3 flex flex-col gap-2">
+            {INTERVAL_GROUPS.map(({ group, labels }) => {
+              const items = labels.map(lbl => {
+                const idx = INTERVALS.findIndex(iv => iv.label === lbl);
+                return idx >= 0 ? { idx, entry: INTERVALS[idx] } : null;
+              }).filter(Boolean) as { idx: number; entry: IntervalEntry }[];
+
+              return (
+                <div key={group} className="flex items-center gap-3">
+                  {/* Group label */}
+                  <span className="text-[11px] text-gray-500 w-14 shrink-0">{group}</span>
+                  {/* Interval buttons */}
+                  <div className="flex items-center gap-1 flex-wrap">
+                    {items.map(({ idx, entry }) => (
+                      <button
+                        key={entry.label}
+                        onClick={() => { onSelect(idx); setOpen(false); }}
+                        className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                          idx === intervalIdx
+                            ? "bg-indigo-600 text-white"
+                            : "text-gray-300 hover:bg-gray-700 hover:text-white"
+                        }`}
+                      >
+                        {entry.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function TradingPlatform() {
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("1");
@@ -258,18 +352,8 @@ export default function TradingPlatform() {
         {/* Symbol search */}
         <SymbolSearch onSelect={setSymbolForActivePanel} placeholder={activePanel?.symbol ?? "Search…"} />
 
-        {/* Interval selector (TradingView-style) */}
-        <div className="flex items-center gap-0.5">
-          {INTERVALS.map((iv, i) => (
-            <button
-              key={iv.label}
-              onClick={() => setIntervalIdx(i)}
-              className={`px-2 py-0.5 text-xs rounded transition-colors font-medium ${i === intervalIdx ? "bg-indigo-600 text-white" : "text-gray-500 hover:text-gray-200 hover:bg-gray-800"}`}
-            >
-              {iv.label}
-            </button>
-          ))}
-        </div>
+        {/* Interval selector — dropdown like TradingView */}
+        <IntervalSelector intervalIdx={intervalIdx} onSelect={setIntervalIdx} />
 
         <div className="w-px h-5 bg-gray-700" />
 
