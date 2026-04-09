@@ -459,6 +459,7 @@ export default function OptionsStrategyTester() {
           { sym: "FINNIFTY",   label: "FIN NIFTY",    lot: 40, exch: "NSE" },
           { sym: "MIDCPNIFTY", label: "MIDCAP NIFTY", lot: 75, exch: "NSE" },
           { sym: "SENSEX",     label: "SENSEX",        lot: 10, exch: "BSE" },
+          { sym: "BANKEX",     label: "BANKEX",        lot: 15, exch: "BSE" },
         ];
         const switchIndex = async (sym: string) => {
           if (sym === symbol && spotInfo) return;
