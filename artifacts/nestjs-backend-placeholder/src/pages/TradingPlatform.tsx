@@ -908,10 +908,80 @@ export default function TradingPlatform() {
                   symbolName={SYMBOLS.find(s => s.symbol === panel.symbol)?.name}
                   periodCfg={customPeriodCfg ?? INTERVALS[intervalIdx]}
                   drawingTool={(((): DrawingTool => {
-                    const direct = ["none","trendline","ray","extendedline","hline","hray","vline","crossline","rectangle","eraser"];
-                    if (direct.includes(drawingTool)) return drawingTool as DrawingTool;
-                    if (drawingTool === "infoline" || drawingTool === "trendangle") return "trendline";
-                    return "none";
+                    const DIRECT: DrawingTool[] = [
+                      "none","trendline","ray","extendedline",
+                      "hline","hray","vline","crossline",
+                      "rectangle","circle","ellipse",
+                      "parallelch","pitchfork",
+                      "fibretracement","fibextension","fibtimezone","fibfan",
+                      "gannfan","gannbox",
+                      "longposition","shortposition",
+                      "cycliclines",
+                      "arrowmarker","arrowmarkup","arrowmarkdown",
+                      "flag","measure","note","eraser",
+                    ];
+                    if (DIRECT.includes(drawingTool as DrawingTool)) return drawingTool as DrawingTool;
+                    const MAP: Record<string, DrawingTool> = {
+                      // Lines aliases
+                      "infoline":          "trendline",
+                      "trendangle":        "trendline",
+                      // Channel aliases
+                      "regtrend":          "trendline",
+                      "flattop":           "hline",
+                      "disjointch":        "parallelch",
+                      // Pitchfork aliases
+                      "schiffpitch":       "pitchfork",
+                      "pitchfan":          "pitchfork",
+                      // Fibonacci aliases
+                      "fibcircles":        "circle",
+                      "fibspiral":         "fibretracement",
+                      "fibwedge":          "fibretracement",
+                      "fibchannel":        "parallelch",
+                      // Gann aliases
+                      "gannsquare":        "gannbox",
+                      "gannsquarefixed":   "gannbox",
+                      // Pattern aliases (simplified to trendline)
+                      "abcd":              "trendline",
+                      "cypher":            "trendline",
+                      "headshoulders":     "trendline",
+                      "trianglepat":       "rectangle",
+                      "threedrives":       "trendline",
+                      // Elliott aliases
+                      "elliottimpulse":    "trendline",
+                      "elliottcorrection": "trendline",
+                      "elliotttriangle":   "trendline",
+                      "elliottdouble":     "trendline",
+                      "elliotttriple":     "trendline",
+                      // Cycles aliases
+                      "timecycles":        "cycliclines",
+                      "sineline":          "trendline",
+                      // Forecast aliases
+                      "positionforecast":  "longposition",
+                      "barpattern":        "rectangle",
+                      "sector":            "rectangle",
+                      // Volume aliases
+                      "anchoredvwap":      "vline",
+                      "fixedrangevolume":  "rectangle",
+                      "anchoredvolume":    "rectangle",
+                      // Brush aliases
+                      "brush":             "trendline",
+                      "highlighter":       "rectangle",
+                      // Arrow aliases
+                      "arrow":             "arrowmarker",
+                      // Shape aliases
+                      "rotatedrectangle":  "rectangle",
+                      "path":              "trendline",
+                      "curve":             "extendedline",
+                      "arc":               "circle",
+                      "polyline":          "trendline",
+                      "triangleshape":     "rectangle",
+                      // Text/annotation aliases
+                      "text":              "note",
+                      "pricenote":         "note",
+                      "pin":               "flag",
+                      "callout":           "note",
+                    };
+                    return MAP[drawingTool] ?? "none";
                   })())}
                   chartType={chartType}
                   indicators={indicators}
