@@ -5,7 +5,7 @@ import {
   ChevronDown, Crosshair, Calendar,
 } from "lucide-react";
 import ChartPanel, { type DrawingTool, type Drawing, type ChartType } from "@/components/trading/ChartPanel";
-import WatchlistPanel from "@/components/trading/WatchlistPanel";
+import WatchlistPanel, { type WatchlistPanelHandle } from "@/components/trading/WatchlistPanel";
 
 // ─── Symbol catalogue ────────────────────────────────────────────────────────
 const SYMBOLS = [
@@ -154,105 +154,154 @@ function makePanel(symbol: string): PanelState {
   return { id: uid(), symbol, drawings: [] };
 }
 
-// ─── Symbol Search (API-backed — full universe) ───────────────────────────────
+// ─── Symbol Search Modal (TradingView-style full-screen popup) ────────────────
 interface SearchResult { symbol: string; name: string }
 
-export interface SymbolSearchHandle { open: (char?: string) => void }
+type SearchMode = "chart" | "watchlist";
 
-const SymbolSearch = forwardRef<SymbolSearchHandle, { onSelect: (sym: string) => void; placeholder?: string }>(
-function SymbolSearch({ onSelect, placeholder }, fwdRef) {
-  const [q, setQ] = useState("");
-  const [open, setOpen] = useState(false);
+export interface SearchModalHandle {
+  open: (opts?: { char?: string; mode?: SearchMode }) => void;
+}
+
+const INDEX_SYMS = new Set(["NIFTY 50", "NIFTY50", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]);
+
+const SearchModal = forwardRef<SearchModalHandle, {
+  onSelectChart: (sym: string) => void;
+  onSelectWatchlist: (sym: string) => void;
+}>(function SearchModal({ onSelectChart, onSelectWatchlist }, fwdRef) {
+  const [open, setOpen]       = useState(false);
+  const [mode, setMode]       = useState<SearchMode>("chart");
+  const [q, setQ]             = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useImperativeHandle(fwdRef, () => ({
-    open: (char?: string) => {
-      if (char) {
-        setQ(char);
-        setOpen(true);
-        handleChange(char);
-      } else {
-        setOpen(true);
-      }
+    open: (opts) => {
+      setMode(opts?.mode ?? "chart");
+      const char = opts?.char ?? "";
+      setQ(char);
+      setResults([]);
+      setActiveIdx(0);
+      setOpen(true);
+      if (char) doSearch(char);
       requestAnimationFrame(() => inputRef.current?.focus());
     },
   }));
 
-  useEffect(() => {
-    function handler(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
+  function close() { setOpen(false); setQ(""); setResults([]); }
 
-  function handleChange(val: string) {
-    setQ(val);
-    setOpen(true);
+  function doSearch(val: string) {
     if (debounce.current) clearTimeout(debounce.current);
     if (!val.trim()) { setResults([]); return; }
     debounce.current = setTimeout(async () => {
       setLoading(true);
       try {
         const res = await fetch(`/api/stocks/search?q=${encodeURIComponent(val.trim())}`);
-        if (res.ok) {
-          const data = await res.json();
-          setResults(data.results ?? []);
-        }
+        if (res.ok) { const d = await res.json(); setResults(d.results ?? []); setActiveIdx(0); }
       } catch { setResults([]); }
       finally { setLoading(false); }
-    }, 180);
+    }, 160);
   }
 
-  const INDEX_SYMS = new Set(["NIFTY 50", "NIFTY50", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]);
+  function handleSelect(sym: string) {
+    if (mode === "watchlist") onSelectWatchlist(sym);
+    else onSelectChart(sym);
+    close();
+  }
+
+  if (!open) return null;
 
   return (
-    <div ref={ref} className="relative">
-      <div className="flex items-center gap-1.5 bg-gray-800 border border-gray-700 rounded px-2 py-1 focus-within:border-indigo-500 transition-colors">
-        <Search size={13} className="text-gray-500" />
-        <input
-          ref={inputRef}
-          value={q}
-          onChange={e => handleChange(e.target.value)}
-          onFocus={() => { setOpen(true); if (q) handleChange(q); }}
-          placeholder={placeholder ?? "Search symbol…"}
-          className="bg-transparent text-white text-xs placeholder-gray-600 focus:outline-none w-36"
-          onKeyDown={e => {
-            if (e.key === "Enter" && results[0]) { onSelect(results[0].symbol); setQ(""); setOpen(false); }
-            if (e.key === "Escape") { setOpen(false); inputRef.current?.blur(); }
-          }}
-        />
-        {loading && <div className="w-3 h-3 border border-indigo-400 border-t-transparent rounded-full animate-spin" />}
-        {q && !loading && <button onClick={() => { setQ(""); setResults([]); setOpen(false); }} className="text-gray-600 hover:text-white"><X size={11} /></button>}
-      </div>
-      {open && results.length > 0 && (
-        <div className="absolute top-full left-0 mt-1 z-50 bg-gray-900 border border-gray-700 rounded shadow-2xl w-80 max-h-80 overflow-y-auto">
-          {results.map(s => (
+    <div
+      className="fixed inset-0 z-[200] flex items-start justify-center"
+      style={{ paddingTop: "10vh", background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)" }}
+      onMouseDown={e => { if (e.target === e.currentTarget) close(); }}
+    >
+      <div
+        className="w-full mx-4 rounded-2xl overflow-hidden flex flex-col shadow-2xl"
+        style={{ maxWidth: 620, maxHeight: "72vh", background: "#1a1d27", border: "1px solid rgba(255,255,255,0.09)" }}
+      >
+        {/* Search input row */}
+        <div className="flex items-center gap-3 px-5 py-4 border-b" style={{ borderColor: "rgba(255,255,255,0.07)" }}>
+          <Search size={17} className="text-gray-500 shrink-0" />
+          <input
+            ref={inputRef}
+            value={q}
+            onChange={e => { setQ(e.target.value); doSearch(e.target.value); }}
+            placeholder={mode === "watchlist" ? "Search to add to watchlist…" : "Search symbol or company…"}
+            className="flex-1 bg-transparent text-white text-base placeholder-gray-600 focus:outline-none"
+            onKeyDown={e => {
+              if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx(i => Math.min(i + 1, results.length - 1)); }
+              if (e.key === "ArrowUp")   { e.preventDefault(); setActiveIdx(i => Math.max(i - 1, 0)); }
+              if (e.key === "Enter" && results[activeIdx]) handleSelect(results[activeIdx].symbol);
+              if (e.key === "Escape") close();
+            }}
+          />
+          {loading && <div className="w-4 h-4 border-2 border-indigo-400/60 border-t-indigo-400 rounded-full animate-spin shrink-0" />}
+          {q && !loading && (
+            <button onClick={() => { setQ(""); setResults([]); inputRef.current?.focus(); }} className="shrink-0 text-gray-600 hover:text-white transition-colors">
+              <X size={15} />
+            </button>
+          )}
+          {mode === "watchlist" && (
+            <span className="shrink-0 text-[11px] px-2.5 py-1 rounded-full font-medium" style={{ background: "rgba(99,102,241,0.2)", color: "#a5b4fc", border: "1px solid rgba(99,102,241,0.3)" }}>
+              + Watchlist
+            </span>
+          )}
+          <button onClick={close} className="shrink-0 text-gray-600 hover:text-white transition-colors ml-1">
+            <X size={17} />
+          </button>
+        </div>
+
+        {/* Results list */}
+        <div className="flex-1 overflow-y-auto" style={{ scrollbarWidth: "none" }}>
+          {results.length > 0 && results.map((s, i) => (
             <button
               key={s.symbol}
-              className="w-full flex items-center gap-3 px-3 py-2 hover:bg-gray-800 text-left group"
-              onClick={() => { onSelect(s.symbol); setQ(""); setResults([]); setOpen(false); }}
+              onClick={() => handleSelect(s.symbol)}
+              onMouseEnter={() => setActiveIdx(i)}
+              className={`w-full flex items-center gap-4 px-5 py-3 text-left transition-colors ${
+                i === activeIdx ? "bg-indigo-500/15" : "hover:bg-white/5"
+              }`}
             >
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-semibold text-white group-hover:text-indigo-300">{s.symbol}</div>
-                {s.name && <div className="text-xs text-gray-500 truncate">{s.name}</div>}
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-[11px] font-bold"
+                style={{ background: "rgba(255,255,255,0.06)", color: "#9ca3af" }}>
+                {s.symbol.slice(0, 2)}
               </div>
-              <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded ${INDEX_SYMS.has(s.symbol) ? "bg-purple-900/50 text-purple-300" : "bg-gray-800 text-gray-400"}`}>
-                {INDEX_SYMS.has(s.symbol) ? "INDEX" : "NSE"}
-              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-white">{s.symbol}</div>
+                {s.name && <div className="text-xs text-gray-500 truncate mt-0.5">{s.name}</div>}
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-[10px] px-1.5 py-0.5 rounded font-mono"
+                  style={{ background: "rgba(255,255,255,0.06)", color: "#6b7280" }}>
+                  {INDEX_SYMS.has(s.symbol) ? "INDEX" : "NSE"}
+                </span>
+              </div>
             </button>
           ))}
+
+          {q && !loading && results.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-14 gap-2">
+              <Search size={28} className="text-gray-700" />
+              <p className="text-sm text-gray-500">No results for <span className="text-gray-300">"{q}"</span></p>
+            </div>
+          )}
+
+          {!q && (
+            <div className="flex flex-col items-center justify-center py-14 gap-2">
+              <Search size={28} className="text-gray-700" />
+              <p className="text-sm text-gray-600">
+                {mode === "watchlist" ? "Search a symbol to add to your watchlist" : "Type a symbol or company name"}
+              </p>
+              <p className="text-xs text-gray-700 mt-1">Press <kbd className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-500 font-mono text-[11px]">↑↓</kbd> to navigate · <kbd className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-500 font-mono text-[11px]">Enter</kbd> to select · <kbd className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-500 font-mono text-[11px]">Esc</kbd> to close</p>
+            </div>
+          )}
         </div>
-      )}
-      {open && q.length > 0 && results.length === 0 && !loading && (
-        <div className="absolute top-full left-0 mt-1 z-50 bg-gray-900 border border-gray-700 rounded shadow-2xl w-80 px-4 py-3">
-          <p className="text-xs text-gray-500">No results for "{q}"</p>
-        </div>
-      )}
+      </div>
     </div>
   );
 });
@@ -464,7 +513,8 @@ export default function TradingPlatform() {
   const [calEnd, setCalEnd] = useState("");
   const [clock, setClock] = useState("");
 
-  const searchRef = useRef<SymbolSearchHandle>(null);
+  const searchRef    = useRef<SearchModalHandle>(null);
+  const watchlistRef = useRef<WatchlistPanelHandle>(null);
 
   // ── Live IST clock ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -522,9 +572,9 @@ export default function TradingPlatform() {
         return;
       }
 
-      // Printable character (no modifier) — open symbol search like TradingView
+      // Printable character (no modifier) — open symbol search modal like TradingView
       if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1 && !inInput) {
-        searchRef.current?.open(e.key);
+        searchRef.current?.open({ char: e.key, mode: "chart" });
       }
     }
     document.addEventListener("keydown", onKey);
@@ -589,8 +639,14 @@ export default function TradingPlatform() {
       {/* ── Toolbar ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-800 bg-[#131722] shrink-0 flex-wrap">
 
-        {/* Symbol search */}
-        <SymbolSearch ref={searchRef} onSelect={setSymbolForActivePanel} placeholder={activePanel?.symbol ?? "Search…"} />
+        {/* Symbol name button — opens modal search (chart mode) */}
+        <button
+          onClick={() => searchRef.current?.open({ mode: "chart" })}
+          className="flex items-center gap-2 bg-gray-800/80 border border-gray-700 hover:border-gray-500 rounded px-3 py-1.5 transition-colors group"
+        >
+          <span className="text-sm font-bold text-white tracking-wide">{activePanel?.symbol ?? "—"}</span>
+          <Search size={12} className="text-gray-500 group-hover:text-gray-300 transition-colors" />
+        </button>
 
         {/* Interval selector — dropdown like TradingView */}
         <IntervalSelector intervalIdx={intervalIdx} onSelect={handleIntervalSelect} />
@@ -815,11 +871,20 @@ export default function TradingPlatform() {
         {/* Watchlist */}
         {showWatchlist && (
           <WatchlistPanel
+            ref={watchlistRef}
             onSymbolSelect={setSymbolForActivePanel}
             activeSymbol={activePanel?.symbol ?? ""}
+            onRequestAdd={() => searchRef.current?.open({ mode: "watchlist" })}
           />
         )}
       </div>
+
+      {/* ── Symbol Search Modal (shared — chart mode or watchlist-add mode) ── */}
+      <SearchModal
+        ref={searchRef}
+        onSelectChart={setSymbolForActivePanel}
+        onSelectWatchlist={(sym) => watchlistRef.current?.addSymbol(sym)}
+      />
     </div>
   );
 }

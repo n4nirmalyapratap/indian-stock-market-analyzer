@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { Plus, Trash2, ChevronDown, Check, X, Pencil, Search } from "lucide-react";
+import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from "react";
+import { Plus, Trash2, ChevronDown, Check, X, Pencil } from "lucide-react";
 
 export interface WatchlistItem {
   symbol: string;
@@ -12,6 +12,10 @@ export interface Watchlist {
   id: string;
   name: string;
   symbols: string[];
+}
+
+export interface WatchlistPanelHandle {
+  addSymbol: (sym: string) => void;
 }
 
 interface StockDetail {
@@ -64,9 +68,11 @@ function fmtCrore(v: number): string {
 interface Props {
   onSymbolSelect: (symbol: string) => void;
   activeSymbol: string;
+  onRequestAdd: () => void;
 }
 
-export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) {
+const WatchlistPanel = forwardRef<WatchlistPanelHandle, Props>(
+function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd }, ref) {
   const [watchlists, setWatchlists]   = useState<Watchlist[]>(loadWatchlists);
   const [activeId, setActiveId]       = useState(watchlists[0]?.id ?? "default");
   const [prices, setPrices]           = useState<Record<string, WatchlistItem>>({});
@@ -77,20 +83,29 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
   const [newListName, setNewListName] = useState("");
   const [stockDetail, setStockDetail] = useState<StockDetail | null>(null);
 
-  // Add-symbol mode: triggered only by the + button (NOT by the main search)
-  const [addMode, setAddMode]         = useState(false);
-  const [addInput, setAddInput]       = useState("");
-
   const menuRef     = useRef<HTMLDivElement>(null);
-  const addInputRef = useRef<HTMLInputElement>(null);
   const fetchGenRef = useRef(0);
 
   const activeWL = watchlists.find(w => w.id === activeId) ?? watchlists[0];
 
-  // Focus add input when add mode opens
-  useEffect(() => {
-    if (addMode) setTimeout(() => addInputRef.current?.focus(), 50);
-  }, [addMode]);
+  // Expose addSymbol to parent via ref
+  useImperativeHandle(ref, () => ({
+    addSymbol: (sym: string) => {
+      const upper = sym.trim().toUpperCase();
+      if (!upper || !activeWL) return;
+      setWatchlists(prev => {
+        const updated = prev.map(w =>
+          w.id === activeId && !w.symbols.includes(upper)
+            ? { ...w, symbols: [...w.symbols, upper] }
+            : w
+        );
+        saveWatchlists(updated);
+        return updated;
+      });
+      const gen = ++fetchGenRef.current;
+      fetchPrices([upper], gen);
+    },
+  }));
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -126,7 +141,7 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
     fetchPrices(activeWL.symbols, gen);
   }, [activeWL?.id, activeWL?.symbols.join(",")]);
 
-  // Fetch stock details for the active symbol (triggered by toolbar search OR watchlist click)
+  // Fetch stock details for the active symbol (updates whenever chart symbol changes)
   useEffect(() => {
     if (!activeSymbol) return;
     let cancelled = false;
@@ -138,18 +153,6 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
   }, [activeSymbol]);
 
   function save(lists: Watchlist[]) { setWatchlists(lists); saveWatchlists(lists); }
-
-  // Add symbol — only called from the + button flow
-  function addSymbol() {
-    const sym = addInput.trim().toUpperCase();
-    if (sym && activeWL && !activeWL.symbols.includes(sym)) {
-      save(watchlists.map(w => w.id === activeWL.id ? { ...w, symbols: [...w.symbols, sym] } : w));
-      const gen = ++fetchGenRef.current;
-      fetchPrices([sym], gen);
-    }
-    setAddInput("");
-    setAddMode(false);
-  }
 
   function removeSymbol(sym: string) {
     save(watchlists.map(w => w.id === activeWL?.id ? { ...w, symbols: w.symbols.filter(s => s !== sym) } : w));
@@ -202,7 +205,6 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
       {/* ── Header: watchlist name + + button ── */}
       <div className="relative shrink-0" ref={menuRef}>
         <div className="flex items-center px-1 py-1 gap-0.5">
-          {/* Watchlist name / dropdown trigger */}
           <button
             onClick={() => setShowMenu(v => !v)}
             className="flex items-center gap-1.5 flex-1 min-w-0 px-3 py-2 rounded hover:bg-white/5 transition-colors text-left"
@@ -224,11 +226,11 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
             )}
           </button>
 
-          {/* + button — opens add-symbol mode */}
+          {/* + button — opens the search modal in watchlist-add mode */}
           <button
-            onClick={() => { setAddMode(v => !v); setAddInput(""); }}
+            onClick={onRequestAdd}
             title="Add symbol to watchlist"
-            className={`shrink-0 w-7 h-7 flex items-center justify-center rounded transition-colors ${addMode ? "bg-indigo-600 text-white" : "text-gray-500 hover:text-white hover:bg-white/8"}`}
+            className="shrink-0 w-7 h-7 flex items-center justify-center rounded text-gray-500 hover:text-white hover:bg-white/8 transition-colors"
           >
             <Plus size={15} />
           </button>
@@ -247,8 +249,6 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
                 <button
                   onClick={e => { e.stopPropagation(); setEditingId(wl.id); setEditVal(wl.name); setShowMenu(false); }}
                   className="text-gray-600 hover:text-white p-0.5 rounded"
-                  onMouseEnter={e => (e.currentTarget.style.opacity = "1")}
-                  onMouseLeave={e => (e.currentTarget.style.opacity = "")}
                 >
                   <Pencil size={10} />
                 </button>
@@ -289,29 +289,6 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
           </div>
         )}
       </div>
-
-      {/* ── Add symbol inline search (only visible when + was clicked) ── */}
-      {addMode && (
-        <div className="shrink-0 px-2 pb-1.5">
-          <div className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5" style={{ background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)" }}>
-            <Search size={11} className="text-indigo-400 shrink-0" />
-            <input
-              ref={addInputRef}
-              value={addInput}
-              onChange={e => setAddInput(e.target.value.toUpperCase())}
-              onKeyDown={e => {
-                if (e.key === "Enter") addSymbol();
-                if (e.key === "Escape") { setAddMode(false); setAddInput(""); }
-              }}
-              placeholder="Symbol + Enter to add…"
-              className="flex-1 bg-transparent text-xs text-white placeholder-indigo-400/60 focus:outline-none min-w-0"
-            />
-            <button onClick={() => { setAddMode(false); setAddInput(""); }} className="shrink-0 text-gray-600 hover:text-white">
-              <X size={11} />
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* ── Symbol list ── */}
       <div className="flex-1 overflow-y-auto" style={{ scrollbarWidth: "none" }}>
@@ -400,4 +377,6 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
       )}
     </div>
   );
-}
+});
+
+export default WatchlistPanel;
