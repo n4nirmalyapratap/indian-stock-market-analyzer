@@ -117,57 +117,106 @@ function Pill({ label, value, color = "gray" }: { label: string; value: string; 
 
 // ── Minimal markdown renderer for chat messages ───────────────────────────────
 function renderMd(text: string) {
-  return text.split("\n").map((line, i) => {
-    // Blank line → spacer
-    if (!line.trim()) return <div key={i} className="h-1" />;
+  // Parse inline **bold** and `code`
+  function parseInline(s: string): React.ReactNode[] {
+    const result: React.ReactNode[] = [];
+    const re = /\*\*(.*?)\*\*|`([^`]+)`/g;
+    let last = 0; let m: RegExpExecArray | null;
+    while ((m = re.exec(s)) !== null) {
+      if (m.index > last) result.push(s.slice(last, m.index));
+      if (m[1] !== undefined)
+        result.push(<strong key={m.index} className="font-semibold text-gray-900">{m[1]}</strong>);
+      if (m[2] !== undefined)
+        result.push(<code key={m.index} className="bg-indigo-50 text-indigo-700 px-1 py-0.5 rounded text-[11px] font-mono">{m[2]}</code>);
+      last = re.lastIndex;
+    }
+    if (last < s.length) result.push(s.slice(last));
+    return result;
+  }
 
-    // Parse inline **bold** and `code`
-    function parseInline(s: string) {
-      const result: React.ReactNode[] = [];
-      const re = /\*\*(.*?)\*\*|`([^`]+)`/g;
-      let last = 0; let m: RegExpExecArray | null;
-      while ((m = re.exec(s)) !== null) {
-        if (m.index > last) result.push(s.slice(last, m.index));
-        if (m[1] !== undefined) result.push(<strong key={m.index} className="font-semibold text-gray-900">{m[1]}</strong>);
-        if (m[2] !== undefined) result.push(<code key={m.index} className="bg-gray-100 text-indigo-700 px-1 py-0.5 rounded text-[11px] font-mono">{m[2]}</code>);
-        last = re.lastIndex;
-      }
-      if (last < s.length) result.push(s.slice(last));
-      return result;
+  // Group lines into blocks so tables are collected together
+  const lines = text.split("\n");
+  type Block = { type: "table"; rows: string[] } | { type: "line"; text: string };
+  const blocks: Block[] = [];
+  for (const line of lines) {
+    const isTableRow = /^\|.+\|/.test(line.trim());
+    const last = blocks[blocks.length - 1];
+    if (isTableRow) {
+      if (last?.type === "table") { last.rows.push(line); }
+      else { blocks.push({ type: "table", rows: [line] }); }
+    } else {
+      blocks.push({ type: "line", text: line });
+    }
+  }
+
+  return blocks.map((block, bi) => {
+    // ── Render markdown table ──────────────────────────────────────────────
+    if (block.type === "table") {
+      const isSep = (r: string) => /^\|[\s|:-]+\|$/.test(r.trim());
+      const parseRow = (r: string) =>
+        r.replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+
+      const nonSep = block.rows.filter(r => !isSep(r));
+      if (nonSep.length < 1) return null;
+      const [header, ...dataRows] = nonSep;
+      const headers = parseRow(header);
+
+      return (
+        <div key={bi} className="my-2 rounded-xl overflow-hidden border border-gray-100 shadow-sm">
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr className="bg-indigo-50 border-b border-indigo-100">
+                {headers.map((h, hi) => (
+                  <th key={hi} className="px-3 py-2 text-left text-[10px] font-bold text-indigo-700 uppercase tracking-wide whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {dataRows.map((row, ri) => (
+                <tr key={ri} className={ri % 2 === 0 ? "bg-white" : "bg-gray-50/70"}>
+                  {parseRow(row).map((cell, ci) => (
+                    <td key={ci} className="px-3 py-1.5 text-gray-700 leading-snug">
+                      {parseInline(cell)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
     }
 
-    // Header
+    // ── Render regular line ────────────────────────────────────────────────
+    const line = block.text;
+    if (!line.trim()) return <div key={bi} className="h-1" />;
+
     if (/^#{1,3}\s/.test(line)) {
       const t = line.replace(/^#+\s/, "");
-      return <p key={i} className="font-bold text-gray-800 mt-2 text-sm">{parseInline(t)}</p>;
+      return <p key={bi} className="font-bold text-gray-800 mt-2 mb-0.5 text-sm">{parseInline(t)}</p>;
     }
-    // Bullet or dash list
     if (/^[•\-\*]\s/.test(line)) {
       const t = line.replace(/^[•\-\*]\s/, "");
       return (
-        <div key={i} className="flex gap-2 items-start">
-          <span className="text-indigo-400 mt-0.5 flex-shrink-0 text-xs">•</span>
+        <div key={bi} className="flex gap-2 items-start">
+          <span className="text-indigo-400 flex-shrink-0 text-xs mt-0.5">•</span>
           <span className="text-sm leading-snug text-gray-700">{parseInline(t)}</span>
         </div>
       );
     }
-    // Numbered list
     if (/^\d+\.\s/.test(line)) {
       const num = line.match(/^(\d+)\./)?.[1];
       const t   = line.replace(/^\d+\.\s/, "");
       return (
-        <div key={i} className="flex gap-2 items-start">
+        <div key={bi} className="flex gap-2 items-start">
           <span className="text-indigo-500 font-semibold flex-shrink-0 text-xs w-4 text-right mt-0.5">{num}.</span>
           <span className="text-sm leading-snug text-gray-700">{parseInline(t)}</span>
         </div>
       );
     }
-    // Table row (skip — render as plain)
-    if (/^\|/.test(line)) {
-      return <p key={i} className="text-xs font-mono text-gray-500 leading-relaxed">{line}</p>;
-    }
-    // Default paragraph
-    return <p key={i} className="text-sm leading-snug text-gray-700">{parseInline(line)}</p>;
+    return <p key={bi} className="text-sm leading-snug text-gray-700">{parseInline(line)}</p>;
   });
 }
 
