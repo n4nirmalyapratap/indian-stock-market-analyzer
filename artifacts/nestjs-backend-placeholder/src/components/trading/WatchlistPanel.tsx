@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Plus, Trash2, ChevronDown, Check, X, Pencil } from "lucide-react";
+import { Plus, Trash2, ChevronDown, Check, X, Pencil, Search } from "lucide-react";
 
 export interface WatchlistItem {
   symbol: string;
@@ -70,18 +70,27 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
   const [watchlists, setWatchlists]   = useState<Watchlist[]>(loadWatchlists);
   const [activeId, setActiveId]       = useState(watchlists[0]?.id ?? "default");
   const [prices, setPrices]           = useState<Record<string, WatchlistItem>>({});
-  const [addInput, setAddInput]       = useState("");
   const [showMenu, setShowMenu]       = useState(false);
   const [editingId, setEditingId]     = useState<string | null>(null);
   const [editVal, setEditVal]         = useState("");
   const [newListMode, setNewListMode] = useState(false);
   const [newListName, setNewListName] = useState("");
   const [stockDetail, setStockDetail] = useState<StockDetail | null>(null);
-  const menuRef      = useRef<HTMLDivElement>(null);
-  const addRef       = useRef<HTMLInputElement>(null);
-  const fetchGenRef  = useRef(0);
+
+  // Add-symbol mode: triggered only by the + button (NOT by the main search)
+  const [addMode, setAddMode]         = useState(false);
+  const [addInput, setAddInput]       = useState("");
+
+  const menuRef     = useRef<HTMLDivElement>(null);
+  const addInputRef = useRef<HTMLInputElement>(null);
+  const fetchGenRef = useRef(0);
 
   const activeWL = watchlists.find(w => w.id === activeId) ?? watchlists[0];
+
+  // Focus add input when add mode opens
+  useEffect(() => {
+    if (addMode) setTimeout(() => addInputRef.current?.focus(), 50);
+  }, [addMode]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -117,7 +126,7 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
     fetchPrices(activeWL.symbols, gen);
   }, [activeWL?.id, activeWL?.symbols.join(",")]);
 
-  // Fetch stock details for the active symbol
+  // Fetch stock details for the active symbol (triggered by toolbar search OR watchlist click)
   useEffect(() => {
     if (!activeSymbol) return;
     let cancelled = false;
@@ -130,13 +139,16 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
 
   function save(lists: Watchlist[]) { setWatchlists(lists); saveWatchlists(lists); }
 
+  // Add symbol — only called from the + button flow
   function addSymbol() {
     const sym = addInput.trim().toUpperCase();
-    if (!sym || !activeWL || activeWL.symbols.includes(sym)) { setAddInput(""); return; }
-    save(watchlists.map(w => w.id === activeWL.id ? { ...w, symbols: [...w.symbols, sym] } : w));
+    if (sym && activeWL && !activeWL.symbols.includes(sym)) {
+      save(watchlists.map(w => w.id === activeWL.id ? { ...w, symbols: [...w.symbols, sym] } : w));
+      const gen = ++fetchGenRef.current;
+      fetchPrices([sym], gen);
+    }
     setAddInput("");
-    const gen = ++fetchGenRef.current;
-    fetchPrices([sym], gen);
+    setAddMode(false);
   }
 
   function removeSymbol(sym: string) {
@@ -187,28 +199,40 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
       style={{ width: 220, background: "#0f1117", borderLeft: "1px solid #1e2130" }}
     >
 
-      {/* ── Header: watchlist switcher ── */}
+      {/* ── Header: watchlist name + + button ── */}
       <div className="relative shrink-0" ref={menuRef}>
-        <button
-          onClick={() => setShowMenu(v => !v)}
-          className="flex items-center gap-2 w-full px-4 py-3 text-left hover:bg-white/5 transition-colors group"
-        >
-          {editingId === activeId ? (
-            <input
-              autoFocus
-              value={editVal}
-              onChange={e => setEditVal(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter") renameList(); if (e.key === "Escape") setEditingId(null); }}
-              onClick={e => e.stopPropagation()}
-              className="flex-1 bg-white/10 text-white text-sm rounded px-2 py-0.5 focus:outline-none"
-            />
-          ) : (
-            <>
-              <span className="flex-1 text-sm font-semibold text-white truncate">{activeWL?.name ?? "Watchlist"}</span>
-              <ChevronDown size={13} className={`text-gray-500 transition-transform ${showMenu ? "rotate-180" : ""}`} />
-            </>
-          )}
-        </button>
+        <div className="flex items-center px-1 py-1 gap-0.5">
+          {/* Watchlist name / dropdown trigger */}
+          <button
+            onClick={() => setShowMenu(v => !v)}
+            className="flex items-center gap-1.5 flex-1 min-w-0 px-3 py-2 rounded hover:bg-white/5 transition-colors text-left"
+          >
+            {editingId === activeId ? (
+              <input
+                autoFocus
+                value={editVal}
+                onChange={e => setEditVal(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") renameList(); if (e.key === "Escape") setEditingId(null); }}
+                onClick={e => e.stopPropagation()}
+                className="flex-1 bg-white/10 text-white text-sm rounded px-2 py-0.5 focus:outline-none"
+              />
+            ) : (
+              <>
+                <span className="flex-1 text-sm font-semibold text-white truncate">{activeWL?.name ?? "Watchlist"}</span>
+                <ChevronDown size={12} className={`text-gray-500 shrink-0 transition-transform ${showMenu ? "rotate-180" : ""}`} />
+              </>
+            )}
+          </button>
+
+          {/* + button — opens add-symbol mode */}
+          <button
+            onClick={() => { setAddMode(v => !v); setAddInput(""); }}
+            title="Add symbol to watchlist"
+            className={`shrink-0 w-7 h-7 flex items-center justify-center rounded transition-colors ${addMode ? "bg-indigo-600 text-white" : "text-gray-500 hover:text-white hover:bg-white/8"}`}
+          >
+            <Plus size={15} />
+          </button>
+        </div>
 
         {/* Dropdown */}
         {showMenu && (
@@ -222,8 +246,7 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
                 <span className="flex-1 truncate">{wl.name}</span>
                 <button
                   onClick={e => { e.stopPropagation(); setEditingId(wl.id); setEditVal(wl.name); setShowMenu(false); }}
-                  className="opacity-0 hover:opacity-100 group-hover:opacity-60 text-gray-500 hover:text-white p-0.5 rounded"
-                  style={{ opacity: undefined }}
+                  className="text-gray-600 hover:text-white p-0.5 rounded"
                   onMouseEnter={e => (e.currentTarget.style.opacity = "1")}
                   onMouseLeave={e => (e.currentTarget.style.opacity = "")}
                 >
@@ -233,8 +256,6 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
                   <button
                     onClick={e => { e.stopPropagation(); deleteList(wl.id); }}
                     className="text-gray-600 hover:text-red-400 p-0.5 rounded"
-                    onMouseEnter={e => (e.currentTarget.style.opacity = "1")}
-                    onMouseLeave={e => (e.currentTarget.style.opacity = "")}
                   >
                     <Trash2 size={10} />
                   </button>
@@ -268,6 +289,29 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
           </div>
         )}
       </div>
+
+      {/* ── Add symbol inline search (only visible when + was clicked) ── */}
+      {addMode && (
+        <div className="shrink-0 px-2 pb-1.5">
+          <div className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5" style={{ background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)" }}>
+            <Search size={11} className="text-indigo-400 shrink-0" />
+            <input
+              ref={addInputRef}
+              value={addInput}
+              onChange={e => setAddInput(e.target.value.toUpperCase())}
+              onKeyDown={e => {
+                if (e.key === "Enter") addSymbol();
+                if (e.key === "Escape") { setAddMode(false); setAddInput(""); }
+              }}
+              placeholder="Symbol + Enter to add…"
+              className="flex-1 bg-transparent text-xs text-white placeholder-indigo-400/60 focus:outline-none min-w-0"
+            />
+            <button onClick={() => { setAddMode(false); setAddInput(""); }} className="shrink-0 text-gray-600 hover:text-white">
+              <X size={11} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Symbol list ── */}
       <div className="flex-1 overflow-y-auto" style={{ scrollbarWidth: "none" }}>
@@ -327,7 +371,9 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
       {stockDetail && detailRows.length > 0 && (
         <div className="shrink-0 overflow-y-auto" style={{ maxHeight: 200, borderTop: "1px solid rgba(255,255,255,0.07)", scrollbarWidth: "none" }}>
           <div className="px-4 pt-3 pb-1">
-            <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-2">{activeSymbol} Details</div>
+            <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-2">
+              {activeSymbol} Details
+            </div>
             {detailPrice != null && (
               <div className="flex items-baseline gap-1.5 mb-2">
                 <span className="text-sm font-bold" style={{ color: detailColor }}>
@@ -352,26 +398,6 @@ export default function WatchlistPanel({ onSymbolSelect, activeSymbol }: Props) 
           <div className="pb-2" />
         </div>
       )}
-
-      {/* ── Add symbol ── */}
-      <div className="shrink-0 px-3 py-3" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-        <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ background: "rgba(255,255,255,0.06)" }}>
-          <input
-            ref={addRef}
-            value={addInput}
-            onChange={e => setAddInput(e.target.value.toUpperCase())}
-            onKeyDown={e => { if (e.key === "Enter") addSymbol(); }}
-            placeholder="Add symbol…"
-            className="flex-1 bg-transparent text-xs text-white placeholder-gray-600 focus:outline-none min-w-0"
-          />
-          <button
-            onClick={addSymbol}
-            className="shrink-0 text-indigo-400 hover:text-indigo-300 transition-colors"
-          >
-            <Plus size={14} />
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
