@@ -263,8 +263,9 @@ function SupervisorTab() {
       </div>
 
       {/* Input bar + suggestion popup */}
-      <div className="px-3 py-2.5 border-t border-gray-100 flex-shrink-0 relative">
-        {/* Suggestion popup — floats above the input, anchored to the ⚡ button */}
+      <div className="px-3 py-2.5 border-t border-gray-100 flex-shrink-0 relative"
+           onMouseLeave={() => setShowSugg(false)}>
+        {/* Suggestion popup — appears on ⚡ hover */}
         {showSugg && (
           <div className="absolute bottom-full left-3 right-3 mb-2 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-10">
             <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-3 pt-2.5 pb-1">Try asking</p>
@@ -278,9 +279,9 @@ function SupervisorTab() {
         )}
 
         <div className="flex gap-2 items-center bg-gray-100 rounded-xl px-3 py-1.5">
-          {/* ⚡ suggestions toggle */}
+          {/* ⚡ suggestions — show popup on hover */}
           <button
-            onClick={() => setShowSugg(v => !v)}
+            onMouseEnter={() => !loading && setShowSugg(true)}
             disabled={loading}
             title="Quick suggestions"
             className={`text-gray-400 hover:text-indigo-600 transition flex-shrink-0 disabled:opacity-40 ${showSugg ? "text-indigo-600" : ""}`}>
