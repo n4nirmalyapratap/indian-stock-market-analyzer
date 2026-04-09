@@ -156,14 +156,14 @@ function SupervisorTab() {
     if (intent === "forecast" && d.result?.p50) {
       const r = d.result;
       return (
-        <div className="mt-2 bg-white border border-indigo-100 rounded-lg p-3 space-y-2">
+        <div className="mt-2 bg-white dark:bg-gray-800 border border-indigo-100 dark:border-indigo-900 rounded-lg p-3 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-gray-600">{r.symbol} — {r.horizonDays}d Forecast</span>
             <SignalBadge signal={r.direction} />
           </div>
           <div className="grid grid-cols-3 gap-2 text-center">
             {["p10", "p50", "p90"].map(k => (
-              <div key={k} className="bg-gray-50 rounded p-2">
+              <div key={k} className="bg-gray-50 dark:bg-gray-800 rounded p-2">
                 <p className="text-xs text-gray-500">{k.toUpperCase()}</p>
                 <p className="font-bold text-sm">₹{r[k]?.[r[k].length - 1]?.toFixed(1)}</p>
               </div>
@@ -178,7 +178,7 @@ function SupervisorTab() {
     if (intent === "pairs" && d.result?.ou) {
       const r = d.result;
       return (
-        <div className="mt-2 bg-white border border-purple-100 rounded-lg p-3 space-y-1">
+        <div className="mt-2 bg-white dark:bg-gray-800 border border-purple-100 dark:border-purple-900 rounded-lg p-3 space-y-1">
           <div className="flex justify-between items-center">
             <span className="text-xs font-semibold">{r.symbolA} / {r.symbolB}</span>
             <SignalBadge signal={r.signal?.signal || "HOLD"} />
@@ -195,7 +195,7 @@ function SupervisorTab() {
     if (intent === "var" && d.result?.portfolioVarPct != null) {
       const r = d.result;
       return (
-        <div className="mt-2 bg-white border border-red-100 rounded-lg p-3">
+        <div className="mt-2 bg-white dark:bg-gray-800 border border-red-100 dark:border-red-900 rounded-lg p-3">
           <p className="text-xs font-semibold mb-2">Portfolio VaR ({(r.confidence * 100).toFixed(0)}%)</p>
           <div className="grid grid-cols-2 gap-2 text-xs text-center">
             <div className="bg-red-50 rounded p-2"><p className="text-gray-500">1-day VaR</p><p className="font-bold text-red-700">{fmtN(r.portfolioVarPct, 2)}%</p></div>
@@ -207,13 +207,13 @@ function SupervisorTab() {
     if (intent === "backtest" && d.result?.metrics) {
       const m = d.result.metrics;
       return (
-        <div className="mt-2 bg-white border border-green-100 rounded-lg p-3">
+        <div className="mt-2 bg-white dark:bg-gray-800 border border-green-100 dark:border-green-900 rounded-lg p-3">
           <p className="text-xs font-semibold mb-2">Backtest: {d.symbolA} / {d.symbolB}</p>
           <div className="grid grid-cols-2 gap-1 text-xs">
-            <div className="bg-gray-50 rounded p-1.5 text-center"><p className="text-gray-500">Return</p><p className="font-bold">{fmt(m.totalReturnPct)}%</p></div>
-            <div className="bg-gray-50 rounded p-1.5 text-center"><p className="text-gray-500">Sharpe</p><p className="font-bold">{fmtN(m.annSharpe, 2)}</p></div>
-            <div className="bg-gray-50 rounded p-1.5 text-center"><p className="text-gray-500">Max DD</p><p className="font-bold text-red-600">-{fmtN(m.maxDrawdownPct, 1)}%</p></div>
-            <div className="bg-gray-50 rounded p-1.5 text-center"><p className="text-gray-500">Win Rate</p><p className="font-bold">{fmtN(m.winRatePct, 1)}%</p></div>
+            <div className="bg-gray-50 dark:bg-gray-800/60 rounded p-1.5 text-center"><p className="text-gray-500">Return</p><p className="font-bold">{fmt(m.totalReturnPct)}%</p></div>
+            <div className="bg-gray-50 dark:bg-gray-800/60 rounded p-1.5 text-center"><p className="text-gray-500">Sharpe</p><p className="font-bold">{fmtN(m.annSharpe, 2)}</p></div>
+            <div className="bg-gray-50 dark:bg-gray-800/60 rounded p-1.5 text-center"><p className="text-gray-500">Max DD</p><p className="font-bold text-red-600">-{fmtN(m.maxDrawdownPct, 1)}%</p></div>
+            <div className="bg-gray-50 dark:bg-gray-800/60 rounded p-1.5 text-center"><p className="text-gray-500">Win Rate</p><p className="font-bold">{fmtN(m.winRatePct, 1)}%</p></div>
           </div>
         </div>
       );
@@ -263,7 +263,7 @@ function SupervisorTab() {
       </div>
 
       {/* Input bar + suggestion popup */}
-      <div className="px-3 py-2.5 border-t border-gray-100 flex-shrink-0 relative"
+      <div className="px-3 py-2.5 border-t border-gray-100 dark:border-gray-800 flex-shrink-0 relative"
            onMouseLeave={() => setShowSugg(false)}>
         {/* Suggestion popup — appears on ⚡ hover */}
         {showSugg && (
@@ -341,7 +341,7 @@ function PairsTab() {
   return (
     <div className="space-y-5">
       {/* Pair analyzer */}
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
+      <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
         <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
           <Target className="w-4 h-4 text-purple-600" /> Stock Pair Analyzer
         </h3>
@@ -379,7 +379,7 @@ function PairsTab() {
               <Metric label="Average Gap" value={fmtN(ou?.mu, 4)} sub="Normal price difference between the two stocks" />
               <Metric label="Pull-Back Speed" value={fmtN(ou?.theta, 4)} sub="How quickly prices snap back to normal" />
               <Metric label="Gap Volatility" value={fmtN(ou?.sigma, 4)} sub="Typical day-to-day gap swings" />
-              <div className="bg-gray-50 rounded-lg p-3 text-center">
+              <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 text-center">
                 <p className="text-xs text-gray-500 mb-1">Gap Score (how far from normal)</p>
                 <Gauge value={zScore} min={-4} max={4} label={`${fmtN(zScore, 2)}σ`} />
               </div>
@@ -403,7 +403,7 @@ function PairsTab() {
             {result.spreadSeries?.length > 1 && (
               <div>
                 <p className="text-xs text-gray-500 mb-2">Spread (A − β·B) — last 60 days</p>
-                <div className="bg-gray-50 rounded-lg p-3">
+                <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3">
                   <Sparkline data={result.spreadSeries} color="#7c3aed" width={500} height={60} />
                 </div>
               </div>
@@ -413,7 +413,7 @@ function PairsTab() {
       </div>
 
       {/* Pair Scanner */}
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
+      <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
         <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
           <Zap className="w-4 h-4 text-amber-600" /> Cointegrated Pair Scanner (Bonferroni corrected)
         </h3>
@@ -447,7 +447,7 @@ function PairsTab() {
                 </thead>
                 <tbody>
                   {scanResult.pairs.map((p: any, i: number) => (
-                    <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                    <tr key={i} className="border-b border-gray-50 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/40">
                       <td className="py-2 font-medium">{p.symbolA} / {p.symbolB}</td>
                       <td className="text-right">{fmtN(p.pValue, 4)}</td>
                       <td className="text-right">{p.passedBonferroni
@@ -495,7 +495,7 @@ function BacktestTab() {
 
   return (
     <div className="space-y-5">
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
+      <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
         <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
           <Play className="w-4 h-4 text-green-600" /> Historical Strategy Test
         </h3>
@@ -546,7 +546,7 @@ function BacktestTab() {
           </div>
 
           {equity?.length > 2 && (
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
+            <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
               <p className="text-xs text-gray-500 mb-2">Portfolio Growth Chart</p>
               <Sparkline data={equity}
                 color={m.totalReturnPct >= 0 ? "#16a34a" : "#dc2626"}
@@ -556,7 +556,7 @@ function BacktestTab() {
           )}
 
           {result.trades?.length > 0 && (
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
+            <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
               <p className="text-xs font-semibold text-gray-700 mb-2">Recent Trades</p>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
@@ -616,7 +616,7 @@ function VaRTab() {
 
   return (
     <div className="space-y-5">
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
+      <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
         <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
           <Shield className="w-4 h-4 text-red-600" /> Portfolio Risk Calculator
         </h3>
@@ -665,7 +665,7 @@ function VaRTab() {
           </div>
 
           {dist && (
-            <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
               <p className="text-sm font-semibold text-gray-700 mb-3">Daily Return Range (Historical)</p>
               <div className="flex items-end gap-2 h-20">
                 {Object.entries(dist).map(([k, v]: any) => {
@@ -688,7 +688,7 @@ function VaRTab() {
           )}
 
           {r.breakdown?.length > 0 && (
-            <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
               <p className="text-sm font-semibold text-gray-700 mb-3">Risk per Stock</p>
               <div className="space-y-2">
                 {r.breakdown.map((b: any) => (
@@ -735,7 +735,7 @@ function ForecastTab() {
 
   return (
     <div className="space-y-5">
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
+      <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
         <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
           <Brain className="w-4 h-4 text-indigo-600" /> AI Price Forecast
         </h3>
@@ -774,7 +774,7 @@ function ForecastTab() {
             <MetricCard label="Direction" value={<SignalBadge signal={r.direction} />} icon={<Zap className="w-4 h-4" />} />
           </div>
 
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
             <p className="text-sm font-semibold text-gray-700 mb-3">Price Forecast — 3 Scenarios</p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -788,7 +788,7 @@ function ForecastTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="border-b border-gray-50 bg-gray-50">
+                  <tr className="border-b border-gray-50 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/60">
                     <td className="py-2 text-gray-500">Today ({r.latestDate})</td>
                     <td className="text-right text-gray-600">₹{r.latestPrice?.toFixed(2)}</td>
                     <td className="text-right text-gray-600 font-medium">₹{r.latestPrice?.toFixed(2)}</td>
@@ -799,7 +799,7 @@ function ForecastTab() {
                     const range = r.p90[i] - r.p10[i];
                     const retPct = ((r.p50[i] - r.latestPrice) / r.latestPrice * 100);
                     return (
-                      <tr key={date} className="border-b border-gray-50 hover:bg-gray-50">
+                      <tr key={date} className="border-b border-gray-50 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/40">
                         <td className="py-2">{date}</td>
                         <td className="text-right text-red-600">₹{r.p10[i]?.toFixed(2)}</td>
                         <td className={`text-right font-medium ${retPct >= 0 ? "text-green-700" : "text-red-700"}`}>
@@ -816,7 +816,7 @@ function ForecastTab() {
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
+            <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
               <p className="text-xs font-semibold text-gray-600 mb-3">What Drives This Forecast</p>
               <div className="space-y-2">
                 {Object.entries(r.featureImportance || {}).map(([k, v]: any) => (
@@ -830,7 +830,7 @@ function ForecastTab() {
                 ))}
               </div>
             </div>
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
+            <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
               <p className="text-xs font-semibold text-gray-600 mb-3">Technical Signals Used</p>
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between"><span className="text-gray-500">RSI (14)</span><span className="font-medium">{r.rsi}</span></div>
@@ -852,9 +852,9 @@ function ForecastTab() {
 }
 
 // ── Reusable metric components ────────────────────────────────────────────────
-function Metric({ label, value, sub, color = "text-gray-900" }: any) {
+function Metric({ label, value, sub, color = "text-gray-900 dark:text-white" }: any) {
   return (
-    <div className="bg-gray-50 rounded-lg p-3">
+    <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3">
       <p className="text-xs text-gray-500">{label}</p>
       <p className={`text-base font-bold mt-0.5 ${color}`}>{value ?? "—"}</p>
       {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
@@ -862,9 +862,9 @@ function Metric({ label, value, sub, color = "text-gray-900" }: any) {
   );
 }
 
-function MetricCard({ label, value, color = "text-gray-800", icon }: any) {
+function MetricCard({ label, value, color = "text-gray-800 dark:text-gray-200", icon }: any) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4">
+    <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
       <div className="flex items-center gap-2 mb-2 text-gray-400">{icon}<p className="text-xs">{label}</p></div>
       <div className={`text-xl font-bold ${color}`}>{value}</div>
     </div>
@@ -889,20 +889,20 @@ export default function HydraAlpha() {
   }, []);
 
   return (
-    <div className="flex flex-col bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden"
+    <div className="flex flex-col bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden"
          style={{ height: "calc(100vh - 48px)" }}>
 
       {/* ── Slim header ───────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 flex-shrink-0">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
         <div className="flex items-center gap-2.5">
           <img src="/niftynodes-logo.png" alt="NiftyNodes" className="w-8 h-8 rounded-full object-cover" />
           <div className="leading-tight">
-            <p className="text-sm font-bold text-gray-900">Nifty Node Bot</p>
+            <p className="text-sm font-bold text-gray-900 dark:text-white">Nifty Node Bot</p>
             <p className="text-[11px] text-gray-400">AI-powered stock analysis</p>
           </div>
         </div>
         {status && (
-          <span className="flex items-center gap-1.5 text-[11px] text-green-700 bg-green-50 border border-green-100 px-2.5 py-1 rounded-full font-medium">
+          <span className="flex items-center gap-1.5 text-[11px] text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-900/20 border border-green-100 dark:border-green-800 px-2.5 py-1 rounded-full font-medium">
             <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
             Live
           </span>
@@ -910,7 +910,7 @@ export default function HydraAlpha() {
       </div>
 
       {/* ── Compact tab strip ─────────────────────────────────────────── */}
-      <div className="flex border-b border-gray-100 flex-shrink-0">
+      <div className="flex border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
         {TABS.map(t => {
           const Icon = t.icon;
           const active = tab === t.id;
@@ -918,8 +918,8 @@ export default function HydraAlpha() {
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`flex-1 flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium transition-colors border-b-2 ${
                 active
-                  ? "border-indigo-600 text-indigo-700 bg-indigo-50/60"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                  ? "border-indigo-600 text-indigo-700 dark:text-indigo-300 bg-indigo-50/60 dark:bg-indigo-900/30"
+                  : "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800"
               }`}>
               <Icon className={`w-4 h-4 ${active ? "text-indigo-600" : "text-gray-400"}`} />
               {t.label}
