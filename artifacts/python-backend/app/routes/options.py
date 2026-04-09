@@ -35,7 +35,7 @@ from ..services.options_service import (
     atm_strike,
     RISK_FREE_RATE,
 )
-from ..services.options_backtest_service import run_backtest, STRATEGIES, _to_yf_sym
+from ..services.options_backtest_service import run_backtest, STRATEGIES, _to_yf_sym, _to_yf_sym_candidates
 from ..services.options_chatbot import chat_reply
 
 router = APIRouter(prefix="/options", tags=["options"])
@@ -54,12 +54,24 @@ def _fetch_spot_and_hv_sync(symbol: str) -> dict:
     import math
     import pandas as pd
 
-    upper  = symbol.upper()
-    yf_sym = _to_yf_sym(upper)
+    upper      = symbol.upper()
+    candidates = _to_yf_sym_candidates(upper)
 
-    ticker = yf.Ticker(yf_sym)
-    hist   = ticker.history(period="3mo")
-    if hist.empty:
+    hist = None
+    used_sym = None
+    for yf_sym in candidates:
+        try:
+            t = yf.Ticker(yf_sym)
+            h = t.history(period="3mo")
+            if not h.empty:
+                hist = h
+                used_sym = yf_sym
+                break
+            logger.warning(f"{yf_sym}: empty history, trying next candidate")
+        except Exception as e:
+            logger.warning(f"{yf_sym}: fetch error ({e}), trying next candidate")
+
+    if hist is None or hist.empty:
         raise ValueError(f"No data returned for {symbol}")
 
     hist.index = pd.to_datetime(hist.index).normalize()
