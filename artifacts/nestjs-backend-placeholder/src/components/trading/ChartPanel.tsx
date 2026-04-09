@@ -759,6 +759,12 @@ export default function ChartPanel({
   const [lastCandle, setLastCandle]     = useState<{ c: number; pct: number } | null>(null);
   const [ctxMenu, setCtxMenu]           = useState<{ x: number; y: number } | null>(null);
   const [hoveredDrawingId, setHoveredDrawingId] = useState<string | null>(null);
+  const [isDraggingDrawing, setIsDraggingDrawing] = useState(false);
+  // Refs so native (non-React) event listeners always see latest values
+  const drawingsRef          = useRef(drawings);
+  useEffect(() => { drawingsRef.current = drawings; }, [drawings]);
+  const hoveredDrawingIdRef  = useRef<string | null>(null);
+  const hoverRafRef          = useRef<number | null>(null);
 
   // ── Repaint SVG ────────────────────────────────────────────────────────────
   const paintSvg = useCallback((
@@ -798,6 +804,94 @@ export default function ChartPanel({
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hoveredDrawingId]);
+
+  // Change canvas cursor when hovering a drawing (pointer mode only, no overlay)
+  useEffect(() => {
+    if (drawingTool !== "none") return;
+    const canvas = containerRef.current?.querySelector("canvas") as HTMLElement | null;
+    if (canvas) canvas.style.cursor = hoveredDrawingId ? "grab" : "";
+  }, [hoveredDrawingId, drawingTool]);
+
+  // ── Native capture listeners for pointer-mode hover + drag start ────────────
+  // These run WITHOUT the overlay div, so ECharts handles the mouse natively
+  // (smooth crosshair). We intercept only when the user actually hits a drawing.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const onNativeMove = (e: MouseEvent) => {
+      if (drawingToolRef.current !== "none") return;
+      if (dragDrawingState.current) return;           // overlay handles drag
+      if (!drawingsRef.current.length) return;
+
+      const chart = chartRef.current;
+      if (!chart || !candles.current.length) return;
+      const rect = container.getBoundingClientRect();
+      const px = e.clientX - rect.left;
+      const py = e.clientY - rect.top;
+
+      // One RAF per frame — skip if one is already queued
+      if (hoverRafRef.current !== null) return;
+      hoverRafRef.current = requestAnimationFrame(() => {
+        hoverRafRef.current = null;
+        const ch = chartRef.current;
+        if (!ch || !candles.current.length) return;
+        const hitId = hitTestDrawings(px, py, drawingsRef.current, ch, candles.current);
+        if (hitId !== hoveredDrawingIdRef.current) {
+          hoveredDrawingIdRef.current = hitId;
+          setHoveredDrawingId(hitId);
+        }
+      });
+    };
+
+    const onNativeDown = (e: MouseEvent) => {
+      if (drawingToolRef.current !== "none") return;
+      if (!drawingsRef.current.length) return;
+
+      const chart = chartRef.current;
+      if (!chart || !candles.current.length) return;
+      const rect = container.getBoundingClientRect();
+      const px = e.clientX - rect.left;
+      const py = e.clientY - rect.top;
+      const HANDLE_R = 10;
+
+      // Handle-point check on current hover target
+      if (hoveredDrawingIdRef.current) {
+        const hd = drawingsRef.current.find(d => d.id === hoveredDrawingIdRef.current);
+        if (hd) {
+          const hls = getShapeHandles(hd.shape, chart);
+          const near = hls?.find(h => Math.hypot(h.px - px, h.py - py) < HANDLE_R);
+          if (near) {
+            e.stopPropagation(); e.preventDefault();
+            dragDrawingState.current = { id: hoveredDrawingIdRef.current!, kind: near.kind, startPx: px, startPy: py, origShape: { ...hd.shape } };
+            setIsDraggingDrawing(true);
+            return;
+          }
+        }
+      }
+
+      // Body hit check
+      const hitId = hitTestDrawings(px, py, drawingsRef.current, chart, candles.current);
+      if (hitId) {
+        e.stopPropagation(); e.preventDefault();
+        const hd = drawingsRef.current.find(d => d.id === hitId)!;
+        dragDrawingState.current = { id: hitId, kind: "move", startPx: px, startPy: py, origShape: { ...hd.shape } };
+        hoveredDrawingIdRef.current = hitId;
+        setHoveredDrawingId(hitId);
+        setIsDraggingDrawing(true);
+      }
+      // else: let ECharts handle pan/zoom naturally
+    };
+
+    // capture: true for mousedown so we intercept before ECharts' ZRender
+    container.addEventListener("mousemove", onNativeMove);
+    container.addEventListener("mousedown", onNativeDown, { capture: true });
+    return () => {
+      container.removeEventListener("mousemove", onNativeMove);
+      container.removeEventListener("mousedown", onNativeDown, { capture: true });
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Render ECharts ─────────────────────────────────────────────────────────
   const renderChart = useCallback(() => {
@@ -1121,40 +1215,9 @@ export default function ChartPanel({
   };
 
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    // ── Pointer-mode: drag/resize drawings ──────────────────────────────────
-    if (drawingTool === "none") {
-      const chart = chartRef.current;
-      const pos = getXY(e);
-      if (!chart || !candles.current.length || !pos) { forwardToChart(e); return; }
-      const HANDLE_R = 10;
-      // Check if near a handle of the currently hovered drawing
-      if (hoveredDrawingId) {
-        const hd = drawings.find(d => d.id === hoveredDrawingId);
-        if (hd) {
-          const hls = getShapeHandles(hd.shape, chart);
-          if (hls) {
-            const near = hls.find(h => Math.hypot(h.px - pos.px, h.py - pos.py) < HANDLE_R);
-            if (near) {
-              e.preventDefault();
-              dragDrawingState.current = { id: hoveredDrawingId, kind: near.kind, startPx: pos.px, startPy: pos.py, origShape: { ...hd.shape } };
-              return;
-            }
-          }
-        }
-      }
-      // Check if clicking on a drawing body
-      const hitId = hitTestDrawings(pos.px, pos.py, drawings, chart, candles.current);
-      if (hitId) {
-        e.preventDefault();
-        const hd = drawings.find(d => d.id === hitId)!;
-        dragDrawingState.current = { id: hitId, kind: "move", startPx: pos.px, startPy: pos.py, origShape: { ...hd.shape } };
-        setHoveredDrawingId(hitId);
-        return;
-      }
-      // Nothing hit — forward to echart for pan/zoom
-      forwardToChart(e);
-      return;
-    }
+    // Pointer-mode drag is now initiated by the native capture listener.
+    // The overlay is only mounted when isDraggingDrawing || drawingTool!=="none".
+    if (drawingTool === "none") return;
 
     e.preventDefault();
     onActivate();
@@ -1218,23 +1281,16 @@ export default function ChartPanel({
     const pos = getXY(e);
     if (!pos) return;
 
-    // ── Pointer-mode: drag preview / hover hit-test ──────────────────────────
+    // ── Pointer-mode: only drag preview (overlay is shown only during drag) ────
     if (drawingTool === "none") {
       const chart = chartRef.current;
-      if (!chart || !candles.current.length) { forwardToChart(e); return; }
-      // Dragging a drawing — show live preview
+      if (!chart || !candles.current.length) return;
       if (dragDrawingState.current) {
         const ds = dragDrawingState.current;
         const newShape = applyShapeDelta(ds.origShape, chart, ds.startPx, ds.startPy, pos.px, pos.py, ds.kind);
         const previewEls = shapeToPixels(newShape as any, chart, candles.current);
         paintSvgRef.current?.(previewEls ?? null, null, ds.id, null);
-        return;
       }
-      // Hover hit-test to show handles
-      const hitId = hitTestDrawings(pos.px, pos.py, drawings, chart, candles.current);
-      if (hitId !== hoveredDrawingId) setHoveredDrawingId(hitId);
-      // Forward to echart so crosshair / tooltip still works
-      forwardToChart(e);
       return;
     }
 
@@ -1412,6 +1468,7 @@ export default function ChartPanel({
           onDrawingUpdate?.(ds.id, newShape);
         }
         dragDrawingState.current = null;
+        setIsDraggingDrawing(false); // hide drag overlay → ECharts resumes native handling
         // Repaint with handles still shown if still hovering
         const chart2 = chartRef.current;
         if (chart2 && hoveredDrawingId) {
@@ -1422,7 +1479,6 @@ export default function ChartPanel({
           paintSvgRef.current?.();
         }
       }
-      forwardToChart(e);
       return;
     }
 
@@ -1591,15 +1647,16 @@ export default function ChartPanel({
           <div className="absolute inset-0 z-30 pointer-events-none transition-opacity" style={{ background: TC.dimBg }} />
         )}
         <svg ref={svgRef} className="absolute inset-0" style={{ pointerEvents: "none", zIndex: 10 }} />
-        {(drawingTool !== "none" || drawings.length > 0) && (
+        {/* Overlay: only shown while actively drawing or dragging a drawing.
+            ECharts handles the mouse natively at all other times → smooth crosshair. */}
+        {(drawingTool !== "none" || isDraggingDrawing) && (
           <div
             className="absolute inset-0"
             style={{
               zIndex: 20,
               cursor: drawingTool === "eraser" ? "none"
-                : drawingTool === "none"
-                  ? (hoveredDrawingId ? "grab" : "default")
-                  : "crosshair",
+                : isDraggingDrawing ? "grabbing"
+                : "crosshair",
             }}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
@@ -1607,11 +1664,9 @@ export default function ChartPanel({
             onMouseLeave={(e) => {
               eraserPos.current = null;
               if (dragStart.current) { dragStart.current = null; }
-              if (dragDrawingState.current) { dragDrawingState.current = null; }
-              if (hoveredDrawingId) setHoveredDrawingId(null);
-              // Don't cancel phase2 on leaf so user can re-enter the chart
+              if (dragDrawingState.current) { dragDrawingState.current = null; setIsDraggingDrawing(false); }
+              if (hoveredDrawingId) { hoveredDrawingIdRef.current = null; setHoveredDrawingId(null); }
               paintSvg();
-              // Let echart know we left so it can clear tooltip/crosshair
               const canvas = containerRef.current?.querySelector("canvas");
               if (canvas) canvas.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, clientX: e.clientX, clientY: e.clientY }));
             }}
