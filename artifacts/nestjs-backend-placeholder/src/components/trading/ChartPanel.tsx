@@ -665,6 +665,7 @@ export default function ChartPanel({
   const candles      = useRef<Candle[]>([]);
   const dragStart    = useRef<{ px: number; py: number; xIdx: number; y: number } | null>(null);
   const eraserPos    = useRef<{ x: number; y: number } | null>(null);
+  const paintSvgRef  = useRef<((preview?: SvgEl | SvgEl[] | null, eraser?: { x: number; y: number } | null) => void) | null>(null);
   const indicatorDataRef = useRef<Record<string, (number | null)[]>>({});
   const drawingToolRef = useRef<DrawingTool>(drawingTool);
   const intervalRef    = useRef<string>(periodCfg.i);
@@ -943,8 +944,8 @@ export default function ChartPanel({
     const chart = echarts.init(div, null, { renderer: "canvas" });
     chartRef.current = chart;
 
-    chart.on("dataZoom", () => { requestAnimationFrame(() => paintSvg()); });
-    chart.on("rendered",  () => { requestAnimationFrame(() => paintSvg()); });
+    chart.on("dataZoom", () => { requestAnimationFrame(() => paintSvgRef.current?.()); });
+    chart.on("rendered",  () => { requestAnimationFrame(() => paintSvgRef.current?.()); });
 
     // Update OHLCV header on crosshair move
     chart.on("updateAxisPointer", (e: any) => {
@@ -978,6 +979,9 @@ export default function ChartPanel({
   useEffect(() => { renderChart(); }, [indicators, showRSI, showMACD, chartType]);
   useEffect(() => { if (candles.current.length) renderChart(); }, [theme]);
   useEffect(() => { paintSvg(); }, [drawings]);
+  // Keep paintSvgRef pointing at the latest closure so echarts event handlers
+  // (registered once at init) always repaint with up-to-date drawings/state.
+  useEffect(() => { paintSvgRef.current = paintSvg; }, [paintSvg]);
 
   // ── Drawing helpers ────────────────────────────────────────────────────────
   const getXY = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -1357,6 +1361,7 @@ export default function ChartPanel({
         className="flex-1 relative min-h-0"
         onContextMenu={e => {
           e.preventDefault();
+          onActivate();
           const r = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
           setCtxMenu({ x: e.clientX - r.left, y: e.clientY - r.top });
         }}
