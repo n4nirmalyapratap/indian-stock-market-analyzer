@@ -60,7 +60,7 @@ function getThemeColors(theme: "dark" | "light") {
     bg:      d ? "#131722"                : "#ffffff",
     grid:    d ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.07)",
     text:    d ? "#787b86"                : "#9ca3af",
-    cross:   d ? "rgba(255,255,255,0.2)"  : "rgba(0,0,0,0.25)",
+    cross:   d ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.5)",
     labBg:   d ? "#2a2e39"                : "#e0e4ef",
     labText: d ? "#d1d4dc"                : "#131722",
     tipBg:   d ? "#1e2130"                : "#f5f7fc",
@@ -977,7 +977,7 @@ export default function ChartPanel({
         axisPointer: {
           type: "cross",
           crossStyle: { color: T.cross, width: 1 },
-          lineStyle: { color: T.cross, width: 1, type: "solid" },
+          lineStyle: { color: T.cross, width: 1, type: "dashed" },
           label: {
             backgroundColor: T.labBg,
             color: T.labText,
