@@ -19,7 +19,7 @@ function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
   );
 }
 
-export default function TelegramBot() {
+export default function TelegramBot({ embedded = false }: { embedded?: boolean }) {
   const qc = useQueryClient();
   const [testMsg, setTestMsg] = useState("");
   const [testResult, setTestResult] = useState<{ text: string; response: string } | null>(null);
@@ -60,14 +60,16 @@ export default function TelegramBot() {
 
   return (
     <div className="space-y-6 max-w-4xl">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-          <Bot className="w-7 h-7 text-blue-500" /> Telegram Bot
-        </h1>
-        <p className="text-gray-500 mt-1 text-sm">
-          Real-time NSE market data via Telegram with full NLP support.
-        </p>
-      </div>
+      {!embedded && (
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+            <Bot className="w-7 h-7 text-blue-500" /> Telegram Bot
+          </h1>
+          <p className="text-gray-500 mt-1 text-sm">
+            Real-time NSE market data via Telegram with full NLP support.
+          </p>
+        </div>
+      )}
 
       {/* Status Row */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
