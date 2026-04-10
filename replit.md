@@ -1,25 +1,28 @@
-# Indian Stock Market Analyzer
+# Indian Stock Market Analyzer — Agent Memory
 
 ## Overview
 
 A real-time Indian stock market analysis platform with sector rotation tracking,
-candlestick pattern detection, custom stock scanners, NLP-powered queries, and a
-WhatsApp bot — all powered by a Python FastAPI backend.
+candlestick pattern detection, custom stock scanners, NLP-powered queries, a
+Telegram bot, and a WhatsApp bot — powered by a **Python FastAPI backend** and
+a **React/Vite frontend**.
+
+---
 
 ## Tech Stack
 
 | Layer | Technology |
 |---|---|
 | Backend | Python 3.11 · FastAPI · uvicorn |
-| Data sources | NSE India API · Yahoo Finance |
+| Data sources | NSE India API · Yahoo Finance (`yfinance`) |
 | NLP | spaCy 3.8 (rule-based EntityRuler) |
-| Analytics | pandas · numpy |
-| Technical indicators | `ta` library (EMA, RSI, MACD, Bollinger Bands, ATR) |
-| Frontend | React 18 · Vite · TypeScript · TailwindCSS · TanStack Query |
+| Analytics | pandas · numpy · scipy |
+| Technical indicators | `ta` library via local `pandas_ta/` shim |
+| Frontend | React 19 · Vite · TypeScript · TailwindCSS · TanStack Query |
 | Router | wouter (NOT react-router) |
 | UI | shadcn/ui |
-| Monorepo | pnpm workspaces |
-| Node.js version | 24 |
+| Monorepo | pnpm workspaces (Node.js 24) |
+| Deployment | Docker (two-container: nginx frontend + Python backend) |
 
 ---
 
@@ -28,183 +31,243 @@ WhatsApp bot — all powered by a Python FastAPI backend.
 ```
 /
 ├── artifacts/
-│   ├── python-backend/     ← ACTIVE: FastAPI backend (port 8090)
-│   │   ├── main.py         ← App entry point, all routers registered
-│   │   ├── run.py          ← Startup script (ensures spaCy model is present)
-│   │   ├── requirements.txt
+│   ├── python-backend/          ← ACTIVE: FastAPI backend (port 8090)
+│   │   ├── main.py              ← App entry point, all routers registered
+│   │   ├── run.py               ← Startup script + spaCy model self-heal
+│   │   ├── requirements.txt     ← Python dependencies (includes feedparser)
+│   │   ├── Dockerfile           ← Production Docker image (python:3.11-slim)
+│   │   ├── pandas_ta/           ← LOCAL SHIM — NOT a PyPI package (see below)
+│   │   │   ├── __init__.py      ← Wraps `ta` library with pandas-ta API
+│   │   │   └── pyproject.toml   ← Allows optional pip install if needed
 │   │   └── app/
-│   │       ├── routes/     ← FastAPI route modules
-│   │       └── services/   ← Business logic
+│   │       ├── routes/          ← FastAPI route modules
+│   │       └── services/        ← Business logic + indicators.py
 │   │
-│   ├── stock-market-app/   ← ACTIVE: React/Vite frontend (port 3002)
-│   │   ├── .replit-artifact/artifact.toml  ← Registered artifact (localPort=3002)
-│   │   ├── vite.config.ts  ← Vite internal proxy: /api/* → localhost:8090
-│   │   └── src/
+│   ├── stock-market-app/        ← ACTIVE: React/Vite frontend (port 3002 on Replit)
+│   │   ├── .replit-artifact/artifact.toml
+│   │   ├── Dockerfile           ← Production Docker image (node:24-slim + nginx:alpine)
+│   │   ├── nginx.conf           ← Serves SPA + proxies /api/* → backend container
+│   │   └── vite.config.ts       ← Dev: proxies /api/* → localhost:8090
 │   │
-│   ├── api-server/         ← ROUTING SHIM ONLY — do NOT touch source code or start workflow
-│   │   └── .replit-artifact/artifact.toml  ← localPort=8090, paths=["/api"]
-│   │                                         Tells Replit proxy: route /api/* → port 8090
-│   │                                         Source code inside is unused — only artifact.toml matters
+│   ├── api-server/              ← ROUTING SHIM ONLY — do NOT touch or start
+│   │   └── .replit-artifact/artifact.toml
+│   │       ← localPort=8090, paths=["/api"]
+│   │       ← Tells Replit proxy: route /api/* → Python backend on port 8090
+│   │       ← Source code inside is unused; only artifact.toml matters
 │   │
-│   └── mockup-sandbox/     ← Canvas design tool (do not touch)
+│   └── mockup-sandbox/          ← Canvas design tool (do not touch)
 │
-│   ✅ DELETED (April 2026 cleanup — do NOT recreate):
-│   ├── nestjs-backend/              ← Deprecated Node.js/NestJS backend
-│   └── nestjs-backend-placeholder/  ← Old frontend placeholder (replaced by stock-market-app/)
-│
+├── docker-compose.yml           ← Orchestrates backend + frontend containers
+├── .dockerignore                ← Excludes node_modules, caches, deprecated folders
 ├── scripts/
-│   └── src/push-github.ts  ← GitHub push via Replit connector
-└── lib/                    ← Shared TypeScript libraries
+│   └── src/push-github.ts      ← GitHub push via Replit connector (no PAT needed)
+├── lib/                         ← Shared TypeScript libraries
+├── README.md                    ← Developer-facing docs
+└── GITHUB_PUSH.md               ← Push script documentation
 ```
+
+### ⚠️ Deleted Directories (do NOT recreate)
+
+| Directory | Reason removed |
+|---|---|
+| `artifacts/nestjs-backend/` | Deprecated Node.js/NestJS backend — replaced by Python |
+| `artifacts/nestjs-backend-placeholder/` | Old placeholder — replaced by `stock-market-app/` |
 
 ---
 
-## Workflows (Active)
+## Workflows (Replit — Active)
 
 | Workflow name | Command | Port | State |
 |---|---|---|---|
 | `Python Backend` | `bash -c 'cd /home/runner/workspace/artifacts/python-backend && PORT=8090 python run.py'` | 8090 | RUNNING |
 | `artifacts/stock-market-app: web` | `BASE_PATH=/ PORT=3002 pnpm --filter @workspace/stock-market-app run dev` | 3002 | RUNNING |
-| `artifacts/api-server: API Server` | (routing shim — do not stop) | 8090 routing | RUNNING |
-| `artifacts/mockup-sandbox: Component Preview Server` | (do not start) | — | NOT_STARTED |
+| `artifacts/api-server: API Server` | routing shim echo only — intentionally NOT_STARTED | 8090 routing | NOT_STARTED |
 
 ---
 
-## ⚠️ Critical: Two-Layer Proxy Architecture
-
-There are **two separate proxy layers**. Both must be correctly configured or the API will 502.
+## ⚠️ Critical: Two-Layer Proxy Architecture (Replit only)
 
 ### Layer 1 — Replit Proxy (outermost, browser-facing)
-
-The Replit proxy sits at the public domain (`https://xxx.riker.replit.dev`).
-It routes requests to local ports based on **registered artifact paths** in each artifact's `artifact.toml`.
 
 | URL path | Routes to port | Controlled by |
 |---|---|---|
 | `/api/*` | **8090** | `artifacts/api-server/.replit-artifact/artifact.toml` |
-| `/*` (everything else) | **3002** | `artifacts/stock-market-app/.replit-artifact/artifact.toml` |
+| `/*` | **3002** | `artifacts/stock-market-app/.replit-artifact/artifact.toml` |
 
-The `api-server` artifact acts as a **routing shim** — `localPort = 8090` and `paths = ["/api"]`
-tell the Replit proxy to forward all `/api/...` browser requests directly to the Python backend.
-Its own workflow is intentionally NOT started.
+### Layer 2 — Vite Dev Server Proxy (internal only)
 
-### Layer 2 — Vite Dev Server Proxy (internal, server-side only)
-
-Inside `vite.config.ts`:
 ```js
 proxy: { "/api": { target: "http://localhost:8090" } }
 ```
-This only applies to requests that reach Vite directly (e.g., `curl localhost:3002/api/...`).
-**It is bypassed entirely when the browser accesses the app through the Replit proxy.**
+Only applies when hitting Vite directly (e.g. `curl localhost:3002/api/...`).
+**Bypassed entirely when the browser accesses through the Replit proxy.**
+
+### In Docker (no Replit proxy)
+
+nginx handles both layers in one config:
+```nginx
+location /api/ { proxy_pass http://backend:8090; }
+location /     { try_files $uri /index.html; }
+```
+
+---
+
+## Docker Deployment
+
+### Architecture
+
+```
+Browser → http://localhost
+    → nginx (port 80)
+        → /api/* → Python FastAPI backend (port 8090, internal)
+        → /*     → React SPA (static HTML/JS/CSS)
+```
+
+### Quick start
+
+```bash
+git clone https://github.com/n4nirmalyapratap/indian-stock-market-analyzer
+cd indian-stock-market-analyzer
+docker compose up --build
+```
+
+App: **http://localhost**
+API health: **http://localhost/api/healthz**
+API docs: **http://localhost:8090/docs**
+
+### Always use `--build` after `git pull`
+
+```bash
+git pull
+docker compose up --build     # ← --build is REQUIRED to rebuild images
+```
+
+Without `--build`, Docker reuses cached images and changes don't take effect.
+
+### Key Docker files
+
+| File | Purpose |
+|---|---|
+| `docker-compose.yml` | Orchestrates backend + frontend; healthcheck; env vars |
+| `artifacts/python-backend/Dockerfile` | python:3.11-slim; pip install; spaCy model baked in |
+| `artifacts/stock-market-app/Dockerfile` | node:24-slim builder → nginx:alpine; two-stage build |
+| `artifacts/stock-market-app/nginx.conf` | SPA fallback + /api/* proxy + gzip + security headers |
+| `.dockerignore` | Excludes node_modules, __pycache__, market_cache, runtime DBs |
+
+### Environment variables
+
+| Variable | Default in Docker | Description |
+|---|---|---|
+| `SESSION_SECRET` | `changeme-in-production` | Session signing key — set for real prod |
+| `PORT` | `8090` | Python backend listen port |
+| `TELEGRAM_BOT_TOKEN` | (unset) | Optional — enables Telegram polling |
+| `TWILIO_ACCOUNT_SID` | (unset) | Optional — enables WhatsApp webhook |
+| `TWILIO_AUTH_TOKEN` | (unset) | Optional — enables WhatsApp webhook |
+
+Pass via `.env` file at repo root — Docker Compose picks it up automatically.
+
+---
+
+## pandas_ta — Local Package Shim
+
+`pandas-ta` is not installable on Python 3.11+ via PyPI (the PyPI package is unmaintained).
+This project uses a custom shim at `artifacts/python-backend/pandas_ta/`.
+
+### How it works
+
+- `pandas_ta/__init__.py` wraps the `ta` library with the same function signatures
+- Provides: `ema()`, `sma()`, `rsi()`, `macd()`, `bbands()`, `atr()`
+- Both `run.py` and `app/services/indicators.py` add `/app/` to `sys.path` at startup
+- The backend `Dockerfile` also sets `ENV PYTHONPATH=/app` as belt-and-suspenders
+
+### Rules
+
+- **Never** `pip install pandas-ta` or `pip install pandas_ta` from PyPI
+- **Never** add `pandas_ta` to `requirements.txt`
+- **Never** add `pandas_ta` back to `SKIP_DIRS` in `scripts/src/push-github.ts`
+- The `pandas_ta/pyproject.toml` exists for optional pip editable install — the Docker build does NOT use it (PYTHONPATH is sufficient)
+
+---
+
+## GitHub Push Script
+
+```bash
+pnpm --filter @workspace/scripts run push-github
+```
+
+### What is skipped (never pushed)
+
+| Category | Items |
+|---|---|
+| Directories | `node_modules`, `dist`, `build`, `__pycache__`, `.pythonlibs`, `market_cache`, `.git`, `.agents`, `.local` |
+| Files | `pnpm-lock.yaml`, `hydra_prices.db`, `.DS_Store`, `.tsbuildinfo` |
+| Extensions | `.png`, `.jpg`, `.gif`, `.webp`, `.ico`, `.woff`, `.ttf`, `.mp4`, `.pdf`, `.zip`, `.pyc` |
+
+**`pandas_ta/` is included in pushes** (was incorrectly skipped as "vendored shim" — fixed April 2026).
+
+### ⚠️ Never add `base_tree` to the Git trees API call
+
+The push script builds a **complete new tree** without `base_tree`. If `base_tree` is added, deleted files silently persist on GitHub forever. See `GITHUB_PUSH.md` for full explanation.
 
 ---
 
 ## Full Incident RCA — "App Not Starting / API 502" (April 2026)
 
-This section documents every step taken to fix the startup issues when the `stock-market-app`
-artifact was first registered by Replit. Record it in full so future agents don't repeat the same path.
+### Step 1 — Artifact auto-registered with wrong package filter
+`artifacts/stock-market-app: web` workflow auto-generated with `--filter nestjs-backend-placeholder`.
+Fix: use `verifyAndReplaceArtifactToml()` to update `artifact.toml`.
 
-### Timeline & findings
+### Step 2 — `configureWorkflow()` cannot override artifact-managed workflows
+Throws `PROHIBITED_ACTION`. Must use `verifyAndReplaceArtifactToml()` instead.
 
-#### Step 1 — Artifact auto-registered with wrong package filter
-When Replit registered the `stock-market-app` as a formal artifact, it auto-generated workflow
-`artifacts/stock-market-app: web` with a broken `--filter` pointing to whatever package Replit
-guessed (in our case `nestjs-backend-placeholder`). The workflow immediately exits with:
-```
-No projects matched the filters in "/home/runner/workspace"
-```
+### Step 3 — `artifact.toml` cannot be edited directly
+Must copy → edit temp file inside workspace (NOT `/tmp`) → `verifyAndReplaceArtifactToml()`.
 
-**Finding**: Artifact-managed workflows get their command from `artifact.toml`, not from the
-Replit UI workflow configuration. The auto-generated `artifact.toml` picks an arbitrary package
-name that may be wrong — especially if folder names have changed.
+### Step 4 — Port 3002 conflict
+Two workflows bound to same port. Resolution: make `Start application` a no-op, restart it, then restart `artifacts/stock-market-app: web`.
 
-**How to find the correct package name** — always verify dynamically, never assume:
-```bash
-cat artifacts/stock-market-app/package.json | python3.11 -c "import sys,json; print(json.load(sys.stdin)['name'])"
-# → should print the actual name, e.g. @workspace/stock-market-app
-```
-Then confirm that name matches the `--filter` in `artifacts/stock-market-app/.replit-artifact/artifact.toml`.
-If they differ, fix `artifact.toml` using `verifyAndReplaceArtifactToml()` (see Step 3).
-
-#### Step 2 — `configureWorkflow()` cannot override artifact-managed workflows
-Attempted to fix the workflow command using `configureWorkflow()` in the code_execution sandbox:
-```
-Error: "artifacts/stock-market-app: web" is managed by an artifact and cannot be overridden via setRunWorkflow
-```
-**Finding**: Artifact-managed workflows (those whose name matches `artifacts/X: Y`) can only
-be changed by editing `artifact.toml`. You cannot use `configureWorkflow()` on them.
-
-#### Step 3 — `artifact.toml` cannot be edited directly
-Attempting to write to `artifacts/stock-market-app/.replit-artifact/artifact.toml` directly fails:
-```
-Error: You are forbidden from creating or editing the artifact.toml file.
-```
-**Finding**: Must use the `verifyAndReplaceArtifactToml()` sandbox function. Workflow:
-1. Copy `artifact.toml` to a temp path inside the workspace (NOT `/tmp` — cross-device rename fails)
-2. Edit the temp file with the correct package name
-3. Call `verifyAndReplaceArtifactToml({ tempFilePath: "...", artifactTomlPath: "..." })`
-
-#### Step 4 — Port 3002 conflict between two workflows
-After fixing `artifact.toml`, the `artifacts/stock-market-app: web` workflow still exited
-because `Start application` was already bound to port 3002.
-
-**Finding**: Only one process can bind to port 3002. The two workflows had an identical command
-and were fighting over the same port. Resolution:
-1. Reconfigure `Start application` to a no-op: `configureWorkflow({ name: "Start application", command: "echo ...", autoStart: false })`
-2. Restart `Start application` → it runs the echo, finishes, releases port 3002
-3. Restart `artifacts/stock-market-app: web` → now binds port 3002 successfully
-
-#### Step 5 — API returning 502 (proxy layer collision)
-Even with the frontend running, all `/api/...` calls returned 502 in the browser.
-`curl localhost:3002/api/sectors` worked fine (Vite proxy worked), but browser calls failed.
-
-**Finding**: The `api-server` artifact was registered with `localPort = 8080` and `paths = ["/api"]`.
-The Replit proxy (outermost layer) intercepted all `/api/...` browser requests and forwarded
-them to port 8080 — where nothing was running — before Vite's proxy ever got involved.
-`curl localhost:3002/...` bypasses the Replit proxy, which is why it worked but the browser didn't.
-
-Fix: Updated `artifacts/api-server/.replit-artifact/artifact.toml`:
-- Changed `localPort = 8080` → `localPort = 8090`
-- Changed `run` command to point to the Python backend
-- The `api-server` workflow remains NOT_STARTED — only the port routing entry matters
-
-### Checklist to verify working state
-```
-[ ] curl http://localhost:8090/api/healthz  → 200 OK
-[ ] curl http://localhost:3002/api/healthz  → 200 OK (Vite proxy)
-[ ] Workflow "Python Backend" → RUNNING
-[ ] Workflow "artifacts/stock-market-app: web" → RUNNING
-[ ] artifacts/api-server/artifact.toml → localPort = 8090
-[ ] artifacts/stock-market-app/artifact.toml → run command uses @workspace/stock-market-app
-```
+### Step 5 — API returning 502
+`api-server` artifact had `localPort = 8080`. Replit proxy forwarded `/api/*` to port 8080 where nothing ran. Fix: change to `localPort = 8090`.
 
 ---
 
-## Debugging — API 502 Errors
+## Docker Bug Fix History (April 2026)
 
-1. `curl http://localhost:8090/api/healthz` — if this fails, Python backend is down → restart `Python Backend` workflow
+All these were fixed in a single session — documented here so they are never repeated.
+
+| # | Symptom | Root cause | Fix |
+|---|---|---|---|
+| 1 | `Cannot find module @rollup/rollup-linux-x64-musl` | Frontend Dockerfile used `node:24-alpine` (musl). pnpm-workspace.yaml excludes musl rollup binary. | Changed builder to `node:24-slim` (Debian/glibc). |
+| 2 | `ModuleNotFoundError: No module named 'pandas_ta'` | `pandas_ta/` directory was in push script `SKIP_DIRS` — never reached GitHub. Users who cloned the repo had an empty `python-backend/` with no shim. | Removed `"pandas_ta"` from `SKIP_DIRS` in `push-github.ts`. |
+| 3 | `No module named 'setuptools.backends'` | `pyproject.toml` used `setuptools.backends.legacy:build` (setuptools 68+ syntax) but Docker image ships with older pip/setuptools. | Changed to `setuptools.build_meta` (supported since setuptools 40+). |
+| 4 | `ModuleNotFoundError: No module named 'pandas_ta'` (again, even after fix #2) | Switched to `pip install -e ./pandas_ta/` approach with a separate `COPY pandas_ta/` step, which introduced new fragility. Unnecessary — the code already has `sys.path.insert` in `run.py` and `indicators.py`. | Removed the separate COPY and pip install entirely. Set `ENV PYTHONPATH=/app`. `COPY . .` includes `pandas_ta/` naturally. |
+| 5 | Docker layer cache invalidated on every source change | spaCy model download was placed after `COPY . .` — so every code change triggered a 60–90s re-download. | Moved spaCy download before `COPY . .`. Order: apt-get → pip install → spaCy → source. |
+| 6 | Unnecessary `COPY lib/ ./lib/` in frontend Dockerfile | Frontend has zero workspace dependencies on `lib/*` packages (verified). Wasted build time and a potential failure point. | Removed `COPY lib/ ./lib/`. |
+
+---
+
+## Debugging Guide
+
+### API 502 on Replit
+
+1. `curl http://localhost:8090/api/healthz` — if fails → Python backend is down → restart `Python Backend` workflow
 2. Check `artifacts/api-server/.replit-artifact/artifact.toml`:
    - `localPort` must be `8090`
    - `paths` must be `["/api"]`
-   - If wrong → copy to a temp file in the workspace, fix, use `verifyAndReplaceArtifactToml()`
-3. Make sure `artifacts/api-server: API Server` workflow is NOT_STARTED (starting it would conflict on port 8090)
-4. `curl http://localhost:3002/api/healthz` — if this fails but 8090 works, Vite proxy is broken → check `vite.config.ts`
+3. Never start `artifacts/api-server: API Server` workflow
 
-## Debugging — Frontend Not Showing in Canvas Preview
+### Frontend not showing on Replit
 
-1. Check `artifacts/stock-market-app: web` → must be RUNNING
-2. If FINISHED:
-   - Another workflow likely holds port 3002
-   - Check `Start application` — if RUNNING, reconfigure it to no-op then restart it
-   - Then restart `artifacts/stock-market-app: web`
-3. If workflow command shows a wrong package filter (any name that isn't the actual package):
-   - Find the correct name: `cat artifacts/stock-market-app/package.json | python3.11 -c "import sys,json; print(json.load(sys.stdin)['name'])"`
-   - Read `artifacts/stock-market-app/.replit-artifact/artifact.toml`
-   - Copy to `artifacts/stock-market-app/.replit-artifact/artifact-temp.toml`
-   - Fix `run` to `BASE_PATH=/ PORT=3002 pnpm --filter <correct-name> run dev`
-   - Call `verifyAndReplaceArtifactToml({ tempFilePath: "...artifact-temp.toml", artifactTomlPath: "...artifact.toml" })`
-   - Restart `artifacts/stock-market-app: web`
-4. Do NOT use `configureWorkflow()` on artifact-managed workflows — it will throw PROHIBITED_ACTION
+1. `artifacts/stock-market-app: web` must be RUNNING
+2. If FINISHED: another workflow holds port 3002 → reconfigure `Start application` to no-op
+3. If wrong package filter: fix via `verifyAndReplaceArtifactToml()`
+
+### Docker not working locally
+
+1. Always use `docker compose up --build` after any `git pull`
+2. If build fails with rollup error → wrong base image (must be `node:24-slim`, not alpine)
+3. If `pandas_ta` not found → check `PYTHONPATH=/app` is in backend Dockerfile
+4. If frontend build fails with tsconfig error → `tsconfig.base.json` must be present at workspace root
 
 ---
 
@@ -213,7 +276,7 @@ Fix: Updated `artifacts/api-server/.replit-artifact/artifact.toml`:
 | Path | Page |
 |---|---|
 | `/` | Market Dashboard |
-| `/trading` | Chart Studio (Learn tab hidden here) |
+| `/trading` | Chart Studio |
 | `/sectors` | Market Sectors & rotation |
 | `/stocks` | Stock Lookup |
 | `/patterns` | Candlestick pattern detection |
@@ -231,31 +294,30 @@ Fix: Updated `artifacts/api-server/.replit-artifact/artifact.toml`:
 # Push to GitHub
 pnpm --filter @workspace/scripts run push-github
 
-# Health checks
+# Health checks (Replit)
 curl http://localhost:8090/api/healthz      # Python backend direct
 curl http://localhost:3002/api/healthz      # Via Vite proxy
 
-# Manual run (debug only — use workflows in normal operation)
-python3.11 artifacts/python-backend/run.py
-BASE_PATH=/ PORT=3002 pnpm --filter @workspace/stock-market-app run dev
+# Docker (local machine)
+docker compose up --build                  # Build and run everything
+docker compose down                        # Stop
+curl http://localhost/api/healthz          # App health via nginx
 ```
 
 ---
 
 ## Important Rules
 
-- Python backend MUST use `python3.11` (not generic `python`)
-- All Indian stock symbols use `.NS` suffix for NSE (e.g., RELIANCE.NS)
-- yfinance: ALWAYS use `yf.Ticker(ticker).history()` NOT `yf.download()` for concurrency safety
-- spaCy model (en_core_web_sm) auto-downloads on first run via `run.py` self-heal block
+- Python backend: use `python` (Replit uses `python3.11` in the workflow command explicitly)
+- yfinance: **ALWAYS** use `yf.Ticker(ticker).history()` — NEVER `yf.download()` (not thread-safe)
+- All NSE stock symbols need `.NS` suffix (e.g., `RELIANCE.NS`)
+- spaCy model auto-downloads via `run.py` self-heal block on first Replit start; pre-baked into Docker image
 - `vite.config.ts` requires both `PORT` and `BASE_PATH` env vars or it throws at startup
-- **NEVER touch `artifacts/api-server/` source code** — it is a routing shim only
-- **NEVER touch `artifacts/nestjs-backend/` or `artifacts/api-server/` pnpm packages**
-- **NEVER use `configureWorkflow()` on artifact-managed workflows** — use `verifyAndReplaceArtifactToml()`
-- `artifact.toml` cannot be written directly — always copy → edit copy → `verifyAndReplaceArtifactToml()`
-- Temp files for `verifyAndReplaceArtifactToml` must be inside `/home/runner/workspace/` (not `/tmp/`) to avoid cross-device rename errors
-- GlobalAssistant (Learn tab) must be placed INSIDE WouterRouter in App.tsx
-- GlobalAssistant returns null on `/trading` and `/chart/*` routes
-- UI style: glass cards (`bg-indigo-600 dark:bg-white/10`), Tailwind + `dark:` variants
-- **DARK/LIGHT MODE — MANDATORY**: Every UI element MUST work correctly in both light and dark mode. Never use bare `style={{ background: "#hex" }}` or `style={{ color: "#hex" }}` inline styles for surfaces, text, or borders — they are invisible to Tailwind's dark-mode system. Always use Tailwind classes with `dark:` variants (e.g. `bg-white dark:bg-gray-900`, `text-gray-800 dark:text-white`). For gradients, use `bg-gradient-to-br from-white to-violet-50 dark:from-gray-900 dark:to-indigo-950`. Inline styles are only acceptable for decorative elements that are intentionally the same colour in both modes (e.g. a coloured avatar icon gradient).
-- Always add `feedparser` and `nsepython` to `requirements.txt` if used
+- **NEVER** `pip install pandas_ta` — use the local shim
+- **NEVER** add `pandas_ta` back to `SKIP_DIRS` in push script
+- **NEVER** use `base_tree` in the GitHub trees API call (see GITHUB_PUSH.md)
+- **NEVER** touch `artifacts/api-server/` source code — routing shim only
+- **NEVER** use `configureWorkflow()` on artifact-managed workflows
+- `artifact.toml` edits: copy → edit → `verifyAndReplaceArtifactToml()` (temp file must be in `/home/runner/workspace/`, not `/tmp/`)
+- UI: always use Tailwind `dark:` variants — never bare inline hex styles for surfaces or text
+- Router is `wouter` — NEVER import from `react-router`
