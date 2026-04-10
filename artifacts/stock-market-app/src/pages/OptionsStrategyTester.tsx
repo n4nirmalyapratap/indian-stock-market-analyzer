@@ -946,13 +946,6 @@ export default function OptionsStrategyTester() {
                   </div>
                 </div>
 
-                {/* Strategy Insight */}
-                <StrategyInsightCard
-                  legs={legs}
-                  payoff={analysis.payoff}
-                  spot={spotInfo?.spot}
-                />
-
                 {/* P&L Chart */}
                 <div className="flex-1 flex flex-col min-h-0">
                   <div className="flex items-center justify-between mb-1.5">
@@ -1001,6 +994,13 @@ export default function OptionsStrategyTester() {
                     spots={analysis.payoff.spots}
                     payoffs={analysis.payoff.payoffs}
                     currentSpot={spotInfo?.spot}
+                  />
+
+                  {/* Strategy Insight — below heatmap */}
+                  <StrategyInsightCard
+                    legs={legs}
+                    payoff={analysis.payoff}
+                    spot={spotInfo?.spot}
                   />
                 </div>
               </div>
