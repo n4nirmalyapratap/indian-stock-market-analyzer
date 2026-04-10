@@ -81,14 +81,31 @@ Real-time Indian stock market analysis platform — sector rotation tracking, ca
 
 ---
 
+## Global AI Assistant
+
+A floating chat button (bottom-right, every page) powered by the rule-based backend — **zero cost, no paid API**.
+
+- **Frontend**: `artifacts/stock-market-app/src/components/GlobalAssistant.tsx`
+- **Backend**: `artifacts/python-backend/app/routes/assistant.py` → `POST /api/assistant/chat`
+- Handles: stock analysis, sector overview, sector rotation, pattern scans, scanner runs, and education Q&A (RSI, MACD, options, P/E, etc.)
+- Uses the existing NLP intent parser + live market data services
+- Returns all answers in simple, plain English
+
+---
+
 ## Project Structure
 
 ```
-artifacts/python-backend/     ← ACTIVE: FastAPI backend (port 8090)
-artifacts/stock-market-app/   ← ACTIVE: React/Vite frontend (port 19845)
-artifacts/nestjs-backend/     ← DEPRECATED (reference only)
-artifacts/api-server/         ← DEPRECATED Node.js server; artifact.toml now points to Python backend
-scripts/src/push-github.ts    ← GitHub push script (uses Replit GitHub connector)
+artifacts/python-backend/                       ← ACTIVE: FastAPI backend (port 8090)
+  app/routes/assistant.py                       ← Global assistant endpoint
+  app/routes/nlp.py                             ← NLP query endpoint
+  app/services/nlp_service.py                   ← Intent + entity parser
+artifacts/stock-market-app/                     ← ACTIVE: React/Vite frontend (port 19845)
+  src/components/GlobalAssistant.tsx            ← Floating AI chat panel (global)
+  src/App.tsx                                   ← Root — GlobalAssistant mounted here
+artifacts/nestjs-backend/                       ← DEPRECATED (reference only)
+artifacts/api-server/                           ← DEPRECATED Node.js server; artifact.toml now points to Python backend
+scripts/src/push-github.ts                      ← GitHub push script (uses Replit GitHub connector)
 ```
 
 ---
