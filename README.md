@@ -16,12 +16,12 @@ WhatsApp bot — all powered by a **Python FastAPI backend**.
 | Analytics | pandas · numpy |
 | Technical indicators | `ta` library (EMA, RSI, MACD, Bollinger Bands, ATR) |
 | Frontend | React 18 · Vite · TypeScript · TailwindCSS · TanStack Query |
+| Router | wouter (NOT react-router) |
+| UI | shadcn/ui |
 | WhatsApp | Twilio (webhook-based) |
 
 > **Node.js is NOT used for any active functionality.**
-> The `artifacts/nestjs-backend/` and `artifacts/api-server/` directories are
-> retained for historical reference only and are marked DEPRECATED. Do not start
-> those servers or reference them in new code.
+> All previous Node.js / NestJS backend directories have been **permanently deleted**.
 
 ---
 
@@ -45,27 +45,41 @@ WhatsApp bot — all powered by a **Python FastAPI backend**.
 │   │       │   ├── nlp.py       ← POST /api/nlp/query (natural language)
 │   │       │   └── analytics.py ← GET /api/analytics/* (5 endpoints)
 │   │       ├── services/        ← Business logic
-│   │       │   ├── nse_service.py
-│   │       │   ├── yahoo_service.py
-│   │       │   ├── stocks_service.py
-│   │       │   ├── sectors_service.py
-│   │       │   ├── patterns_service.py
-│   │       │   ├── scanners_service.py
-│   │       │   ├── whatsapp_service.py
-│   │       │   ├── nlp_service.py      ← spaCy NLP pipeline
-│   │       │   └── analytics_service.py← Correlation, heatmap, breadth, movers
 │   │       └── lib/
 │   │           ├── universe.py  ← Nifty100, Midcap, Smallcap, SECTOR_SYMBOLS
 │   │           └── indicators.py
 │   │
-│   ├── nestjs-backend-placeholder/  ← ACTIVE: React/Vite frontend (port 3002)
+│   ├── stock-market-app/        ← ACTIVE: React/Vite frontend (port 3002)
+│   │   ├── .replit-artifact/artifact.toml
+│   │   ├── vite.config.ts       ← proxies /api/* → localhost:8090
 │   │   └── src/
 │   │       ├── lib/api.ts       ← All API calls (relative /api, proxied to Python)
 │   │       └── pages/           ← Dashboard, Sectors, Patterns, Scanners, WhatsApp
 │   │
-│   ├── nestjs-backend/          ← DEPRECATED (reference only, not started)
-│   └── api-server/              ← DEPRECATED (reference only, not started)
+│   ├── api-server/              ← ROUTING SHIM ONLY — do NOT touch or start
+│   │   └── .replit-artifact/artifact.toml
+│   │       ← localPort=8090, paths=["/api"]
+│   │       ← Tells Replit proxy: route /api/* → Python backend on port 8090
+│   │       ← Source code inside this folder is unused; only artifact.toml matters
+│   │
+│   └── mockup-sandbox/          ← Canvas design tool (do not touch)
+│
+├── scripts/
+│   └── src/push-github.ts       ← GitHub push via Replit connector
+├── lib/                         ← Shared TypeScript libraries
+├── GITHUB_PUSH.md               ← Push workflow documentation
+└── AGENT_PROMPT.md              ← Full agent setup instructions
 ```
+
+### ⚠️ Deleted Directories (do NOT recreate)
+
+| Directory | Reason removed |
+|---|---|
+| `artifacts/nestjs-backend/` | Deprecated Node.js/NestJS backend — replaced by Python backend |
+| `artifacts/nestjs-backend-placeholder/` | Old frontend placeholder — replaced by `stock-market-app/` |
+
+These folders were permanently removed in the April 2026 cleanup.
+If you see them reappear, delete them and push again.
 
 ---
 
@@ -118,56 +132,61 @@ WhatsApp bot — all powered by a **Python FastAPI backend**.
 
 ### Requirements
 
-This project runs on **Replit** with the following modules enabled in `.replit`:
+This project runs on **Replit** with:
 - `nodejs-24` (for the React/Vite frontend only)
 - `python-3.11` (for the FastAPI backend)
 
-### First-time setup (new Replit account)
+### Setup steps
 
-1. **Import from GitHub**
-   - Fork or import `n4nirmalyapratap/indian-stock-market-analyzer` into your Replit account.
-
-2. **Install Python dependencies**
+1. **Install Python dependencies**
    ```bash
    cd artifacts/python-backend
    pip install -r requirements.txt
-   python3 -m spacy download en_core_web_sm --break-system-packages
    ```
-   > Note: `run.py` auto-downloads the spaCy model if it is missing, so step 2 is optional.
+   > `run.py` auto-downloads the spaCy model (`en_core_web_sm`) on first start.
 
-3. **Install Node.js dependencies** (frontend only)
+2. **Install Node.js dependencies** (frontend only)
    ```bash
    pnpm install
    ```
 
-4. **Set environment variables** (optional — for WhatsApp bot)
+3. **Set environment variables** (optional — for WhatsApp bot)
    - `SESSION_SECRET` — any random string (session security)
    - Twilio credentials if you want the WhatsApp webhook to work
 
-5. **Start workflows**
-   - The `Project` run button starts both **Python Backend** (port 8090) and
-     **Stock Market Frontend** (port 3002) automatically.
-   - The frontend Vite dev server proxies all `/api` calls to `http://localhost:8090`.
+4. **Start workflows**
+   - `Python Backend` — `bash -c 'cd artifacts/python-backend && PORT=8090 python run.py'`
+   - `artifacts/stock-market-app: web` — starts automatically from `artifact.toml`
 
-### Do NOT start these servers
-- `artifacts/nestjs-backend/` — DEPRECATED, no workflow configured
-- `artifacts/api-server/` — DEPRECATED, no workflow configured
+5. **Verify**
+   ```bash
+   curl http://localhost:8090/api/healthz   # → {"status":"ok"}
+   ```
+
+### Do NOT start these
+- `artifacts/api-server: API Server` — routing shim only, no server code to run
 
 ---
 
 ## Development Notes
 
-- **All new features go into `artifacts/python-backend/`** — Python only.
-- **Frontend changes go into `artifacts/nestjs-backend-placeholder/src/`**.
-- The frontend uses relative `/api/*` paths; the Vite proxy routes them to the Python backend.
+- **All new backend features** go into `artifacts/python-backend/` — Python only
+- **Frontend changes** go into `artifacts/stock-market-app/src/`
+- Frontend uses relative `/api/*` paths; the Vite proxy routes them to the Python backend
 - `pandas-ta` is not available on PyPI for Python 3.11+ — the project uses a custom shim
-  at `artifacts/python-backend/pandas_ta/` that wraps the `ta` library.
-- The `ta` library mirrors `pandas-ta` API for EMA, RSI, MACD, Bollinger Bands, and ATR.
+  at `artifacts/python-backend/pandas_ta/` that wraps the `ta` library
+- The `ta` library mirrors `pandas-ta` API for EMA, RSI, MACD, Bollinger Bands, and ATR
+- **NEVER touch `artifacts/api-server/` source code** — it is a routing shim only
+- **NEVER recreate `artifacts/nestjs-backend/` or `artifacts/nestjs-backend-placeholder/`**
 
 ---
 
 ## GitHub
 
 Repository: [n4nirmalyapratap/indian-stock-market-analyzer](https://github.com/n4nirmalyapratap/indian-stock-market-analyzer)
+
+To push: `pnpm --filter @workspace/scripts run push-github`
+
+See `GITHUB_PUSH.md` for full push documentation including automatic OAuth setup.
 
 All commits are pushed to the `main` branch after each set of changes.

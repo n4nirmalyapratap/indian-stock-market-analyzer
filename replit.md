@@ -44,8 +44,13 @@ WhatsApp bot — all powered by a Python FastAPI backend.
 │   ├── api-server/         ← ROUTING SHIM ONLY — do NOT touch source code or start workflow
 │   │   └── .replit-artifact/artifact.toml  ← localPort=8090, paths=["/api"]
 │   │                                         Tells Replit proxy: route /api/* → port 8090
+│   │                                         Source code inside is unused — only artifact.toml matters
 │   │
 │   └── mockup-sandbox/     ← Canvas design tool (do not touch)
+│
+│   ✅ DELETED (April 2026 cleanup — do NOT recreate):
+│   ├── nestjs-backend/              ← Deprecated Node.js/NestJS backend
+│   └── nestjs-backend-placeholder/  ← Old frontend placeholder (replaced by stock-market-app/)
 │
 ├── scripts/
 │   └── src/push-github.ts  ← GitHub push via Replit connector
