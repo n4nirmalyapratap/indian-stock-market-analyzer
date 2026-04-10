@@ -157,7 +157,7 @@ function computeHA(cs: Candle[]): Candle[] {
 
 // ── SVG overlay helpers ────────────────────────────────────────────────────────
 
-interface SvgLine    { type: "line";    x1: number; y1: number; x2: number; y2: number; dash?: boolean; color?: string }
+interface SvgLine    { type: "line";    x1: number; y1: number; x2: number; y2: number; dash?: boolean; color?: string; width?: number }
 interface SvgRect    { type: "rect";    x: number;  y: number;  w: number;  h: number;  fill?: string; stroke?: string }
 interface SvgCircle  { type: "circle";  cx: number; cy: number; r: number;  fill?: string }
 interface SvgEllipse { type: "ellipse"; cx: number; cy: number; rx: number; ry: number; fill?: string }
@@ -205,12 +205,24 @@ function shapeToPixels(
 
   // ── Lines ──────────────────────────────────────────────────────────────────
   if (s.type === "hline") {
-    const [, py] = chart.convertToPixel({ gridIndex: 0 }, [0, s.y]);
-    return [{ type: "line", x1: b.leftX, y1: py, x2: b.rightX, y2: py }];
+    const [, py0] = chart.convertToPixel({ gridIndex: 0 }, [0, s.y]);
+    // y1 is set when user rotates the line by dragging the right handle
+    const py1 = typeof s.y1 === "number"
+      ? (chart.convertToPixel({ gridIndex: 0 }, [0, s.y1]) as [number, number])[1]
+      : py0;
+    const lw = typeof s.width === "number" ? s.width : 1.5;
+    return [{ type: "line", x1: b.leftX, y1: py0, x2: b.rightX, y2: py1, width: lw }];
   }
   if (s.type === "hray") {
-    const [startX, py] = chart.convertToPixel({ gridIndex: 0 }, [s.xIdx, s.y]);
-    return [{ type: "line", x1: startX, y1: py, x2: b.rightX, y2: py }];
+    const [startX, py0] = chart.convertToPixel({ gridIndex: 0 }, [s.xIdx, s.y]);
+    // Clip start to grid left edge so the ray doesn't bleed into the axis
+    const x1 = Math.max(startX, b.leftX);
+    // y1 is set when user rotates: the y at the right edge
+    const py1 = typeof s.y1 === "number"
+      ? (chart.convertToPixel({ gridIndex: 0 }, [0, s.y1]) as [number, number])[1]
+      : py0;
+    const lw = typeof s.width === "number" ? s.width : 1.5;
+    return [{ type: "line", x1, y1: py0, x2: b.rightX, y2: py1, width: lw }];
   }
   if (s.type === "vline") {
     const [px] = chart.convertToPixel({ gridIndex: 0 }, [s.xIdx, 0]);
@@ -234,7 +246,8 @@ function shapeToPixels(
     const dx = px1 - px0, dy = py1 - py0;
     const len = Math.hypot(dx, dy);
     if (len < 1) return [{ type: "line", x1: px0, y1: py0, x2: px1, y2: py1 }];
-    const [ex, ey] = extendRay(px0, py0, dx / len, dy / len, 0, 0, W, H);
+    // Clip to grid bounds (not full SVG) so ray doesn't extend into axis areas
+    const [ex, ey] = extendRay(px0, py0, dx / len, dy / len, b.leftX, b.topY, b.rightX, b.botY);
     return [{ type: "line", x1: px0, y1: py0, x2: ex, y2: ey }];
   }
   if (s.type === "extendedline") {
@@ -244,8 +257,8 @@ function shapeToPixels(
     const len = Math.hypot(dx, dy);
     if (len < 1) return [{ type: "line", x1: px0, y1: py0, x2: px1, y2: py1 }];
     const nx = dx / len, ny = dy / len;
-    const [ex1, ey1] = extendRay(px0, py0,  nx,  ny, 0, 0, W, H);
-    const [ex2, ey2] = extendRay(px0, py0, -nx, -ny, 0, 0, W, H);
+    const [ex1, ey1] = extendRay(px0, py0,  nx,  ny, b.leftX, b.topY, b.rightX, b.botY);
+    const [ex2, ey2] = extendRay(px0, py0, -nx, -ny, b.leftX, b.topY, b.rightX, b.botY);
     return [{ type: "line", x1: ex2, y1: ey2, x2: ex1, y2: ey1 }];
   }
 
@@ -551,10 +564,31 @@ function getShapeHandles(shape: Record<string, unknown>, chart: echarts.ECharts)
     const p = toPx(shape.xIdx as number, shape.y as number);
     return [{ ...p, kind: "p0", cursor: "move" }];
   }
-  if (type === "hline" || type === "hray" || type === "crossline") {
+  if (type === "crossline") {
     const mid = chart.getWidth() / 2;
     const [, py] = chart.convertToPixel({ gridIndex: 0 }, [0, shape.y as number]) as [number, number];
-    return [{ px: mid, py, kind: "p0", cursor: "ns-resize" }];
+    return [{ px: mid, py, kind: "p0", cursor: "move" }];
+  }
+  if (type === "hline") {
+    const [, py0] = chart.convertToPixel({ gridIndex: 0 }, [0, shape.y as number]) as [number, number];
+    const py1 = typeof shape.y1 === "number"
+      ? (chart.convertToPixel({ gridIndex: 0 }, [0, shape.y1 as number]) as [number, number])[1]
+      : py0;
+    // Left handle moves the left y; right handle can create slope (rotate)
+    return [
+      { px: CHART_GL + 16, py: py0, kind: "p0", cursor: "crosshair" },
+      { px: chart.getWidth() - CHART_GR - 16, py: py1, kind: "p1", cursor: "crosshair" },
+    ];
+  }
+  if (type === "hray") {
+    const [startX, py0] = chart.convertToPixel({ gridIndex: 0 }, [shape.xIdx as number, shape.y as number]) as [number, number];
+    const py1 = typeof shape.y1 === "number"
+      ? (chart.convertToPixel({ gridIndex: 0 }, [0, shape.y1 as number]) as [number, number])[1]
+      : py0;
+    return [
+      { px: Math.max(startX, CHART_GL + 4), py: py0, kind: "p0", cursor: "crosshair" },
+      { px: chart.getWidth() - CHART_GR - 16, py: py1, kind: "p1", cursor: "crosshair" },
+    ];
   }
   if (type === "vline") {
     const mid = chart.getHeight() / 2;
@@ -593,9 +627,30 @@ function applyShapeDelta(
   const shiftIdx = (k: string) => { if (typeof s[k] === "number") s[k] = Math.max(0, (s[k] as number) + dIdx); };
   const shiftY   = (k: string) => { if (typeof s[k] === "number") s[k] = (s[k] as number) + dY; };
   if (kind === "move") {
-    shiftIdx("xIdx"); shiftY("y");
-    shiftIdx("x0Idx"); shiftY("y0");
-    shiftIdx("x1Idx"); shiftY("y1"); shiftY("y2");
+    // hline / hray: shift y (and y1 if slope was set) together
+    if (s.type === "hline" || s.type === "hray") {
+      shiftIdx("xIdx"); shiftY("y"); shiftY("y1");
+    } else {
+      shiftIdx("xIdx"); shiftY("y");
+      shiftIdx("x0Idx"); shiftY("y0");
+      shiftIdx("x1Idx"); shiftY("y1"); shiftY("y2");
+    }
+  } else if (s.type === "hline") {
+    // p0 = left endpoint → only shift y (left price level)
+    // p1 = right endpoint → shift y1 to create/adjust slope
+    if (kind === "p0") { shiftY("y"); }
+    else if (kind === "p1") {
+      if (typeof s.y1 !== "number") s.y1 = s.y; // initialise slope from current y
+      shiftY("y1");
+    }
+  } else if (s.type === "hray") {
+    // p0 = origin → shift xIdx and y
+    // p1 = tip    → shift y1 to create/adjust slope
+    if (kind === "p0") { shiftIdx("xIdx"); shiftY("y"); }
+    else if (kind === "p1") {
+      if (typeof s.y1 !== "number") s.y1 = s.y; // initialise slope from current y
+      shiftY("y1");
+    }
   } else if (kind === "p0") {
     shiftIdx("xIdx"); shiftY("y");
     shiftIdx("x0Idx"); shiftY("y0");
@@ -627,7 +682,7 @@ function renderSvg(
       line.setAttribute("x1", String(el.x1)); line.setAttribute("y1", String(el.y1));
       line.setAttribute("x2", String(el.x2)); line.setAttribute("y2", String(el.y2));
       line.setAttribute("stroke", el.color ?? baseColor);
-      line.setAttribute("stroke-width", "1.5");
+      line.setAttribute("stroke-width", String(el.width ?? 1.5));
       line.setAttribute("opacity", opacity);
       if (el.dash) line.setAttribute("stroke-dasharray", "5 4");
       svgEl.appendChild(line);
@@ -760,6 +815,7 @@ export default function ChartPanel({
   const [ctxMenu, setCtxMenu]           = useState<{ x: number; y: number } | null>(null);
   const [hoveredDrawingId, setHoveredDrawingId] = useState<string | null>(null);
   const [isDraggingDrawing, setIsDraggingDrawing] = useState(false);
+  const [drawingCtxMenu, setDrawingCtxMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   // Refs so native (non-React) event listeners always see latest values
   const drawingsRef          = useRef(drawings);
   useEffect(() => { drawingsRef.current = drawings; }, [drawings]);
@@ -805,6 +861,14 @@ export default function ChartPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hoveredDrawingId]);
 
+  // Dismiss drawing context menu when clicking outside it
+  useEffect(() => {
+    if (!drawingCtxMenu) return;
+    const close = () => setDrawingCtxMenu(null);
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [drawingCtxMenu]);
+
   // Change canvas cursor when hovering a drawing (pointer mode only, no overlay)
   useEffect(() => {
     if (drawingTool !== "none") return;
@@ -847,6 +911,20 @@ export default function ChartPanel({
     const onNativeDown = (e: MouseEvent) => {
       if (drawingToolRef.current !== "none") return;
       if (!drawingsRef.current.length) return;
+      // Right-click → show drawing context menu if over a drawing
+      if (e.button === 2) {
+        const chart = chartRef.current;
+        if (!chart || !candles.current.length) return;
+        const rect = container.getBoundingClientRect();
+        const px = e.clientX - rect.left;
+        const py = e.clientY - rect.top;
+        const hitId = hitTestDrawings(px, py, drawingsRef.current, chart, candles.current);
+        if (hitId) {
+          e.stopPropagation(); e.preventDefault();
+          setDrawingCtxMenu({ id: hitId, x: e.clientX, y: e.clientY });
+        }
+        return;
+      }
 
       const chart = chartRef.current;
       if (!chart || !candles.current.length) return;
@@ -883,12 +961,24 @@ export default function ChartPanel({
       // else: let ECharts handle pan/zoom naturally
     };
 
+    const onContextMenu = (e: MouseEvent) => {
+      // Prevent browser default menu when right-clicking over a drawing
+      if (!drawingsRef.current.length) return;
+      const chart = chartRef.current;
+      if (!chart || !candles.current.length) return;
+      const rect = container.getBoundingClientRect();
+      const hitId = hitTestDrawings(e.clientX - rect.left, e.clientY - rect.top, drawingsRef.current, chart, candles.current);
+      if (hitId) e.preventDefault();
+    };
+
     // capture: true for mousedown so we intercept before ECharts' ZRender
     container.addEventListener("mousemove", onNativeMove);
     container.addEventListener("mousedown", onNativeDown, { capture: true });
+    container.addEventListener("contextmenu", onContextMenu);
     return () => {
       container.removeEventListener("mousemove", onNativeMove);
       container.removeEventListener("mousedown", onNativeDown, { capture: true });
+      container.removeEventListener("contextmenu", onContextMenu);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1672,6 +1762,52 @@ export default function ChartPanel({
             }}
           />
         )}
+
+        {/* ── Drawing right-click context menu ─────────────────────── */}
+        {drawingCtxMenu && (() => {
+          const dm = drawingCtxMenu;
+          const dShape = drawings.find(d => d.id === dm.id);
+          const curW   = typeof dShape?.shape?.width === "number" ? dShape.shape.width : 1.5;
+          const widths = [1, 1.5, 2, 3, 4];
+          const containerRect = containerRef.current?.getBoundingClientRect();
+          const menuLeft = containerRect ? Math.min(dm.x - containerRect.left, containerRect.width - 170) : dm.x;
+          const menuTop  = containerRect ? Math.min(dm.y - containerRect.top,  containerRect.height - 140) : dm.y;
+          return (
+            <div
+              className="absolute z-50 rounded-lg shadow-2xl py-2 min-w-[160px]"
+              style={{ left: menuLeft, top: menuTop, background: TC.ctxBg, border: `1px solid ${TC.ctxBor}` }}
+              onMouseDown={e => e.stopPropagation()}
+            >
+              <div className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider" style={{ color: TC.text }}>Line Width</div>
+              <div className="flex items-center gap-1 px-3 pb-2">
+                {widths.map(w => (
+                  <button
+                    key={w}
+                    title={`${w}px`}
+                    className="flex-1 rounded flex items-center justify-center py-1.5 transition-colors"
+                    style={{ background: Math.abs(curW - w) < 0.1 ? TC.grid : "transparent", border: `1px solid ${TC.ctxBor}` }}
+                    onClick={() => {
+                      if (dShape) onDrawingUpdate?.(dm.id, { ...dShape.shape, width: w });
+                      setDrawingCtxMenu(null);
+                    }}
+                  >
+                    <svg width="20" height={w === 1 ? 4 : w * 2} viewBox={`0 0 20 ${w * 2}`}>
+                      <line x1="2" y1={w} x2="18" y2={w} stroke={TC.tipText} strokeWidth={w} />
+                    </svg>
+                  </button>
+                ))}
+              </div>
+              <div style={{ borderTop: `1px solid ${TC.ctxBor}` }} />
+              <button
+                className="w-full text-left px-3 py-1.5 text-xs transition-colors mt-1"
+                style={{ color: "#ef4444" }}
+                onMouseEnter={e => (e.currentTarget.style.background = TC.grid)}
+                onMouseLeave={e => (e.currentTarget.style.background = "")}
+                onClick={() => { onDrawingErase(dm.id); setDrawingCtxMenu(null); }}
+              >Delete drawing</button>
+            </div>
+          );
+        })()}
 
         {/* ── Right-click context menu ──────────────────────────────── */}
         {ctxMenu && (
