@@ -131,7 +131,7 @@ All features are built TDD — tests are written first, then the implementation.
 
 | Suite | Command | Count |
 |---|---|---|
-| Backend pytest | `cd artifacts/python-backend && python3 -m pytest tests/ -v` | **513** (2 skipped/VADER) |
+| Backend pytest | `cd artifacts/python-backend && python3 -m pytest tests/ -v` | **697** (2 skipped/VADER) |
 | Frontend vitest | `pnpm --filter @workspace/stock-market-app run test` | **160** |
 
 ### Backend test files
@@ -144,6 +144,7 @@ All features are built TDD — tests are written first, then the implementation.
 | `test_patterns.py` | Candlestick pattern detection |
 | `test_log_buffer.py` | Admin log ring buffer |
 | `test_data_quality.py` | Universe, sector, and stock data integrity |
+| `test_scanners.py` | Scanner engine: `_compute_value` (20 indicator types), `_compare` (all 6 operators), `_eval_condition` (comparisons + crossovers), CRUD operations, default scanner integrity, AND/OR logic, score calculation, result shape, complex multi-condition combinations, edge cases |
 
 ### Frontend test files
 | File | What it covers |
