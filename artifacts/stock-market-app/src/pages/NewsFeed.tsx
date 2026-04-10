@@ -372,22 +372,50 @@ function LoadingCards({ isDark }: { isDark: boolean }) {
   );
 }
 
+// ── Section Loader ────────────────────────────────────────────────────────────
+
+function SectionLoader({ active }: { active: boolean }) {
+  if (!active) return null;
+  return (
+    <span
+      style={{
+        position: "absolute", top: 10, right: 10,
+        width: 14, height: 14,
+        border: "2.5px solid #818cf8",
+        borderTopColor: "transparent",
+        borderRadius: "50%",
+        display: "inline-block",
+        animation: "spin 0.75s linear infinite",
+        zIndex: 2,
+      }}
+    />
+  );
+}
+
 // ── Refresh Countdown ─────────────────────────────────────────────────────────
 
-function RefreshCountdown({ seconds, onRefresh, isDark }: { seconds: number; onRefresh: () => void; isDark: boolean }) {
+function RefreshCountdown({
+  seconds, onRefresh, isDark, isRefreshing,
+}: { seconds: number; onRefresh: () => void; isDark: boolean; isRefreshing: boolean }) {
   const pct = (seconds / (8 * 60)) * 100;
   return (
     <button
       onClick={onRefresh}
-      className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg transition-all hover:brightness-90"
+      disabled={isRefreshing}
+      className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg transition-all hover:brightness-90 disabled:opacity-60"
       style={{ background: isDark ? "#1e293b" : "#f3f4f6", color: isDark ? "#94a3b8" : "#6b7280" }}
-      title={`Auto-refresh in ${Math.floor(seconds / 60)}m ${seconds % 60}s`}
+      title={isRefreshing ? "Refreshing…" : `Auto-refresh in ${Math.floor(seconds / 60)}m ${seconds % 60}s`}
     >
-      <RefreshCw className="w-3.5 h-3.5" style={{ animation: seconds < 10 ? "spin 1s linear infinite" : "none" }} />
-      <span>Refresh</span>
-      <div className="w-8 h-1 rounded-full overflow-hidden" style={{ background: isDark ? "#334155" : "#e2e8f0" }}>
-        <div className="h-full rounded-full bg-indigo-500 transition-all" style={{ width: `${pct}%` }} />
-      </div>
+      <RefreshCw
+        className="w-3.5 h-3.5"
+        style={{ animation: isRefreshing ? "spin 0.7s linear infinite" : "none" }}
+      />
+      <span>{isRefreshing ? "Refreshing…" : "Refresh"}</span>
+      {!isRefreshing && (
+        <div className="w-8 h-1 rounded-full overflow-hidden" style={{ background: isDark ? "#334155" : "#e2e8f0" }}>
+          <div className="h-full rounded-full bg-indigo-500 transition-all duration-1000" style={{ width: `${pct}%` }} />
+        </div>
+      )}
     </button>
   );
 }
@@ -415,43 +443,46 @@ export default function NewsFeed() {
 
   const feedCategory = (activeTab === "deals" || activeTab === "events") ? "all" : activeTab;
 
-  const { data: feed, isLoading: feedLoading, refetch: refetchFeed } = useQuery({
+  const { data: feed, isLoading: feedLoading, isFetching: feedFetching } = useQuery({
     queryKey: ["newsFeed", feedCategory, debouncedSearch],
     queryFn:  () => api.newsFeed({ category: feedCategory, search: debouncedSearch, limit: 60 }),
     staleTime: 8 * 60 * 1000,
     enabled: activeTab !== "deals" && activeTab !== "events",
   });
 
-  const { data: stats } = useQuery({
+  const { data: stats, isFetching: statsFetching } = useQuery({
     queryKey: ["newsStats"],
     queryFn:  api.newsStats,
     staleTime: 8 * 60 * 1000,
   });
 
-  const refreshMutation = useMutation({
-    mutationFn: api.newsRefresh,
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["newsFeed"] });
-      qc.invalidateQueries({ queryKey: ["newsStats"] });
-      qc.invalidateQueries({ queryKey: ["newsDeals"] });
-      qc.invalidateQueries({ queryKey: ["newsEvents"] });
-      setCountdown(8 * 60);
-    },
-  });
+  const refreshMutation = useMutation({ mutationFn: api.newsRefresh });
 
-  const handleRefresh = useCallback(() => {
-    refreshMutation.mutate();
-  }, [refreshMutation]);
+  // Stable ref so the interval never needs to re-register
+  const refreshFnRef = useRef<() => void>(() => {});
+  refreshFnRef.current = useCallback(() => {
+    refreshMutation.mutate(undefined, {
+      onSuccess: () => {
+        qc.invalidateQueries({ queryKey: ["newsFeed"] });
+        qc.invalidateQueries({ queryKey: ["newsStats"] });
+        qc.invalidateQueries({ queryKey: ["newsDeals"] });
+        qc.invalidateQueries({ queryKey: ["newsEvents"] });
+        setCountdown(8 * 60);
+      },
+    });
+  }, [refreshMutation, qc]);
+
+  const handleRefresh = useCallback(() => { refreshFnRef.current(); }, []);
 
   useEffect(() => {
     const id = setInterval(() => {
       setCountdown(c => {
-        if (c <= 1) { handleRefresh(); return 8 * 60; }
+        if (c <= 1) { refreshFnRef.current(); return 8 * 60; }
         return c - 1;
       });
     }, 1000);
     return () => clearInterval(id);
-  }, [handleRefresh]);
+  }, []); // empty deps — interval never re-registers
 
   useEffect(() => {
     clearTimeout(debounceRef.current);
@@ -477,6 +508,10 @@ export default function NewsFeed() {
           from { opacity: 0; transform: translateY(12px); }
           to   { opacity: 1; transform: translateY(0); }
         }
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to   { transform: rotate(360deg); }
+        }
         .news-card-enter {
           animation: slideIn 0.3s ease forwards;
         }
@@ -493,7 +528,7 @@ export default function NewsFeed() {
             Live headlines from ET, Livemint, Moneycontrol + NSE data
           </p>
         </div>
-        <RefreshCountdown seconds={countdown} onRefresh={handleRefresh} isDark={isDark} />
+        <RefreshCountdown seconds={countdown} onRefresh={handleRefresh} isDark={isDark} isRefreshing={refreshMutation.isPending} />
       </div>
 
       {/* Live ticker */}
@@ -501,7 +536,8 @@ export default function NewsFeed() {
 
       {/* Stats row */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="relative grid grid-cols-2 md:grid-cols-4 gap-3">
+          <SectionLoader active={statsFetching} />
           <div className="rounded-xl border p-3" style={{ background: isDark ? "#1e293b" : "#fff", borderColor: borderCol }}>
             <div className="text-xs mb-1" style={{ color: muTxt }}>Total Articles</div>
             <div className="text-2xl font-bold" style={{ color: hdrTxt }}>{stats.totalArticles}</div>
@@ -530,13 +566,16 @@ export default function NewsFeed() {
 
       {/* Mood bar */}
       {stats && (
-        <MoodBar
-          bullish={stats.sentiments.bullish}
-          bearish={stats.sentiments.bearish}
-          neutral={stats.sentiments.neutral}
-          mood={stats.marketMood}
-          isDark={isDark}
-        />
+        <div className="relative">
+          <SectionLoader active={statsFetching} />
+          <MoodBar
+            bullish={stats.sentiments.bullish}
+            bearish={stats.sentiments.bearish}
+            neutral={stats.sentiments.neutral}
+            mood={stats.marketMood}
+            isDark={isDark}
+          />
+        </div>
       )}
 
       {/* Tabs */}
@@ -600,7 +639,8 @@ export default function NewsFeed() {
           <p className="text-sm mt-1">{search ? "Try a different search term" : "Check back soon"}</p>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="relative space-y-3">
+          <SectionLoader active={feedFetching && !feedLoading} />
           {articles.map((article, i) => (
             <div key={article.id} className="news-card-enter" style={{ animationDelay: `${Math.min(i * 30, 400)}ms` }}>
               <NewsCard article={article} isDark={isDark} index={i} />
