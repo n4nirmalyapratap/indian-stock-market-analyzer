@@ -4,19 +4,23 @@ version: "3.9"
 #
 # Two containers:
 #   backend   — Python FastAPI on port 8090 (internal)
-#   frontend  — nginx serving built React app on port 80 (public)
-#               nginx also proxies /api/* → backend:8090
+#   frontend  — nginx on port 80 (public), serves BOTH apps:
+#                 /          → User stock market app (Clerk auth)
+#                 /admin/    → Admin dashboard (username/password login)
+#                 /api/*     → Proxied to backend
 #
-# First-time setup:
-#   cp .env.example .env        # fill in your keys
-#   bash scripts/setup-git-hook.sh   # auto-restart on git pull
+# ── First-time setup ──────────────────────────────────────────────────────────
+#   cp .env.example .env          # fill in your keys (see SETUP.md)
 #   docker compose up --build -d
 #
-# Deploy / update (manual):
-#   bash deploy.sh
+# ── After any git pull ────────────────────────────────────────────────────────
+#   git pull && docker compose up --build -d   # --build is REQUIRED
 #
-# Then open:  http://localhost
-# API health: http://localhost/api/healthz
+# ── URLs ──────────────────────────────────────────────────────────────────────
+#   User app:      http://localhost
+#   Admin panel:   http://localhost/admin
+#   API health:    http://localhost/api/healthz
+#   API docs:      http://localhost:8090/docs
 # ──────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -30,17 +34,28 @@ services:
     restart: unless-stopped
     environment:
       PORT: "8090"
-      SESSION_SECRET: "${SESSION_SECRET:-changeme-in-production}"
-      # Clerk — required for JWT auth middleware
-      CLERK_SECRET_KEY: "${CLERK_SECRET_KEY}"
+
+      # ── Auth (Clerk — user app JWT verification) ──────────────────────────
+      CLERK_SECRET_KEY:      "${CLERK_SECRET_KEY}"
       CLERK_PUBLISHABLE_KEY: "${CLERK_PUBLISHABLE_KEY}"
-      # Optional bot integrations
+
+      # ── Admin dashboard credentials ───────────────────────────────────────
+      ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD}"          # REQUIRED — set in .env
+
+      # ── Optional integrations ─────────────────────────────────────────────
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
       TWILIO_ACCOUNT_SID: "${TWILIO_ACCOUNT_SID:-}"
-      TWILIO_AUTH_TOKEN: "${TWILIO_AUTH_TOKEN:-}"
+      TWILIO_AUTH_TOKEN:  "${TWILIO_AUTH_TOKEN:-}"
+
+      # ── File logging for /api/admin/logs (optional) ───────────────────────
+      # Uncomment and adjust path to enable log tailing in admin dashboard.
+      # LOG_FILE: "/app/logs/app.log"
+
     ports:
-      # Expose directly for debugging (remove in production if not needed)
+      # Exposed for direct API access / debugging.
       - "8090:8090"
+
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8090/api/healthz')"]
@@ -49,13 +64,15 @@ services:
       retries: 3
       start_period: 20s
 
-  # ── React/Vite frontend via nginx ───────────────────────────────────────────
+
+  # ── Combined nginx frontend (user app + admin dashboard) ───────────────────
   frontend:
     build:
       context: .
       dockerfile: artifacts/stock-market-app/Dockerfile
       args:
-        # Clerk publishable key is embedded in the frontend JS bundle at build time
+        # Clerk publishable key is baked into the user app JS bundle at build time.
+        # The admin dashboard does NOT need this — it uses username/password login.
         VITE_CLERK_PUBLISHABLE_KEY: "${VITE_CLERK_PUBLISHABLE_KEY}"
     container_name: stock-frontend
     restart: unless-stopped
