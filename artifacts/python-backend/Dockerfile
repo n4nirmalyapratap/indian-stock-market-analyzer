@@ -12,6 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ── Python dependencies from PyPI ─────────────────────────────────────────────
 # Copied before source so this layer is cached as long as requirements.txt
 # does not change — even if source files change.
+# PIP_ROOT_USER_ACTION=ignore suppresses the "running pip as root" advisory —
+# running as root inside a Docker container is intentional and safe.
+ENV PIP_ROOT_USER_ACTION=ignore
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
