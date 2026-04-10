@@ -1,0 +1,55 @@
+# Git
+.git
+.gitignore
+
+# Node.js
+node_modules
+**/node_modules
+dist
+**/dist
+.cache
+**/.cache
+
+# Python
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pythonlibs
+**/.pythonlibs
+.venv
+**/venv
+*.egg-info
+
+# Replit platform
+.agents
+.local
+.replit
+.replit-artifact
+
+# App runtime data
+**/market_cache
+hydra_prices.db
+**/hydra_prices.db
+
+# Lock files (rebuilt inside container)
+pnpm-lock.yaml
+uv.lock
+package-lock.json
+yarn.lock
+
+# Build artifacts
+*.tsbuildinfo
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Deprecated artifacts — never include these
+artifacts/nestjs-backend
+artifacts/nestjs-backend-placeholder
+artifacts/mockup-sandbox

@@ -6,6 +6,7 @@
   "scripts": {
     "hello": "tsx ./src/hello.ts",
     "push-github": "tsx ./src/push-github.ts",
+    "restore-files": "tsx ./src/restore-files.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {

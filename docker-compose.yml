@@ -1,0 +1,103 @@
+version: "3.9"
+
+# ── Indian Stock Market Analyzer — Docker Compose ─────────────────────────────
+#
+# Two containers:
+#   backend   — Python FastAPI on port 8090 (internal)
+#   frontend  — nginx on port 80 (public), serves BOTH apps + proxies /api/*
+#
+#     /          →  User stock market app  (Clerk + custom email/password auth)
+#     /admin/    →  Admin dashboard        (username + password login)
+#     /api/*     →  Proxied to backend container (port 8090)
+#
+# ── First-time setup ──────────────────────────────────────────────────────────
+#   cp .env.example .env          # fill in your keys (see SETUP.md)
+#   docker compose up --build -d
+#
+# ── After any git pull ────────────────────────────────────────────────────────
+#   git pull && docker compose up --build -d   # --build is REQUIRED
+#
+# ── URLs ──────────────────────────────────────────────────────────────────────
+#   User app:      http://localhost
+#   Admin panel:   http://localhost/admin
+#   API health:    http://localhost/api/healthz
+#   API docs:      http://localhost:8090/docs  (dev only)
+# ──────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Python FastAPI backend ──────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./artifacts/python-backend
+      dockerfile: Dockerfile
+    container_name: stock-backend
+    restart: unless-stopped
+    environment:
+      PORT: "8090"
+
+      # ── Custom email+password auth (user app) ─────────────────────────────
+      # Must be a long random secret — used to sign HS256 JWTs (30-day tokens).
+      # Generate one: python -c "import secrets; print(secrets.token_hex(32))"
+      SESSION_SECRET: "${SESSION_SECRET}"
+
+      # ── Clerk Auth (user app — Google OAuth + optional email) ─────────────
+      CLERK_SECRET_KEY:      "${CLERK_SECRET_KEY:-}"
+      CLERK_PUBLISHABLE_KEY: "${CLERK_PUBLISHABLE_KEY:-}"
+
+      # ── Admin dashboard credentials ───────────────────────────────────────
+      ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD}"          # REQUIRED — set in .env
+
+      # ── User database path ────────────────────────────────────────────────
+      # App users (email+password) are stored in SQLite.
+      # This points to the persistent volume so the DB survives container restarts.
+      DATA_DIR: "/app/data"
+
+      # ── Optional integrations ─────────────────────────────────────────────
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TWILIO_ACCOUNT_SID: "${TWILIO_ACCOUNT_SID:-}"
+      TWILIO_AUTH_TOKEN:  "${TWILIO_AUTH_TOKEN:-}"
+
+    volumes:
+      # Persist the SQLite user database (email+password accounts) across restarts.
+      - userdata:/app/data
+
+    ports:
+      # Exposed for direct API access / debugging.
+      # Remove or restrict in production if you don't need direct backend access.
+      - "8090:8090"
+
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8090/api/healthz')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 25s
+
+
+  # ── Combined nginx frontend (user app + admin dashboard) ───────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: artifacts/stock-market-app/Dockerfile
+      args:
+        # VITE_CLERK_PUBLISHABLE_KEY is baked into the user-app JS bundle at build time.
+        # Leave empty if you are running without Clerk — app falls back to email+password only.
+        VITE_CLERK_PUBLISHABLE_KEY: "${VITE_CLERK_PUBLISHABLE_KEY:-}"
+    container_name: stock-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+
+# ── Named volumes ─────────────────────────────────────────────────────────────
+volumes:
+  userdata:
+    # Stores users.db (email+password accounts).
+    # Data survives: docker compose down / up --build
+    # Data is lost only on: docker compose down -v  (explicit volume removal)
