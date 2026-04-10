@@ -371,7 +371,86 @@ export const api = {
 
   sectorDetail: (sector: string, period: "3mo" | "6mo" | "1y" | "5y" = "1y") =>
     fetchApi<SectorDetailData>(`/sector-analytics/${encodeURIComponent(sector)}/detail?period=${period}`),
+
+  newsFeed: (params?: { category?: string; search?: string; limit?: number; offset?: number }) => {
+    const q = new URLSearchParams(
+      Object.fromEntries(Object.entries(params ?? {}).filter(([, v]) => v != null && v !== "").map(([k, v]) => [k, String(v)]))
+    ).toString();
+    return fetchApi<NewsFeedResponse>(`/news/feed${q ? "?" + q : ""}`);
+  },
+
+  newsDeals: () => fetchApi<NewsDealsResponse>("/news/deals"),
+
+  newsEvents: () => fetchApi<NewsEventsResponse>("/news/events"),
+
+  newsStats: () => fetchApi<NewsStatsResponse>("/news/stats"),
+
+  newsRefresh: () => fetchApi<{ ok: boolean }>("/news/refresh", { method: "POST" }),
 };
+
+// ─── News types ────────────────────────────────────────────────────────────────
+
+export interface NewsArticle {
+  id: string;
+  title: string;
+  summary: string;
+  url: string;
+  source: string;
+  sourceShort: string;
+  sourceColor: string;
+  category: "market" | "corporate" | "general";
+  published: string;
+  sentiment: "bullish" | "bearish" | "neutral";
+  tickers: string[];
+  type: "news";
+}
+
+export interface NewsFeedResponse {
+  articles: NewsArticle[];
+  total: number;
+  cached: boolean;
+  refreshedAt: string;
+  categories: string[];
+}
+
+export interface Deal {
+  type: "bulk" | "block";
+  date: string;
+  symbol: string;
+  name: string;
+  client: string;
+  side: string;
+  quantity: number;
+  price: number;
+}
+
+export interface NewsDealsResponse {
+  bulk: Deal[];
+  block: Deal[];
+  total: number;
+  refreshedAt: string;
+}
+
+export interface NewsEvent {
+  symbol: string;
+  company: string;
+  purpose: string;
+  date: string;
+  type: string;
+}
+
+export interface NewsEventsResponse {
+  events: NewsEvent[];
+  total: number;
+  refreshedAt: string;
+}
+
+export interface NewsStatsResponse {
+  totalArticles: number;
+  sentiments: { bullish: number; bearish: number; neutral: number };
+  sources: Record<string, number>;
+  marketMood: "bullish" | "bearish" | "neutral";
+}
 
 // ─── Sector Analytics types ───────────────────────────────────────────────────
 

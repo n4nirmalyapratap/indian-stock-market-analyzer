@@ -17,12 +17,14 @@ import SettingsPage from "@/pages/SettingsPage";
 import NotFound from "@/pages/not-found";
 import TradingPlatform from "@/pages/TradingPlatform";
 import SectorDetail from "@/pages/SectorDetail";
+import NewsFeed from "@/pages/NewsFeed";
 import GlobalAssistant from "@/components/GlobalAssistant";
 import { ThemeProvider, useTheme } from "@/context/ThemeContext";
 import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
   MessageCircle, Send, Brain, TrendingUp, CandlestickChart,
   Settings, ChevronRight, ChevronLeft, ChevronDown, Sun, Moon,
+  Newspaper,
 } from "lucide-react";
 
 const queryClient = new QueryClient({
@@ -33,6 +35,7 @@ const MAIN_NAV = [
   { path: "/",         label: "Dashboard",      icon: LayoutDashboard },
   { path: "/trading",  label: "Chart Studio",   icon: CandlestickChart },
   { path: "/sectors",  label: "Market Sectors", icon: BarChart3 },
+  { path: "/news",     label: "News Feed",      icon: Newspaper },
   { path: "/stocks",   label: "Stock Lookup",   icon: Search },
   { path: "/patterns", label: "Patterns",       icon: Scan },
   { path: "/scanners", label: "Scanners",       icon: Filter },
@@ -213,6 +216,7 @@ function Router() {
         <Route path="/trading"         component={TradingPlatform} />
         <Route path="/sectors/:sectorId" component={SectorDetail} />
         <Route path="/sectors"          component={Sectors} />
+        <Route path="/news"            component={NewsFeed} />
         <Route path="/stocks"          component={StockLookup} />
         <Route path="/patterns"        component={Patterns} />
         <Route path="/scanners"        component={Scanners} />
