@@ -1,5 +1,5 @@
-import { lazy, Suspense, useState, useEffect } from "react";
-import { Switch, Route, Router as WouterRouter, Link, useLocation } from "wouter";
+import { useEffect } from "react";
+import { Switch, Route, Router as WouterRouter } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -24,22 +24,16 @@ import { setTokenGetter } from "@/lib/api";
 import { LayoutShell } from "@/LayoutShell";
 import { LogOut } from "lucide-react";
 
-// Lazily import ALL of @clerk/react — only loaded when a key is configured.
-// This prevents Clerk from trying to fetch its browser SDK from a CDN when
-// running in environments (Docker/offline) where Clerk is not configured.
-const ClerkApp = lazy(() => import("./ClerkApp"));
-
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
 });
 
-const clerkPubKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
-const basePath    = import.meta.env.BASE_URL.replace(/\/$/, "");
+const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 
-// ── User profile — custom-auth only ──────────────────────────────────────────
+// ── User profile ──────────────────────────────────────────────────────────────
 
-function CustomOnlyUserProfile({ open }: { open: boolean }) {
+function UserProfile({ open }: { open: boolean }) {
   const { user, logout } = useCustomAuth();
   if (!user) return null;
 
@@ -81,18 +75,18 @@ function CustomOnlyUserProfile({ open }: { open: boolean }) {
 }
 
 
-// ── Layout (no-Clerk variant) ─────────────────────────────────────────────────
+// ── Layout ────────────────────────────────────────────────────────────────────
 
-function LayoutNoClerk({ children }: { children: React.ReactNode }) {
-  return <LayoutShell ProfileComponent={CustomOnlyUserProfile}>{children}</LayoutShell>;
+function Layout({ children }: { children: React.ReactNode }) {
+  return <LayoutShell ProfileComponent={UserProfile}>{children}</LayoutShell>;
 }
 
 
-// ── Routes (no Clerk) ─────────────────────────────────────────────────────────
+// ── Routes ────────────────────────────────────────────────────────────────────
 
-function AppRoutesNoClerk() {
+function AppRoutes() {
   return (
-    <LayoutNoClerk>
+    <Layout>
       <Switch>
         <Route path="/"                component={Dashboard} />
         <Route path="/trading"         component={TradingPlatform} />
@@ -108,14 +102,14 @@ function AppRoutesNoClerk() {
         <Route path="/chart/:symbol"   component={ChartView} />
         <Route component={NotFound} />
       </Switch>
-    </LayoutNoClerk>
+    </Layout>
   );
 }
 
 
-// ── Token injector (no Clerk) ─────────────────────────────────────────────────
+// ── Token injector ────────────────────────────────────────────────────────────
 
-function CustomTokenInjector() {
+function TokenInjector() {
   const { token } = useCustomAuth();
   useEffect(() => {
     if (token) setTokenGetter(async () => token!);
@@ -124,29 +118,21 @@ function CustomTokenInjector() {
 }
 
 
-// ── App flow when Clerk is NOT configured ─────────────────────────────────────
+// ── Auth gate ─────────────────────────────────────────────────────────────────
 
-function NoClerkGate() {
+function AuthGate() {
   const { user, token } = useCustomAuth();
 
   if (!user || !token) {
-    return <LoginPage showGoogle={false} />;
+    return <LoginPage />;
   }
 
   return (
     <>
-      <CustomTokenInjector />
-      <AppRoutesNoClerk />
+      <TokenInjector />
+      <AppRoutes />
       <GlobalAssistant />
     </>
-  );
-}
-
-function AppWithoutClerk() {
-  return (
-    <QueryClientProvider client={queryClient}>
-      <NoClerkGate />
-    </QueryClientProvider>
   );
 }
 
@@ -159,10 +145,9 @@ function App() {
       <CustomAuthProvider>
         <TooltipProvider>
           <WouterRouter base={basePath}>
-            {clerkPubKey
-              ? <Suspense fallback={null}><ClerkApp /></Suspense>
-              : <AppWithoutClerk />
-            }
+            <QueryClientProvider client={queryClient}>
+              <AuthGate />
+            </QueryClientProvider>
           </WouterRouter>
           <Toaster />
         </TooltipProvider>

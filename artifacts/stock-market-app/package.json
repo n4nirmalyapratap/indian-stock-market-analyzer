@@ -74,7 +74,6 @@
     "zod": "catalog:"
   },
   "dependencies": {
-    "@clerk/react": "^6.2.1",
     "@types/plotly.js": "^3.0.10",
     "echarts": "^6.0.0",
     "lightweight-charts": "^5.1.0",
