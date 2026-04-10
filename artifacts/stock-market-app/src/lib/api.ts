@@ -338,6 +338,9 @@ export const api = {
   stockFinancials: (symbol: string) =>
     fetchApi<StockFinancials>(`/stocks/${encodeURIComponent(symbol)}/financials`),
 
+  stockTechnicalSummary: (symbol: string, interval = "1d") =>
+    fetchApi<TechnicalSummary>(`/stocks/${encodeURIComponent(symbol)}/technical-summary?interval=${interval}`),
+
   patterns: (params?: { universe?: string; signal?: string; category?: string }) => {
     const filtered = Object.fromEntries(
       Object.entries(params ?? {}).filter(([, v]) => v != null && v !== ""),
@@ -568,6 +571,56 @@ export interface SectorDetailData {
   constituents:    ConstituentStock[];
   topGainers:      ConstituentStock[];
   topLosers:       ConstituentStock[];
+}
+
+// ── Technical Summary (TradingView Indicators' Summary) ──────────────────────
+
+export type TechAction = "BUY" | "SELL" | "NEUTRAL";
+export type TechSignal = "STRONG_BUY" | "BUY" | "NEUTRAL" | "SELL" | "STRONG_SELL";
+
+export interface TechIndicatorRow {
+  name:   string;
+  value:  number | null;
+  action: TechAction;
+}
+
+export interface TechSection {
+  signal:     TechSignal;
+  buy:        number;
+  sell:       number;
+  neutral:    number;
+  indicators: TechIndicatorRow[];
+}
+
+export interface PivotLevel {
+  r3: number | null;
+  r2: number | null;
+  r1: number | null;
+  p:  number | null;
+  s1: number | null;
+  s2: number | null;
+  s3: number | null;
+}
+
+export interface DmPivot {
+  r1: number | null;
+  p:  number | null;
+  s1: number | null;
+}
+
+export interface TechnicalSummary {
+  symbol:          string;
+  interval:        string;
+  summary:         { signal: TechSignal; buy: number; sell: number; neutral: number };
+  oscillators:     TechSection;
+  movingAverages:  TechSection;
+  pivots: {
+    classic:   PivotLevel;
+    fibonacci: PivotLevel;
+    camarilla: PivotLevel;
+    woodie:    PivotLevel;
+    dm:        DmPivot;
+  };
 }
 
 // ── Stock Financials (TradingView-style) ────────────────────────────────────

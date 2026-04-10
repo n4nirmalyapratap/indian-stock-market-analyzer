@@ -67,7 +67,12 @@ Run: `pnpm --filter @workspace/scripts run push-github`
 ## Key Features
 
 ### Stock Analysis Page
-- **Technicals view**: EMA (9/21/50/200), RSI with zone indicator, MACD crossover, Bollinger Bands position, Support/Resistance levels, Entry signal with Target/Stop-Loss/R:R
+- **Technicals view** (TradingView Indicators' Summary style, dark theme):
+  - Timeframe selector: 1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d, 1w, 1mo
+  - Summary SVG gauge (speedometer needle) with Buy/Sell/Neutral counts
+  - **Oscillators** sub-gauge + expandable table: RSI(14), Stochastic %K, CCI(20), ADX(14), Awesome Oscillator, Momentum(10), MACD(12,26), StochRSI Fast, Williams %R(14), Bull Bear Power, Ultimate Oscillator(7,14,28)
+  - **Moving Averages** sub-gauge + expandable table: EMA/SMA (10/20/30/50/100/200), Ichimoku Base Line, VWMA(20), HMA(9)
+  - **Pivots** table with Classic / Fibonacci / Camarilla / Woodie / DM tabs (R3–S3)
 - **Financials view** (TradingView-style, 6 tabs):
   - **Overview** — Valuation & Profitability metric cards + mini Revenue/Net Income charts
   - **Income Statement** — Revenue vs Profits bar chart + EBITDA bar chart + sortable table (Annual/Quarterly toggle)
