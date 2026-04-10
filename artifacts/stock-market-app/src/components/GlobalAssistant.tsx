@@ -1,6 +1,19 @@
 import { useState, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
-import { BookOpen, Send, X, RotateCcw, Sparkles, ChevronRight, ChevronLeft, GraduationCap } from "lucide-react";
+import { BookOpen, Send, X, RotateCcw, Sparkles, ChevronRight, ChevronLeft, GraduationCap, Bot } from "lucide-react";
+
+// ── Options AI chat helper ────────────────────────────────────────────────────
+const BASE = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
+async function optionsChat(messages: { role: string; content: string }[]): Promise<string> {
+  const res = await fetch(`${BASE}/api/options/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages }),
+  });
+  if (!res.ok) throw new Error("AI error");
+  const d = await res.json();
+  return d.reply ?? "Sorry, I couldn't get a response.";
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Knowledge base — market concepts + every app feature, in plain English
@@ -957,9 +970,12 @@ interface Msg {
 // ─────────────────────────────────────────────────────────────────────────────
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
+type AiMsg = { role: "user" | "assistant"; content: string };
+
 export default function GlobalAssistant() {
   const [loc] = useLocation();
   const isChartStudio = loc.startsWith("/trading") || loc.startsWith("/chart");
+  const isOptions = loc.startsWith("/options");
 
   const [open, setOpen]           = useState(false);
   const [msgs, setMsgs]           = useState<Msg[]>([]);
@@ -970,8 +986,39 @@ export default function GlobalAssistant() {
   const endRef   = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Options AI chat state
+  const [aiMode, setAiMode]       = useState(false);
+  const [aiMsgs, setAiMsgs]       = useState<AiMsg[]>([]);
+  const [aiInput, setAiInput]     = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const aiEndRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs]);
+  useEffect(() => { aiEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [aiMsgs]);
   useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 150); }, [open]);
+
+  // Switch back to Learn mode when leaving the options page
+  useEffect(() => { if (!isOptions) setAiMode(false); }, [isOptions]);
+
+  async function sendAiChat() {
+    const text = aiInput.trim();
+    if (!text || aiLoading) return;
+    const userMsg: AiMsg = { role: "user", content: text };
+    setAiMsgs(prev => [...prev, userMsg]);
+    setAiInput("");
+    setAiLoading(true);
+    try {
+      const reply = await optionsChat([...aiMsgs, userMsg]);
+      setAiMsgs(prev => [...prev, { role: "assistant", content: reply }]);
+    } catch {
+      setAiMsgs(prev => [...prev, {
+        role: "assistant",
+        content: "Sorry, couldn't reach the AI right now. Please try again.",
+      }]);
+    } finally {
+      setAiLoading(false);
+    }
+  }
 
   // First-visit hint — slide out the tooltip after 1.2 s, retract after 5 s
   useEffect(() => {
@@ -1194,7 +1241,125 @@ export default function GlobalAssistant() {
             </div>
           </div>
 
-          {/* Category tabs */}
+          {/* Mode toggle — only on /options page */}
+          {isOptions && (
+            <div className="flex-shrink-0 flex border-b border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900">
+              <button
+                onClick={() => setAiMode(false)}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[12px] font-semibold transition border-b-2
+                  ${!aiMode
+                    ? "border-indigo-600 text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/20"
+                    : "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"}`}
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                Learn
+              </button>
+              <button
+                onClick={() => setAiMode(true)}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[12px] font-semibold transition border-b-2
+                  ${aiMode
+                    ? "border-indigo-600 text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/20"
+                    : "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"}`}
+              >
+                <Bot className="w-3.5 h-3.5" />
+                Options AI
+              </button>
+            </div>
+          )}
+
+          {/* AI chat body — visible when in AI mode */}
+          {aiMode && (
+            <>
+              <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0 bg-gray-50 dark:bg-gray-950">
+                {aiMsgs.length === 0 && (
+                  <div className="flex flex-col items-center pt-8 pb-4 px-2">
+                    <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-md mb-4">
+                      <Bot className="w-8 h-8 text-white" />
+                    </div>
+                    <p className="text-base font-bold text-gray-800 dark:text-white">Options AI</p>
+                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-1 text-center leading-relaxed max-w-[260px]">
+                      Ask about Greeks, strategies, IV analysis, or your current position
+                    </p>
+                    <div className="mt-5 w-full space-y-2">
+                      <p className="text-[10px] font-bold text-gray-300 uppercase tracking-widest text-center mb-2">Try asking</p>
+                      {[
+                        { q: "What is an Iron Condor?",                     icon: "📐" },
+                        { q: "Explain Delta and Gamma",                     icon: "🔢" },
+                        { q: "Best NIFTY strategy for range-bound market?", icon: "📊" },
+                        { q: "What is Implied Volatility?",                 icon: "📈" },
+                      ].map(({ q, icon }) => (
+                        <button key={q} onClick={() => setAiInput(q)}
+                          className="w-full flex items-center gap-2.5 text-left bg-white dark:bg-gray-800 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 border border-gray-100 dark:border-white/10 hover:border-indigo-200 rounded-xl px-3.5 py-2.5 transition group">
+                          <span className="text-base">{icon}</span>
+                          <span className="text-xs text-gray-600 dark:text-gray-300 group-hover:text-indigo-700 dark:group-hover:text-indigo-300 leading-snug">{q}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {aiMsgs.map((m, i) => (
+                  <div key={i} className={`flex gap-2.5 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                    {m.role === "assistant" && (
+                      <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-sm mt-0.5">
+                        <Bot style={{ width: 14, height: 14 }} className="text-white" />
+                      </div>
+                    )}
+                    {m.role === "user" ? (
+                      <div className="max-w-[80%] bg-indigo-600 text-white rounded-2xl rounded-tr-none px-3.5 py-2.5 shadow-sm text-sm leading-relaxed">
+                        {m.content}
+                      </div>
+                    ) : (
+                      <div className="flex-1 min-w-0 bg-white dark:bg-gray-800 border border-gray-100 dark:border-white/10 rounded-2xl rounded-tl-none px-4 py-3 shadow-sm">
+                        <RichText text={m.content} />
+                      </div>
+                    )}
+                    {m.role === "user" && (
+                      <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center mt-0.5">
+                        <span className="text-[10px] font-bold text-gray-500 dark:text-gray-300">YOU</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {aiLoading && (
+                  <div className="flex gap-2.5">
+                    <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-sm">
+                      <Bot style={{ width: 14, height: 14 }} className="text-white" />
+                    </div>
+                    <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-white/10 rounded-2xl rounded-tl-none px-4 py-3 shadow-sm">
+                      <div className="flex gap-1.5 items-center">
+                        <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                        <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                        <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div ref={aiEndRef} />
+              </div>
+              <div className="flex-shrink-0 border-t border-gray-100 dark:border-white/[0.08] p-3 flex gap-2 bg-white dark:bg-gray-900">
+                <input
+                  type="text"
+                  value={aiInput}
+                  onChange={e => setAiInput(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendAiChat())}
+                  placeholder="Ask about options, Greeks, strategies…"
+                  className="flex-1 text-sm border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2
+                    focus:outline-none focus:ring-2 focus:ring-indigo-300
+                    bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400"
+                />
+                <button
+                  onClick={sendAiChat}
+                  disabled={!aiInput.trim() || aiLoading}
+                  className="bg-indigo-600 text-white rounded-xl px-3 py-2 hover:bg-indigo-700 disabled:opacity-40 transition flex-shrink-0"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* Learn panel — hidden in AI mode */}
+          {!aiMode && (<>
           <div className="flex-shrink-0 border-b border-gray-100 dark:border-white/[0.06] bg-gray-50 dark:bg-gray-800/50 px-3 py-2 overflow-x-auto">
             <div className="flex gap-1.5" style={{ width: "max-content" }}>
               {CATEGORIES.map(cat => (
@@ -1364,6 +1529,7 @@ export default function GlobalAssistant() {
               </button>
             </div>
           </div>
+          </>)}
         </div>
         </>
       )}
