@@ -97,6 +97,28 @@ The following are **never pushed** (mirrors `.gitignore`):
 | Extensions | `.png`, `.jpg`, `.gif`, `.webp`, `.ico`, `.woff`, `.ttf`, `.mp4`, `.pdf`, `.zip` |
 | Size | Files larger than 400 KB are skipped with a warning |
 
+### 🛡️ Hard-coded protected files — NEVER deletable
+
+The following file types trigger an **immediate push abort** if they are missing
+from the workspace (detected by `isProtected()` in `push-github.ts`):
+
+| Protected pattern | Why |
+|---|---|
+| `Dockerfile` (any path) | Required for Docker builds in every artifact |
+| `docker-compose.yml` | Orchestrates the multi-container production stack |
+| `nginx.conf` (any path) | Reverse proxy config served inside the Docker image |
+| `.dockerignore` | Controls what goes into the Docker build context |
+
+If the push prints `🚨 PUSH ABORTED — PROTECTED FILES MISSING FROM WORKSPACE`,
+run `restore-files` and re-push. The `restore-files` script automatically
+includes all these files in its recovery list.
+
+**Never remove `Dockerfile`, `nginx.conf`, or `docker-compose.yml` from the
+workspace before pushing. The push script will refuse and tell you exactly
+which files to restore.**
+
+---
+
 ### ⚠️ pandas_ta must NOT be in SKIP_DIRS
 
 `artifacts/python-backend/pandas_ta/` is a local package shim that must be in the
