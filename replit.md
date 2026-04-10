@@ -104,17 +104,23 @@ artifact was first registered by Replit. Record it in full so future agents don'
 
 #### Step 1 — Artifact auto-registered with wrong package filter
 When Replit registered the `stock-market-app` as a formal artifact, it auto-generated workflow
-`artifacts/stock-market-app: web` with this broken command:
-```
-BASE_PATH=/ PORT=3002 pnpm --filter @workspace/nestjs-backend-placeholder run dev
-```
-`nestjs-backend-placeholder` does not exist in the workspace → workflow immediately exits with:
+`artifacts/stock-market-app: web` with a broken `--filter` pointing to whatever package Replit
+guessed (in our case `nestjs-backend-placeholder`). The workflow immediately exits with:
 ```
 No projects matched the filters in "/home/runner/workspace"
 ```
 
 **Finding**: Artifact-managed workflows get their command from `artifact.toml`, not from the
-Replit UI workflow configuration. The auto-generated `artifact.toml` had the wrong package name.
+Replit UI workflow configuration. The auto-generated `artifact.toml` picks an arbitrary package
+name that may be wrong — especially if folder names have changed.
+
+**How to find the correct package name** — always verify dynamically, never assume:
+```bash
+cat artifacts/stock-market-app/package.json | python3.11 -c "import sys,json; print(json.load(sys.stdin)['name'])"
+# → should print the actual name, e.g. @workspace/stock-market-app
+```
+Then confirm that name matches the `--filter` in `artifacts/stock-market-app/.replit-artifact/artifact.toml`.
+If they differ, fix `artifact.toml` using `verifyAndReplaceArtifactToml()` (see Step 3).
 
 #### Step 2 — `configureWorkflow()` cannot override artifact-managed workflows
 Attempted to fix the workflow command using `configureWorkflow()` in the code_execution sandbox:
@@ -189,10 +195,11 @@ Fix: Updated `artifacts/api-server/.replit-artifact/artifact.toml`:
    - Another workflow likely holds port 3002
    - Check `Start application` — if RUNNING, reconfigure it to no-op then restart it
    - Then restart `artifacts/stock-market-app: web`
-3. If workflow command shows `nestjs-backend-placeholder`:
+3. If workflow command shows a wrong package filter (any name that isn't the actual package):
+   - Find the correct name: `cat artifacts/stock-market-app/package.json | python3.11 -c "import sys,json; print(json.load(sys.stdin)['name'])"`
    - Read `artifacts/stock-market-app/.replit-artifact/artifact.toml`
    - Copy to `artifacts/stock-market-app/.replit-artifact/artifact-temp.toml`
-   - Fix `run` to `BASE_PATH=/ PORT=3002 pnpm --filter @workspace/stock-market-app run dev`
+   - Fix `run` to `BASE_PATH=/ PORT=3002 pnpm --filter <correct-name> run dev`
    - Call `verifyAndReplaceArtifactToml({ tempFilePath: "...artifact-temp.toml", artifactTomlPath: "...artifact.toml" })`
    - Restart `artifacts/stock-market-app: web`
 4. Do NOT use `configureWorkflow()` on artifact-managed workflows — it will throw PROHIBITED_ACTION
