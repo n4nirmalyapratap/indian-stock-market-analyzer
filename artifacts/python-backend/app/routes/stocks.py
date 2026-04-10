@@ -227,6 +227,217 @@ async def get_stock_history(
     }
 
 
+@router.get("/{symbol}/financials")
+async def get_stock_financials(symbol: str):
+    """
+    Return TradingView-style financial data for a stock:
+    overview metrics, income statement (annual + quarterly),
+    balance sheet, cash flow, dividends, and EPS history.
+    All monetary values are in ₹ Crores (1 Crore = 1e7).
+    """
+    import math
+    import pandas as pd
+    import yfinance as yf
+
+    symbol = symbol.upper()
+
+    def _safe(val):
+        """Return None for NaN/inf, else the value."""
+        try:
+            if val is None:
+                return None
+            if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+                return None
+            return val
+        except Exception:
+            return None
+
+    def _cr(val):
+        """Convert raw rupee value → ₹ Crores, rounded to 2 dp."""
+        v = _safe(val)
+        if v is None:
+            return None
+        return round(float(v) / 1e7, 2)
+
+    def _pct(val):
+        """Convert 0-1 fraction → percentage rounded to 2 dp."""
+        v = _safe(val)
+        if v is None:
+            return None
+        return round(float(v) * 100, 2)
+
+    def _f(val, decimals=2):
+        v = _safe(val)
+        if v is None:
+            return None
+        return round(float(v), decimals)
+
+    def _row(df, key):
+        """Safe lookup of a row from a DataFrame; returns None if missing."""
+        try:
+            if df is None or df.empty or key not in df.index:
+                return None
+            return df.loc[key]
+        except Exception:
+            return None
+
+    def _df_to_list(df, row_map: dict, sort_asc=True):
+        """
+        Convert a transposed financial DataFrame into a list of dicts.
+
+        df       : DataFrame where rows=metrics, cols=dates
+        row_map  : {output_key: (df_row_name, transform_fn)}
+        sort_asc : sort by date ascending (oldest first)
+        """
+        if df is None or df.empty:
+            return []
+        results = []
+        for col in df.columns:
+            entry = {"date": str(col.date())}
+            for out_key, (row_name, fn) in row_map.items():
+                try:
+                    val = df.loc[row_name, col] if row_name in df.index else None
+                    entry[out_key] = fn(val)
+                except Exception:
+                    entry[out_key] = None
+            results.append(entry)
+        if sort_asc:
+            results.sort(key=lambda x: x["date"])
+        return results
+
+    def _fetch():
+        candidates = [f"{symbol}.NS", symbol]
+
+        for tick_sym in candidates:
+            try:
+                t = yf.Ticker(tick_sym)
+                info = t.info or {}
+                if not (info.get("regularMarketPrice") or info.get("currentPrice")
+                        or info.get("marketCap")):
+                    continue
+
+                return {
+                    "info": info,
+                    "financials": t.financials,
+                    "q_financials": t.quarterly_financials,
+                    "balance_sheet": t.balance_sheet,
+                    "cash_flow": t.cash_flow,
+                    "dividends": t.dividends,
+                }
+            except Exception:
+                continue
+        return None
+
+    raw = await asyncio.to_thread(_fetch)
+    if raw is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"No financial data found for {symbol}. "
+                               "Check the NSE symbol is correct."},
+        )
+
+    info = raw["info"]
+    fs   = raw["financials"]
+    qfs  = raw["q_financials"]
+    bs   = raw["balance_sheet"]
+    cf   = raw["cash_flow"]
+    divs = raw["dividends"]
+
+    INCOME_MAP = {
+        "revenue":         ("Total Revenue",    _cr),
+        "grossProfit":     ("Gross Profit",      _cr),
+        "operatingIncome": ("Operating Income",  _cr),
+        "netIncome":       ("Net Income",        _cr),
+        "ebitda":          ("EBITDA",            _cr),
+    }
+
+    BS_MAP = {
+        "totalAssets": ("Total Assets",              _cr),
+        "totalDebt":   ("Total Debt",                _cr),
+        "equity":      ("Common Stock Equity",       _cr),
+        "cash":        ("Cash And Cash Equivalents", _cr),
+    }
+
+    CF_MAP = {
+        "operatingCF": ("Operating Cash Flow",  _cr),
+        "investingCF": ("Investing Cash Flow",  _cr),
+        "financingCF": ("Financing Cash Flow",  _cr),
+        "freeCF":      ("Free Cash Flow",       _cr),
+        "capex":       ("Capital Expenditure",  _cr),
+    }
+
+    annual_income    = _df_to_list(fs,  INCOME_MAP)
+    quarterly_income = _df_to_list(qfs, INCOME_MAP)
+    annual_bs        = _df_to_list(bs,  BS_MAP)
+    annual_cf        = _df_to_list(cf,  CF_MAP)
+
+    eps_annual = []
+    for row in _df_to_list(fs, {"eps": ("Diluted EPS", _f)}):
+        if row["eps"] is not None:
+            eps_annual.append(row)
+
+    eps_quarterly = []
+    for row in _df_to_list(qfs, {"eps": ("Diluted EPS", _f)}):
+        if row["eps"] is not None:
+            eps_quarterly.append(row)
+
+    div_list = []
+    if divs is not None and len(divs) > 0:
+        for dt, amount in divs.items():
+            v = _safe(amount)
+            if v is not None:
+                date_str = str(pd.Timestamp(dt).date())
+                div_list.append({"date": date_str, "amount": round(float(v), 2)})
+        div_list.sort(key=lambda x: x["date"])
+
+    ov = info
+    overview = {
+        "marketCap":      _safe(ov.get("marketCap")),
+        "trailingPE":     _f(ov.get("trailingPE")),
+        "forwardPE":      _f(ov.get("forwardPE")),
+        "priceToBook":    _f(ov.get("priceToBook")),
+        "priceToSales":   _f(ov.get("priceToSalesTrailing12Months")),
+        "evToEbitda":     _f(ov.get("enterpriseToEbitda")),
+        "trailingEps":    _f(ov.get("trailingEps")),
+        "forwardEps":     _f(ov.get("forwardEps")),
+        "roe":            _pct(ov.get("returnOnEquity")),
+        "roa":            _pct(ov.get("returnOnAssets")),
+        "debtToEquity":   _f(ov.get("debtToEquity")),
+        "currentRatio":   _f(ov.get("currentRatio")),
+        "grossMargin":    _pct(ov.get("grossMargins")),
+        "operatingMargin": _pct(ov.get("operatingMargins")),
+        "netMargin":      _pct(ov.get("profitMargins")),
+        "dividendYield":  _f(ov.get("dividendYield")),
+        "dividendRate":   _f(ov.get("dividendRate")),
+        "earningsGrowth": _pct(ov.get("earningsGrowth")),
+        "revenueGrowth":  _pct(ov.get("revenueGrowth")),
+        "bookValue":      _f(ov.get("bookValue")),
+        "weekChange52":   _pct(ov.get("52WeekChange")),
+    }
+
+    return {
+        "symbol":      symbol,
+        "companyName": info.get("longName") or info.get("shortName") or symbol,
+        "currency":    info.get("currency", "INR"),
+        "overview":    overview,
+        "incomeStatement": {
+            "annual":    annual_income,
+            "quarterly": quarterly_income,
+        },
+        "balanceSheet": {
+            "annual": annual_bs,
+        },
+        "cashFlow": {
+            "annual": annual_cf,
+        },
+        "dividends": div_list,
+        "eps": {
+            "annual":    eps_annual,
+            "quarterly": eps_quarterly,
+        },
+    }
+
+
 @router.get("/{symbol}")
 async def get_stock(symbol: str):
     data = await _service.get_stock_details(symbol)
