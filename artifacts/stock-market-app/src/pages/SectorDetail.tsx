@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { api, SectorDetailData, ConstituentStock } from "@/lib/api";
 import { useTheme } from "@/context/ThemeContext";
+import ChartButton from "@/components/ChartButton";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -589,7 +590,12 @@ function ConstituentTab({ data, isDark }: { data: SectorDetailData; isDark: bool
                   return (
                     <td key={c.key} className="px-3 py-2 whitespace-nowrap"
                       style={{ color: isChange ? colorForPct(val) : hdrTxt }}>
-                      {c.fmt(row)}
+                      {c.key === "name" ? (
+                        <span className="flex items-center gap-0.5">
+                          {c.fmt(row)}
+                          <ChartButton symbol={row.symbol} />
+                        </span>
+                      ) : c.fmt(row)}
                     </td>
                   );
                 })}
@@ -661,7 +667,10 @@ export default function SectorDetail() {
           <div className="rounded-2xl border p-5" style={{ background: isDark ? "#1e293b" : "#fff", borderColor: isDark ? "#334155" : "#e2e8f0" }}>
             <div className="flex items-start justify-between flex-wrap gap-3">
               <div>
-                <h1 className="text-2xl font-bold" style={{ color: hdrTxt }}>{data.name}</h1>
+                <h1 className="text-2xl font-bold flex items-center gap-1" style={{ color: hdrTxt }}>
+                  {data.name}
+                  <ChartButton symbol={data.symbol} />
+                </h1>
                 <p className="text-sm mt-0.5" style={{ color: muTxt }}>
                   Sector Deep-Dive · Top-down analysis from macro to individual stocks
                 </p>

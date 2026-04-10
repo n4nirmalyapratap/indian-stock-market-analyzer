@@ -133,6 +133,28 @@ scripts/src/push-github.ts                      ← GitHub push script (uses Rep
 
 ---
 
+## ChartButton — Deep-link to Chart Studio
+
+A shared component `src/components/ChartButton.tsx` renders a small `LineChart` icon next to any stock or sector name. Clicking it navigates to **Chart Studio** (`/trading?symbol=SYMBOLNAME`) with that symbol pre-loaded.
+
+- Strips `.NS` / `.BO` suffixes automatically (`RELIANCE.NS` → `RELIANCE`)
+- Default opacity is 30% (subtle); fades to 100% on hover with indigo highlight
+- Works in both dark and light mode (uses `dark:` variants)
+- Chart Studio back button appears automatically when a user arrives via `?symbol=` link (uses `cameFromLink` ref pattern in TradingPlatform.tsx)
+
+**Usage:**
+```tsx
+import ChartButton from "@/components/ChartButton";
+<ChartButton symbol="RELIANCE.NS" />   // stock
+<ChartButton symbol="NIFTY BANK" />    // sector index
+```
+
+**Currently added to:**
+- `SectorDetail.tsx` → sector header name (links to sector index chart)
+- `SectorDetail.tsx` → Constituents tab — every row's Stock column
+
+---
+
 ## Code Review Fixes (April 2026)
 
 The following bugs were found in a deep code review and fixed:

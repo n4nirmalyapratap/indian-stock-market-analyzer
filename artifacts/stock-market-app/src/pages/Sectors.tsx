@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { api, SectorHeatmapItem } from "@/lib/api";
-import { Info, Target, Shield, BarChart2, Zap, Activity, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import { Info, Target, Shield, BarChart2, Zap, Activity, ChevronRight, ArrowUp, ArrowDown } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 
 // ── Theme-aware tier config ────────────────────────────────────────────────────
@@ -488,9 +488,9 @@ function heatStyle(val: number | null, isDark: boolean): { bg: string; text: str
 type SortDir = "default" | "desc" | "asc";
 
 const SORT_OPTIONS: { dir: SortDir; icon: ReactNode; title: string }[] = [
-  { dir: "default", icon: <ArrowUpDown className="w-3 h-3" />, title: "Default order" },
-  { dir: "desc",    icon: <ArrowDown   className="w-3 h-3" />, title: "Best → Worst"  },
-  { dir: "asc",     icon: <ArrowUp     className="w-3 h-3" />, title: "Worst → Best"  },
+  { dir: "default", icon: <span className="text-[11px] font-bold leading-none">≡</span>, title: "Default order" },
+  { dir: "desc",    icon: <ArrowDown className="w-3 h-3" />, title: "Best → Worst" },
+  { dir: "asc",     icon: <ArrowUp   className="w-3 h-3" />, title: "Worst → Best" },
 ];
 
 function SectorHeatMap({ data, isDark }: { data: SectorHeatmapItem[]; isDark: boolean }) {
