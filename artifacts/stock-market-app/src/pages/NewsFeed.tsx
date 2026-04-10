@@ -5,6 +5,7 @@ import {
   Newspaper, TrendingUp, TrendingDown, Minus, Search, RefreshCw,
   ExternalLink, Clock, Zap, BarChart2, ChevronDown, ChevronUp,
   Tag, Radio, AlertTriangle, Building2, ArrowUpRight, ArrowDownRight,
+  Film, List, X,
 } from "lucide-react";
 import { api, NewsArticle } from "@/lib/api";
 import { useTheme } from "@/context/ThemeContext";
@@ -422,7 +423,243 @@ function RefreshCountdown({
   );
 }
 
-// ── Main Page ─────────────────────────────────────────────────────────────────
+// ── Reels View (TikTok-style snap scroll) ─────────────────────────────────────
+
+function getReelGradient(article: NewsArticle): string {
+  const p: Record<string, Record<string, string>> = {
+    market: {
+      bullish: "linear-gradient(160deg,#0a0f1e 0%,#0d2a4a 45%,#0a2a1a 100%)",
+      bearish: "linear-gradient(160deg,#0a0f1e 0%,#0d1a4a 45%,#2a0a14 100%)",
+      neutral: "linear-gradient(160deg,#0a0f1e 0%,#111e40 45%,#0d1a34 100%)",
+    },
+    corporate: {
+      bullish: "linear-gradient(160deg,#160b3a 0%,#0d3030 45%,#0a2818 100%)",
+      bearish: "linear-gradient(160deg,#160b3a 0%,#3a0b2a 45%,#40080e 100%)",
+      neutral: "linear-gradient(160deg,#160b3a 0%,#1e1650 45%,#120d3a 100%)",
+    },
+    general: {
+      bullish: "linear-gradient(160deg,#1a0800 0%,#3a1a00 45%,#0e2212 100%)",
+      bearish: "linear-gradient(160deg,#1a0800 0%,#3a0800 45%,#2a0008 100%)",
+      neutral: "linear-gradient(160deg,#1a0a00 0%,#2a1800 45%,#14100a 100%)",
+    },
+  };
+  return p[article.category]?.[article.sentiment] ?? p.market.neutral;
+}
+
+function getReelOrbs(article: NewsArticle): [string, string] {
+  const cat = article.category;
+  const s   = article.sentiment;
+  const green = "rgba(34,197,94,0.35)";
+  const red   = "rgba(239,68,68,0.35)";
+  const neu   = "rgba(148,163,184,0.25)";
+  if (cat === "market")    return s === "bullish" ? ["rgba(99,102,241,0.45)", green]   : s === "bearish" ? ["rgba(99,102,241,0.4)", red]   : ["rgba(99,102,241,0.35)", neu];
+  if (cat === "corporate") return s === "bullish" ? ["rgba(139,92,246,0.45)", green]  : s === "bearish" ? ["rgba(139,92,246,0.4)", red]  : ["rgba(139,92,246,0.35)", neu];
+  return                          s === "bullish" ? ["rgba(251,146,60,0.45)",  green]  : s === "bearish" ? ["rgba(251,146,60,0.4)",  red]  : ["rgba(251,146,60,0.35)",  neu];
+}
+
+function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: () => void }) {
+  const [current, setCurrent] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const cardRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  const goTo = useCallback((idx: number) => {
+    const clamped = Math.max(0, Math.min(idx, articles.length - 1));
+    setCurrent(clamped);
+    cardRefs.current[clamped]?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [articles.length]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); goTo(current + 1); }
+      if (e.key === "ArrowUp"   || e.key === "k") { e.preventDefault(); goTo(current - 1); }
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [current, goTo, onClose]);
+
+  const handleScroll = useCallback(() => {
+    if (!containerRef.current) return;
+    const { scrollTop, clientHeight } = containerRef.current;
+    if (clientHeight === 0) return;
+    const idx = Math.round(scrollTop / clientHeight);
+    setCurrent(Math.min(Math.max(idx, 0), articles.length - 1));
+  }, [articles.length]);
+
+  const sentLabel = (s: string) =>
+    s === "bullish" ? { txt: "BULLISH", color: "#22c55e", bg: "rgba(34,197,94,0.15)" }
+    : s === "bearish" ? { txt: "BEARISH", color: "#ef4444", bg: "rgba(239,68,68,0.15)" }
+    : { txt: "NEUTRAL", color: "#94a3b8", bg: "rgba(148,163,184,0.12)" };
+
+  const catLabel = (c: string) =>
+    c === "market" ? { txt: "MARKET", color: "#38bdf8" }
+    : c === "corporate" ? { txt: "COMPANY", color: "#c084fc" }
+    : { txt: "GENERAL", color: "#fb923c" };
+
+  const DOTS_MAX = 12;
+
+  return (
+    <div className="relative rounded-2xl overflow-hidden" style={{ height: "calc(100vh - 120px)" }}>
+      {/* Top bar overlay */}
+      <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-4 py-3 pointer-events-none"
+        style={{ background: "linear-gradient(to bottom, rgba(0,0,0,0.65) 0%, transparent 100%)" }}>
+        <div className="flex items-center gap-2">
+          <Film className="w-4 h-4 text-white" />
+          <span className="text-white text-sm font-bold tracking-wide">News Reels</span>
+        </div>
+        <div className="flex items-center gap-3 pointer-events-auto">
+          <span className="text-white/60 text-xs font-mono bg-black/30 px-2 py-0.5 rounded-full">
+            {current + 1} / {articles.length}
+          </span>
+          <button onClick={onClose}
+            className="flex items-center gap-1 text-xs text-white/80 hover:text-white transition px-2.5 py-1.5 rounded-lg"
+            style={{ background: "rgba(255,255,255,0.12)", backdropFilter: "blur(8px)", border: "1px solid rgba(255,255,255,0.15)" }}>
+            <List className="w-3.5 h-3.5" /> List
+          </button>
+        </div>
+      </div>
+
+      {/* Progress dots — right side */}
+      <div className="absolute right-3 top-1/2 -translate-y-1/2 z-30 flex flex-col gap-1.5 items-center">
+        {articles.slice(0, DOTS_MAX).map((_, i) => (
+          <button key={i} onClick={() => goTo(i)}
+            className="transition-all duration-200 rounded-full"
+            style={{
+              width:  i === current ? 6 : 4,
+              height: i === current ? 20 : 4,
+              background: i === current ? "#fff" : "rgba(255,255,255,0.3)",
+            }} />
+        ))}
+        {articles.length > DOTS_MAX && (
+          <span className="text-white/30 text-[9px] mt-1">+{articles.length - DOTS_MAX}</span>
+        )}
+      </div>
+
+      {/* Snap-scroll container */}
+      <div
+        ref={containerRef}
+        onScroll={handleScroll}
+        className="h-full overflow-y-scroll"
+        style={{ scrollSnapType: "y mandatory", scrollbarWidth: "none", msOverflowStyle: "none" }}
+      >
+        {articles.map((article, i) => {
+          const [orb1, orb2] = getReelOrbs(article);
+          const sent = sentLabel(article.sentiment);
+          const cat  = catLabel(article.category);
+          return (
+            <div
+              key={article.id}
+              ref={el => { cardRefs.current[i] = el; }}
+              className="relative flex flex-col overflow-hidden"
+              style={{ height: "100%", scrollSnapAlign: "start", flexShrink: 0, background: getReelGradient(article) }}
+            >
+              {/* Decorative blurred orbs */}
+              <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                <div style={{ position: "absolute", top: "-15%", right: "-8%", width: "55%", height: "55%", borderRadius: "50%",
+                  background: `radial-gradient(circle, ${orb1} 0%, transparent 70%)`, filter: "blur(50px)" }} />
+                <div style={{ position: "absolute", bottom: "-10%", left: "-8%", width: "50%", height: "50%", borderRadius: "50%",
+                  background: `radial-gradient(circle, ${orb2} 0%, transparent 70%)`, filter: "blur(45px)" }} />
+                <div style={{ position: "absolute", inset: 0,
+                  backgroundImage: "linear-gradient(rgba(255,255,255,0.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.025) 1px,transparent 1px)",
+                  backgroundSize: "60px 60px" }} />
+              </div>
+
+              {/* Card content */}
+              <div className="relative z-10 flex flex-col h-full px-6 pt-16 pb-5">
+                {/* Source + meta row */}
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold px-2.5 py-1 rounded-lg text-white"
+                      style={{ background: article.sourceColor ?? "#6366f1" }}>
+                      {article.sourceShort}
+                    </span>
+                    <span className="text-xs font-bold px-2.5 py-1 rounded-lg border"
+                      style={{ color: sent.color, background: sent.bg, borderColor: sent.color + "40" }}>
+                      {sent.txt}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold px-2 py-0.5 rounded-md"
+                      style={{ color: cat.color, background: cat.color + "20" }}>{cat.txt}</span>
+                    <span className="text-xs text-white/45 flex items-center gap-1">
+                      <Clock className="w-3 h-3" />{timeAgo(article.published)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Spacer pushes content to bottom 40% */}
+                <div className="flex-1" />
+
+                {/* Hero headline */}
+                <h2 className="text-[22px] md:text-[28px] font-black leading-tight text-white mb-3"
+                  style={{ textShadow: "0 2px 20px rgba(0,0,0,0.6)" }}>
+                  {article.title}
+                </h2>
+
+                {/* Summary */}
+                {article.summary && (
+                  <p className="text-sm leading-relaxed text-white/70 mb-4 line-clamp-3">
+                    {article.summary}
+                  </p>
+                )}
+
+                {/* Ticker chips */}
+                {article.tickers.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-4">
+                    {article.tickers.map(t => (
+                      <Link key={t} href={`/stocks?q=${t}`}>
+                        <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-lg cursor-pointer hover:opacity-80 transition"
+                          style={{ background: "rgba(255,255,255,0.1)", color: "#c7d2fe", border: "1px solid rgba(255,255,255,0.18)" }}>
+                          {t}
+                        </span>
+                      </Link>
+                    ))}
+                  </div>
+                )}
+
+                {/* Bottom bar */}
+                <div className="flex items-center justify-between pt-3 border-t border-white/10">
+                  <span className="text-xs text-white/30 hidden sm:block">↑↓ scroll · arrow keys · ESC to exit</span>
+                  <div className="flex items-center gap-2 ml-auto">
+                    {i > 0 && (
+                      <button onClick={() => goTo(i - 1)}
+                        className="flex items-center gap-1 text-xs text-white/60 hover:text-white transition px-3 py-1.5 rounded-lg"
+                        style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)" }}>
+                        <ChevronUp className="w-3.5 h-3.5" /> Prev
+                      </button>
+                    )}
+                    <a href={article.url} target="_blank" rel="noopener noreferrer"
+                      className="flex items-center gap-1.5 text-sm font-semibold px-4 py-1.5 rounded-xl text-white hover:opacity-90 active:scale-95 transition"
+                      style={{ background: "rgba(255,255,255,0.14)", backdropFilter: "blur(8px)", border: "1px solid rgba(255,255,255,0.22)" }}>
+                      Read Full Story <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                    {i < articles.length - 1 && (
+                      <button onClick={() => goTo(i + 1)}
+                        className="flex items-center gap-1 text-xs text-white/60 hover:text-white transition px-3 py-1.5 rounded-lg"
+                        style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)" }}>
+                        Next <ChevronDown className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Swipe hint for first card */}
+                {i === current && i < articles.length - 1 && (
+                  <div className="flex flex-col items-center mt-3 text-white/25 text-[11px]">
+                    <ChevronDown className="w-4 h-4 animate-bounce" />
+                    <span>swipe up for next</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 type Tab = "all" | "market" | "corporate" | "general" | "deals" | "events";
 const TABS: Tab[] = ["all", "market", "corporate", "general", "deals", "events"];
@@ -433,6 +670,7 @@ export default function NewsFeed() {
   const qc = useQueryClient();
 
   const [activeTab, setActiveTab] = useState<Tab>("all");
+  const [reelsMode, setReelsMode] = useState(false);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [countdown, setCountdown] = useState(8 * 60);
@@ -533,7 +771,24 @@ export default function NewsFeed() {
             Live headlines from ET, Livemint, Moneycontrol + NSE data
           </p>
         </div>
-        <RefreshCountdown seconds={countdown} onRefresh={handleRefresh} isDark={isDark} isRefreshing={refreshMutation.isPending} />
+        <div className="flex items-center gap-2">
+          {activeTab !== "deals" && activeTab !== "events" && (
+            <button
+              onClick={() => setReelsMode(r => !r)}
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl border transition-all"
+              style={{
+                background: reelsMode ? "#6366f1" : isDark ? "#1e293b" : "#fff",
+                color:      reelsMode ? "#fff" : isDark ? "#94a3b8" : "#6b7280",
+                borderColor: reelsMode ? "#6366f1" : isDark ? "#334155" : "#e2e8f0",
+                boxShadow:  reelsMode ? "0 0 0 3px rgba(99,102,241,0.2)" : "none",
+              }}
+            >
+              {reelsMode ? <List className="w-3.5 h-3.5" /> : <Film className="w-3.5 h-3.5" />}
+              {reelsMode ? "List View" : "Reels"}
+            </button>
+          )}
+          <RefreshCountdown seconds={countdown} onRefresh={handleRefresh} isDark={isDark} isRefreshing={refreshMutation.isPending} />
+        </div>
       </div>
 
       {/* Live ticker */}
@@ -635,6 +890,13 @@ export default function NewsFeed() {
         <DealsSection isDark={isDark} />
       ) : activeTab === "events" ? (
         <EventsSection isDark={isDark} />
+      ) : reelsMode && articles.length > 0 ? (
+        <ReelsView articles={articles} onClose={() => setReelsMode(false)} />
+      ) : reelsMode && feedLoading ? (
+        <div className="flex flex-col items-center justify-center py-24 gap-3" style={{ color: muTxt }}>
+          <Film className="w-10 h-10 opacity-30" />
+          <p className="text-sm">Loading reels…</p>
+        </div>
       ) : feedLoading ? (
         <LoadingCards isDark={isDark} />
       ) : articles.length === 0 ? (
