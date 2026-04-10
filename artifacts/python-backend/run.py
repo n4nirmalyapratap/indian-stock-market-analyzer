@@ -21,6 +21,11 @@ def _ensure_spacy_model() -> None:
 
 _ensure_spacy_model()
 
+# ── Set up in-memory ring-buffer log handler BEFORE uvicorn starts ────────────
+# This captures all Python log records so /api/admin/logs can return them.
+from app.services.log_buffer import setup_ring_buffer
+setup_ring_buffer()
+
 import uvicorn
 
 if __name__ == "__main__":

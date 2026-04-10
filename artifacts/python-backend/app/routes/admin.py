@@ -1,9 +1,11 @@
 import os
 import sys
 import time
+import uuid
 import secrets
 import logging
-from fastapi import APIRouter, Request, Header
+import sqlite3
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 router = APIRouter(tags=["admin"])
@@ -14,6 +16,8 @@ _start_time = time.time()
 # In-memory session store: token -> expiry timestamp
 _sessions: dict[str, float] = {}
 _SESSION_TTL = 8 * 3600  # 8 hours
+
+_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "users.db")
 
 
 def _purge_expired():
@@ -28,7 +32,34 @@ def _valid_session(token: str) -> bool:
     return token in _sessions and _sessions[token] > time.time()
 
 
-# ── Login (public — no auth required) ────────────────────────────────────────
+def _require_admin(request: Request) -> bool:
+    return _valid_session(request.headers.get("X-Admin-Token", ""))
+
+
+# ── Users DB helpers ──────────────────────────────────────────────────────────
+
+def _get_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _init_db() -> None:
+    conn = _get_db()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id            TEXT PRIMARY KEY,
+            email         TEXT UNIQUE NOT NULL,
+            name          TEXT NOT NULL DEFAULT '',
+            password_hash TEXT NOT NULL,
+            created_at    INTEGER NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+# ── Login (public) ────────────────────────────────────────────────────────────
 
 @router.post("/admin/login")
 async def admin_login(request: Request):
@@ -60,14 +91,7 @@ async def admin_login(request: Request):
     return {"token": token, "expires_in": _SESSION_TTL}
 
 
-# ── Helper: check admin session ───────────────────────────────────────────────
-
-def _require_admin(request: Request) -> bool:
-    token = request.headers.get("X-Admin-Token", "")
-    return _valid_session(token)
-
-
-# ── Protected admin endpoints ─────────────────────────────────────────────────
+# ── App status ────────────────────────────────────────────────────────────────
 
 @router.get("/admin/status")
 async def admin_status(request: Request):
@@ -91,6 +115,8 @@ async def admin_status(request: Request):
         "whatsapp_configured": bool(os.environ.get("WHATSAPP_ENABLED")),
     }
 
+
+# ── Clerk users ───────────────────────────────────────────────────────────────
 
 @router.get("/admin/users")
 async def admin_users(request: Request):
@@ -138,25 +164,119 @@ async def admin_users(request: Request):
         return JSONResponse(status_code=502, content={"error": str(e)})
 
 
-@router.get("/admin/logs")
-async def admin_logs(request: Request, lines: int = 100):
+# ── App (custom auth) users ───────────────────────────────────────────────────
+
+@router.get("/admin/users/app")
+async def admin_app_users(request: Request):
     if not _require_admin(request):
         return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
 
-    log_lines: list[str] = []
-    log_file = os.environ.get("LOG_FILE", "")
-    if log_file and os.path.exists(log_file):
-        try:
-            with open(log_file, "r", errors="replace") as f:
-                all_lines = f.readlines()
-            log_lines = [l.rstrip() for l in all_lines[-lines:]]
-        except Exception as e:
-            log_lines = [f"[Error reading log file: {e}]"]
-    else:
-        log_lines = [
-            "Logs are written to stdout/stderr (Replit workflow console).",
-            "To enable file logging set LOG_FILE=/tmp/app.log and restart.",
-            "Check the 'Python Backend' workflow tab in the Replit workspace for live logs.",
-        ]
+    _init_db()
+    conn = _get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, email, name, created_at FROM users ORDER BY created_at DESC"
+        ).fetchall()
+    finally:
+        conn.close()
 
-    return {"logs": log_lines, "total": len(log_lines)}
+    return {
+        "users": [
+            {"id": r["id"], "email": r["email"], "name": r["name"], "created_at": r["created_at"]}
+            for r in rows
+        ],
+        "total": len(rows),
+    }
+
+
+@router.post("/admin/users/create")
+async def admin_create_user(request: Request):
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON"})
+
+    email    = (body.get("email") or "").strip().lower()
+    password = body.get("password") or ""
+    name     = (body.get("name") or "").strip()
+
+    if not email or "@" not in email:
+        return JSONResponse(status_code=400, content={"error": "Enter a valid email address"})
+    if len(password) < 6:
+        return JSONResponse(status_code=400, content={"error": "Password must be at least 6 characters"})
+
+    _init_db()
+    conn = _get_db()
+    try:
+        existing = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+        if existing:
+            return JSONResponse(status_code=400, content={"error": "An account with this email already exists"})
+
+        import bcrypt
+        user_id       = str(uuid.uuid4())
+        display_name  = name or email.split("@")[0]
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+        conn.execute(
+            "INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, email, display_name, password_hash, int(time.time())),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    logger.info("Admin created new app user: %s", email)
+    return {"id": user_id, "email": email, "name": display_name}
+
+
+@router.delete("/admin/users/app/{user_id}")
+async def admin_delete_app_user(user_id: str, request: Request):
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+
+    _init_db()
+    conn = _get_db()
+    try:
+        row = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not row:
+            return JSONResponse(status_code=404, content={"error": "User not found"})
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"deleted": user_id}
+
+
+# ── Structured logs from in-memory ring buffer ────────────────────────────────
+
+@router.get("/admin/logs")
+async def admin_logs(
+    request: Request,
+    lines: int = 200,
+    level: str = "",
+    search: str = "",
+):
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+
+    from app.services.log_buffer import get_ring_buffer  # noqa: PLC0415
+    buf = get_ring_buffer()
+
+    if buf is None:
+        return {
+            "logs": [{
+                "ts":     time.time(),
+                "level":  "INFO",
+                "logger": "system",
+                "msg":    "Log buffer not initialised — restart the backend to enable structured logs.",
+            }],
+            "total": 1,
+            "structured": True,
+        }
+
+    records = buf.get_records(limit=lines, level=level or None, search=search or None)
+    return {"logs": records, "total": len(records), "structured": True}

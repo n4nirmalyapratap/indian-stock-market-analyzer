@@ -38,6 +38,30 @@ export async function fetchAdmin<T>(path: string, options?: RequestInit): Promis
 
 const J = { "Content-Type": "application/json" };
 
+export type ClerkUser = {
+  id: string;
+  email: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  image_url: string | null;
+  created_at: number;
+  last_sign_in_at: number | null;
+};
+
+export type AppUser = {
+  id: string;
+  email: string;
+  name: string;
+  created_at: number;
+};
+
+export type LogRecord = {
+  ts: number;
+  level: string;
+  logger: string;
+  msg: string;
+};
+
 export const api = {
   login: (username: string, password: string) =>
     fetchAdmin<{ token: string; expires_in: number }>("/admin/login", {
@@ -59,22 +83,34 @@ export const api = {
       whatsapp_configured: boolean;
     }>("/admin/status"),
 
+  // Clerk (Google) users
   adminUsers: () =>
-    fetchAdmin<{
-      users: Array<{
-        id: string;
-        email: string | null;
-        first_name: string | null;
-        last_name: string | null;
-        image_url: string | null;
-        created_at: number;
-        last_sign_in_at: number | null;
-      }>;
-      total: number;
-    }>("/admin/users"),
+    fetchAdmin<{ users: ClerkUser[]; total: number }>("/admin/users"),
 
-  adminLogs: (lines?: number) =>
-    fetchAdmin<{ logs: string[]; total: number }>(`/admin/logs${lines ? `?lines=${lines}` : ""}`),
+  // Custom auth (email+password) users
+  adminAppUsers: () =>
+    fetchAdmin<{ users: AppUser[]; total: number }>("/admin/users/app"),
+
+  adminCreateUser: (email: string, password: string, name: string) =>
+    fetchAdmin<{ id: string; email: string; name: string }>("/admin/users/create", {
+      method: "POST",
+      headers: J,
+      body: JSON.stringify({ email, password, name }),
+    }),
+
+  adminDeleteAppUser: (userId: string) =>
+    fetchAdmin<{ deleted: string }>(`/admin/users/app/${userId}`, { method: "DELETE" }),
+
+  // Structured logs from in-memory ring buffer
+  adminLogs: (lines = 200, level = "", search = "") => {
+    const params = new URLSearchParams();
+    params.set("lines", String(lines));
+    if (level) params.set("level", level);
+    if (search) params.set("search", search);
+    return fetchAdmin<{ logs: LogRecord[]; total: number; structured: boolean }>(
+      `/admin/logs?${params.toString()}`
+    );
+  },
 
   whatsappStatus: () =>
     fetchAdmin<{
