@@ -524,11 +524,17 @@ function SectorHeatMap({ data, isDark }: { data: SectorHeatmapItem[]; isDark: bo
       <div className="p-3 space-y-3">
         {/* Uniform 7-column grid — 2 clean rows for 14 sectors, no blank gaps */}
         <div className="grid gap-1.5" style={{ gridTemplateColumns: "repeat(7, 1fr)" }}>
-          {data.map(sector => {
-            const val    = sector[metric] as number | null;
-            const style  = heatStyle(val, isDark);
+          {data.map((sector, idx) => {
+            const val     = sector[metric] as number | null;
+            const hs      = heatStyle(val, isDark);
             const hovered = hoveredSymbol === sector.symbol;
-            const name   = sector.name.replace(/nifty\s+/i, "").replace("NIFTY ", "");
+            const name    = sector.name.replace(/nifty\s+/i, "").replace("NIFTY ", "");
+            // Top row (first 7 cards) → tooltip below; bottom row → tooltip above
+            const COLS        = 7;
+            const isTopRow    = idx < COLS;
+            const tooltipPos  = isTopRow
+              ? "top-full left-1/2 -translate-x-1/2 mt-2"
+              : "bottom-full left-1/2 -translate-x-1/2 mb-2";
 
             return (
               <Link key={sector.symbol} href={`/sectors/${encodeURIComponent(sector.symbol)}`}>
@@ -536,7 +542,7 @@ function SectorHeatMap({ data, isDark }: { data: SectorHeatmapItem[]; isDark: bo
                   className="relative flex flex-col items-center justify-center rounded-xl cursor-pointer select-none"
                   style={{
                     height:     84,
-                    background: style.bg,
+                    background: hs.bg,
                     transform:  hovered ? "scale(1.05)" : "scale(1)",
                     transition: "transform 0.15s ease, box-shadow 0.15s ease",
                     boxShadow:  hovered ? `0 4px 18px rgba(0,0,0,${isDark ? "0.5" : "0.15"})` : "none",
@@ -547,27 +553,25 @@ function SectorHeatMap({ data, isDark }: { data: SectorHeatmapItem[]; isDark: bo
                 >
                   <span
                     className="text-xs font-semibold text-center leading-tight px-1"
-                    style={{ color: style.text, maxWidth: "90%" }}
+                    style={{ color: hs.text, maxWidth: "90%" }}
                   >
                     {name}
                   </span>
                   <span
                     className="text-sm font-bold tabular-nums"
-                    style={{ color: style.text }}
+                    style={{ color: hs.text }}
                   >
                     {val != null ? (val >= 0 ? "+" : "") + val.toFixed(2) + "%" : "—"}
                   </span>
 
-                  {/* Tooltip */}
+                  {/* Tooltip — flips above/below based on row so it stays inside the panel */}
                   {hovered && (
                     <div
-                      className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 rounded-lg px-3 py-2 whitespace-nowrap shadow-2xl pointer-events-none text-xs"
+                      className={`absolute ${tooltipPos} z-50 rounded-lg px-3 py-2 whitespace-nowrap shadow-2xl pointer-events-none text-xs`}
                       style={{ background: isDark ? "#0f172a" : "#1e293b", color: "#f1f5f9", border: `1px solid ${isDark ? "#334155" : "#475569"}` }}
                     >
                       <div className="font-semibold mb-0.5">{sector.name}</div>
-                      <div style={{ color: "#94a3b8" }}>
-                        Mkt Cap ≈ ₹{sector.marketCap}L Cr
-                      </div>
+                      <div style={{ color: "#94a3b8" }}>Mkt Cap ≈ ₹{sector.marketCap}L Cr</div>
                       <div style={{ color: val == null ? "#94a3b8" : val >= 0 ? "#4ade80" : "#f87171" }}>
                         {val != null ? (val >= 0 ? "▲ +" : "▼ ") + val.toFixed(2) + "%" : "—"}
                       </div>
