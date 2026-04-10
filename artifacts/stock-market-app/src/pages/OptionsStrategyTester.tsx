@@ -5,7 +5,7 @@ import { useTheme } from "@/context/ThemeContext";
 import {
   TrendingUp, TrendingDown, Plus, Trash2, Play, BarChart2,
   AlertTriangle, RefreshCw, ChevronDown, Target, Activity,
-  Shield, Zap, Info, X
+  Shield, Zap, Info, X, Sparkles, BookOpen
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -586,7 +586,8 @@ interface SmartSuggestResult {
     vol_regime: string; vol_bias: string; hv_pct: number; hv: number;
     spot: number; atm: number; step: number; lot_size: number;
   };
-  recommendations: SuggestedStrategy[];
+  recommendations: SuggestedStrategy[];   // 12 predefined, sorted by fit score
+  ai_suggestions:  SuggestedStrategy[];   // 5 AI-invented, regime-specific
 }
 
 const VOL_REGIME_CHIP: Record<string, string> = {
@@ -619,12 +620,14 @@ function SmartBuilderTab({
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState("");
   const [result,   setResult]   = useState<SmartSuggestResult | null>(null);
-  const [expanded, setExpanded] = useState<number | null>(null);
+  const [expandedPre, setExpandedPre] = useState<number | null>(null);
+  const [expandedAI,  setExpandedAI]  = useState<number | null>(0);
 
-  const card  = isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200";
-  const muted = isDark ? "text-slate-400" : "text-gray-500";
-  const h3    = isDark ? "text-slate-100" : "text-gray-800";
-  const body  = isDark ? "bg-slate-900" : "bg-gray-50";
+  const card    = isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200";
+  const aiCard  = isDark ? "bg-violet-950/40 border-violet-800/50" : "bg-violet-50 border-violet-200";
+  const muted   = isDark ? "text-slate-400" : "text-gray-500";
+  const h3      = isDark ? "text-slate-100" : "text-gray-800";
+  const body    = isDark ? "bg-slate-900" : "bg-gray-50";
 
   async function fetchSuggestions() {
     if (!symbol) return;
@@ -632,9 +635,10 @@ function SmartBuilderTab({
     setError("");
     try {
       const data = await post<SmartSuggestResult>("/options/smart-suggest",
-        { symbol: symbol.trim().toUpperCase(), top_n: 5 });
+        { symbol: symbol.trim().toUpperCase() });
       setResult(data);
-      setExpanded(0);
+      setExpandedAI(0);
+      setExpandedPre(null);
     } catch (e: any) {
       setError(e?.message || "Failed to get suggestions");
     } finally {
@@ -643,17 +647,11 @@ function SmartBuilderTab({
   }
 
   function useStrategy(rec: SuggestedStrategy) {
-    const ls  = spotInfo?.lot_size ?? 75;
-    const iv  = spotInfo?.hv30     ?? 0.20;
+    const ls = spotInfo?.lot_size ?? 75;
+    const iv = spotInfo?.hv30     ?? 0.20;
     const newLegs: Leg[] = rec.legs.map(l => ({
-      id:          crypto.randomUUID(),
-      action:      l.action,
-      option_type: l.option_type,
-      strike:      l.strike,
-      premium:     0,
-      lots:        l.lots,
-      lot_size:    ls,
-      iv,
+      id: crypto.randomUUID(), action: l.action, option_type: l.option_type,
+      strike: l.strike, premium: 0, lots: l.lots, lot_size: ls, iv,
     }));
     setLegs(newLegs);
     setTab("strategy");
@@ -666,6 +664,121 @@ function SmartBuilderTab({
     return s >= 65 ? "text-emerald-600" : s >= 42 ? "text-amber-500" : "text-rose-500";
   }
 
+  // Shared strategy card renderer
+  function StratCard({
+    rec, i, isOpen, onToggle, isAI,
+  }: { rec: SuggestedStrategy; i: number; isOpen: boolean; onToggle: () => void; isAI: boolean }) {
+    const baseCard = isAI ? aiCard : card;
+    return (
+      <div className={`${baseCard} rounded-xl border overflow-hidden transition-shadow ${isOpen ? "shadow-md" : ""}`}>
+        <div className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:opacity-90" onClick={onToggle}>
+          {/* Rank badge */}
+          <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0
+            ${i === 0
+              ? isAI ? "bg-violet-500 text-white" : "bg-amber-400 text-white"
+              : isDark ? "bg-slate-700 text-slate-300" : "bg-gray-100 text-gray-500"}`}>
+            {i + 1}
+          </span>
+
+          {/* Name + badges */}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`text-sm font-bold truncate ${h3}`}>{rec.name}</span>
+              {isAI && (
+                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-violet-500 text-white uppercase tracking-wide shrink-0 flex items-center gap-0.5">
+                  ✦ AI
+                </span>
+              )}
+              <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium border shrink-0
+                ${OUTLOOK_CHIP[rec.outlook as Outlook] ?? "bg-gray-50 text-gray-500 border-gray-200"}`}>
+                {OUTLOOK_ICON[rec.outlook] ?? ""} {rec.outlook}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 mt-1.5">
+              <div className={`flex-1 h-1.5 rounded-full overflow-hidden ${isDark ? "bg-slate-700" : "bg-gray-100"}`}>
+                <div className={`h-full rounded-full transition-all ${scoreColor(rec.fit_score)}`}
+                     style={{ width: `${rec.fit_score}%` }} />
+              </div>
+              <span className={`text-[11px] font-bold shrink-0 ${scoreLabelCls(rec.fit_score)}`}>
+                {rec.fit_score}/100
+              </span>
+            </div>
+          </div>
+
+          {/* Use button */}
+          <button
+            onClick={e => { e.stopPropagation(); useStrategy(rec); }}
+            className={`shrink-0 flex items-center gap-1.5 text-[11px] font-semibold text-white px-3 py-1.5 rounded-lg transition
+              ${isAI ? "bg-violet-600 hover:bg-violet-700" : "bg-indigo-600 hover:bg-indigo-700"}`}
+          >
+            <Play className="w-3 h-3" /> Use
+          </button>
+          <ChevronDown className={`w-4 h-4 shrink-0 ${muted} transition-transform ${isOpen ? "rotate-180" : ""}`} />
+        </div>
+
+        {/* Expanded details */}
+        {isOpen && (
+          <div className={`border-t px-4 py-3 flex flex-col gap-3
+            ${isDark
+              ? isAI ? "border-violet-800/40 bg-violet-950/30" : "border-slate-700 bg-slate-900/50"
+              : isAI ? "border-violet-100 bg-violet-50/60" : "border-gray-100 bg-gray-50"}`}>
+
+            {/* Description (for AI strategies) */}
+            {isAI && (
+              <p className={`text-xs italic ${isDark ? "text-violet-300" : "text-violet-700"}`}>
+                {rec.description}
+              </p>
+            )}
+
+            {/* Legs */}
+            <div>
+              <p className={`text-[10px] font-bold uppercase tracking-widest ${muted} mb-1.5`}>Legs</p>
+              <div className="flex flex-wrap gap-1.5">
+                {rec.legs.map((l, li) => (
+                  <span key={li} className={`text-[11px] font-mono font-medium px-2 py-0.5 rounded
+                    ${l.action === "buy"
+                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                      : "bg-rose-50   text-rose-700   border border-rose-200"}`}>
+                    {l.action === "buy" ? "+" : "−"}{l.lots}× {l.option_type.toUpperCase()} {l.strike.toLocaleString("en-IN")}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {/* Rationale */}
+            <div>
+              <p className={`text-[10px] font-bold uppercase tracking-widest ${muted} mb-1`}>Why now?</p>
+              <p className={`text-xs leading-relaxed ${isDark ? "text-slate-300" : "text-gray-700"}`}>{rec.rationale}</p>
+            </div>
+
+            {/* Risk */}
+            <div className={`flex items-start gap-2 text-xs rounded-lg px-3 py-2
+              ${isDark ? "bg-rose-950/40 text-rose-300 border border-rose-900/40"
+                       : "bg-rose-50   text-rose-700  border border-rose-100"}`}>
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <span>{rec.key_risk}</span>
+            </div>
+
+            <button
+              onClick={() => useStrategy(rec)}
+              className={`self-start flex items-center gap-2 text-sm font-semibold text-white px-4 py-2 rounded-lg transition shadow-sm
+                ${isAI ? "bg-violet-600 hover:bg-violet-700" : "bg-indigo-600 hover:bg-indigo-700"}`}
+            >
+              <Play className="w-3.5 h-3.5" /> Load into Strategy Builder → backtest it
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const VOL_REGIME_SENTIMENT: Record<string, { icon: string; desc: string }> = {
+    low:       { icon: "😴", desc: "Market is calm. AI suggests buying-time-value or back-spread strategies." },
+    moderate:  { icon: "⚖️", desc: "Balanced conditions. AI recommends defined-risk net-credit structures." },
+    high:      { icon: "🔥", desc: "Vol is rich. AI picks premium-selling and ratio strategies." },
+    very_high: { icon: "⚡", desc: "Extreme vol spike. AI selects wide condors and crash-protection plays." },
+  };
+
   return (
     <div className={`flex flex-col gap-4 p-4 ${body} rounded-2xl border ${isDark ? "border-slate-700" : "border-gray-200"} min-h-[480px]`}>
 
@@ -677,8 +790,8 @@ function SmartBuilderTab({
             Smart Strategy Builder
           </h2>
           <p className={`text-xs mt-0.5 ${muted}`}>
-            Reads live {symbol} market data — scores all 12 pre-defined strategies
-            and invents 5 custom strategies, then ranks them by current market fit.
+            Scores all 12 standard strategies + generates 5 unique AI suggestions
+            tailored to the current {symbol} market sentiment — 17 strategies total.
           </p>
         </div>
         <button
@@ -689,7 +802,7 @@ function SmartBuilderTab({
         >
           {loading
             ? <><RefreshCw className="w-4 h-4 animate-spin" /> Analysing…</>
-            : <><Activity className="w-4 h-4" /> Get AI Suggestions</>}
+            : <><Activity className="w-4 h-4" /> Analyse &amp; Suggest</>}
         </button>
       </div>
 
@@ -704,148 +817,104 @@ function SmartBuilderTab({
           <Target className="w-10 h-10 opacity-30" />
           <div>
             <p className="font-medium">No analysis yet</p>
-            <p className="text-xs mt-1 opacity-70">Click "Get AI Suggestions" to analyse live {symbol} market conditions</p>
+            <p className="text-xs mt-1 opacity-70">
+              Click "Analyse &amp; Suggest" to score all 17 strategies for current {symbol} conditions
+            </p>
           </div>
         </div>
       )}
 
       {result && (
         <>
-          {/* Market State Card */}
-          <div className={`${card} rounded-xl border p-4 flex flex-wrap gap-4 items-center`}>
-            <div>
-              <p className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>Vol Regime</p>
-              <span className={`mt-1 inline-flex items-center text-xs font-semibold px-2.5 py-1 rounded-full ${VOL_REGIME_CHIP[result.market_state.vol_regime] ?? ""}`}>
-                {VOL_REGIME_LABEL[result.market_state.vol_regime] ?? result.market_state.vol_regime}
-              </span>
+          {/* ── Market State Card ── */}
+          <div className={`${card} rounded-xl border p-4`}>
+            <div className="flex flex-wrap gap-4 items-start">
+              <div>
+                <p className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>Vol Regime</p>
+                <span className={`mt-1 inline-flex items-center text-xs font-semibold px-2.5 py-1 rounded-full ${VOL_REGIME_CHIP[result.market_state.vol_regime] ?? ""}`}>
+                  {VOL_REGIME_LABEL[result.market_state.vol_regime] ?? result.market_state.vol_regime}
+                </span>
+              </div>
+              <div>
+                <p className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>HV Percentile</p>
+                <p className={`text-xl font-bold mt-0.5 ${h3}`}>{result.market_state.hv_pct.toFixed(0)}<span className="text-sm font-normal ml-0.5">th</span></p>
+              </div>
+              <div>
+                <p className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>Annualised HV</p>
+                <p className={`text-xl font-bold mt-0.5 ${h3}`}>{result.market_state.hv.toFixed(1)}<span className="text-sm font-normal ml-0.5">%</span></p>
+              </div>
+              <div>
+                <p className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>Vol Bias</p>
+                <span className={`mt-1 inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-full capitalize ${BIAS_CHIP[result.market_state.vol_bias]}`}>
+                  {result.market_state.vol_bias}
+                </span>
+              </div>
+              <div className="ml-auto text-right">
+                <p className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>ATM Strike</p>
+                <p className={`text-sm font-bold mt-0.5 ${h3}`}>₹{result.market_state.atm.toLocaleString("en-IN")}</p>
+              </div>
             </div>
-            <div>
-              <p className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>HV Percentile</p>
-              <p className={`text-xl font-bold mt-0.5 ${h3}`}>{result.market_state.hv_pct.toFixed(0)}<span className="text-sm font-normal ml-0.5">th</span></p>
-            </div>
-            <div>
-              <p className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>Annualised HV</p>
-              <p className={`text-xl font-bold mt-0.5 ${h3}`}>{result.market_state.hv.toFixed(1)}<span className="text-sm font-normal ml-0.5">%</span></p>
-            </div>
-            <div>
-              <p className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>Vol Bias</p>
-              <span className={`mt-1 inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-full capitalize ${BIAS_CHIP[result.market_state.vol_bias]}`}>
-                {result.market_state.vol_bias}
-              </span>
-            </div>
-            <div className="ml-auto text-right">
-              <p className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>ATM Strike</p>
-              <p className={`text-sm font-bold mt-0.5 ${h3}`}>₹{result.market_state.atm.toLocaleString("en-IN")}</p>
-            </div>
+            {/* Sentiment message */}
+            {VOL_REGIME_SENTIMENT[result.market_state.vol_regime] && (
+              <p className={`mt-3 text-xs flex items-center gap-1.5 ${isDark ? "text-slate-300" : "text-gray-600"}`}>
+                <span>{VOL_REGIME_SENTIMENT[result.market_state.vol_regime].icon}</span>
+                <span>{VOL_REGIME_SENTIMENT[result.market_state.vol_regime].desc}</span>
+              </p>
+            )}
           </div>
 
-          {/* Recommendation Cards */}
+          {/* ── AI Suggested Strategies (5) ── */}
           <div className="flex flex-col gap-2">
-            <p className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>
-              Top {result.recommendations.length} Strategies — ranked by fit score
-            </p>
-            {result.recommendations.map((rec, i) => {
-              const isOpen = expanded === i;
-              return (
-                <div key={rec.name} className={`${card} rounded-xl border overflow-hidden transition-shadow ${isOpen ? "shadow-md" : ""}`}>
-                  {/* Row: rank + name + score bar + outlook + use */}
-                  <div
-                    className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:opacity-90"
-                    onClick={() => setExpanded(isOpen ? null : i)}
-                  >
-                    {/* Rank badge */}
-                    <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0
-                      ${i === 0 ? "bg-amber-400 text-white" : "bg-gray-100 text-gray-500"}`}>
-                      {i + 1}
-                    </span>
+            {/* AI section header */}
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg
+              ${isDark ? "bg-violet-900/30 border border-violet-800/40" : "bg-violet-50 border border-violet-200"}`}>
+              <Sparkles className="w-4 h-4 text-violet-500 shrink-0" />
+              <div className="flex-1">
+                <p className="text-xs font-bold text-violet-600">
+                  AI Suggested — based on {VOL_REGIME_LABEL[result.market_state.vol_regime] ?? "current"} market sentiment
+                </p>
+                <p className={`text-[10px] ${isDark ? "text-violet-400" : "text-violet-500"}`}>
+                  5 unique strategies invented for the current vol regime · these change with market conditions
+                </p>
+              </div>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full bg-violet-500 text-white shrink-0`}>
+                {result.ai_suggestions?.length ?? 0} strategies
+              </span>
+            </div>
 
-                    {/* Name + badges */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className={`text-sm font-bold truncate ${h3}`}>{rec.name}</span>
-                        {rec.is_custom && (
-                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 border border-violet-200 uppercase tracking-wide shrink-0">
-                            Invented
-                          </span>
-                        )}
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium border shrink-0
-                          ${OUTLOOK_CHIP[rec.outlook as Outlook] ?? "bg-gray-50 text-gray-500 border-gray-200"}`}>
-                          {OUTLOOK_ICON[rec.outlook] ?? ""} {rec.outlook}
-                        </span>
-                      </div>
-                      {/* Score bar */}
-                      <div className="flex items-center gap-2 mt-1.5">
-                        <div className="flex-1 h-1.5 rounded-full bg-gray-100 overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all ${scoreColor(rec.fit_score)}`}
-                            style={{ width: `${rec.fit_score}%` }}
-                          />
-                        </div>
-                        <span className={`text-[11px] font-bold shrink-0 ${scoreLabelCls(rec.fit_score)}`}>
-                          {rec.fit_score}/100
-                        </span>
-                      </div>
-                    </div>
+            {(result.ai_suggestions ?? []).map((rec, i) => (
+              <StratCard
+                key={rec.name} rec={rec} i={i} isAI={true}
+                isOpen={expandedAI === i}
+                onToggle={() => setExpandedAI(expandedAI === i ? null : i)}
+              />
+            ))}
+          </div>
 
-                    {/* Use button */}
-                    <button
-                      onClick={e => { e.stopPropagation(); useStrategy(rec); }}
-                      className="shrink-0 flex items-center gap-1.5 text-[11px] font-semibold
-                                 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg transition"
-                    >
-                      <Play className="w-3 h-3" /> Use
-                    </button>
+          {/* ── Predefined Strategies (12) ── */}
+          <div className="flex flex-col gap-2">
+            {/* Predefined section header */}
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg
+              ${isDark ? "bg-slate-800 border border-slate-700" : "bg-gray-100 border border-gray-200"}`}>
+              <BookOpen className="w-4 h-4 text-indigo-500 shrink-0" />
+              <div className="flex-1">
+                <p className={`text-xs font-bold ${h3}`}>Standard Strategies — All 12, scored by fit</p>
+                <p className={`text-[10px] ${muted}`}>
+                  Classic strategies scored against current {symbol} HV percentile · sorted best fit first
+                </p>
+              </div>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isDark ? "bg-slate-700 text-slate-300" : "bg-gray-200 text-gray-600"} shrink-0`}>
+                12 strategies
+              </span>
+            </div>
 
-                    {/* Expand toggle */}
-                    <ChevronDown className={`w-4 h-4 shrink-0 ${muted} transition-transform ${isOpen ? "rotate-180" : ""}`} />
-                  </div>
-
-                  {/* Expanded details */}
-                  {isOpen && (
-                    <div className={`border-t ${isDark ? "border-slate-700 bg-slate-900/50" : "border-gray-100 bg-gray-50"} px-4 py-3 flex flex-col gap-3`}>
-
-                      {/* Legs summary */}
-                      <div>
-                        <p className={`text-[10px] font-bold uppercase tracking-widest ${muted} mb-1.5`}>Legs</p>
-                        <div className="flex flex-wrap gap-1.5">
-                          {rec.legs.map((l, li) => (
-                            <span key={li} className={`text-[11px] font-mono font-medium px-2 py-0.5 rounded
-                              ${l.action === "buy"
-                                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                : "bg-rose-50   text-rose-700   border border-rose-200"}`}>
-                              {l.action === "buy" ? "+" : "−"}{l.lots}× {l.option_type.toUpperCase()} {l.strike.toLocaleString("en-IN")}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Rationale */}
-                      <div>
-                        <p className={`text-[10px] font-bold uppercase tracking-widest ${muted} mb-1`}>Why now?</p>
-                        <p className={`text-xs leading-relaxed ${isDark ? "text-slate-300" : "text-gray-700"}`}>{rec.rationale}</p>
-                      </div>
-
-                      {/* Risk */}
-                      <div className={`flex items-start gap-2 text-xs rounded-lg px-3 py-2
-                        ${isDark ? "bg-rose-950/40 text-rose-300 border border-rose-900/40"
-                                 : "bg-rose-50   text-rose-700  border border-rose-100"}`}>
-                        <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                        <span>{rec.key_risk}</span>
-                      </div>
-
-                      {/* Use full button */}
-                      <button
-                        onClick={() => useStrategy(rec)}
-                        className="self-start flex items-center gap-2 text-sm font-semibold
-                                   bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg transition shadow-sm"
-                      >
-                        <Play className="w-3.5 h-3.5" /> Load into Strategy Builder → backtest it
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {result.recommendations.map((rec, i) => (
+              <StratCard
+                key={rec.name} rec={rec} i={i} isAI={false}
+                isOpen={expandedPre === i}
+                onToggle={() => setExpandedPre(expandedPre === i ? null : i)}
+              />
+            ))}
           </div>
         </>
       )}

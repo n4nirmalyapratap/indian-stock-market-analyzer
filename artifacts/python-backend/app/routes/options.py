@@ -455,15 +455,16 @@ class ChatReq(BaseModel):
 
 class SmartSuggestReq(BaseModel):
     symbol: str = Field(..., description="NSE symbol, e.g. NIFTY or RELIANCE")
-    top_n:  int = Field(5, ge=1, le=12, description="Number of recommendations to return")
 
 
 @router.post("/smart-suggest")
 async def smart_suggest(req: SmartSuggestReq):
     """
-    Read live market data for the symbol and return ranked strategy recommendations.
-    Combines scoring of all 12 pre-defined strategies *and* 5 custom-invented
-    strategies against current HV percentile, returning the best-fit top_n.
+    Read live market data for the symbol and return all 17 strategy suggestions:
+      - 12 predefined strategies scored and sorted by fit score
+      - 5 AI-invented strategies tailored to the current vol regime
+        (different strategies are generated for low/moderate/high/very_high vol)
+    Returns { market_state, recommendations (12), ai_suggestions (5) }.
     """
     from ..services.strategy_builder_service import build_smart_suggestions
 
@@ -477,7 +478,6 @@ async def smart_suggest(req: SmartSuggestReq):
         hv       = spot_data.get("hv30", 0.0),
         hv_pct   = spot_data.get("hv30_pct", 50.0),
         lot_size = spot_data["lot_size"],
-        top_n    = req.top_n,
     )
     return result
 
