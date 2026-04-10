@@ -16,6 +16,7 @@ import OptionsStrategyTester from "@/pages/OptionsStrategyTester";
 import SettingsPage from "@/pages/SettingsPage";
 import NotFound from "@/pages/not-found";
 import TradingPlatform from "@/pages/TradingPlatform";
+import SectorDetail from "@/pages/SectorDetail";
 import GlobalAssistant from "@/components/GlobalAssistant";
 import { ThemeProvider, useTheme } from "@/context/ThemeContext";
 import {
@@ -210,7 +211,8 @@ function Router() {
       <Switch>
         <Route path="/"                component={Dashboard} />
         <Route path="/trading"         component={TradingPlatform} />
-        <Route path="/sectors"         component={Sectors} />
+        <Route path="/sectors/:sectorId" component={SectorDetail} />
+        <Route path="/sectors"          component={Sectors} />
         <Route path="/stocks"          component={StockLookup} />
         <Route path="/patterns"        component={Patterns} />
         <Route path="/scanners"        component={Scanners} />

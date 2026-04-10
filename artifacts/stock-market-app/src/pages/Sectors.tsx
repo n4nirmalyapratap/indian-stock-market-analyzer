@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
-import { TrendingUp, TrendingDown, Info, Target, Shield, BarChart2, Zap, Activity } from "lucide-react";
+import { Link } from "wouter";
+import { api, SectorHeatmapItem } from "@/lib/api";
+import { TrendingUp, TrendingDown, Info, Target, Shield, BarChart2, Zap, Activity, ChevronRight } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 
 // ── Theme-aware tier config ────────────────────────────────────────────────────
@@ -438,6 +440,225 @@ function BreadthBar({ rotation, isDark }: { rotation: any; isDark: boolean }) {
   );
 }
 
+// ── Sector Heat Map ───────────────────────────────────────────────────────────
+
+const HEATMAP_METRICS: { key: keyof SectorHeatmapItem; label: string }[] = [
+  { key: "change1d",  label: "1D" },
+  { key: "change1w",  label: "1W" },
+  { key: "change1m",  label: "1M" },
+  { key: "change1y",  label: "1Y" },
+  { key: "changeYTD", label: "YTD" },
+];
+
+function heatColor(val: number | null): string {
+  if (val == null) return "#6b7280";
+  if (val >= 3)   return "#15803d";
+  if (val >= 1.5) return "#16a34a";
+  if (val >= 0.5) return "#4ade80";
+  if (val >= -0.5) return "#6b7280";
+  if (val >= -1.5) return "#f87171";
+  if (val >= -3)   return "#ef4444";
+  return "#dc2626";
+}
+
+function textColorForBg(val: number | null): string {
+  if (val == null) return "#fff";
+  return Math.abs(val) >= 0.5 ? "#fff" : "#1f2937";
+}
+
+function SectorHeatMap({ data, isDark }: { data: SectorHeatmapItem[]; isDark: boolean }) {
+  const [metric, setMetric] = useState<keyof SectorHeatmapItem>("change1d");
+  const [hoveredSymbol, setHoveredSymbol] = useState<string | null>(null);
+  const total = data.reduce((s, d) => s + d.marketCap, 0);
+
+  return (
+    <Card isDark={isDark}>
+      <CardHeader isDark={isDark}>
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <BarChart2 className="w-4 h-4 text-indigo-500" />
+            <span className="font-semibold text-sm" style={{ color: isDark ? "#f1f5f9" : "#111827" }}>
+              Sector Heat Map
+            </span>
+            <span className="text-xs" style={{ color: isDark ? "#64748b" : "#9ca3af" }}>
+              Block size = market cap · Color = performance
+            </span>
+          </div>
+          <div className="flex gap-1">
+            {HEATMAP_METRICS.map(m => (
+              <button
+                key={m.key as string}
+                onClick={() => setMetric(m.key)}
+                className="px-2.5 py-1 rounded text-xs font-medium transition-colors"
+                style={{
+                  background: metric === m.key ? "#6366f1" : isDark ? "#334155" : "#f3f4f6",
+                  color: metric === m.key ? "#fff" : isDark ? "#cbd5e1" : "#374151",
+                }}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </CardHeader>
+      <div className="p-3">
+        <div className="flex flex-wrap rounded-lg overflow-hidden gap-0.5">
+          {data.map(sector => {
+            const val = sector[metric] as number | null;
+            const pct = total > 0 ? (sector.marketCap / total * 100) : 5;
+            const minW = Math.max(pct, 4);
+            const hovered = hoveredSymbol === sector.symbol;
+            return (
+              <Link key={sector.symbol} href={`/sectors/${encodeURIComponent(sector.symbol)}`}>
+                <div
+                  className="relative flex flex-col items-center justify-center cursor-pointer rounded-md transition-all"
+                  style={{
+                    width:      `calc(${minW}% - 2px)`,
+                    minWidth:   80,
+                    height:     sector.marketCap > 20 ? 90 : sector.marketCap > 8 ? 74 : 64,
+                    background: heatColor(val),
+                    opacity:    hovered ? 0.85 : 1,
+                    transform:  hovered ? "scale(1.03)" : "scale(1)",
+                    padding:    "4px 6px",
+                  }}
+                  onMouseEnter={() => setHoveredSymbol(sector.symbol)}
+                  onMouseLeave={() => setHoveredSymbol(null)}
+                >
+                  <span className="text-xs font-bold text-center leading-tight"
+                    style={{ color: textColorForBg(val) }}>
+                    {sector.name.replace("Nifty ", "").replace("NIFTY ", "")}
+                  </span>
+                  <span className="text-xs font-semibold mt-0.5"
+                    style={{ color: textColorForBg(val) }}>
+                    {val != null ? (val >= 0 ? "+" : "") + val.toFixed(2) + "%" : "—"}
+                  </span>
+                  {hovered && (
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 bg-gray-900 text-white text-xs rounded-lg px-2.5 py-2 whitespace-nowrap shadow-xl pointer-events-none">
+                      <div className="font-semibold">{sector.name}</div>
+                      <div>Market Cap: ₹{sector.marketCap}L Cr</div>
+                      <div>Performance: {val != null ? (val >= 0 ? "+" : "") + val.toFixed(2) + "%" : "—"}</div>
+                    </div>
+                  )}
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+        <div className="flex items-center justify-end gap-3 mt-3">
+          <div className="flex items-center gap-1.5 text-xs" style={{ color: isDark ? "#94a3b8" : "#6b7280" }}>
+            <span>Strong Loss</span>
+            {["#dc2626","#f87171","#6b7280","#4ade80","#16a34a"].map(c => (
+              <div key={c} className="w-4 h-3 rounded-sm" style={{ background: c }} />
+            ))}
+            <span>Strong Gain</span>
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// ── Top Movers ────────────────────────────────────────────────────────────────
+
+function TopMovers({ isDark }: { isDark: boolean }) {
+  const [period, setPeriod] = useState<"1d" | "1w" | "1m" | "1y">("1d");
+
+  const { data: movers, isLoading } = useQuery({
+    queryKey:  ["sectorTopMovers", period],
+    queryFn:   () => api.sectorTopMovers(period),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const hdrTxt = isDark ? "#f1f5f9" : "#111827";
+  const muTxt  = isDark ? "#94a3b8" : "#6b7280";
+  const borderCol = isDark ? "#334155" : "#e2e8f0";
+
+  return (
+    <Card isDark={isDark}>
+      <CardHeader isDark={isDark}>
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <Zap className="w-4 h-4 text-yellow-500" />
+            <span className="font-semibold text-sm" style={{ color: hdrTxt }}>Top Movers</span>
+          </div>
+          <div className="flex gap-1">
+            {(["1d","1w","1m","1y"] as const).map(p => (
+              <button key={p} onClick={() => setPeriod(p)}
+                className="px-2.5 py-1 rounded text-xs font-medium transition-colors"
+                style={{
+                  background: period === p ? "#6366f1" : isDark ? "#334155" : "#f3f4f6",
+                  color: period === p ? "#fff" : isDark ? "#cbd5e1" : "#374151",
+                }}>
+                {p.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </div>
+      </CardHeader>
+      {isLoading ? (
+        <div className="p-4 space-y-2">
+          {[...Array(5)].map((_, i) => <div key={i} className="h-8 animate-pulse rounded" style={{ background: isDark ? "#334155" : "#f3f4f6" }} />)}
+        </div>
+      ) : (
+        <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x" style={{ borderColor: borderCol }}>
+          <div className="p-4">
+            <div className="flex items-center gap-1.5 text-xs font-semibold mb-3" style={{ color: "#16a34a" }}>
+              <TrendingUp className="w-3.5 h-3.5" /> Top Gainers
+            </div>
+            <div className="space-y-2">
+              {movers?.gainers?.map(s => {
+                const val = s[`change${period === "1d" ? "1d" : period === "1w" ? "1w" : period === "1m" ? "1m" : "1y"}` as keyof SectorHeatmapItem] as number | null;
+                return (
+                  <Link key={s.symbol} href={`/sectors/${encodeURIComponent(s.symbol)}`}>
+                    <div className="flex items-center justify-between hover:opacity-80 transition-opacity cursor-pointer">
+                      <div>
+                        <div className="text-xs font-semibold" style={{ color: hdrTxt }}>
+                          {s.name.replace("Nifty ", "")}
+                        </div>
+                        <div className="text-xs" style={{ color: muTxt }}>{s.category}</div>
+                      </div>
+                      <div className="flex items-center gap-1 text-xs font-bold" style={{ color: "#16a34a" }}>
+                        <TrendingUp className="w-3 h-3" />
+                        {val != null ? (val >= 0 ? "+" : "") + val.toFixed(2) + "%" : "—"}
+                      </div>
+                    </div>
+                  </Link>
+                );
+              }) ?? <p className="text-xs" style={{ color: muTxt }}>No data</p>}
+            </div>
+          </div>
+          <div className="p-4">
+            <div className="flex items-center gap-1.5 text-xs font-semibold mb-3" style={{ color: "#dc2626" }}>
+              <TrendingDown className="w-3.5 h-3.5" /> Top Losers
+            </div>
+            <div className="space-y-2">
+              {movers?.losers?.map(s => {
+                const val = s[`change${period === "1d" ? "1d" : period === "1w" ? "1w" : period === "1m" ? "1m" : "1y"}` as keyof SectorHeatmapItem] as number | null;
+                return (
+                  <Link key={s.symbol} href={`/sectors/${encodeURIComponent(s.symbol)}`}>
+                    <div className="flex items-center justify-between hover:opacity-80 transition-opacity cursor-pointer">
+                      <div>
+                        <div className="text-xs font-semibold" style={{ color: hdrTxt }}>
+                          {s.name.replace("Nifty ", "")}
+                        </div>
+                        <div className="text-xs" style={{ color: muTxt }}>{s.category}</div>
+                      </div>
+                      <div className="flex items-center gap-1 text-xs font-bold" style={{ color: "#dc2626" }}>
+                        <TrendingDown className="w-3 h-3" />
+                        {val != null ? (val >= 0 ? "+" : "") + val.toFixed(2) + "%" : "—"}
+                      </div>
+                    </div>
+                  </Link>
+                );
+              }) ?? <p className="text-xs" style={{ color: muTxt }}>No data</p>}
+            </div>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function Sectors() {
   const { theme } = useTheme();
@@ -449,6 +670,12 @@ export default function Sectors() {
     staleTime: 4 * 60 * 1000,
   });
 
+  const { data: heatmapData, isLoading: heatmapLoading } = useQuery({
+    queryKey:  ["sectorHeatmap"],
+    queryFn:   api.sectorHeatmap,
+    staleTime: 5 * 60 * 1000,
+  });
+
   const sectors  = rotation?.sectors ?? [];
   const phase    = rotation?.economicPhase;
   const strategy = rotation?.portfolioStrategy;
@@ -457,11 +684,31 @@ export default function Sectors() {
 
   return (
     <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h1 className="text-2xl font-bold" style={{ color: hdrTxt }}>Sector Analytics</h1>
+          <p className="text-sm mt-0.5" style={{ color: muTxt }}>
+            Top-down investing: Market → Sector → Stock · Click any sector for a deep dive
+          </p>
+        </div>
+        <Link href="/sectors">
+          <div className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg transition-colors"
+            style={{ background: isDark ? "#1e293b" : "#f3f4f6", color: muTxt }}>
+            Rotation Analysis <ChevronRight className="w-3 h-3" />
+          </div>
+        </Link>
+      </div>
+
+      {heatmapLoading ? (
+        <div className="h-48 animate-pulse rounded-2xl" style={{ background: isDark ? "#1e293b" : "#f3f4f6" }} />
+      ) : heatmapData && heatmapData.length > 0 ? (
+        <SectorHeatMap data={heatmapData} isDark={isDark} />
+      ) : null}
+
+      <TopMovers isDark={isDark} />
+
       <div>
-        <h1 className="text-2xl font-bold" style={{ color: hdrTxt }}>Market Sector Analysis</h1>
-        <p className="text-sm mt-0.5" style={{ color: muTxt }}>
-          Which industry groups are leading the market — with strength scores, trend signals, and a suggested portfolio strategy
-        </p>
+        <h2 className="text-base font-bold mb-3" style={{ color: hdrTxt }}>Rotation & Strength Analysis</h2>
       </div>
 
       {isLoading ? (
