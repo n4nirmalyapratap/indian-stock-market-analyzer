@@ -1,5 +1,6 @@
 {
   "artifacts/python-backend/tests/test_indicators.py::TestATR::test_atr_always_positive": true,
   "artifacts/python-backend/tests/test_indicators.py::TestVWAP::test_vwap_is_bounded_by_daily_high_low": true,
-  "artifacts/python-backend/tests/test_hydra.py::TestHydraForecastOutputContract::test_forecast_bullish_on_rising_series": true
+  "artifacts/python-backend/tests/test_hydra.py::TestHydraForecastOutputContract::test_forecast_bullish_on_rising_series": true,
+  "artifacts/python-backend/tests/test_options.py::TestBsPrice::test_atm_call_and_put_similar_magnitude": true
 }

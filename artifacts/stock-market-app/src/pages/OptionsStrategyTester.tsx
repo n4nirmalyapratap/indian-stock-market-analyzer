@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { fetchApi } from "@/lib/api";
+import { fmtINR, pct, fmt, clr, bg, computeHeatBars, QUICK_STRATEGIES } from "@/lib/options-utils";
 import { useTheme } from "@/context/ThemeContext";
 import {
   TrendingUp, TrendingDown, Plus, Trash2, Play, BarChart2,
@@ -32,24 +33,6 @@ interface Leg {
 
 interface SpotInfo { spot: number; hv30: number; hv30_pct: number; lot_size: number; atm: number; }
 interface Greeks   { delta: number; gamma: number; theta: number; vega: number; rho: number; }
-
-// ── Formatting helpers ────────────────────────────────────────────────────────
-function fmtINR(n: number | null | undefined) {
-  if (n == null) return "—";
-  const sign = n < 0 ? "-" : "";
-  const v = Math.abs(n);
-  if (v >= 1e7) return `${sign}₹${(v / 1e7).toFixed(2)}Cr`;
-  if (v >= 1e5) return `${sign}₹${(v / 1e5).toFixed(2)}L`;
-  return `${sign}₹${v.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
-}
-function pct(n: number | null | undefined, d = 2) {
-  return n == null ? "—" : `${Number(n).toFixed(d)}%`;
-}
-function fmt(n: number | null | undefined, d = 2) {
-  return n == null ? "—" : Number(n).toFixed(d);
-}
-function clr(v: number) { return v >= 0 ? "text-green-600" : "text-red-500"; }
-function bg(v: number)  { return v >= 0 ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"; }
 
 // ── Preset strategies ─────────────────────────────────────────────────────────
 const PRESETS = [
@@ -84,48 +67,6 @@ const OUTLOOK_DOT: Record<Outlook, string> = {
   neutral:  "bg-indigo-400",
   volatile: "bg-amber-400",
 };
-
-const QUICK_STRATEGIES: { label: string; category: string; outlook: Outlook; legs: QuickLeg[] }[] = [
-  // ── Directional ──────────────────────────────────────────────────────────
-  { label: "Long Call",  category: "Directional", outlook: "bullish",
-    legs: [{ action: "buy",  option_type: "call", lots: 1, otmMult: 0 }] },
-  { label: "Short Put",  category: "Directional", outlook: "bullish",
-    legs: [{ action: "sell", option_type: "put",  lots: 1, otmMult: 1 }] },
-  { label: "Long Put",   category: "Directional", outlook: "bearish",
-    legs: [{ action: "buy",  option_type: "put",  lots: 1, otmMult: 0 }] },
-  { label: "Short Call", category: "Directional", outlook: "bearish",
-    legs: [{ action: "sell", option_type: "call", lots: 1, otmMult: 1 }] },
-  // ── Volatility ───────────────────────────────────────────────────────────
-  { label: "Long Straddle",  category: "Volatility", outlook: "volatile",
-    legs: [{ action: "buy", option_type: "call", lots: 1, otmMult: 0 },
-           { action: "buy", option_type: "put",  lots: 1, otmMult: 0 }] },
-  { label: "Long Strangle",  category: "Volatility", outlook: "volatile",
-    legs: [{ action: "buy", option_type: "call", lots: 1, otmMult: 1 },
-           { action: "buy", option_type: "put",  lots: 1, otmMult: 1 }] },
-  { label: "Short Straddle", category: "Volatility", outlook: "neutral",
-    legs: [{ action: "sell", option_type: "call", lots: 1, otmMult: 0 },
-           { action: "sell", option_type: "put",  lots: 1, otmMult: 0 }] },
-  { label: "Short Strangle", category: "Volatility", outlook: "neutral",
-    legs: [{ action: "sell", option_type: "call", lots: 1, otmMult: 1 },
-           { action: "sell", option_type: "put",  lots: 1, otmMult: 1 }] },
-  // ── Spreads ──────────────────────────────────────────────────────────────
-  { label: "Bull Call Spread", category: "Spreads", outlook: "bullish",
-    legs: [{ action: "buy",  option_type: "call", lots: 1, otmMult: 0 },
-           { action: "sell", option_type: "call", lots: 1, otmMult: 1 }] },
-  { label: "Bear Put Spread",  category: "Spreads", outlook: "bearish",
-    legs: [{ action: "buy",  option_type: "put",  lots: 1, otmMult: 0 },
-           { action: "sell", option_type: "put",  lots: 1, otmMult: 1 }] },
-  // ── Multi-leg ─────────────────────────────────────────────────────────────
-  { label: "Iron Condor", category: "Multi-leg", outlook: "neutral",
-    legs: [{ action: "sell", option_type: "call", lots: 1, otmMult: 1 },
-           { action: "buy",  option_type: "call", lots: 1, otmMult: 2 },
-           { action: "sell", option_type: "put",  lots: 1, otmMult: 1 },
-           { action: "buy",  option_type: "put",  lots: 1, otmMult: 2 }] },
-  { label: "Butterfly",   category: "Multi-leg", outlook: "neutral",
-    legs: [{ action: "buy",  option_type: "call", lots: 1, spreadMult: -1 },
-           { action: "sell", option_type: "call", lots: 2, spreadMult:  0 },
-           { action: "buy",  option_type: "call", lots: 1, spreadMult:  1 }] },
-];
 
 const STRATEGY_GROUPS = [
   { label: "Directional", items: QUICK_STRATEGIES.filter(s => s.category === "Directional") },
@@ -181,22 +122,7 @@ function GreeksBar({ g }: { g: Greeks }) {
 function PnlHeatmap({ spots, payoffs, currentSpot }: {
   spots: number[]; payoffs: number[]; currentSpot?: number;
 }) {
-  const maxAbs = Math.max(...payoffs.map(Math.abs), 1);
-  // Downsample to ~80 bars for performance
-  const step = Math.max(1, Math.floor(spots.length / 80));
-  const bars = spots
-    .filter((_, i) => i % step === 0)
-    .map((s, i) => {
-      const pnl = payoffs[i * step] ?? 0;
-      const norm = Math.min(Math.abs(pnl) / maxAbs, 1);
-      const alpha = 0.12 + norm * 0.88;
-      const color = pnl > 0
-        ? `rgba(22,163,74,${alpha})`
-        : pnl < 0
-          ? `rgba(220,38,38,${alpha})`
-          : "rgba(200,200,200,0.2)";
-      return { s, pnl, color };
-    });
+  const bars = computeHeatBars(spots, payoffs);
 
   // Find spot bar nearest to currentSpot
   const nearestIdx = currentSpot
