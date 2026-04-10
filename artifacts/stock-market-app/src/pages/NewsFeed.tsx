@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { Link } from "wouter";
 import {
   Newspaper, TrendingUp, TrendingDown, Minus, Search, RefreshCw,
@@ -223,7 +223,7 @@ function NewsCard({ article, isDark, index }: { article: NewsArticle; isDark: bo
 // ── Deals Table ───────────────────────────────────────────────────────────────
 
 function DealsSection({ isDark }: { isDark: boolean }) {
-  const { data, isLoading } = useQuery({ queryKey: ["newsDeals"], queryFn: api.newsDeals, staleTime: 20 * 60 * 1000 });
+  const { data, isLoading, isFetching } = useQuery({ queryKey: ["newsDeals"], queryFn: api.newsDeals, staleTime: 20 * 60 * 1000, placeholderData: keepPreviousData });
   const [activeDealsTab, setActiveDealsTab] = useState<"bulk" | "block">("bulk");
 
   const hdrTxt = isDark ? "#f1f5f9" : "#111827";
@@ -233,10 +233,11 @@ function DealsSection({ isDark }: { isDark: boolean }) {
 
   const deals = data ? (activeDealsTab === "bulk" ? data.bulk : data.block) : [];
 
-  if (isLoading) return <LoadingCards isDark={isDark} />;
+  if (isLoading && !data) return <LoadingCards isDark={isDark} />;
 
   return (
-    <div className="space-y-4">
+    <div className="relative space-y-4">
+      <SectionLoader active={isFetching && !isLoading} />
       <div className="flex gap-2">
         {(["bulk", "block"] as const).map(t => (
           <button
@@ -318,12 +319,12 @@ function DealsSection({ isDark }: { isDark: boolean }) {
 // ── Corporate Events ──────────────────────────────────────────────────────────
 
 function EventsSection({ isDark }: { isDark: boolean }) {
-  const { data, isLoading } = useQuery({ queryKey: ["newsEvents"], queryFn: api.newsEvents, staleTime: 15 * 60 * 1000 });
+  const { data, isLoading, isFetching } = useQuery({ queryKey: ["newsEvents"], queryFn: api.newsEvents, staleTime: 15 * 60 * 1000, placeholderData: keepPreviousData });
   const muTxt = isDark ? "#94a3b8" : "#6b7280";
   const borderCol = isDark ? "#334155" : "#e2e8f0";
   const hdrTxt = isDark ? "#f1f5f9" : "#111827";
 
-  if (isLoading) return <LoadingCards isDark={isDark} />;
+  if (isLoading && !data) return <LoadingCards isDark={isDark} />;
 
   const events = data?.events ?? [];
   if (!events.length) {
@@ -331,7 +332,8 @@ function EventsSection({ isDark }: { isDark: boolean }) {
   }
 
   return (
-    <div className="space-y-2">
+    <div className="relative space-y-2">
+      <SectionLoader active={isFetching && !isLoading} />
       {events.map((ev, i) => (
         <div
           key={i}
@@ -447,6 +449,7 @@ export default function NewsFeed() {
     queryKey: ["newsFeed", feedCategory, debouncedSearch],
     queryFn:  () => api.newsFeed({ category: feedCategory, search: debouncedSearch, limit: 60 }),
     staleTime: 8 * 60 * 1000,
+    placeholderData: keepPreviousData,
     enabled: activeTab !== "deals" && activeTab !== "events",
   });
 
@@ -454,6 +457,7 @@ export default function NewsFeed() {
     queryKey: ["newsStats"],
     queryFn:  api.newsStats,
     staleTime: 8 * 60 * 1000,
+    placeholderData: keepPreviousData,
   });
 
   const refreshMutation = useMutation({ mutationFn: api.newsRefresh });
