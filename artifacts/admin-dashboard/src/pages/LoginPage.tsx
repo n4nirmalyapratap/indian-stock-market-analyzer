@@ -44,10 +44,11 @@ export default function LoginPage({ onLogin }: { onLogin: (token: string) => voi
 
             {/* Username */}
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wide">
+              <label htmlFor="admin-username" className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wide">
                 Username
               </label>
               <input
+                id="admin-username"
                 type="text"
                 value={username}
                 onChange={e => setUsername(e.target.value)}
@@ -61,15 +62,16 @@ export default function LoginPage({ onLogin }: { onLogin: (token: string) => voi
 
             {/* Password */}
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wide">
+              <label htmlFor="admin-password" className="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wide">
                 Password
               </label>
               <div className="relative">
                 <input
+                  id="admin-password"
                   type={showPw ? "text" : "password"}
                   value={password}
                   onChange={e => setPassword(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder="Enter password"
                   autoComplete="current-password"
                   required
                   className="w-full bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-500 text-sm px-4 pr-11 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition"

@@ -28,10 +28,7 @@ COPY artifacts/stock-market-app/ ./artifacts/stock-market-app/
 
 RUN pnpm install --no-frozen-lockfile
 
-# VITE_CLERK_PUBLISHABLE_KEY is embedded in the JS bundle at build time
-ARG VITE_CLERK_PUBLISHABLE_KEY
-ENV PORT=3000 BASE_PATH=/ NODE_ENV=production \
-    VITE_CLERK_PUBLISHABLE_KEY=${VITE_CLERK_PUBLISHABLE_KEY}
+ENV PORT=3000 BASE_PATH=/ NODE_ENV=production
 
 RUN pnpm --filter @workspace/stock-market-app run build
 
@@ -51,7 +48,6 @@ COPY artifacts/admin-dashboard/ ./artifacts/admin-dashboard/
 
 RUN pnpm install --no-frozen-lockfile
 
-# Admin dashboard does NOT need Clerk — pure username/password login
 ENV PORT=3001 BASE_PATH=/admin NODE_ENV=production
 
 RUN pnpm --filter @workspace/admin-dashboard run build

@@ -1,8 +1,8 @@
 # Indian Stock Market Analyzer
 
 A real-time Indian stock market analysis platform with sector rotation tracking,
-candlestick pattern detection, custom stock scanners, NLP-powered queries, and a
-WhatsApp bot — all powered by a **Python FastAPI backend**.
+candlestick pattern detection, custom stock scanners, Hydra Alpha signals,
+NLP-powered queries, and a full admin panel — all powered by a **Python FastAPI backend**.
 
 ---
 
@@ -14,13 +14,16 @@ WhatsApp bot — all powered by a **Python FastAPI backend**.
 | Data sources | NSE India API · Yahoo Finance |
 | NLP | spaCy 3.8 (rule-based EntityRuler) |
 | Analytics | pandas · numpy |
-| Technical indicators | `ta` library (EMA, RSI, MACD, Bollinger Bands, ATR) |
-| Frontend | React 18 · Vite · TypeScript · TailwindCSS · TanStack Query |
+| Technical indicators | `ta` library (EMA, RSI, MACD, Bollinger Bands, ATR, VWAP) |
+| User frontend | React 18 · Vite · TypeScript · TailwindCSS · TanStack Query |
+| Admin dashboard | React 18 · Vite · TypeScript · TailwindCSS · TanStack Query |
 | Router | wouter (NOT react-router) |
 | UI | shadcn/ui |
-| WhatsApp | Twilio (webhook-based) |
+| Charts | Lightweight Charts · ECharts · Recharts |
+| Auth | Custom email+password (HS256 JWT) — no Clerk, no Google OAuth |
+| WhatsApp | Twilio webhook (backend only — `/api/whatsapp/*`) |
 
-> **Node.js is used only for the React/Vite frontend** (build tooling + dev server).
+> **Node.js is used only for the React/Vite frontends** (build tooling + dev server).
 > All Node.js / NestJS *backend* directories have been **permanently deleted** — the backend is Python only.
 
 ---
@@ -35,13 +38,19 @@ WhatsApp bot — all powered by a **Python FastAPI backend**.
 │   │   ├── run.py               ← Startup script (ensures spaCy model is present)
 │   │   ├── requirements.txt     ← Python dependencies
 │   │   ├── pandas_ta/           ← ta-library shim (mirrors pandas-ta API)
+│   │   ├── tests/               ← pytest unit tests (116 tests)
+│   │   │   ├── conftest.py      ← shared fixtures (OHLCV builders, candle makers)
+│   │   │   ├── test_indicators.py   ← SMA/EMA/RSI/MACD/BB/ATR/VWAP/S&R (50 tests)
+│   │   │   ├── test_data_quality.py ← RSI/MACD/BB/Z-score/VWAP/Hydra/cross-indicator (27 tests)
+│   │   │   ├── test_patterns.py     ← candle helpers, doji, hammer, engulfing (29 tests)
+│   │   │   └── test_log_buffer.py   ← log buffer ring tests (10 tests)
 │   │   └── app/
 │   │       ├── routes/          ← FastAPI route modules
 │   │       │   ├── sectors.py   ← GET /api/sectors, /api/sectors/rotation
 │   │       │   ├── stocks.py    ← GET /api/stocks/nifty100, /api/stocks/:symbol
 │   │       │   ├── patterns.py  ← GET /api/patterns, POST /api/patterns/scan
 │   │       │   ├── scanners.py  ← CRUD /api/scanners, POST /api/scanners/:id/run
-│   │       │   ├── whatsapp.py  ← /api/whatsapp/status, /message, /messages
+│   │       │   ├── whatsapp.py  ← /api/whatsapp/* (backend webhook only)
 │   │       │   ├── nlp.py       ← POST /api/nlp/query (natural language)
 │   │       │   └── analytics.py ← GET /api/analytics/* (5 endpoints)
 │   │       ├── services/        ← Business logic
@@ -49,24 +58,38 @@ WhatsApp bot — all powered by a **Python FastAPI backend**.
 │   │           ├── universe.py  ← Nifty100, Midcap, Smallcap, SECTOR_SYMBOLS
 │   │           └── indicators.py
 │   │
-│   ├── stock-market-app/        ← ACTIVE: React/Vite frontend (port 3002)
+│   ├── stock-market-app/        ← ACTIVE: User frontend (port 3002 / path "/")
 │   │   ├── .replit-artifact/artifact.toml
 │   │   ├── vite.config.ts       ← proxies /api/* → localhost:8090
+│   │   ├── vitest.config.ts     ← frontend unit test config
 │   │   └── src/
-│   │       ├── lib/api.ts       ← All API calls (relative /api, proxied to Python)
-│   │       └── pages/           ← Dashboard, Sectors, Patterns, Scanners, WhatsApp
+│   │       ├── lib/
+│   │       │   ├── api.ts       ← All API calls (relative /api, proxied to Python)
+│   │       │   ├── indicators.ts    ← Client-side SMA/EMA/RSI/MACD/BB
+│   │       │   └── __tests__/   ← Vitest unit tests (37 tests)
+│   │       ├── context/
+│   │       │   └── CustomAuthContext.tsx  ← Email+password auth (no Clerk)
+│   │       └── pages/           ← Dashboard, Sectors, Patterns, Scanners, etc.
 │   │
-│   ├── api-server/              ← ROUTING SHIM ONLY — do NOT touch or start
+│   ├── admin-dashboard/         ← ACTIVE: Admin panel (path "/admin")
+│   │   ├── .replit-artifact/artifact.toml
+│   │   └── src/
+│   │       ├── lib/api.ts       ← Admin API calls (X-Admin-Token header)
+│   │       └── pages/
+│   │           ├── LogsPage.tsx ← Live logs: Summary view + Raw terminal view
+│   │           ├── OverviewPage.tsx
+│   │           ├── UsersPage.tsx
+│   │           └── SettingsPage.tsx
+│   │
+│   ├── api-server/              ← ROUTING SHIM ONLY — do NOT touch
 │   │   └── .replit-artifact/artifact.toml
 │   │       ← localPort=8090, paths=["/api"]
-│   │       ← Tells Replit proxy: route /api/* → Python backend on port 8090
-│   │       ← Source code inside this folder is unused; only artifact.toml matters
+│   │       ← Tells Replit proxy to route /api/* → Python backend
 │   │
-│   └── mockup-sandbox/          ← Canvas design tool (do not touch)
+│   └── mockup-sandbox/          ← Canvas design preview (do not touch)
 │
 ├── scripts/
 │   └── src/push-github.ts       ← GitHub push via Replit connector
-├── lib/                         ← Shared TypeScript libraries
 ├── GITHUB_PUSH.md               ← Push workflow documentation
 └── AGENT_PROMPT.md              ← Full agent setup instructions
 ```
@@ -150,21 +173,20 @@ This project runs on **Replit** with:
    pnpm install
    ```
 
-3. **Set environment variables** (optional — for WhatsApp bot)
-   - `SESSION_SECRET` — any random string (session security)
-   - Twilio credentials if you want the WhatsApp webhook to work
+3. **Set environment variables**
+   - `SESSION_SECRET` — JWT signing secret (required)
+   - `ADMIN_USERNAME` / `ADMIN_PASSWORD` — admin panel credentials (required)
+   - Twilio credentials if you want the WhatsApp webhook (optional)
 
-4. **Start workflows**
-   - `Python Backend` — `bash -c 'cd artifacts/python-backend && PORT=8090 python run.py'`
-   - `artifacts/stock-market-app: web` — starts automatically from `artifact.toml`
+4. **Start all four workflows** (Replit starts them automatically)
+   - `artifacts/api-server: API Server` — Python FastAPI backend on port 8090
+   - `artifacts/stock-market-app: web` — user Vite app on port 3002
+   - `artifacts/admin-dashboard: web` — admin Vite app on port 22133
 
 5. **Verify**
    ```bash
    curl http://localhost:8090/api/healthz   # → {"status":"ok"}
    ```
-
-### Do NOT start these
-- `artifacts/api-server: API Server` — routing shim only, no server code to run
 
 ---
 
@@ -224,15 +246,16 @@ SESSION_SECRET=your-secret docker compose up --build -d
 
 | Variable | Required | Description |
 |---|---|---|
-| `SESSION_SECRET` | Yes (prod) | Session signing key — set to a long random string |
-| `TWILIO_ACCOUNT_SID` | No | WhatsApp bot via Twilio |
-| `TWILIO_AUTH_TOKEN` | No | WhatsApp bot via Twilio |
-| `TELEGRAM_BOT_TOKEN` | No | Telegram bot polling |
+| `SESSION_SECRET` | **Yes** | JWT signing secret — use a long random string |
+| `ADMIN_USERNAME` | **Yes** | Admin panel login username (default: `admin`) |
+| `ADMIN_PASSWORD` | **Yes** | Admin panel login password — make it strong |
+| `TWILIO_ACCOUNT_SID` | No | WhatsApp webhook via Twilio |
+| `TWILIO_AUTH_TOKEN` | No | WhatsApp webhook via Twilio |
 
 Pass them in a `.env` file at the repo root — Docker Compose picks it up automatically:
 ```bash
-SESSION_SECRET=supersecretkey123
-TELEGRAM_BOT_TOKEN=123456:ABCDEF...
+cp .env.example .env
+# then edit .env
 ```
 
 ### Deploying to AWS / Azure
@@ -264,6 +287,40 @@ docker compose up --build -d
 | `artifacts/stock-market-app/Dockerfile` | Node 24 build → nginx static image |
 | `artifacts/stock-market-app/nginx.conf` | Serves SPA + proxies `/api/*` to backend |
 | `.dockerignore` | Excludes `node_modules`, caches, deprecated folders |
+
+---
+
+## Testing
+
+The project has a three-layer test suite.
+
+### Backend unit tests (pytest — 116 tests)
+
+```bash
+cd artifacts/python-backend
+python3 -m pytest tests/ -v
+```
+
+| File | What it covers |
+|---|---|
+| `test_indicators.py` | SMA, EMA, RSI, MACD, Bollinger Bands, ATR, VWAP, Support/Resistance |
+| `test_data_quality.py` | RSI range, MACD structure, Z-score, VWAP cumulative behaviour, Hydra engine |
+| `test_patterns.py` | Candle helpers (body/shadow/range), doji, hammer, shooting star, engulfing |
+| `test_log_buffer.py` | Ring-buffer log store |
+
+### Frontend unit tests (Vitest — 37 tests)
+
+```bash
+pnpm --filter @workspace/stock-market-app run test
+```
+
+Tests cover all five client-side indicator functions in `src/lib/indicators.ts`:
+`calcSMA`, `calcEMA`, `calcRSI`, `calcMACD`, `calcBollingerBands`.
+
+### End-to-end tests (Playwright)
+
+Run via the Replit testing skill — covers login flows, dashboard rendering,
+admin Logs page (Summary view + Raw terminal view), and level filtering.
 
 ---
 

@@ -1,0 +1,4 @@
+{
+  "artifacts/python-backend/tests/test_indicators.py::TestATR::test_atr_always_positive": true,
+  "artifacts/python-backend/tests/test_indicators.py::TestVWAP::test_vwap_is_bounded_by_daily_high_low": true
+}
