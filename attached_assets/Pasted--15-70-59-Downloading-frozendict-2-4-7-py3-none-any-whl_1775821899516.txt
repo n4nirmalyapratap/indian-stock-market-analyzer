@@ -1,0 +1,48 @@
+#15 70.59   Downloading frozendict-2.4.7-py3-none-any.whl.metadata (23 kB)
+#15 70.99 Collecting peewee>=3.16.2 (from yfinance>=0.2.48->-r requirements.txt (line 10))
+#15 71.01   Downloading peewee-4.0.4-py3-none-any.whl.metadata (8.6 kB)
+#15 71.32 Collecting beautifulsoup4>=4.11.1 (from yfinance>=0.2.48->-r requirements.txt (line 10))
+#15 ...
+
+#27 [frontend builder-user 8/8] RUN pnpm --filter @workspace/stock-market-app run build
+#27 2.205
+#27 2.205 > @workspace/stock-market-app@0.0.0 build /workspace/artifacts/stock-market-app
+#27 2.205 > vite build --config vite.config.ts
+#27 2.205
+#27 2.999 vite v7.3.2 building client environment for production...
+#27 3.177 transforming...
+#27 CANCELED
+
+#15 [backend 5/7] RUN pip install --no-cache-dir -r requirements.txt
+#15 71.34   Downloading beautifulsoup4-4.14.3-py3-none-any.whl.metadata (3.8 kB)
+#15 CANCELED
+------
+ > [frontend builder-admin 8/8] RUN pnpm --filter @workspace/admin-dashboard run build:
+2.995 vite v7.3.2 building client environment for production...
+3.170 ✓ 0 modules transformed.
+3.175 ✗ Build failed in 101ms
+3.175 error during build:
+3.175 [vite:build-html] parsing /workspace/lib/api-client-react/tsconfig.json failed: Error: ENOENT: no such file or directory, open '/workspace/lib/api-client-react/tsconfig.json'
+3.175 file: /workspace/artifacts/admin-dashboard/index.html
+3.175     at file:///workspace/node_modules/.pnpm/vite@7.3.2_@types+node@25.5.2_jiti@2.6.1_lightningcss@1.32.0/node_modules/vite/dist/node/chunks/config.js:5719:9
+3.280 /workspace/artifacts/admin-dashboard:
+3.280  ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @workspace/admin-dashboard@0.0.0 build: `vite build --config vite.config.ts`
+3.280 Exit status 1
+------
+Dockerfile:57
+
+--------------------
+
+  55 |     ENV PORT=3001 BASE_PATH=/admin NODE_ENV=production
+
+  56 |
+
+  57 | >>> RUN pnpm --filter @workspace/admin-dashboard run build
+
+  58 |
+
+  59 |
+
+--------------------
+
+target frontend: failed to solve: process "/bin/sh -c pnpm --filter @workspace/admin-dashboard run build" did not complete successfully: exit code: 1
