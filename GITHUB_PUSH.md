@@ -15,31 +15,47 @@ Run this after every meaningful change. It will print a commit URL on success.
 
 ---
 
-## First-Time Setup — Authorization Required
+## First-Time Setup — Agent Must Trigger the Popup (NOT the user)
 
-The very first time you run the push script in a new Replit workspace, GitHub
-OAuth authorization is required. The agent cannot do this for you — it needs a
-human to click the popup.
+When the push script fails with `HTTP_401` or "No connection found", the GitHub
+OAuth integration needs to be authorized. **The agent must handle this automatically
+by calling `proposeIntegration` in the code_execution sandbox — do NOT ask the user
+to navigate the Replit sidebar manually.**
 
-### Step-by-step
+### Correct agent flow (do this, in order):
 
-1. In the Replit sidebar, open **Tools → Integrations** (or click the plug icon).
-2. Find **GitHub** in the integrations list and click **Connect**.
-3. A GitHub OAuth popup will open in your browser.
-4. Sign in to GitHub (if not already signed in) and click **Authorize Replit**.
-5. The popup closes. The integration status changes to **Connected**.
-6. Now run the push script — it will work without any further auth.
+```javascript
+// Step 1 — Search for the GitHub integration
+const results = await searchIntegrations("GitHub");
+console.log(results);
+// Look for either a connector (not_setup) or connection (not_added / added)
 
-> **Important:** Tell the agent "I have authorized GitHub" once you complete
-> step 4-5. The agent will then run the push script for you.
+// Step 2a — If status is "not_setup" (never authorized):
+//   Call proposeIntegration to trigger the OAuth popup for the user automatically.
+//   This exits the agent loop and waits for the user to complete the popup.
+await proposeIntegration("connector:ccfg_github_<ID>");
 
-### What the agent should say to prompt authorization
+// Step 2b — On the next agent loop after the user authorizes:
+//   searchIntegrations will now return a connection instead of a connector.
+//   Wire it to this project:
+await addIntegration("connection:conn_github_<ID>");
 
-When setting up a fresh workspace, the agent should pause and say:
+// Step 3 — Run the push script
+// pnpm --filter @workspace/scripts run push-github
+```
 
-> "Before I can push to GitHub, I need you to authorize the GitHub integration.
-> Please open **Tools → Integrations** in the Replit sidebar, find GitHub,
-> click Connect, and complete the OAuth popup. Let me know when it's done."
+### What NOT to do
+
+- Do NOT tell the user to open Tools → Integrations in the sidebar
+- Do NOT tell the user to click Connect manually
+- Do NOT ask the user to do anything — call proposeIntegration and the popup appears automatically
+- Do NOT attempt to use a PAT or SSH key
+
+### What the user sees
+
+When `proposeIntegration` is called, Replit automatically shows a GitHub OAuth
+popup in the user's browser. The user just clicks "Authorize Replit" and the
+popup closes. That's it — no sidebar navigation required.
 
 ---
 
@@ -87,7 +103,7 @@ The following are **never pushed** (mirrors `.gitignore`):
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `HTTP_401: Bad credentials` | GitHub not authorized | Complete the OAuth flow (see First-Time Setup above) |
+| `HTTP_401: Bad credentials` or `No connection found` | GitHub not authorized for this workspace | Agent calls `searchIntegrations("GitHub")` then `proposeIntegration(connectorId)` — popup appears automatically |
 | `HTTP_404: Not Found` | Wrong owner/repo in the script | Check `OWNER`, `REPO`, `BRANCH` constants in `scripts/src/push-github.ts` |
 | `HTTP_429: rate limit` | Too many requests | Script retries automatically; wait and retry if it still fails |
 | `Cannot find module '@replit/connectors-sdk'` | pnpm packages not installed | Run `pnpm install` first |
