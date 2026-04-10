@@ -58,10 +58,9 @@ WhatsApp bot — all powered by a Python FastAPI backend.
 
 | Workflow name | Command | Port | State |
 |---|---|---|---|
-| `Python Backend` | `bash -c 'cd /home/runner/workspace/artifacts/python-backend && PORT=8090 python3.11 run.py'` | 8090 | RUNNING |
+| `Python Backend` | `bash -c 'cd /home/runner/workspace/artifacts/python-backend && PORT=8090 python run.py'` | 8090 | RUNNING |
 | `artifacts/stock-market-app: web` | `BASE_PATH=/ PORT=3002 pnpm --filter @workspace/stock-market-app run dev` | 3002 | RUNNING |
-| `Start application` | `echo 'App now served by artifacts/stock-market-app workflow'` | — | FINISHED (no-op) |
-| `artifacts/api-server: API Server` | (do not start) | — | NOT_STARTED |
+| `artifacts/api-server: API Server` | (routing shim — do not stop) | 8090 routing | RUNNING |
 | `artifacts/mockup-sandbox: Component Preview Server` | (do not start) | — | NOT_STARTED |
 
 ---
@@ -170,8 +169,6 @@ Fix: Updated `artifacts/api-server/.replit-artifact/artifact.toml`:
 [ ] curl http://localhost:3002/api/healthz  → 200 OK (Vite proxy)
 [ ] Workflow "Python Backend" → RUNNING
 [ ] Workflow "artifacts/stock-market-app: web" → RUNNING
-[ ] Workflow "Start application" → FINISHED (no-op, not port 3002)
-[ ] Workflow "artifacts/api-server: API Server" → NOT_STARTED
 [ ] artifacts/api-server/artifact.toml → localPort = 8090
 [ ] artifacts/stock-market-app/artifact.toml → run command uses @workspace/stock-market-app
 ```
