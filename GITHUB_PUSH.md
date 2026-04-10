@@ -1,95 +1,108 @@
-# GitHub Push — How It Works & What to Avoid
+# GitHub Push — How It Works
 
-## How to push
+This project pushes to GitHub using a custom TypeScript script that talks to the
+Replit GitHub connector. There is no `git push` involved — no PAT, no SSH key.
+
+---
+
+## Quick Reference
 
 ```bash
 pnpm --filter @workspace/scripts run push-github
 ```
 
-If it times out, run the same command again immediately — it will finish in seconds.
-See [Why it sometimes needs two runs](#why-it-sometimes-needs-two-runs) below.
+Run this after every meaningful change. It will print a commit URL on success.
 
 ---
 
-## How the script works
+## First-Time Setup — Authorization Required
 
-The project uses a custom push script (`scripts/src/push-github.ts`) instead of regular
-`git push`, because Replit's environment cannot authenticate with GitHub via SSH or PAT —
-it uses a Replit OAuth proxy instead.
+The very first time you run the push script in a new Replit workspace, GitHub
+OAuth authorization is required. The agent cannot do this for you — it needs a
+human to click the popup.
 
-The script:
-1. Walks the **entire workspace** from the root
-2. Skips any file or directory listed in `.gitignore` (see skip rules below)
-3. Uploads each remaining file to GitHub as an individual API blob
-4. Assembles all blobs into a single tree → commit → updates the branch ref
+### Step-by-step
 
-> `.gitignore` is the **single source of truth** for what gets excluded.  
-> The `SKIP_DIRS` / `SKIP_FILES` / `SKIP_EXTS` constants inside the script
-> mirror `.gitignore` exactly — if you add something to `.gitignore`, add it
-> to the matching constant in the script too.
+1. In the Replit sidebar, open **Tools → Integrations** (or click the plug icon).
+2. Find **GitHub** in the integrations list and click **Connect**.
+3. A GitHub OAuth popup will open in your browser.
+4. Sign in to GitHub (if not already signed in) and click **Authorize Replit**.
+5. The popup closes. The integration status changes to **Connected**.
+6. Now run the push script — it will work without any further auth.
 
----
+> **Important:** Tell the agent "I have authorized GitHub" once you complete
+> step 4-5. The agent will then run the push script for you.
 
-## Why it sometimes needs two runs
+### What the agent should say to prompt authorization
 
-Each file requires a separate HTTPS round-trip to the GitHub API (~0.4–0.6 s per file).
-With ~166 source files that takes **70–100 seconds** total — longer than the default
-60-second shell timeout used by the Replit agent.
+When setting up a fresh workspace, the agent should pause and say:
 
-The script is **idempotent**: blobs already uploaded are cached by GitHub (content-addressed),
-so the second run only uploads the remaining files and finishes in **10–20 seconds**.
-
-The GitHub commit is only created once **all** blobs are uploaded, so a timed-out first
-run never creates a broken or partial commit on GitHub.
+> "Before I can push to GitHub, I need you to authorize the GitHub integration.
+> Please open **Tools → Integrations** in the Replit sidebar, find GitHub,
+> click Connect, and complete the OAuth popup. Let me know when it's done."
 
 ---
 
-## What to avoid
+## How the Script Works
 
-### Never add these to INCLUDE_PATHS (there is no whitelist now)
+The script (`scripts/src/push-github.ts`) uses the Replit Connectors SDK to
+call the GitHub API through Replit's proxy. No token is stored in the code.
 
-The old script used a hand-maintained `INCLUDE_PATHS` whitelist. That is gone.
-The script now walks from root and skips via `.gitignore` rules. **No whitelist to maintain.**
+Flow:
+1. Authenticate via `GET /user` — confirms the connector is authorized
+2. Get current GitHub `HEAD` SHA for the branch
+3. Walk the entire workspace (respecting `.gitignore` skip rules)
+4. Upload all files as Git blobs via `POST /repos/.../git/blobs`
+5. Create a new Git tree from those blobs
+6. Create a new commit with that tree
+7. Update the branch ref to point to the new commit
 
-### Keep the file count low
+---
 
-The more source files synced, the longer each push takes.
+## Skip Rules
 
-| Do NOT add to source | Why |
+The following are **never pushed** (mirrors `.gitignore`):
+
+| Category | Skipped |
 |---|---|
-| `node_modules/` | Hundreds of MB, already in `.gitignore` |
-| `dist/` / `build/` | Generated — rebuild from source |
-| `.pythonlibs/` | Replit's pip cache, not source |
-| `market_cache/` | Runtime data written by the app |
-| `artifacts/python-backend/pandas_ta/` | Vendored shim, not real source |
-| Large static assets (images, fonts) | Host on CDN; script skips >400 KB anyway |
-
-Keeping the count under **~100 files** makes the push reliably finish in one run.
-
-### Keep `.gitignore` and the script in sync
-
-If you add a new large/generated directory, add it to **both**:
-
-1. `.gitignore` (so local git and editors also ignore it)
-2. `SKIP_DIRS` in `scripts/src/push-github.ts` (so the push script ignores it)
+| Directories | `node_modules`, `dist`, `build`, `.git`, `__pycache__`, `.pythonlibs`, `market_cache`, `.agents`, `.local` |
+| Files | `pnpm-lock.yaml`, `hydra_prices.db`, `.DS_Store`, `.tsbuildinfo` |
+| Extensions | `.png`, `.jpg`, `.gif`, `.webp`, `.ico`, `.woff`, `.ttf`, `.mp4`, `.pdf`, `.zip` |
+| Size | Files larger than 400 KB are skipped with a warning |
 
 ---
 
-## Current file count & timings
+## Rate Limiting & Retries
 
-| Metric | Value |
-|---|---|
-| Source files synced | ~320 |
-| Parallel workers | 4 (stays ≤ 8 RPS, under the 10 RPS proxy limit) |
-| Typical run time | 40–50 s (completes in **one run**) |
-| Blob upload rate | ~0.4–0.6 s / file sequential; ÷4 with parallelism |
-| 429 rate-limit handling | Automatic exponential backoff + retry (up to 4×) |
+- The script uploads blobs with 4 concurrent workers to stay under GitHub's
+  rate limit (Replit proxy allows ~10 requests/second).
+- On HTTP 429 (rate limited), the script automatically retries up to 4 times
+  with exponential back-off (1s → 2s → 4s → 8s).
+- If the push times out or fails partway through, just run it again — blob
+  uploads are idempotent.
 
 ---
 
-## Adding a new source directory
+## Troubleshooting
 
-Just create your directory and files. The next push will pick them up automatically
-as long as the directory isn't listed in `.gitignore` or `SKIP_DIRS`.
+| Symptom | Cause | Fix |
+|---|---|---|
+| `HTTP_401: Bad credentials` | GitHub not authorized | Complete the OAuth flow (see First-Time Setup above) |
+| `HTTP_404: Not Found` | Wrong owner/repo in the script | Check `OWNER`, `REPO`, `BRANCH` constants in `scripts/src/push-github.ts` |
+| `HTTP_429: rate limit` | Too many requests | Script retries automatically; wait and retry if it still fails |
+| `Cannot find module '@replit/connectors-sdk'` | pnpm packages not installed | Run `pnpm install` first |
+| Push hangs with no output | Network issue in Replit | Restart the shell and try again |
+| `non-JSON response` | GitHub API error or proxy issue | Wait 30 seconds and retry |
 
-You **do not** need to update any whitelist.
+---
+
+## Configuration
+
+Edit these three constants at the top of `scripts/src/push-github.ts` if the
+repository changes:
+
+```typescript
+const OWNER  = "n4nirmalyapratap";
+const REPO   = "indian-stock-market-analyzer";
+const BRANCH = "main";
+```
