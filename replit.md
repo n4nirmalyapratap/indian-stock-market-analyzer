@@ -41,6 +41,28 @@ Real-time Indian stock market analysis platform — sector rotation tracking, ca
 - For elements that need explicit dark overrides, use the `dark:` variant: e.g. `bg-gray-100 dark:bg-gray-800`.
 - Charts and canvas elements must set background/text colors dynamically using the `theme` value from `useTheme()`.
 
+### ⚠️ Glass / Transparent elements — SPECIAL RULE
+
+**Frosted-glass styles (backdrop-blur + bg-white/10, bg-black/10, etc.) are ONLY safe in dark mode.**
+On a light background, transparent whites become invisible and white text disappears entirely.
+
+**Rule:** Any element that uses transparency or glass must define BOTH modes explicitly:
+
+```
+✅ CORRECT
+bg-indigo-600 dark:bg-white/10          ← solid visible color in light, glass in dark
+text-white                              ← readable on indigo bg (light) AND on dark glass
+border-indigo-500 dark:border-white/20  ← always visible
+
+❌ WRONG
+bg-white/15 text-white/90              ← invisible white-on-white in light mode
+bg-transparent text-white              ← white text vanishes on light backgrounds
+```
+
+**Pattern to follow for floating buttons, badges, overlays:**
+- Light mode: use a solid, branded color (e.g. `bg-indigo-600 text-white`)
+- Dark mode: use glass (e.g. `dark:bg-white/10 dark:text-white dark:border-white/20`)
+
 ### Checklist for every new component or page
 
 - [ ] No hardcoded light-only or dark-only colors
@@ -48,7 +70,8 @@ Real-time Indian stock market analysis platform — sector rotation tracking, ca
 - [ ] All text uses `text-foreground`, `text-muted-foreground`, or `dark:` variants
 - [ ] All borders use `border-border` or `dark:` variants
 - [ ] Charts/canvas use dynamic colors derived from the current `theme`
-- [ ] Test mentally in both modes before submitting
+- [ ] **Glass/transparent elements**: solid color in light mode + glass in dark mode
+- [ ] Test mentally in BOTH modes before submitting — especially for floating or overlaid UI
 
 ---
 
