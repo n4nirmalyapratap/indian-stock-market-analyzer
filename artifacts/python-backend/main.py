@@ -26,6 +26,7 @@ from app.routes.assistant import router as assistant_router
 from app.routes.sector_analytics import router as sector_analytics_router
 from app.routes.news import router as news_router
 from app.routes.admin import router as admin_router
+from app.routes.auth import router as auth_router
 from app.services.market_cache_service import is_market_open, cache_status
 from app.services import market_cache_service as _mcs
 from app.services.yahoo_service import YahooService as _YahooService
@@ -170,7 +171,7 @@ app.add_middleware(
     allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "X-Admin-Token"],
 )
 
 
@@ -197,3 +198,4 @@ app.include_router(assistant_router,        prefix="/api")
 app.include_router(sector_analytics_router, prefix="/api")
 app.include_router(news_router,             prefix="/api")
 app.include_router(admin_router,            prefix="/api")
+app.include_router(auth_router,             prefix="/api")
