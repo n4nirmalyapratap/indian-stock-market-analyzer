@@ -689,6 +689,20 @@ export default function TradingPlatform() {
 
   const activePanel = panels.find(p => p.id === activePanelId) ?? panels[0];
 
+  // Alt+W → add active chart symbol to the current watchlist
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const sym = activePanel?.symbol;
+    function handler(e: KeyboardEvent) {
+      if (e.altKey && (e.key === "w" || e.key === "W") && sym) {
+        e.preventDefault();
+        watchlistRef.current?.addSymbol(sym);
+      }
+    }
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [activePanel?.symbol]);
+
   function setLayout(mode: LayoutMode) {
     const cfg = LAYOUTS.find(l => l.mode === mode)!;
     setLayoutMode(mode);
