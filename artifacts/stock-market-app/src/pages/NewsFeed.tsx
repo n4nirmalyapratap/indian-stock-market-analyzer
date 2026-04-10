@@ -457,20 +457,42 @@ function getReelOrbs(article: NewsArticle): [string, string] {
   return                          s === "bullish" ? ["rgba(251,146,60,0.45)",  green]  : s === "bearish" ? ["rgba(251,146,60,0.4)",  red]  : ["rgba(251,146,60,0.35)",  neu];
 }
 
-// Build a free Pollinations.ai image prompt from article metadata
-function getPollinationsUrl(article: NewsArticle): string {
-  const stop = new Set(["the","a","an","and","or","but","in","on","at","to","for","of","with","by","from","as","is","are","was","were","be","been","this","that","its","nse","bse"]);
-  const kw = article.title
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, "")
-    .split(/\s+/)
-    .filter(w => w.length > 2 && !stop.has(w))
-    .slice(0, 5)
-    .join(" ");
-  const ctx = article.category === "market" ? "indian stock exchange trading floor" : article.category === "corporate" ? "indian corporate business office" : "india economy finance";
-  const prompt = encodeURIComponent(`${kw} ${ctx}, cinematic, professional photography, high quality`);
-  const seed = Math.abs(parseInt(article.id.replace(/\D/g, "").slice(0, 8) || "0", 10)) % 9999 + 1;
-  return `https://image.pollinations.ai/prompt/${prompt}?width=800&height=600&seed=${seed}&nologo=true&model=flux`;
+// Curated Picsum photo IDs that look finance/business/market appropriate.
+// Picsum serves from a fast CDN — images load in ~80–150ms, no generation needed.
+const REEL_PHOTO_POOLS: Record<string, Record<string, number[]>> = {
+  market: {
+    bullish: [1067,1070,1074,1075,1076,273,277,1,7,20,39,48,67,119,180],
+    bearish: [399,425,434,542,677,765,783,398,380,350,329],
+    neutral: [323,333,370,375,450,460,470,480,490,500,510],
+  },
+  corporate: {
+    bullish: [239,266,270,271,259,260,261,263,265,267,268,269],
+    bearish: [297,299,302,306,310,315,320,325,330,335],
+    neutral: [262,264,337,360,361,362,363,364,365,366],
+  },
+  general: {
+    bullish: [338,342,343,344,349,352,355,357,358,359,361,362],
+    bearish: [430,431,432,433,435,440,445,450,455,460],
+    neutral: [366,367,368,369,371,372,373,374,376,377,378],
+  },
+};
+
+function getFallbackImageUrl(article: NewsArticle): string {
+  const pool = REEL_PHOTO_POOLS[article.category]?.[article.sentiment]
+    ?? REEL_PHOTO_POOLS.market.neutral;
+  // Derive a stable index from the article id
+  const n = Math.abs(parseInt(article.id.replace(/\D/g, "").slice(0, 6) || "1", 10));
+  const id = pool[n % pool.length];
+  return `https://picsum.photos/id/${id}/800/500`;
+}
+
+// Preload image URLs eagerly so they are cache-warm before the user scrolls to them
+function preloadImages(urls: string[]) {
+  urls.forEach(src => {
+    if (!src) return;
+    const img = new window.Image();
+    img.src = src;
+  });
 }
 
 function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: () => void }) {
@@ -483,6 +505,21 @@ function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: ()
     setCurrent(clamped);
     cardRefs.current[clamped]?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [articles.length]);
+
+  // Preload images for current + next 4 cards so they're ready before swipe
+  useEffect(() => {
+    const urls = articles
+      .slice(current, current + 5)
+      .map(a => a.image_url || getFallbackImageUrl(a));
+    preloadImages(urls);
+  }, [current, articles]);
+
+  // Also eagerly preload first 5 on mount
+  useEffect(() => {
+    const urls = articles.slice(0, 5).map(a => a.image_url || getFallbackImageUrl(a));
+    preloadImages(urls);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -562,26 +599,30 @@ function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: ()
           const [orb1, orb2] = getReelOrbs(article);
           const sent = sentLabel(article.sentiment);
           const cat  = catLabel(article.category);
-          const imgSrc = article.image_url || getPollinationsUrl(article);
+          const fallbackSrc = getFallbackImageUrl(article);
+          const imgSrc = article.image_url || fallbackSrc;
           return (
             <div
               key={article.id}
               ref={el => { cardRefs.current[i] = el; }}
               className="relative flex flex-col overflow-hidden"
-              style={{ height: "100%", scrollSnapAlign: "start", flexShrink: 0, background: "#0a0f1e" }}
+              style={{ height: "100%", scrollSnapAlign: "start", flexShrink: 0, background: getReelGradient(article) }}
             >
-              {/* Full-bleed background image */}
+              {/* Full-bleed background image — fades in on load; gradient shows as placeholder */}
               <img
                 src={imgSrc}
                 alt=""
                 aria-hidden
                 className="absolute inset-0 w-full h-full object-cover"
-                style={{ zIndex: 0 }}
+                style={{ zIndex: 0, opacity: 0, transition: "opacity 0.4s ease" }}
+                onLoad={e => { e.currentTarget.style.opacity = "1"; }}
                 onError={e => {
-                  // If real image fails, swap to Pollinations
                   const el = e.currentTarget;
-                  if (el.src !== getPollinationsUrl(article)) {
-                    el.src = getPollinationsUrl(article);
+                  if (el.src !== fallbackSrc) {
+                    el.src = fallbackSrc;
+                  } else {
+                    // Picsum also failed — show gradient only (keep opacity 0)
+                    el.style.display = "none";
                   }
                 }}
               />
