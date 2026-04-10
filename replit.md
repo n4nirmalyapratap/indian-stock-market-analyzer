@@ -131,7 +131,7 @@ All features are built TDD — tests are written first, then the implementation.
 
 | Suite | Command | Count |
 |---|---|---|
-| Backend pytest | `cd artifacts/python-backend && python3 -m pytest tests/ -v` | **5 857** (2 skipped/VADER) |
+| Backend pytest | `cd artifacts/python-backend && python3 -m pytest tests/ -v` | **6 384** (2 skipped/VADER) |
 | Frontend vitest | `pnpm --filter @workspace/stock-market-app run test` | **160** |
 
 ### Backend test files
@@ -146,6 +146,7 @@ All features are built TDD — tests are written first, then the implementation.
 | `test_data_quality.py` | Universe, sector, and stock data integrity |
 | `test_scanners.py` | Scanner engine: `_compute_value` (all 20 indicator types), `_compare` (all 6 operators), `_eval_condition` (comparisons + crossovers), CRUD (create/read/update/delete with every field), default scanner integrity, AND/OR logic, score calculation, result shape, complex multi-condition combinations, edge cases |
 | `test_scanner_condition_matrix.py` | **Full Cartesian-product matrix** of every condition the "New Scanner" UI can build: 26 left indicators × 7 operators × (26 right indicators + number) = 5 158 parametrized tests. Covers: `_compute_value` for all 26 specs with 300-bar data, indicator-vs-number (130), indicator-vs-indicator simple ops (3 380), crossover-vs-number (52), crossover-vs-indicator (1 352), CRUD round-trip for every indicator+operator (182), semantic correctness assertions, description string content. |
+| `test_scanner_settings_matrix.py` | **Scanner-level settings matrix** — the two dimensions orthogonal to condition evaluation: (A) `build_universe` for all 16 non-empty subsets of {NIFTY100, MIDCAP, SMALLCAP, MICROCAP} + ALL, deduplication, ordering, symbol correctness; (B) Universe CRUD roundtrip × 16; (C) Logic CRUD × 2; (D) Universe × Logic × 32 combos; (E) Condition × Logic × Universe 3-way cross = 364 parametrized CRUD; (F) AND/OR multi-condition evaluation semantics (1–4 conditions each); (G) Universe isolation proof; (H) Multi-condition CRUD integrity; (I) Deduplication across overlapping universes; (J) Orthogonal updates (change universe without affecting logic and vice versa). 527 tests. |
 
 ### Frontend test files
 | File | What it covers |
