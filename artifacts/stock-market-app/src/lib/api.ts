@@ -402,6 +402,7 @@ export interface NewsArticle {
   published: string;
   sentiment: "bullish" | "bearish" | "neutral";
   tickers: string[];
+  image_url?: string | null;
   type: "news";
 }
 

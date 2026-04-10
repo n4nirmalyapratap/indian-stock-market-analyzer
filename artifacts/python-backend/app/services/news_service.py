@@ -145,6 +145,43 @@ def _clean(text: str) -> str:
     return text[:400]
 
 
+# ── Image Extraction ───────────────────────────────────────────────────────────
+
+def _extract_image(entry) -> Optional[str]:
+    """Extract image URL from RSS entry via media tags, enclosures, or inline HTML."""
+    # 1. media:thumbnail (most reliable — Mint/ET/MC often include this)
+    mt = entry.get("media_thumbnail")
+    if mt and isinstance(mt, list) and mt[0].get("url"):
+        return mt[0]["url"]
+
+    # 2. media:content with image medium
+    mc = entry.get("media_content")
+    if mc and isinstance(mc, list):
+        for m in mc:
+            url = m.get("url", "")
+            if url and ("image" in m.get("medium", "") or "image" in m.get("type", "")):
+                return url
+
+    # 3. RSS enclosures
+    for enc in entry.get("enclosures", []):
+        if enc.get("type", "").startswith("image/") and enc.get("href"):
+            return enc["href"]
+
+    # 4. Parse <img> from summary/description HTML
+    for field in ("summary", "description", "content"):
+        raw = entry.get(field, "")
+        if isinstance(raw, list):
+            raw = " ".join(item.get("value", "") for item in raw)
+        if raw:
+            m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', raw, re.IGNORECASE)
+            if m:
+                url = m.group(1)
+                if url.startswith("http") and "pixel" not in url and "track" not in url and "beacon" not in url:
+                    return url
+
+    return None
+
+
 # ── Time Parsing ──────────────────────────────────────────────────────────────
 
 def _parse_published(entry) -> str:
@@ -182,6 +219,7 @@ def _fetch_one_feed(src: dict) -> list[dict]:
                 "published": _parse_published(entry),
                 "sentiment": _sentiment(combined),
                 "tickers":   _extract_tickers(combined),
+                "image_url": _extract_image(entry),
                 "type":      "news",
             })
     except Exception as e:

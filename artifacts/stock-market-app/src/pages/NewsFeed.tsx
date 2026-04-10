@@ -457,6 +457,22 @@ function getReelOrbs(article: NewsArticle): [string, string] {
   return                          s === "bullish" ? ["rgba(251,146,60,0.45)",  green]  : s === "bearish" ? ["rgba(251,146,60,0.4)",  red]  : ["rgba(251,146,60,0.35)",  neu];
 }
 
+// Build a free Pollinations.ai image prompt from article metadata
+function getPollinationsUrl(article: NewsArticle): string {
+  const stop = new Set(["the","a","an","and","or","but","in","on","at","to","for","of","with","by","from","as","is","are","was","were","be","been","this","that","its","nse","bse"]);
+  const kw = article.title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .split(/\s+/)
+    .filter(w => w.length > 2 && !stop.has(w))
+    .slice(0, 5)
+    .join(" ");
+  const ctx = article.category === "market" ? "indian stock exchange trading floor" : article.category === "corporate" ? "indian corporate business office" : "india economy finance";
+  const prompt = encodeURIComponent(`${kw} ${ctx}, cinematic, professional photography, high quality`);
+  const seed = Math.abs(parseInt(article.id.replace(/\D/g, "").slice(0, 8) || "0", 10)) % 9999 + 1;
+  return `https://image.pollinations.ai/prompt/${prompt}?width=800&height=600&seed=${seed}&nologo=true&model=flux`;
+}
+
 function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: () => void }) {
   const [current, setCurrent] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -546,22 +562,38 @@ function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: ()
           const [orb1, orb2] = getReelOrbs(article);
           const sent = sentLabel(article.sentiment);
           const cat  = catLabel(article.category);
+          const imgSrc = article.image_url || getPollinationsUrl(article);
           return (
             <div
               key={article.id}
               ref={el => { cardRefs.current[i] = el; }}
               className="relative flex flex-col overflow-hidden"
-              style={{ height: "100%", scrollSnapAlign: "start", flexShrink: 0, background: getReelGradient(article) }}
+              style={{ height: "100%", scrollSnapAlign: "start", flexShrink: 0, background: "#0a0f1e" }}
             >
-              {/* Decorative blurred orbs */}
-              <div className="absolute inset-0 pointer-events-none overflow-hidden">
+              {/* Full-bleed background image */}
+              <img
+                src={imgSrc}
+                alt=""
+                aria-hidden
+                className="absolute inset-0 w-full h-full object-cover"
+                style={{ zIndex: 0 }}
+                onError={e => {
+                  // If real image fails, swap to Pollinations
+                  const el = e.currentTarget;
+                  if (el.src !== getPollinationsUrl(article)) {
+                    el.src = getPollinationsUrl(article);
+                  }
+                }}
+              />
+              {/* Dark gradient overlay for text readability */}
+              <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 1,
+                background: "linear-gradient(to bottom, rgba(0,0,0,0.25) 0%, rgba(0,0,0,0.45) 35%, rgba(0,0,0,0.82) 70%, rgba(0,0,0,0.95) 100%)" }} />
+              {/* Decorative blurred orbs on top of image */}
+              <div className="absolute inset-0 pointer-events-none overflow-hidden" style={{ zIndex: 1 }}>
                 <div style={{ position: "absolute", top: "-15%", right: "-8%", width: "55%", height: "55%", borderRadius: "50%",
-                  background: `radial-gradient(circle, ${orb1} 0%, transparent 70%)`, filter: "blur(50px)" }} />
+                  background: `radial-gradient(circle, ${orb1} 0%, transparent 70%)`, filter: "blur(50px)", opacity: 0.5 }} />
                 <div style={{ position: "absolute", bottom: "-10%", left: "-8%", width: "50%", height: "50%", borderRadius: "50%",
-                  background: `radial-gradient(circle, ${orb2} 0%, transparent 70%)`, filter: "blur(45px)" }} />
-                <div style={{ position: "absolute", inset: 0,
-                  backgroundImage: "linear-gradient(rgba(255,255,255,0.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.025) 1px,transparent 1px)",
-                  backgroundSize: "60px 60px" }} />
+                  background: `radial-gradient(circle, ${orb2} 0%, transparent 70%)`, filter: "blur(45px)", opacity: 0.5 }} />
               </div>
 
               {/* Card content */}
