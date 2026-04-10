@@ -520,9 +520,9 @@ function SectorHeatMap({ data, isDark }: { data: SectorHeatmapItem[]; isDark: bo
         </div>
       </CardHeader>
 
-      <div className="p-3 space-y-3">
+      <div className="p-3 pr-4 space-y-3">
         {/* Uniform 7-column grid — 2 clean rows for 14 sectors, no blank gaps */}
-        <div className="grid gap-1.5" style={{ gridTemplateColumns: "repeat(7, 1fr)" }}>
+        <div className="grid gap-1.5" style={{ gridTemplateColumns: "repeat(7, 1fr)", paddingRight: "2px" }}>
           {data.map((sector) => {
             const val  = sector[metric] as number | null;
             const hs   = heatStyle(val, isDark);
