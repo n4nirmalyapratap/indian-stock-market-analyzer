@@ -78,67 +78,40 @@
   --elevate-1: rgba(0,0,0, .03);
   --elevate-2: rgba(0,0,0, .08);
 
-  --background: red; /*replace with H S L */
-
-  --foreground: red; /*replace with H S L */
-
-  --border: red; /*replace with H S L */
-
-  --card: red; /*replace with H S L */
-
-  --card-foreground: red; /*replace with H S L */
-
-  --card-border: red; /*replace with H S L */
-
-  --sidebar: red; /*replace with H S L */
-
-  --sidebar-foreground: red; /*replace with H S L */
-
-  --sidebar-border: red; /*replace with H S L */
-
-  --sidebar-primary: red; /*replace with H S L */
-
-  --sidebar-primary-foreground: red; /*replace with H S L */
-
-  --sidebar-accent: red; /*replace with H S L */
-
-  --sidebar-accent-foreground: red; /*replace with H S L */
-
-  --sidebar-ring: red; /*replace with H S L */
-
-  --popover: red; /*replace with H S L */
-
-  --popover-foreground: red; /*replace with H S L */
-
-  --popover-border: red; /*replace with H S L */
-
-  --primary: red; /*replace with H S L */
-
-  --primary-foreground: red; /*replace with H S L */
-
-  --secondary: red; /*replace with H S L */
-
-  --secondary-foreground: red; /*replace with H S L */
-
-  --muted: red; /*replace with H S L */
-
-  --muted-foreground: red; /*replace with H S L */
-
-  --accent: red; /*replace with H S L */
-
-  --accent-foreground: red; /*replace with H S L */
-
-  --destructive: red; /*replace with H S L */
-
-  --destructive-foreground: red; /*replace with H S L */
-
-  --input: red; /*replace with H S L */
-  --ring: red; /*replace with H S L */
-  --chart-1: red; /*replace with H S L */
-  --chart-2: red; /*replace with H S L */
-  --chart-3: red; /*replace with H S L */
-  --chart-4: red; /*replace with H S L */
-  --chart-5: red; /*replace with H S L */
+  --background: 0 0% 100%;
+  --foreground: 222 47% 11%;
+  --border: 214 32% 91%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --card-border: 214 32% 91%;
+  --sidebar: 0 0% 100%;
+  --sidebar-foreground: 222 47% 11%;
+  --sidebar-border: 214 32% 91%;
+  --sidebar-primary: 239 84% 67%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 214 32% 95%;
+  --sidebar-accent-foreground: 222 47% 11%;
+  --sidebar-ring: 239 84% 67%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --popover-border: 214 32% 91%;
+  --primary: 239 84% 67%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 214 32% 95%;
+  --secondary-foreground: 222 47% 11%;
+  --muted: 214 32% 95%;
+  --muted-foreground: 215 16% 47%;
+  --accent: 214 32% 95%;
+  --accent-foreground: 222 47% 11%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --input: 214 32% 91%;
+  --ring: 239 84% 67%;
+  --chart-1: 239 84% 67%;
+  --chart-2: 160 60% 45%;
+  --chart-3: 30 80% 55%;
+  --chart-4: 280 65% 60%;
+  --chart-5: 340 75% 55%;
 
   --app-font-sans: 'Inter', sans-serif;
   --app-font-serif: Georgia, serif;
@@ -196,68 +169,40 @@
   --elevate-1: rgba(255,255,255, .04);
   --elevate-2: rgba(255,255,255, .09);
 
-  --background: red; /*replace with H S L */
-
-  --foreground: red; /*replace with H S L */
-
-  --border: red; /*replace with H S L */
-
-  --card: red; /*replace with H S L */
-
-  --card-foreground: red; /*replace with H S L */
-
-  --card-border: red; /*replace with H S L */
-
-  --sidebar: red; /*replace with H S L */
-
-  --sidebar-foreground: red; /*replace with H S L */
-
-  --sidebar-border: red; /*replace with H S L */
-
-  --sidebar-primary: red; /*replace with H S L */
-
-  --sidebar-primary-foreground: red; /*replace with H S L */
-
-  --sidebar-accent: red; /*replace with H S L */
-
-  --sidebar-accent-foreground: red; /*replace with H S L */
-
-  --sidebar-ring: red; /*replace with H S L */
-
-  --popover: red; /*replace with H S L */
-
-  --popover-foreground: red; /*replace with H S L */
-
-  --popover-border: red; /*replace with H S L */
-
-  --primary: red; /*replace with H S L */
-
-  --primary-foreground: red; /*replace with H S L */
-
-  --secondary: red; /*replace with H S L */
-
-  --secondary-foreground: red; /*replace with H S L */
-
-  --muted: red; /*replace with H S L */
-
-  --muted-foreground: red; /*replace with H S L */
-
-  --accent: red; /*replace with H S L */
-
-  --accent-foreground: red; /*replace with H S L */
-
-  --destructive: red; /*replace with H S L */
-
-  --destructive-foreground: red; /*replace with H S L */
-
-  /* Used as the border around inputs. Dark mode: Should be a border that is light enough to have high contrast when rendered on a --card background. More contrast than standard --border */
-  --input: red; /*replace with H S L */
-  --ring: red; /*replace with H S L */
-  --chart-1: red; /*replace with H S L */
-  --chart-2: red; /*replace with H S L */
-  --chart-3: red; /*replace with H S L */
-  --chart-4: red; /*replace with H S L */
-  --chart-5: red; /*replace with H S L */
+  --background: 222 47% 4%;
+  --foreground: 210 40% 96%;
+  --border: 217 33% 17%;
+  --card: 222 47% 7%;
+  --card-foreground: 210 40% 96%;
+  --card-border: 217 33% 17%;
+  --sidebar: 222 47% 4%;
+  --sidebar-foreground: 210 40% 96%;
+  --sidebar-border: 217 33% 17%;
+  --sidebar-primary: 239 84% 67%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 217 33% 17%;
+  --sidebar-accent-foreground: 210 40% 96%;
+  --sidebar-ring: 239 84% 67%;
+  --popover: 222 47% 7%;
+  --popover-foreground: 210 40% 96%;
+  --popover-border: 217 33% 17%;
+  --primary: 239 84% 67%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 217 33% 17%;
+  --secondary-foreground: 210 40% 96%;
+  --muted: 217 33% 17%;
+  --muted-foreground: 215 20% 65%;
+  --accent: 217 33% 17%;
+  --accent-foreground: 210 40% 96%;
+  --destructive: 0 62% 30%;
+  --destructive-foreground: 0 0% 100%;
+  --input: 217 33% 17%;
+  --ring: 239 84% 67%;
+  --chart-1: 239 84% 67%;
+  --chart-2: 160 60% 45%;
+  --chart-3: 30 80% 55%;
+  --chart-4: 280 65% 60%;
+  --chart-5: 340 75% 55%;
 
   --shadow-2xs: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00);
   --shadow-xs: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.00);
@@ -273,6 +218,10 @@
 @layer base {
   * {
     @apply border-border;
+  }
+
+  html {
+    @apply bg-background;
   }
 
   body {
@@ -389,5 +338,285 @@
   .border.active-elevate-2:not(.no-active-interaction-elevate)::after,
   .border.hover-elevate:not(.no-hover-interaction-elevate)::after {
     inset: -1px;
+  }
+
+  /* ─── Global dark-mode overrides for page content ─────────────────────────
+     These apply to pages that haven't had individual dark: variants added yet.
+     Scoped to html.dark so they're completely safe in light mode.          */
+  html.dark .page-dark-card {
+    background-color: #1e293b;
+    border-color: #334155;
+  }
+}
+
+/* Dark mode page-wide helpers — apply globally inside html.dark */
+html.dark .pg-card {
+  background-color: #1e293b !important;
+  border-color: #334155 !important;
+}
+html.dark .pg-card-inner {
+  background-color: #0f172a !important;
+  border-color: #1e293b !important;
+}
+
+/* All standard white cards on page content */
+html.dark main .bg-white {
+  background-color: #1e293b;
+}
+html.dark main .border-gray-50,
+html.dark main .border-gray-100 {
+  border-color: #334155;
+}
+html.dark main .border-gray-200 {
+  border-color: #475569;
+}
+
+/* Text */
+html.dark main .text-gray-900 { color: #f1f5f9; }
+html.dark main .text-gray-800 { color: #e2e8f0; }
+html.dark main .text-gray-700 { color: #cbd5e1; }
+html.dark main .text-gray-600 { color: #94a3b8; }
+html.dark main .text-gray-500 { color: #94a3b8; }
+
+/* Skeleton / muted backgrounds */
+html.dark main .bg-gray-100 { background-color: #334155; }
+html.dark main .bg-gray-50  { background-color: #1e293b; }
+html.dark main .bg-gray-200 { background-color: #475569; }
+
+/* Form inputs */
+html.dark main input:not([style]),
+html.dark main select:not([style]),
+html.dark main textarea:not([style]) {
+  background-color: #1e293b;
+  color: #f1f5f9;
+  border-color: #475569;
+}
+html.dark main input::placeholder,
+html.dark main textarea::placeholder {
+  color: #64748b;
+}
+
+/* Rounded-xl dividers */
+html.dark main .rounded-2xl.bg-white,
+html.dark main .rounded-xl.bg-white {
+  background-color: #1e293b;
+}
+
+/* ─── Base text colour: every unclassed element becomes readable ─── */
+html.dark main { color: #f1f5f9; }
+
+/* Differentiate alternating-row bg from card bg so table rows are visible */
+html.dark main .bg-gray-50  { background-color: #243044; }
+
+/* Make hover states clearly visible in dark mode */
+html.dark main .hover\:bg-gray-50:hover  { background-color: #334155 !important; }
+html.dark main .hover\:bg-gray-100:hover { background-color: #3e4f69 !important; }
+
+/* Brighter semantic text colours on dark backgrounds */
+html.dark main .text-green-700 { color: #4ade80; }
+html.dark main .text-green-600 { color: #4ade80; }
+html.dark main .text-red-700   { color: #fca5a5; }
+html.dark main .text-red-600   { color: #f87171; }
+html.dark main .text-amber-700 { color: #fcd34d; }
+html.dark main .text-amber-600 { color: #fbbf24; }
+html.dark main .text-orange-700 { color: #fb923c; }
+html.dark main .text-orange-600 { color: #fb923c; }
+html.dark main .text-indigo-700 { color: #a5b4fc; }
+html.dark main .text-indigo-600 { color: #818cf8; }
+html.dark main .text-blue-700   { color: #93c5fd; }
+html.dark main .text-purple-700 { color: #d8b4fe; }
+html.dark main .text-cyan-700   { color: #67e8f9; }
+html.dark main .text-teal-700   { color: #5eead4; }
+
+/* Coloured signal / category card backgrounds — darkened for dark mode */
+html.dark main .bg-green-50  { background-color: #0d2218 !important; }
+html.dark main .bg-red-50    { background-color: #2a1212 !important; }
+html.dark main .bg-amber-50  { background-color: #271c07 !important; }
+html.dark main .bg-yellow-50 { background-color: #271c07 !important; }
+html.dark main .bg-blue-50   { background-color: #0e1e35 !important; }
+html.dark main .bg-indigo-50 { background-color: #17204f !important; }
+html.dark main .bg-purple-50 { background-color: #20133a !important; }
+html.dark main .bg-cyan-50   { background-color: #062030 !important; }
+html.dark main .bg-teal-50   { background-color: #05201f !important; }
+html.dark main .bg-orange-50 { background-color: #2a1408 !important; }
+html.dark main .bg-emerald-50 { background-color: #062215 !important; }
+
+/* Coloured borders */
+html.dark main .border-green-200  { border-color: #166534 !important; }
+html.dark main .border-green-100  { border-color: #14532d !important; }
+html.dark main .border-red-200    { border-color: #991b1b !important; }
+html.dark main .border-red-100    { border-color: #7f1d1d !important; }
+html.dark main .border-amber-200  { border-color: #92400e !important; }
+html.dark main .border-indigo-200 { border-color: #4338ca !important; }
+html.dark main .border-indigo-100 { border-color: #3730a3 !important; }
+html.dark main .border-blue-200   { border-color: #1d4ed8 !important; }
+html.dark main .border-purple-200 { border-color: #6b21a8 !important; }
+html.dark main .border-emerald-200 { border-color: #065f46 !important; }
+
+/* ─── Fixed-position dark drawers / overlays (outside <main>) ─── */
+html.dark .dark-drawer {
+  background-color: #1e293b;
+  border-color:     #334155;
+  color:            #f1f5f9;
+}
+html.dark .dark-drawer .bg-white   { background-color: #1e293b !important; }
+html.dark .dark-drawer .bg-gray-50 { background-color: #243044 !important; }
+html.dark .dark-drawer .bg-gray-100 { background-color: #334155 !important; }
+html.dark .dark-drawer .bg-gray-200 { background-color: #475569 !important; }
+html.dark .dark-drawer .border-gray-100 { border-color: #334155 !important; }
+html.dark .dark-drawer .border-gray-200 { border-color: #475569 !important; }
+html.dark .dark-drawer .text-gray-900 { color: #f1f5f9 !important; }
+html.dark .dark-drawer .text-gray-800 { color: #e2e8f0 !important; }
+html.dark .dark-drawer .text-gray-700 { color: #cbd5e1 !important; }
+html.dark .dark-drawer .text-gray-600 { color: #94a3b8 !important; }
+html.dark .dark-drawer .text-gray-500 { color: #94a3b8 !important; }
+html.dark .dark-drawer .text-gray-400 { color: #64748b !important; }
+html.dark .dark-drawer .text-gray-300 { color: #475569 !important; }
+html.dark .dark-drawer input,
+html.dark .dark-drawer textarea {
+  background-color: #1e293b !important;
+  color:            #f1f5f9 !important;
+  border-color:     #475569 !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DARK MODE — FORM ELEMENTS (inputs, selects, textareas)
+   Applied globally in main so every page benefits
+   ═══════════════════════════════════════════════════════════════════ */
+html.dark main input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+html.dark main select,
+html.dark main textarea {
+  background-color: #0f1929 !important;
+  color:            #e2e8f0 !important;
+  border-color:     #334155 !important;
+  color-scheme:     dark;
+}
+html.dark main input::placeholder,
+html.dark main textarea::placeholder {
+  color: #475569 !important;
+}
+html.dark main select option {
+  background-color: #1e293b;
+  color:            #e2e8f0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DARK MODE — OPACITY-MODIFIED BG UTILITIES
+   Tailwind generates different class names for bg-*\/* variants so
+   they skip the plain .bg-gray-50 selector above — handle explicitly
+   ═══════════════════════════════════════════════════════════════════ */
+html.dark main .bg-gray-50\/40  { background-color: rgba(15, 23, 42, 0.55) !important; }
+html.dark main .bg-gray-50\/60  { background-color: rgba(15, 23, 42, 0.65) !important; }
+html.dark main .bg-gray-50\/70  { background-color: rgba(15, 23, 42, 0.70) !important; }
+html.dark main .bg-white\/60    { background-color: rgba(15, 23, 42, 0.65) !important; }
+html.dark main .bg-white\/40    { background-color: rgba(15, 23, 42, 0.50) !important; }
+
+/* hover opacity variants */
+html.dark main .hover\:bg-gray-50\/70:hover { background-color: rgba(30, 41, 59, 0.55) !important; }
+
+/* ── divide-* white-line fix ─────────────────────────────────────────────────
+   In dark mode, divide-gray-50 / divide-gray-100 produce near-white #f9fafb
+   borders that are brutally visible against dark backgrounds.
+   We override all divide-y border tops with a subtle dark tone.
+   Using both the Tailwind selector format AND a universal `* + *` fallback. */
+
+html.dark main .divide-y > * + *,
+html.dark main .divide-gray-50 > * + *,
+html.dark main .divide-gray-100 > * + *,
+html.dark main tbody > tr + tr {
+  border-top-color:    rgba(30, 41, 59, 0.9) !important;
+  border-bottom-color: transparent           !important;
+}
+html.dark main .divide-gray-50 > :not([hidden]) ~ :not([hidden]),
+html.dark main .divide-gray-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(30, 41, 59, 0.9) !important;
+}
+
+/* table row stripes */
+html.dark main tr.bg-white                    { background-color: #1e293b !important; }
+html.dark main tr.bg-slate-50\/60             { background-color: rgba(15,23,42,0.6) !important; }
+
+/* date / number input calendar icons */
+html.dark main input[type="date"]::-webkit-calendar-picker-indicator,
+html.dark main input[type="number"]::-webkit-inner-spin-button {
+  filter: invert(0.7);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   ELEGANT SCROLLBARS  —  light & dark mode
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Firefox ────────────────────────────────────────────────────── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.35) transparent;
+}
+html.dark * {
+  scrollbar-color: rgba(148, 163, 184, 0.22) transparent;
+}
+
+/* ── WebKit (Chrome / Safari / Edge) ───────────────────────────── */
+::-webkit-scrollbar {
+  width:  5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb {
+  background:    rgba(100, 116, 139, 0.32);
+  border-radius: 999px;
+  border:        1px solid transparent;
+  background-clip: content-box;
+  transition: background 0.2s ease;
+}
+::-webkit-scrollbar-thumb:hover {
+  background:    rgba(100, 116, 139, 0.6);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Dark mode overrides */
+html.dark ::-webkit-scrollbar-thumb {
+  background:    rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+  background-clip: content-box;
+}
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background:    rgba(148, 163, 184, 0.45);
+  background-clip: content-box;
+}
+html.dark .dark-drawer input::placeholder,
+html.dark .dark-drawer textarea::placeholder { color: #64748b !important; }
+
+/* ── Theme switch ripple animation (View Transitions API) ──────────────────── */
+::view-transition-old(root) {
+  animation: none;
+  z-index: 0;
+  mix-blend-mode: normal;
+}
+
+::view-transition-new(root) {
+  animation: theme-ripple-reveal 0.9s cubic-bezier(0.4, 0, 0.2, 1) both;
+  z-index: 1;
+  mix-blend-mode: normal;
+}
+
+@keyframes theme-ripple-reveal {
+  from {
+    clip-path: circle(0 at var(--ripple-x, 50%) var(--ripple-y, 50%));
+    opacity: 0.6;
+  }
+  15% {
+    opacity: 1;
+  }
+  to {
+    clip-path: circle(150vmax at var(--ripple-x, 50%) var(--ripple-y, 50%));
+    opacity: 1;
   }
 }
