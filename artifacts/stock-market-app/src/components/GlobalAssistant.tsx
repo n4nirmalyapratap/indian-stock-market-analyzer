@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
 import { BookOpen, Send, X, RotateCcw, Sparkles, ChevronRight, ChevronLeft, GraduationCap, Bot } from "lucide-react";
 
@@ -959,6 +959,148 @@ function RichText({ text }: { text: string }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Full-featured markdown renderer for Options AI messages (tables, lists, etc.)
+// ─────────────────────────────────────────────────────────────────────────────
+function AiRichText({ text }: { text: string }) {
+  function parseInline(s: string): React.ReactNode[] {
+    const parts: React.ReactNode[] = [];
+    const re = /\*\*(.*?)\*\*|`([^`]+)`|\*(.*?)\*/g;
+    let last = 0; let m: RegExpExecArray | null;
+    while ((m = re.exec(s)) !== null) {
+      if (m.index > last) parts.push(s.slice(last, m.index));
+      if (m[1] !== undefined)
+        parts.push(<strong key={m.index} className="font-semibold text-gray-900 dark:text-white">{m[1]}</strong>);
+      else if (m[2] !== undefined)
+        parts.push(<code key={m.index} className="bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded-md text-[11px] font-mono border border-indigo-100 dark:border-indigo-700/30">{m[2]}</code>);
+      else if (m[3] !== undefined)
+        parts.push(<em key={m.index} className="italic text-gray-600 dark:text-gray-400">{m[3]}</em>);
+      last = re.lastIndex;
+    }
+    if (last < s.length) parts.push(s.slice(last));
+    return parts;
+  }
+
+  type Block =
+    | { type: "table"; rows: string[] }
+    | { type: "heading"; level: number; text: string }
+    | { type: "bullet"; text: string; depth: number }
+    | { type: "ordered"; text: string; n: number }
+    | { type: "rule" }
+    | { type: "blank" }
+    | { type: "text"; text: string };
+
+  const lines = text.split("\n");
+  const blocks: Block[] = [];
+
+  for (const raw of lines) {
+    const line = raw;
+    const trimmed = line.trim();
+
+    if (!trimmed) { blocks.push({ type: "blank" }); continue; }
+
+    // Table row
+    if (/^\|.+\|/.test(trimmed)) {
+      const last = blocks[blocks.length - 1];
+      if (last?.type === "table") { last.rows.push(line); }
+      else blocks.push({ type: "table", rows: [line] });
+      continue;
+    }
+    // Heading
+    const hm = trimmed.match(/^(#{1,3})\s+(.*)/);
+    if (hm) { blocks.push({ type: "heading", level: hm[1].length, text: hm[2] }); continue; }
+    // HR
+    if (/^[-*_]{3,}$/.test(trimmed)) { blocks.push({ type: "rule" }); continue; }
+    // Bullet
+    const bm = line.match(/^(\s*)[•\-*]\s+(.*)/);
+    if (bm) { blocks.push({ type: "bullet", text: bm[2], depth: Math.floor(bm[1].length / 2) }); continue; }
+    // Ordered
+    const om = trimmed.match(/^(\d+)\.\s+(.*)/);
+    if (om) { blocks.push({ type: "ordered", text: om[2], n: Number(om[1]) }); continue; }
+    // Normal text
+    blocks.push({ type: "text", text: line });
+  }
+
+  function renderTable(rows: string[]) {
+    const isSep = (r: string) => /^\|[\s|:–-]+\|$/.test(r.trim());
+    const parseRow = (r: string) =>
+      r.replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+    const nonSep = rows.filter(r => !isSep(r));
+    if (nonSep.length < 1) return null;
+    const [header, ...dataRows] = nonSep;
+    const headers = parseRow(header);
+    return (
+      <div className="my-3 -mx-1 overflow-x-auto rounded-2xl shadow-lg border border-indigo-100 dark:border-indigo-800/40">
+        <table className="w-full border-collapse text-[11.5px]" style={{ minWidth: 260 }}>
+          <thead>
+            <tr style={{ background: "linear-gradient(135deg, #6366f1 0%, #7c3aed 100%)" }}>
+              {headers.map((h, hi) => (
+                <th key={hi}
+                  className={`px-3.5 py-2.5 text-left font-bold text-white tracking-wide whitespace-nowrap
+                    ${hi === 0 ? "rounded-tl-2xl" : ""} ${hi === headers.length - 1 ? "rounded-tr-2xl" : ""}`}>
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {dataRows.map((row, ri) => {
+              const cells = parseRow(row);
+              return (
+                <tr key={ri}
+                  className={`border-t border-indigo-50 dark:border-indigo-900/30 transition-colors
+                    ${ri % 2 === 0
+                      ? "bg-white dark:bg-gray-800"
+                      : "bg-indigo-50/40 dark:bg-indigo-900/10"}`}>
+                  {cells.map((cell, ci) => (
+                    <td key={ci}
+                      className={`px-3.5 py-2 leading-snug
+                        ${ci === 0
+                          ? "font-semibold text-indigo-700 dark:text-indigo-300 whitespace-nowrap"
+                          : "text-gray-600 dark:text-gray-300"}`}>
+                      {parseInline(cell)}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  const headingClass = ["", "text-[14px] font-bold text-gray-900 dark:text-white mt-3 mb-1", "text-[13px] font-semibold text-indigo-700 dark:text-indigo-300 mt-2.5 mb-0.5", "text-[12px] font-semibold text-gray-700 dark:text-gray-300 mt-2"];
+
+  return (
+    <div className="space-y-1 text-[12.5px]">
+      {blocks.map((block, bi) => {
+        if (block.type === "blank")   return <div key={bi} className="h-1.5" />;
+        if (block.type === "rule")    return <hr key={bi} className="border-indigo-100 dark:border-indigo-800/40 my-2" />;
+        if (block.type === "table")   return <React.Fragment key={bi}>{renderTable(block.rows)}</React.Fragment>;
+        if (block.type === "heading") return <p key={bi} className={headingClass[block.level]}>{parseInline(block.text)}</p>;
+        if (block.type === "bullet")  return (
+          <div key={bi} className={`flex gap-2 items-start ${block.depth > 0 ? "pl-4" : ""}`}>
+            <span className={`flex-shrink-0 mt-1 w-1.5 h-1.5 rounded-full ${block.depth === 0 ? "bg-indigo-500" : "bg-gray-400"}`} />
+            <span className="leading-relaxed text-gray-700 dark:text-gray-300">{parseInline(block.text)}</span>
+          </div>
+        );
+        if (block.type === "ordered") return (
+          <div key={bi} className="flex gap-2 items-start">
+            <span className="flex-shrink-0 text-indigo-500 dark:text-indigo-400 font-semibold text-[11px] w-4 text-right mt-0.5">{block.n}.</span>
+            <span className="leading-relaxed text-gray-700 dark:text-gray-300">{parseInline(block.text)}</span>
+          </div>
+        );
+        return (
+          <p key={bi} className="leading-relaxed text-gray-700 dark:text-gray-300">
+            {parseInline(block.text)}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 interface Msg {
@@ -1270,18 +1412,28 @@ export default function GlobalAssistant() {
           {/* AI chat body — visible when in AI mode */}
           {aiMode && (
             <>
-              <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0 bg-gray-50 dark:bg-gray-950">
+              {/* Messages area */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0"
+                style={{ background: "linear-gradient(180deg, #f0f0ff 0%, #faf5ff 50%, #f5f3ff 100%)" }}>
+                <style>{`.dark .ai-chat-bg { background: linear-gradient(180deg,#0d0b1e 0%,#100e2a 50%,#0f0c24 100%) !important; }`}</style>
                 {aiMsgs.length === 0 && (
-                  <div className="flex flex-col items-center pt-8 pb-4 px-2">
-                    <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-md mb-4">
-                      <Bot className="w-8 h-8 text-white" />
+                  <div className="flex flex-col items-center pt-6 pb-4 px-2">
+                    {/* Glowing orb */}
+                    <div className="relative mb-5">
+                      <div className="absolute inset-0 rounded-3xl bg-violet-500/30 blur-xl scale-150" />
+                      <div className="relative w-[68px] h-[68px] rounded-3xl flex items-center justify-center shadow-xl"
+                        style={{ background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 60%, #a855f7 100%)" }}>
+                        <Bot className="w-8 h-8 text-white drop-shadow" />
+                      </div>
                     </div>
-                    <p className="text-base font-bold text-gray-800 dark:text-white">Options AI</p>
-                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-1 text-center leading-relaxed max-w-[260px]">
-                      Ask about Greeks, strategies, IV analysis, or your current position
+                    <p className="text-[15px] font-bold text-gray-800 dark:text-white">Options AI</p>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 text-center leading-relaxed max-w-[250px]">
+                      Ask about Greeks, strategies, IV, or your current position
                     </p>
+
+                    {/* Prompt chips */}
                     <div className="mt-5 w-full space-y-2">
-                      <p className="text-[10px] font-bold text-gray-300 uppercase tracking-widest text-center mb-2">Try asking</p>
+                      <p className="text-[9.5px] font-black text-indigo-300 uppercase tracking-[0.15em] text-center mb-3">Try asking</p>
                       {[
                         { q: "What is an Iron Condor?",                     icon: "📐" },
                         { q: "Explain Delta and Gamma",                     icon: "🔢" },
@@ -1289,71 +1441,107 @@ export default function GlobalAssistant() {
                         { q: "What is Implied Volatility?",                 icon: "📈" },
                       ].map(({ q, icon }) => (
                         <button key={q} onClick={() => setAiInput(q)}
-                          className="w-full flex items-center gap-2.5 text-left bg-white dark:bg-gray-800 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 border border-gray-100 dark:border-white/10 hover:border-indigo-200 rounded-xl px-3.5 py-2.5 transition group">
-                          <span className="text-base">{icon}</span>
-                          <span className="text-xs text-gray-600 dark:text-gray-300 group-hover:text-indigo-700 dark:group-hover:text-indigo-300 leading-snug">{q}</span>
+                          className="w-full flex items-center gap-3 text-left rounded-2xl px-4 py-3 transition-all group
+                            border border-indigo-100 dark:border-indigo-800/40
+                            bg-white/80 dark:bg-white/5
+                            hover:bg-indigo-50 dark:hover:bg-indigo-900/30
+                            hover:border-indigo-300 dark:hover:border-indigo-600
+                            hover:shadow-sm backdrop-blur-sm">
+                          <span className="text-[18px] leading-none">{icon}</span>
+                          <span className="text-[12px] text-gray-600 dark:text-gray-300 group-hover:text-indigo-700 dark:group-hover:text-indigo-300 leading-snug font-medium">{q}</span>
+                          <ChevronRight className="ml-auto w-3.5 h-3.5 text-gray-300 dark:text-gray-600 group-hover:text-indigo-400 transition flex-shrink-0" />
                         </button>
                       ))}
                     </div>
                   </div>
                 )}
                 {aiMsgs.map((m, i) => (
-                  <div key={i} className={`flex gap-2.5 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div key={i} className={`flex gap-2.5 ${m.role === "user" ? "justify-end" : "justify-start"} items-end`}>
+
+                    {/* AI avatar */}
                     {m.role === "assistant" && (
-                      <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-sm mt-0.5">
-                        <Bot style={{ width: 14, height: 14 }} className="text-white" />
+                      <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-md mb-0.5">
+                        <Bot style={{ width: 13, height: 13 }} className="text-white" />
                       </div>
                     )}
+
                     {m.role === "user" ? (
-                      <div className="max-w-[80%] bg-indigo-600 text-white rounded-2xl rounded-tr-none px-3.5 py-2.5 shadow-sm text-sm leading-relaxed">
+                      /* ── User bubble ── */
+                      <div className="max-w-[78%] bg-gradient-to-br from-indigo-600 to-violet-600 text-white rounded-2xl rounded-br-md px-4 py-2.5 shadow-md text-[13px] leading-relaxed">
                         {m.content}
                       </div>
                     ) : (
-                      <div className="flex-1 min-w-0 bg-white dark:bg-gray-800 border border-gray-100 dark:border-white/10 rounded-2xl rounded-tl-none px-4 py-3 shadow-sm">
-                        <RichText text={m.content} />
+                      /* ── AI card — wide, allows table overflow ── */
+                      <div className="flex-1 min-w-0 overflow-hidden rounded-2xl rounded-bl-md border border-indigo-100/80 dark:border-indigo-700/30 shadow-md"
+                        style={{ background: "linear-gradient(145deg, #ffffff 0%, #f5f3ff 100%)" }}>
+                        <div className="dark:hidden">
+                          <div className="px-4 pt-3 pb-3.5 overflow-x-auto">
+                            <AiRichText text={m.content} />
+                          </div>
+                        </div>
+                        <div className="hidden dark:block">
+                          <div className="px-4 pt-3 pb-3.5 overflow-x-auto"
+                            style={{ background: "linear-gradient(145deg, #1e1b4b 0%, #1a1035 100%)" }}>
+                            <AiRichText text={m.content} />
+                          </div>
+                        </div>
                       </div>
                     )}
+
+                    {/* User avatar */}
                     {m.role === "user" && (
-                      <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center mt-0.5">
-                        <span className="text-[10px] font-bold text-gray-500 dark:text-gray-300">YOU</span>
+                      <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center mb-0.5 shadow-sm">
+                        <span className="text-[9px] font-black text-white tracking-tight">YOU</span>
                       </div>
                     )}
                   </div>
                 ))}
                 {aiLoading && (
-                  <div className="flex gap-2.5">
-                    <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-sm">
-                      <Bot style={{ width: 14, height: 14 }} className="text-white" />
+                  <div className="flex gap-2.5 items-end">
+                    <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-md mb-0.5">
+                      <Bot style={{ width: 13, height: 13 }} className="text-white" />
                     </div>
-                    <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-white/10 rounded-2xl rounded-tl-none px-4 py-3 shadow-sm">
+                    <div className="rounded-2xl rounded-bl-md border border-indigo-100/80 dark:border-indigo-700/30 px-5 py-3.5 shadow-md"
+                      style={{ background: "linear-gradient(145deg,#ffffff 0%,#f5f3ff 100%)" }}>
                       <div className="flex gap-1.5 items-center">
-                        <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                        <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                        <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                        <span className="w-2 h-2 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: "0ms" }} />
+                        <span className="w-2 h-2 rounded-full bg-violet-400 animate-bounce" style={{ animationDelay: "160ms" }} />
+                        <span className="w-2 h-2 rounded-full bg-purple-400 animate-bounce" style={{ animationDelay: "320ms" }} />
                       </div>
                     </div>
                   </div>
                 )}
                 <div ref={aiEndRef} />
               </div>
-              <div className="flex-shrink-0 border-t border-gray-100 dark:border-white/[0.08] p-3 flex gap-2 bg-white dark:bg-gray-900">
-                <input
-                  type="text"
-                  value={aiInput}
-                  onChange={e => setAiInput(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendAiChat())}
-                  placeholder="Ask about options, Greeks, strategies…"
-                  className="flex-1 text-sm border border-gray-200 dark:border-white/10 rounded-xl px-3 py-2
-                    focus:outline-none focus:ring-2 focus:ring-indigo-300
-                    bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder:text-gray-400"
-                />
-                <button
-                  onClick={sendAiChat}
-                  disabled={!aiInput.trim() || aiLoading}
-                  className="bg-indigo-600 text-white rounded-xl px-3 py-2 hover:bg-indigo-700 disabled:opacity-40 transition flex-shrink-0"
-                >
-                  <Send className="w-4 h-4" />
-                </button>
+
+              {/* Input bar */}
+              <div className="flex-shrink-0 border-t border-indigo-100/60 dark:border-indigo-800/30 px-3 py-3"
+                style={{ background: "linear-gradient(135deg,#faf5ff 0%,#f0f0ff 100%)" }}>
+                <div className="flex items-center gap-2 rounded-2xl border border-indigo-200/70 dark:border-indigo-600/30 px-3.5 py-2.5
+                  bg-white dark:bg-gray-900 shadow-sm
+                  focus-within:border-indigo-400 dark:focus-within:border-indigo-500
+                  focus-within:shadow-[0_0_0_3px_rgba(99,102,241,0.12)] transition-all">
+                  <input
+                    type="text"
+                    value={aiInput}
+                    onChange={e => setAiInput(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendAiChat())}
+                    placeholder="Ask about options, Greeks, strategies…"
+                    className="flex-1 text-[13px] bg-transparent text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-600 outline-none min-w-0"
+                  />
+                  <button
+                    onClick={sendAiChat}
+                    disabled={!aiInput.trim() || aiLoading}
+                    className="flex-shrink-0 w-8 h-8 rounded-xl flex items-center justify-center transition-all
+                      disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{ background: "linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%)" }}
+                  >
+                    <Send className="w-3.5 h-3.5 text-white" />
+                  </button>
+                </div>
+                <p className="text-[10px] text-center text-indigo-300 dark:text-indigo-600 mt-2">
+                  AI-powered · Options &amp; derivatives focused
+                </p>
               </div>
             </>
           )}
