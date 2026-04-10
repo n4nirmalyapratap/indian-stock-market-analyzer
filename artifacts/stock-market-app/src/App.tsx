@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
-import { Switch, Route, Router as WouterRouter, Link, useLocation } from "wouter";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState, useEffect, useRef } from "react";
+import { Switch, Route, Router as WouterRouter, Link, useLocation, Redirect } from "wouter";
+import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import { ClerkProvider, SignIn, SignUp, Show, useClerk, useUser, useAuth } from "@clerk/react";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import ChartView from "@/pages/ChartView";
@@ -18,18 +19,34 @@ import NotFound from "@/pages/not-found";
 import TradingPlatform from "@/pages/TradingPlatform";
 import SectorDetail from "@/pages/SectorDetail";
 import NewsFeed from "@/pages/NewsFeed";
+import LandingPage from "@/pages/LandingPage";
 import GlobalAssistant from "@/components/GlobalAssistant";
 import { ThemeProvider, useTheme } from "@/context/ThemeContext";
+import { setTokenGetter } from "@/lib/api";
 import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
   MessageCircle, Send, Brain, TrendingUp, CandlestickChart,
   Settings, ChevronRight, ChevronLeft, ChevronDown, Sun, Moon,
-  Newspaper,
+  Newspaper, LogOut, User,
 } from "lucide-react";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
 });
+
+const clerkPubKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
+const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
+const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+if (!clerkPubKey) {
+  throw new Error("Missing VITE_CLERK_PUBLISHABLE_KEY");
+}
+
+function stripBase(path: string): string {
+  return basePath && path.startsWith(basePath)
+    ? path.slice(basePath.length) || "/"
+    : path;
+}
 
 const MAIN_NAV = [
   { path: "/",         label: "Dashboard",      icon: LayoutDashboard },
@@ -89,6 +106,56 @@ function ThemeToggle({ open }: { open: boolean }) {
   );
 }
 
+function UserProfile({ open }: { open: boolean }) {
+  const { user, isLoaded } = useUser();
+  const { signOut } = useClerk();
+
+  if (!isLoaded || !user) return null;
+
+  const name = user.fullName || user.firstName || user.emailAddresses[0]?.emailAddress || "User";
+  const initials = name.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2);
+  const avatarUrl = user.imageUrl;
+
+  const handleSignOut = () => signOut({ redirectUrl: "/" });
+
+  if (!open) {
+    return (
+      <button
+        onClick={handleSignOut}
+        title="Sign out"
+        className="w-full flex justify-center py-2 text-gray-400 hover:text-red-400 transition"
+      >
+        <LogOut className="w-4 h-4" />
+      </button>
+    );
+  }
+
+  return (
+    <div className="mx-1.5 mb-1">
+      <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-gray-50 dark:bg-gray-800/50">
+        {avatarUrl ? (
+          <img src={avatarUrl} alt={name} className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
+        ) : (
+          <div className="w-7 h-7 rounded-full bg-indigo-500 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+            {initials}
+          </div>
+        )}
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-medium text-gray-900 dark:text-white truncate">{name}</p>
+          <p className="text-[10px] text-gray-400 truncate">{user.emailAddresses[0]?.emailAddress}</p>
+        </div>
+        <button
+          onClick={handleSignOut}
+          title="Sign out"
+          className="text-gray-400 hover:text-red-400 transition flex-shrink-0"
+        >
+          <LogOut className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Layout({ children }: { children: React.ReactNode }) {
   const [loc] = useLocation();
   const [open, setOpen]           = useState(() => localStorage.getItem("sidebar-open") === "true");
@@ -128,7 +195,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
 
-        {/* Bottom: Settings + theme + toggle */}
+        {/* Bottom: Settings + theme + user + toggle */}
         <div className="border-t border-gray-100 dark:border-white/[0.05] py-2 flex-shrink-0">
 
           {open ? (
@@ -158,6 +225,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           )}
 
           <ThemeToggle open={open} />
+          <UserProfile open={open} />
 
           <button
             onClick={() => setOpen(o => !o)}
@@ -208,7 +276,68 @@ function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Router() {
+function AuthTokenInjector() {
+  const { getToken } = useAuth();
+  const queryClient = useQueryClient();
+  const prevUserRef = useRef<string | null | undefined>(undefined);
+  const { user } = useUser();
+
+  useEffect(() => {
+    setTokenGetter(getToken);
+  }, [getToken]);
+
+  useEffect(() => {
+    const userId = user?.id ?? null;
+    if (prevUserRef.current !== undefined && prevUserRef.current !== userId) {
+      queryClient.clear();
+    }
+    prevUserRef.current = userId;
+  }, [user?.id, queryClient]);
+
+  return null;
+}
+
+function SignInPage() {
+  // To update login providers, app branding, or OAuth settings use the Auth
+  // pane in the workspace toolbar. More information can be found in the Replit docs.
+  return (
+    <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center py-12 px-4">
+      <div className="mb-8 flex flex-col items-center">
+        <img src="/niftynodes-logo.png" alt="NiftyNodes" className="w-12 h-12 rounded-full object-cover mb-3" />
+        <p className="text-white font-bold text-lg">Nifty Node</p>
+        <p className="text-gray-400 text-sm">Indian Stock Market Analysis</p>
+      </div>
+      <SignIn
+        routing="path"
+        path={`${basePath}/sign-in`}
+        signUpUrl={`${basePath}/sign-up`}
+        fallbackRedirectUrl={`${basePath}/`}
+      />
+    </div>
+  );
+}
+
+function SignUpPage() {
+  // To update login providers, app branding, or OAuth settings use the Auth
+  // pane in the workspace toolbar. More information can be found in the Replit docs.
+  return (
+    <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center py-12 px-4">
+      <div className="mb-8 flex flex-col items-center">
+        <img src="/niftynodes-logo.png" alt="NiftyNodes" className="w-12 h-12 rounded-full object-cover mb-3" />
+        <p className="text-white font-bold text-lg">Nifty Node</p>
+        <p className="text-gray-400 text-sm">Indian Stock Market Analysis</p>
+      </div>
+      <SignUp
+        routing="path"
+        path={`${basePath}/sign-up`}
+        signInUrl={`${basePath}/sign-in`}
+        fallbackRedirectUrl={`${basePath}/`}
+      />
+    </div>
+  );
+}
+
+function AppRoutes() {
   return (
     <Layout>
       <Switch>
@@ -232,18 +361,45 @@ function Router() {
   );
 }
 
+function ClerkProviderWithRoutes() {
+  const [, setLocation] = useLocation();
+
+  return (
+    <ClerkProvider
+      publishableKey={clerkPubKey}
+      proxyUrl={clerkProxyUrl}
+      routerPush={(to) => setLocation(stripBase(to))}
+      routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
+    >
+      <QueryClientProvider client={queryClient}>
+        <Switch>
+          <Route path="/sign-in/*?" component={SignInPage} />
+          <Route path="/sign-up/*?" component={SignUpPage} />
+          <Route>
+            <Show when="signed-in">
+              <AuthTokenInjector />
+              <AppRoutes />
+              <GlobalAssistant />
+            </Show>
+            <Show when="signed-out">
+              <LandingPage />
+            </Show>
+          </Route>
+        </Switch>
+      </QueryClientProvider>
+    </ClerkProvider>
+  );
+}
+
 function App() {
   return (
     <ThemeProvider>
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-            <Router />
-            <GlobalAssistant />
-          </WouterRouter>
-          <Toaster />
-        </TooltipProvider>
-      </QueryClientProvider>
+      <TooltipProvider>
+        <WouterRouter base={basePath}>
+          <ClerkProviderWithRoutes />
+        </WouterRouter>
+        <Toaster />
+      </TooltipProvider>
     </ThemeProvider>
   );
 }

@@ -7,11 +7,13 @@ version: "3.9"
 #   frontend  — nginx serving built React app on port 80 (public)
 #               nginx also proxies /api/* → backend:8090
 #
-# Usage (development / local):
-#   docker compose up --build
-#
-# Usage (production — detached):
+# First-time setup:
+#   cp .env.example .env        # fill in your keys
+#   bash scripts/setup-git-hook.sh   # auto-restart on git pull
 #   docker compose up --build -d
+#
+# Deploy / update (manual):
+#   bash deploy.sh
 #
 # Then open:  http://localhost
 # API health: http://localhost/api/healthz
@@ -28,11 +30,14 @@ services:
     restart: unless-stopped
     environment:
       PORT: "8090"
-      # Optional — add Twilio / Telegram credentials here or in a .env file
-      # TWILIO_ACCOUNT_SID: ""
-      # TWILIO_AUTH_TOKEN: ""
-      # TELEGRAM_BOT_TOKEN: ""
       SESSION_SECRET: "${SESSION_SECRET:-changeme-in-production}"
+      # Clerk — required for JWT auth middleware
+      CLERK_SECRET_KEY: "${CLERK_SECRET_KEY}"
+      CLERK_PUBLISHABLE_KEY: "${CLERK_PUBLISHABLE_KEY}"
+      # Optional bot integrations
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TWILIO_ACCOUNT_SID: "${TWILIO_ACCOUNT_SID:-}"
+      TWILIO_AUTH_TOKEN: "${TWILIO_AUTH_TOKEN:-}"
     ports:
       # Expose directly for debugging (remove in production if not needed)
       - "8090:8090"
@@ -49,6 +54,9 @@ services:
     build:
       context: .
       dockerfile: artifacts/stock-market-app/Dockerfile
+      args:
+        # Clerk publishable key is embedded in the frontend JS bundle at build time
+        VITE_CLERK_PUBLISHABLE_KEY: "${VITE_CLERK_PUBLISHABLE_KEY}"
     container_name: stock-frontend
     restart: unless-stopped
     ports:

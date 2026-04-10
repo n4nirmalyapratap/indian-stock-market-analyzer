@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import * as echarts from "echarts";
 import { calcEMA, calcSMA, calcRSI, calcMACD, calcBollingerBands } from "@/lib/indicators";
+import { fetchApi } from "@/lib/api";
 
 export type DrawingTool =
   "none" |
@@ -1195,9 +1196,7 @@ export default function ChartPanel({
       const qs = periodCfg.start && periodCfg.end
         ? `start=${periodCfg.start}&end=${periodCfg.end}&interval=${periodCfg.i}`
         : `period=${periodCfg.p}&interval=${periodCfg.i}`;
-      const res = await fetch(`/api/stocks/${encodeURIComponent(symbol)}/history?${qs}`);
-      if (!res.ok) throw new Error();
-      const data = await res.json();
+      const data = await fetchApi<{ candles: unknown[] }>(`/stocks/${encodeURIComponent(symbol)}/history?${qs}`);
       candles.current = data.candles ?? [];
       // Compute last close + daily change
       const cs = candles.current;

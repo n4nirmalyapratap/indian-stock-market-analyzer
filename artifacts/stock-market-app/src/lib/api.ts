@@ -279,12 +279,34 @@ export class ApiError extends Error {
   }
 }
 
+// ─── Auth token injection ─────────────────────────────────────────────────────
+
+let _getToken: ((opts?: Record<string, unknown>) => Promise<string | null>) | null = null;
+
+export function setTokenGetter(fn: (opts?: Record<string, unknown>) => Promise<string | null>) {
+  _getToken = fn;
+}
+
 // ─── Base fetch ───────────────────────────────────────────────────────────────
 
 const BASE = "/api";
 
 export async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, options);
+  const authHeaders: Record<string, string> = {};
+  if (_getToken) {
+    try {
+      const token = await _getToken();
+      if (token) authHeaders["Authorization"] = `Bearer ${token}`;
+    } catch {
+      // User may not be signed in yet
+    }
+  }
+
+  const existingHeaders = (options?.headers as Record<string, string>) ?? {};
+  const res = await fetch(`${BASE}${path}`, {
+    ...options,
+    headers: { ...existingHeaders, ...authHeaders },
+  });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new ApiError(res.status, body.error || `API error ${res.status}`);

@@ -22,6 +22,7 @@ a **React/Vite frontend**.
 | Router | wouter (NOT react-router) |
 | UI | shadcn/ui |
 | Monorepo | pnpm workspaces (Node.js 24) |
+| Auth | Clerk (Google OAuth + email) — `@clerk/react` frontend · JWT verification in Python |
 | Deployment | Docker (two-container: nginx frontend + Python backend) |
 
 ---
