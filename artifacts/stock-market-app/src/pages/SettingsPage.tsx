@@ -1,14 +1,7 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
 import { useCustomAuth } from "@/context/CustomAuthContext";
 import { useTheme } from "@/context/ThemeContext";
-import WhatsAppBot from "@/pages/WhatsAppBot";
-import TelegramBot from "@/pages/TelegramBot";
 import {
-  User, Mail, Shield, LogOut, Sun, Moon, ChevronDown,
-  MessageCircle, Send, Wifi, WifiOff, CheckCircle, XCircle,
-  KeyRound,
+  User, Mail, Shield, LogOut, Sun, Moon, KeyRound,
 } from "lucide-react";
 
 function Avatar({ name }: { name: string }) {
@@ -20,26 +13,9 @@ function Avatar({ name }: { name: string }) {
   );
 }
 
-function WhatsAppStatus() {
-  const { data } = useQuery({ queryKey: ["whatsapp-status"], queryFn: api.whatsappStatus, refetchInterval: 30000 });
-  return data?.enabled
-    ? <span className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400 font-medium"><Wifi className="w-3 h-3" /> Connected</span>
-    : <span className="flex items-center gap-1.5 text-xs text-gray-400"><WifiOff className="w-3 h-3" /> Disabled</span>;
-}
-
-function TelegramStatus() {
-  const { data } = useQuery({ queryKey: ["telegram-status"], queryFn: () => api.telegramStatus(), refetchInterval: 15000 });
-  const ok = (data as any)?.configured;
-  return ok
-    ? <span className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400 font-medium"><CheckCircle className="w-3 h-3" /> Configured</span>
-    : <span className="flex items-center gap-1.5 text-xs text-gray-400"><XCircle className="w-3 h-3" /> Not configured</span>;
-}
-
 export default function SettingsPage() {
   const { user, logout } = useCustomAuth();
   const { theme, toggleWithRipple } = useTheme();
-  const [botsExpanded, setBotsExpanded] = useState(false);
-  const [activeBot, setActiveBot] = useState<"whatsapp" | "telegram">("whatsapp");
 
   const isDark = theme === "dark";
   const displayName = user?.name || "User";
@@ -134,56 +110,6 @@ export default function SettingsPage() {
             }`} />
           </button>
         </div>
-      </div>
-
-      {/* ── Bot Integrations (collapsed) ──────────────────────────────────── */}
-      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-white/[0.06] overflow-hidden">
-        <button
-          onClick={() => setBotsExpanded(s => !s)}
-          className="w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-white/[0.02] transition"
-        >
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-800 flex items-center justify-center">
-              <MessageCircle className="w-4 h-4 text-gray-500 dark:text-gray-400" />
-            </div>
-            <div className="text-left">
-              <p className="text-sm font-medium text-gray-900 dark:text-white">Bot Integrations</p>
-              <p className="text-xs text-gray-400 dark:text-gray-500">WhatsApp & Telegram market bots</p>
-            </div>
-          </div>
-          <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${botsExpanded ? "rotate-180" : ""}`} />
-        </button>
-
-        {botsExpanded && (
-          <div className="border-t border-gray-100 dark:border-white/[0.04]">
-            <div className="flex gap-1 p-3 bg-gray-50 dark:bg-gray-800/50">
-              {([
-                { id: "whatsapp" as const, label: "WhatsApp", icon: MessageCircle },
-                { id: "telegram" as const, label: "Telegram",  icon: Send },
-              ]).map(({ id, label, icon: Icon }) => (
-                <button
-                  key={id}
-                  onClick={() => setActiveBot(id)}
-                  className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition ${
-                    activeBot === id
-                      ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
-                      : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-                  }`}
-                >
-                  <Icon className="w-3.5 h-3.5" />
-                  {label}
-                  <span className="ml-1">
-                    {id === "whatsapp" ? <WhatsAppStatus /> : <TelegramStatus />}
-                  </span>
-                </button>
-              ))}
-            </div>
-            <div className="p-4">
-              {activeBot === "whatsapp" && <WhatsAppBot embedded />}
-              {activeBot === "telegram" && <TelegramBot embedded />}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* ── Sign out ──────────────────────────────────────────────────────── */}

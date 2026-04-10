@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Switch, Route, Router as WouterRouter } from "wouter";
+import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -122,9 +122,16 @@ function TokenInjector() {
 
 function AuthGate() {
   const { user, token } = useCustomAuth();
+  const [path, navigate] = useLocation();
 
   if (!user || !token) {
     return <LoginPage />;
+  }
+
+  // Logged in but sitting on /login — redirect to the real root immediately
+  if (path === "/login") {
+    navigate("/", { replace: true });
+    return null;
   }
 
   return (
