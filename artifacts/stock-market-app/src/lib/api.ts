@@ -23,9 +23,58 @@ export interface SectorData {
   [key: string]: unknown;
 }
 
+export interface EconomicPhase {
+  phase: string;
+  code: string;
+  color: string;
+  bgColor: string;
+  leadingSectors: string[];
+  characteristics: string;
+  theorySectors: string[];
+  actionableSectors: string[];
+  strategy: string;
+  confidence: number;
+  phaseScores: Record<string, number>;
+}
+
+export interface PortfolioTopPick {
+  sector: string;
+  symbol: string;
+  tier: string;
+  tierLabel: string;
+  color: string;
+  bgColor: string;
+  composite: number;
+  rs: number;
+  roc_6m: number;
+  pct_above_200: number;
+  maxAllocation: string;
+  theoryMatch: boolean;
+  entryReason: string;
+  exitRule: string;
+  profitRule: string;
+}
+
+export interface PortfolioStrategy {
+  coreSatellite: { core: string; satellite: string };
+  topPicks: PortfolioTopPick[];
+  riskManagement: {
+    stopLoss: string;
+    profitTaking: string;
+    exitSignal: string;
+    cashReserve: string;
+    maxPerSector: string;
+    maxPerStock: string;
+  };
+  trendlessMarket: string | null;
+}
+
 export interface SectorRotation {
   rotationPhase: string;
   recommendation: string;
+  timestamp: string;
+  economicPhase: EconomicPhase;
+  portfolioStrategy: PortfolioStrategy;
   marketBreadth: {
     advancing: number;
     declining: number;
@@ -39,6 +88,11 @@ export interface SectorRotation {
   sectors: SectorData[];
   whereToBuyNow: SectorData[];
   phasedOut?: SectorData[];
+  tierCounts?: Record<string, number>;
+  tiers?: { tier: string; label: string; color: string; bg: string; description: string }[];
+  topPerformers?: SectorData[];
+  laggards?: SectorData[];
+  currentlyFocused?: string[];
 }
 
 export interface ConditionSide {

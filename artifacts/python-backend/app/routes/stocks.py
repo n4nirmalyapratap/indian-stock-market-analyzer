@@ -197,7 +197,7 @@ async def get_stock_history(
                 continue
         return {}, None
 
-    info, hist = await asyncio.get_event_loop().run_in_executor(None, _fetch)
+    info, hist = await asyncio.to_thread(_fetch)
 
     if hist is None or hist.empty:
         return JSONResponse(status_code=404, content={"error": f"No history data found for {symbol}"})

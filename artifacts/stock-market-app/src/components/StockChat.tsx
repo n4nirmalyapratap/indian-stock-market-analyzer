@@ -108,8 +108,8 @@ export default function StockChat({ symbol, onClose }: StockChatProps) {
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           {connected
-            ? <Wifi className="w-3.5 h-3.5 text-green-300" title="Connected" />
-            : <WifiOff className="w-3.5 h-3.5 text-red-300" title="Disconnected" />
+            ? <Wifi className="w-3.5 h-3.5 text-green-300" aria-label="Connected" />
+            : <WifiOff className="w-3.5 h-3.5 text-red-300" aria-label="Disconnected" />
           }
           <button
             onClick={onClose}

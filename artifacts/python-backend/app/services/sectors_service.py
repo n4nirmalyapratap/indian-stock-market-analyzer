@@ -36,11 +36,11 @@ SECTOR_INDICES = [
     {"name": "Nifty Realty",            "symbol": "NIFTY REALTY",            "category": "Real Estate",           "nseKey": "NIFTY REALTY",            "yahooTicker": "^CNXREALTY"},
     {"name": "Nifty Energy",            "symbol": "NIFTY ENERGY",            "category": "Energy & Oil",          "nseKey": "NIFTY ENERGY",            "yahooTicker": "^CNXENERGY"},
     {"name": "Nifty Media",             "symbol": "NIFTY MEDIA",             "category": "Media & Entertainment", "nseKey": "NIFTY MEDIA",             "yahooTicker": "^CNXMEDIA"},
-    {"name": "Nifty Financial Services","symbol": "NIFTY FINANCIAL SERVICES","category": "Financial Services",    "nseKey": "NIFTY FINANCIAL SERVICES","yahooTicker": "HDFCBANK.NS"},
+    {"name": "Nifty Financial Services","symbol": "NIFTY FINANCIAL SERVICES","category": "Financial Services",    "nseKey": "NIFTY FINANCIAL SERVICES","yahooTicker": "^CNXFIN"},
     {"name": "Nifty PSU Bank",          "symbol": "NIFTY PSU BANK",          "category": "PSU Banking",           "nseKey": "NIFTY PSU BANK",          "yahooTicker": "^CNXPSUBANK"},
-    {"name": "Nifty Consumer Durables", "symbol": "NIFTY CONSUMER DURABLES", "category": "Consumer Durables",     "nseKey": "NIFTY CONSUMER DURABLES", "yahooTicker": "TITAN.NS"},
-    {"name": "Nifty Oil & Gas",         "symbol": "NIFTY OIL AND GAS",       "category": "Oil & Gas",             "nseKey": "NIFTY OIL AND GAS",       "yahooTicker": "RELIANCE.NS"},
-    {"name": "Nifty Healthcare",        "symbol": "NIFTY HEALTHCARE INDEX",  "category": "Healthcare",            "nseKey": "NIFTY HEALTHCARE INDEX",  "yahooTicker": "APOLLOHOSP.NS"},
+    {"name": "Nifty Consumer Durables", "symbol": "NIFTY CONSUMER DURABLES", "category": "Consumer Durables",     "nseKey": "NIFTY CONSUMER DURABLES", "yahooTicker": "^CNXCONDURAB"},
+    {"name": "Nifty Oil & Gas",         "symbol": "NIFTY OIL AND GAS",       "category": "Oil & Gas",             "nseKey": "NIFTY OIL AND GAS",       "yahooTicker": "^CNXOILGAS"},
+    {"name": "Nifty Healthcare",        "symbol": "NIFTY HEALTHCARE INDEX",  "category": "Healthcare",            "nseKey": "NIFTY HEALTHCARE INDEX",  "yahooTicker": "^CNXHEALTH"},
     {"name": "NIFTY 50",                "symbol": "NIFTY 50",                "category": "Broad Market",          "nseKey": "NIFTY 50",                "yahooTicker": "^NSEI"},
 ]
 
