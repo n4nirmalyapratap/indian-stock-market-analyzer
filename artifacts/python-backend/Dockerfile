@@ -15,8 +15,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Download spaCy model at build time so the container starts immediately
 RUN python -m spacy download en_core_web_sm
 
-# Copy application source
+# Copy application source (includes the local pandas_ta/ shim package)
 COPY . .
+
+# Explicitly set PYTHONPATH so Python always finds /app/pandas_ta/
+# (the pandas_ta shim is a local package, not installed via pip)
+ENV PYTHONPATH=/app
 
 EXPOSE 8090
 
