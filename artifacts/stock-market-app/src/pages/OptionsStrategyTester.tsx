@@ -5,7 +5,7 @@ import { useTheme } from "@/context/ThemeContext";
 import {
   TrendingUp, TrendingDown, Plus, Trash2, Play, BarChart2,
   AlertTriangle, RefreshCw, ChevronDown, Target, Activity,
-  Shield, Zap, Info, X
+  Shield, Zap, Info, X, Lightbulb, ArrowUpDown, BookOpen
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -158,6 +158,156 @@ function PnlHeatmap({ spots, payoffs, currentSpot }: {
         {currentSpot && <span className="text-orange-500">↑ Spot</span>}
         <span>₹{bars[bars.length - 1]?.s.toLocaleString("en-IN", { maximumFractionDigits: 0 })}</span>
       </div>
+    </div>
+  );
+}
+
+// ── Strategy Insight Card ──────────────────────────────────────────────────────
+
+const STRATEGY_INFO: Record<string, {
+  tagline: string;
+  when: string;
+  risk: string;
+  reward: string;
+  outlook: "bullish" | "bearish" | "neutral" | "volatile";
+}> = {
+  "Long Call":        { tagline: "Unlimited upside with defined risk",         when: "Strong bullish view; expect a sharp rally",          risk: "Limited (premium paid)",  reward: "Unlimited",          outlook: "bullish"  },
+  "Short Put":        { tagline: "Collect premium on mild bullish view",        when: "Mildly bullish or neutral; happy to buy at lower level", risk: "High (if market crashes)", reward: "Limited (premium)", outlook: "bullish"  },
+  "Long Put":         { tagline: "Unlimited downside profit with defined risk", when: "Strong bearish view or need portfolio hedge",          risk: "Limited (premium paid)",  reward: "Unlimited",          outlook: "bearish"  },
+  "Short Call":       { tagline: "Collect premium expecting market to stagnate or fall", when: "Bearish to neutral; expecting sideways or decline",  risk: "Unlimited (if market rallies)", reward: "Limited (premium)", outlook: "bearish" },
+  "Long Straddle":    { tagline: "Profit from any big move — direction unknown", when: "High-impact event (budget, earnings) ahead",          risk: "Limited (total premium)", reward: "Unlimited both ways", outlook: "volatile" },
+  "Long Strangle":    { tagline: "Cheaper than straddle; needs bigger move",    when: "Expecting large move but want lower cost",            risk: "Limited (total premium)", reward: "Unlimited both ways", outlook: "volatile" },
+  "Short Straddle":   { tagline: "Profit from time decay and low volatility",   when: "Range-bound market; IV rich before event",            risk: "Unlimited (gap risk)",    reward: "Limited (net credit)", outlook: "neutral" },
+  "Short Strangle":   { tagline: "Wider profit zone than short straddle",       when: "Sideways market with some buffer on both sides",      risk: "Unlimited (gap risk)",    reward: "Limited (net credit)", outlook: "neutral" },
+  "Bull Call Spread":  { tagline: "Defined risk, defined reward bullish play",  when: "Moderate bullish view; lower cost than long call",    risk: "Limited (net debit)",     reward: "Limited (spread width − debit)", outlook: "bullish" },
+  "Bear Put Spread":   { tagline: "Defined risk, defined reward bearish play",  when: "Moderate bearish view; lower cost than long put",     risk: "Limited (net debit)",     reward: "Limited (spread width − debit)", outlook: "bearish" },
+  "Iron Condor":      { tagline: "Collect premium in a defined range",          when: "Low-volatility sideways market; IV is high",          risk: "Limited (net of spreads)",reward: "Limited (net credit)", outlook: "neutral" },
+  "Butterfly":        { tagline: "Max profit if spot pins to centre strike",    when: "Expect very small move; approaching expiry",          risk: "Limited (net debit)",     reward: "Limited (highest near centre)", outlook: "neutral" },
+};
+
+const OUTLOOK_THEME: Record<string, { bg: string; border: string; text: string; dot: string; label: string }> = {
+  bullish:  { bg: "bg-emerald-50",  border: "border-emerald-200", text: "text-emerald-800", dot: "bg-emerald-500", label: "Bullish"  },
+  bearish:  { bg: "bg-red-50",      border: "border-red-200",     text: "text-red-800",     dot: "bg-red-500",     label: "Bearish"  },
+  neutral:  { bg: "bg-blue-50",     border: "border-blue-200",    text: "text-blue-800",    dot: "bg-blue-500",    label: "Neutral"  },
+  volatile: { bg: "bg-violet-50",   border: "border-violet-200",  text: "text-violet-800",  dot: "bg-violet-500",  label: "Volatile" },
+};
+
+function detectStrategy(legs: Array<{ action: string; option_type: string; lots: number; strike: number }>): string | null {
+  const bc = legs.filter(l => l.action === "buy"  && l.option_type === "call");
+  const sc = legs.filter(l => l.action === "sell" && l.option_type === "call");
+  const bp = legs.filter(l => l.action === "buy"  && l.option_type === "put");
+  const sp = legs.filter(l => l.action === "sell" && l.option_type === "put");
+  const n  = legs.length;
+  if (n === 1) {
+    if (bc.length === 1) return "Long Call";
+    if (sc.length === 1) return "Short Call";
+    if (bp.length === 1) return "Long Put";
+    if (sp.length === 1) return "Short Put";
+  }
+  if (n === 2) {
+    if (bc.length === 1 && sc.length === 1) return "Bull Call Spread";
+    if (bp.length === 1 && sp.length === 1) return "Bear Put Spread";
+    if (bc.length === 1 && bp.length === 1) {
+      return bc[0].strike === bp[0].strike ? "Long Straddle" : "Long Strangle";
+    }
+    if (sc.length === 1 && sp.length === 1) {
+      return sc[0].strike === sp[0].strike ? "Short Straddle" : "Short Strangle";
+    }
+  }
+  if (n === 3 && bc.length === 2 && sc.length === 1) return "Butterfly";
+  if (n === 4 && bc.length === 1 && sc.length === 1 && bp.length === 1 && sp.length === 1) return "Iron Condor";
+  return null;
+}
+
+function StrategyInsightCard({
+  legs, payoff, spot,
+}: {
+  legs: Array<{ action: string; option_type: string; lots: number; strike: number }>;
+  payoff: any;
+  spot?: number;
+}) {
+  const name    = detectStrategy(legs);
+  const info    = name ? STRATEGY_INFO[name] : null;
+  const theme   = info ? OUTLOOK_THEME[info.outlook] : OUTLOOK_THEME.neutral;
+  const maxP    = payoff?.max_profit;
+  const maxL    = payoff?.max_loss;
+  const bes     = payoff?.breakevens ?? [];
+  const np      = payoff?.net_premium ?? 0;
+  const isDebit = np < 0;
+
+  const rrRatio = (maxP != null && maxL != null && maxL !== 0)
+    ? Math.abs(maxP / maxL).toFixed(2)
+    : null;
+
+  const beText = bes.length === 1
+    ? `Market must move to ₹${bes[0].toLocaleString("en-IN")} to break even`
+    : bes.length === 2
+      ? `Profitable between ₹${bes[0].toLocaleString("en-IN")} – ₹${bes[1].toLocaleString("en-IN")}`
+      : null;
+
+  const spotDiff = (spot && bes.length === 1)
+    ? bes[0] - spot
+    : null;
+
+  return (
+    <div className={`rounded-xl border ${theme.border} ${theme.bg} p-3 mt-1`}>
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div className="flex items-center gap-2">
+          <Lightbulb className={`w-4 h-4 shrink-0 ${theme.text} opacity-70`} />
+          <div>
+            <div className="flex items-center gap-1.5">
+              <span className={`text-[11px] font-bold ${theme.text}`}>
+                {name ?? "Custom Strategy"}
+              </span>
+              <span className={`flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${theme.border} ${theme.text} bg-white/70`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${theme.dot}`} />
+                {info?.outlook ? theme.label : "Custom"}
+              </span>
+            </div>
+            {info && <p className="text-[10px] text-gray-500 mt-0.5">{info.tagline}</p>}
+          </div>
+        </div>
+        {rrRatio && (
+          <div className="text-right shrink-0">
+            <p className="text-[9px] text-gray-400 uppercase">R:R</p>
+            <p className={`text-sm font-bold ${theme.text}`}>{rrRatio}×</p>
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-1.5 mb-2">
+        <div className="bg-white/70 rounded-lg px-2.5 py-1.5">
+          <p className="text-[9px] text-gray-400 uppercase mb-0.5">Risk</p>
+          <p className="text-[10px] font-semibold text-gray-700">{info?.risk ?? (isDebit ? "Limited (debit paid)" : "Unlimited")}</p>
+        </div>
+        <div className="bg-white/70 rounded-lg px-2.5 py-1.5">
+          <p className="text-[9px] text-gray-400 uppercase mb-0.5">Reward</p>
+          <p className="text-[10px] font-semibold text-gray-700">{info?.reward ?? (isDebit ? "Unlimited" : "Limited (premium)")}</p>
+        </div>
+      </div>
+
+      {beText && (
+        <div className="flex items-start gap-1.5 bg-white/60 rounded-lg px-2.5 py-1.5 mb-1.5">
+          <Target className="w-3 h-3 text-emerald-600 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-[10px] text-gray-600">{beText}</p>
+            {spotDiff !== null && (
+              <p className={`text-[9px] mt-0.5 font-medium ${spotDiff > 0 ? "text-orange-500" : "text-emerald-600"}`}>
+                {spotDiff > 0
+                  ? `₹${Math.abs(spotDiff).toLocaleString("en-IN")} above current spot to reach breakeven`
+                  : `Already past breakeven — in profit territory`}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {info?.when && (
+        <div className="flex items-start gap-1.5 bg-white/60 rounded-lg px-2.5 py-1.5">
+          <BookOpen className="w-3 h-3 text-blue-500 mt-0.5 shrink-0" />
+          <p className="text-[10px] text-gray-500"><span className="font-semibold text-gray-600">When to use: </span>{info.when}</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -554,7 +704,19 @@ export default function OptionsStrategyTester() {
 
             {/* Legs header */}
             <div className="px-4 py-2 border-b border-gray-100 flex items-center justify-between bg-gray-50/60">
-              <span className="text-xs font-semibold text-gray-600">Legs</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-gray-600">Legs</span>
+                {legs.length > 0 && (
+                  <button
+                    onClick={() => setLegs([])}
+                    className="flex items-center gap-0.5 text-[10px] text-gray-300 hover:text-red-400 transition px-1.5 py-0.5 rounded hover:bg-red-50 border border-transparent hover:border-red-100"
+                    title="Clear all legs"
+                  >
+                    <X className="w-2.5 h-2.5" />
+                    Clear
+                  </button>
+                )}
+              </div>
               <div className="flex items-center gap-2">
                 <label className="text-[10px] text-gray-400 font-medium">DTE</label>
                 <input
@@ -674,16 +836,6 @@ export default function OptionsStrategyTester() {
                 {analysisErr}
               </div>
             )}
-            {legs.length > 0 && (
-              <div className="px-4 pb-3 pt-2 border-t border-gray-100">
-                <button
-                  onClick={() => setLegs([])}
-                  className="w-full text-center text-[10px] text-gray-300 hover:text-red-400 transition"
-                >
-                  Clear all legs
-                </button>
-              </div>
-            )}
           </div>
 
           {/* ── RIGHT: Payoff ────────────────────────────────────────── */}
@@ -746,17 +898,12 @@ export default function OptionsStrategyTester() {
                   </div>
                 </div>
 
-                {/* Breakevens */}
-                {analysis.payoff?.breakevens?.length > 0 && (
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-[10px] text-gray-400 uppercase font-semibold tracking-wide">Breakevens</span>
-                    {analysis.payoff.breakevens.map((b: number, i: number) => (
-                      <span key={i} className="text-xs font-mono bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">
-                        ₹{b.toLocaleString("en-IN")}
-                      </span>
-                    ))}
-                  </div>
-                )}
+                {/* Strategy Insight */}
+                <StrategyInsightCard
+                  legs={legs}
+                  payoff={analysis.payoff}
+                  spot={spotInfo?.spot}
+                />
 
                 {/* P&L Chart */}
                 <div className="flex-1 flex flex-col min-h-0">
