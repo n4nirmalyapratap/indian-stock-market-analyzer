@@ -219,6 +219,46 @@ def _pct_change_from_history(history: list[dict], days: int) -> Optional[float]:
     return round((end - start) / start * 100, 2)
 
 
+async def _constituent_pct_changes(constituents: list[str]) -> dict[str, Optional[float]]:
+    """
+    Fallback for sectors whose Yahoo Finance index ticker has no data.
+    Fetches 1-year history for up to 5 constituent stocks and returns
+    equal-weighted average % changes for 1w / 1m / 1y / YTD.
+    """
+    if not constituents:
+        return {"change1w": None, "change1m": None, "change1y": None, "changeYTD": None}
+
+    hists = await asyncio.gather(
+        *[_yf_history(s, "1y") for s in constituents[:5]],
+        return_exceptions=True,
+    )
+
+    def _avg(days: int) -> Optional[float]:
+        vals = [
+            _pct_change_from_history(h, days)
+            for h in hists
+            if not isinstance(h, Exception) and h
+        ]
+        valid = [v for v in vals if v is not None]
+        return round(sum(valid) / len(valid), 2) if valid else None
+
+    def _avg_ytd() -> Optional[float]:
+        vals = [
+            _ytd_change(h)
+            for h in hists
+            if not isinstance(h, Exception) and h
+        ]
+        valid = [v for v in vals if v is not None]
+        return round(sum(valid) / len(valid), 2) if valid else None
+
+    return {
+        "change1w":  _avg(5),
+        "change1m":  _avg(21),
+        "change1y":  _avg(252),
+        "changeYTD": _avg_ytd(),
+    }
+
+
 def _ytd_change(history: list[dict]) -> Optional[float]:
     if not history:
         return None
@@ -266,10 +306,29 @@ class SectorAnalyticsService:
             return_exceptions=True,
         )
 
+        # For any sector whose Yahoo index returned empty history, fetch constituent fallback
+        fallback_tasks = []
+        fallback_indices = []
+        for i, (nse_sym, _) in enumerate(symbols_needed):
+            hist = hist_results[i] if not isinstance(hist_results[i], Exception) else []
+            if not hist:
+                constituents = SECTOR_CONSTITUENTS.get(nse_sym, [])
+                fallback_tasks.append(_constituent_pct_changes(constituents))
+                fallback_indices.append(i)
+
+        fallback_results = await asyncio.gather(*fallback_tasks, return_exceptions=True) if fallback_tasks else []
+
+        # Map fallback results back to their sector indices
+        fallback_map: dict[int, dict] = {}
+        for j, fi in enumerate(fallback_indices):
+            fb = fallback_results[j]
+            fallback_map[fi] = fb if not isinstance(fb, Exception) else {}
+
         result = []
         for i, (nse_sym, _yahoo) in enumerate(symbols_needed):
             live = next((s for s in sectors_live if s["symbol"] == nse_sym), {})
             hist = hist_results[i] if not isinstance(hist_results[i], Exception) else []
+            fb   = fallback_map.get(i, {})
 
             result.append({
                 "symbol":    nse_sym,
@@ -277,12 +336,12 @@ class SectorAnalyticsService:
                 "category":  live.get("category", ""),
                 "lastPrice": live.get("lastPrice", 0),
                 "change1d":  round(live.get("pChange", 0), 2),
-                "change1w":  _pct_change_from_history(hist, 5),
-                "change1m":  _pct_change_from_history(hist, 21),
+                "change1w":  _pct_change_from_history(hist, 5)   or fb.get("change1w"),
+                "change1m":  _pct_change_from_history(hist, 21)  or fb.get("change1m"),
                 "change3m":  _pct_change_from_history(hist, 63),
                 "change6m":  _pct_change_from_history(hist, 126),
-                "change1y":  _pct_change_from_history(hist, 252),
-                "changeYTD": _ytd_change(hist),
+                "change1y":  _pct_change_from_history(hist, 252) or fb.get("change1y"),
+                "changeYTD": _ytd_change(hist)                   or fb.get("changeYTD"),
                 "marketCap": SECTOR_MARKET_CAP_PROXY.get(nse_sym, 5.0),
                 "advances":  live.get("advances", 0),
                 "declines":  live.get("declines", 0),
