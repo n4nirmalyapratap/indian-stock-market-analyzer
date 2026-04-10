@@ -41,8 +41,6 @@ const SKIP_DIRS = new Set([
   ".agents", ".local", ".replit-artifact",
   // App-generated data
   "market_cache",
-  // Vendored shim (not real source)
-  "pandas_ta",
   // Expo / React Native
   ".expo", ".expo-shared",
   // Misc
