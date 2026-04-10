@@ -161,7 +161,10 @@ async def _yf_info(ticker: str) -> dict:
                 "pb":            info.get("priceToBook"),
                 "ps":            info.get("priceToSalesTrailingTwelveMonths"),
                 "evEbitda":      info.get("enterpriseToEbitda"),
-                "roe":           info.get("returnOnEquity"),
+                "roe":            info.get("returnOnEquity"),
+                "roa":            info.get("returnOnAssets"),
+                "earningsGrowth": info.get("earningsGrowth"),
+                "revenueGrowth":  info.get("revenueGrowth"),
                 "debtToEquity":  info.get("debtToEquity"),
                 "netMargin":     info.get("profitMargins"),
                 "dividendYield": info.get("dividendYield"),
@@ -569,11 +572,24 @@ class SectorAnalyticsService:
         }
 
     def _compute_financial_health(self, stocks: list[dict]) -> dict:
-        vals = [s.get("debtToEquity") for s in stocks if s.get("debtToEquity") is not None and s["debtToEquity"] >= 0]
-        avg_de = round(sum(vals) / len(vals), 2) if vals else None
+        de_vals = [s["debtToEquity"] for s in stocks if s.get("debtToEquity") is not None and s["debtToEquity"] >= 0]
+        roa_vals = [s["roa"] for s in stocks if s.get("roa") is not None]
+        eg_vals  = [s["earningsGrowth"] for s in stocks if s.get("earningsGrowth") is not None]
+        rg_vals  = [s["revenueGrowth"]  for s in stocks if s.get("revenueGrowth")  is not None]
+
+        def avg(vals: list) -> float | None:
+            return round(sum(vals) / len(vals), 4) if vals else None
+
         return {
-            "debtToEquity": avg_de,
-            "sampleSize":   len(vals),
+            "debtToEquity":  round(sum(de_vals) / len(de_vals), 2) if de_vals else None,
+            "sampleSize":    len(de_vals),
+            "roa":           avg(roa_vals),
+            "roaSampleSize": len(roa_vals),
+            "earningsGrowth": avg(eg_vals),
+            "revenueGrowth":  avg(rg_vals),
+            # isBanking: True when no stock has a valid D/E but ROA data exists
+            # — tells the frontend to show banking-specific health metrics instead
+            "isBanking":     len(de_vals) == 0 and len(roa_vals) > 0,
         }
 
     def _build_constituents_table(self, stocks: list[dict]) -> list[dict]:
@@ -590,6 +606,9 @@ class SectorAnalyticsService:
                 "ps":            s.get("ps"),
                 "evEbitda":      s.get("evEbitda"),
                 "roe":           s.get("roe"),
+                "roa":           s.get("roa"),
+                "earningsGrowth": s.get("earningsGrowth"),
+                "revenueGrowth":  s.get("revenueGrowth"),
                 "debtToEquity":  s.get("debtToEquity"),
                 "dividendYield": s.get("dividendYield"),
                 "beta":          s.get("beta"),

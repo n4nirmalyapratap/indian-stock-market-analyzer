@@ -466,16 +466,100 @@ function ProfitabilityTab({ data, isDark }: { data: SectorDetailData; isDark: bo
 
 function FinancialHealthTab({ data, isDark }: { data: SectorDetailData; isDark: boolean }) {
   const h = data.financialHealth;
-  const hdrTxt = isDark ? "#f1f5f9" : "#111827";
-  const muTxt  = isDark ? "#94a3b8" : "#6b7280";
+  const hdrTxt   = isDark ? "#f1f5f9" : "#111827";
+  const muTxt    = isDark ? "#94a3b8" : "#6b7280";
+  const cardBg   = isDark ? "#1e293b" : "#f8fafc";
+  const cardBg2  = isDark ? "#1e293b" : "#fff";
+  const borderC  = isDark ? "#334155" : "#e2e8f0";
 
+  // For non-banking sectors: show D/E ratio per constituent
   const deData = data.constituents?.filter(c => c.debtToEquity != null && c.debtToEquity >= 0)
     .map(c => ({ name: c.symbol.replace(".NS", ""), de: +(c.debtToEquity!).toFixed(2) }))
     .sort((a, b) => b.de - a.de) ?? [];
 
+  // For banking sectors: show ROA per constituent
+  const roaData = data.constituents?.filter(c => (c as any).roa != null)
+    .map(c => ({ name: c.symbol.replace(".NS", ""), roa: +((c as any).roa * 100).toFixed(2) }))
+    .sort((a, b) => b.roa - a.roa) ?? [];
+
+  const isBanking = h?.isBanking ?? false;
+  const pct = (v: number | null | undefined) => v != null ? (v * 100).toFixed(1) + "%" : "—";
+
+  if (isBanking) {
+    // Banking / Financial sector: D/E is meaningless — show ROA, earnings growth, revenue growth
+    return (
+      <div className="space-y-5">
+        <div className="rounded-xl border p-4" style={{ background: cardBg, borderColor: borderC }}>
+          <p className="text-xs mb-3" style={{ color: muTxt }}>
+            Banks use depositor funds as "debt", so the traditional Debt/Equity ratio doesn't apply.
+            The key health indicators for banking stocks are shown below instead.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="rounded-xl border p-4" style={{ background: cardBg2, borderColor: borderC }}>
+              <div className="flex items-center gap-1 text-xs mb-1" style={{ color: muTxt }}>
+                Avg. Return on Assets (ROA)
+                <InfoTip text="Net profit as a % of total assets. The primary profitability benchmark for banks — higher is healthier. Healthy banks typically show 1–2%." />
+              </div>
+              <div className="text-3xl font-bold" style={{ color: hdrTxt }}>
+                {h?.roa != null ? (h.roa * 100).toFixed(2) + "%" : "—"}
+              </div>
+              <div className="text-xs mt-1" style={{ color: muTxt }}>
+                Avg. across {h?.roaSampleSize ?? 0} stocks
+              </div>
+            </div>
+            <div className="rounded-xl border p-4" style={{ background: cardBg2, borderColor: borderC }}>
+              <div className="flex items-center gap-1 text-xs mb-1" style={{ color: muTxt }}>
+                Avg. Earnings Growth (YoY)
+                <InfoTip text="Year-on-year net profit growth. Sustained positive growth indicates healthy loan books and improving margins." />
+              </div>
+              <div className="text-3xl font-bold" style={{
+                color: h?.earningsGrowth != null ? (h.earningsGrowth >= 0 ? "#22c55e" : "#ef4444") : hdrTxt
+              }}>
+                {pct(h?.earningsGrowth)}
+              </div>
+              <div className="text-xs mt-1" style={{ color: muTxt }}>Net profit vs prior year</div>
+            </div>
+            <div className="rounded-xl border p-4" style={{ background: cardBg2, borderColor: borderC }}>
+              <div className="flex items-center gap-1 text-xs mb-1" style={{ color: muTxt }}>
+                Avg. Revenue Growth (YoY)
+                <InfoTip text="Year-on-year net interest income / revenue growth. Rising revenue alongside flat/falling costs is a sign of sector strength." />
+              </div>
+              <div className="text-3xl font-bold" style={{
+                color: h?.revenueGrowth != null ? (h.revenueGrowth >= 0 ? "#22c55e" : "#ef4444") : hdrTxt
+              }}>
+                {pct(h?.revenueGrowth)}
+              </div>
+              <div className="text-xs mt-1" style={{ color: muTxt }}>Revenue vs prior year</div>
+            </div>
+          </div>
+        </div>
+
+        {roaData.length > 0 && (
+          <div className="rounded-xl border p-4" style={{ background: cardBg2, borderColor: borderC }}>
+            <h3 className="font-semibold text-sm mb-3" style={{ color: hdrTxt }}>Return on Assets by Bank</h3>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={roaData} layout="vertical" margin={{ top: 0, right: 20, left: 20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={isDark ? "#334155" : "#f1f5f9"} />
+                <XAxis type="number" tick={{ fill: isDark ? "#94a3b8" : "#6b7280", fontSize: 10 }}
+                  tickFormatter={v => v + "%"} />
+                <YAxis type="category" dataKey="name" tick={{ fill: isDark ? "#94a3b8" : "#6b7280", fontSize: 10 }} width={70} />
+                <Tooltip
+                  contentStyle={{ background: isDark ? "#1e293b" : "#fff", border: `1px solid ${borderC}`, borderRadius: 8 }}
+                  formatter={(v: number) => [v.toFixed(2) + "%", "ROA"]}
+                />
+                <Bar dataKey="roa" fill="#6366f1" radius={[0, 4, 4, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Standard sectors: show D/E ratio
   return (
     <div className="space-y-5">
-      <div className="rounded-xl border p-5" style={{ background: isDark ? "#1e293b" : "#f8fafc", borderColor: isDark ? "#334155" : "#e2e8f0" }}>
+      <div className="rounded-xl border p-5" style={{ background: cardBg, borderColor: borderC }}>
         <div className="flex items-center gap-1 text-xs mb-1" style={{ color: muTxt }}>
           Aggregate Debt-to-Equity Ratio
           <InfoTip text="Sum of Total Debts / Sum of Shareholder Equity. What's 'high' depends on the sector — Financials normally run high D/E. A sharp upward trend is a red flag." />
@@ -489,7 +573,7 @@ function FinancialHealthTab({ data, isDark }: { data: SectorDetailData; isDark: 
       </div>
 
       {deData.length > 0 && (
-        <div className="rounded-xl border p-4" style={{ background: isDark ? "#1e293b" : "#fff", borderColor: isDark ? "#334155" : "#e2e8f0" }}>
+        <div className="rounded-xl border p-4" style={{ background: cardBg2, borderColor: borderC }}>
           <h3 className="font-semibold text-sm mb-3" style={{ color: hdrTxt }}>D/E by Constituent Stock</h3>
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={deData} layout="vertical" margin={{ top: 0, right: 20, left: 20, bottom: 0 }}>
@@ -497,7 +581,7 @@ function FinancialHealthTab({ data, isDark }: { data: SectorDetailData; isDark: 
               <XAxis type="number" tick={{ fill: isDark ? "#94a3b8" : "#6b7280", fontSize: 10 }} />
               <YAxis type="category" dataKey="name" tick={{ fill: isDark ? "#94a3b8" : "#6b7280", fontSize: 10 }} width={70} />
               <Tooltip
-                contentStyle={{ background: isDark ? "#1e293b" : "#fff", border: `1px solid ${isDark ? "#334155" : "#e2e8f0"}`, borderRadius: 8 }}
+                contentStyle={{ background: isDark ? "#1e293b" : "#fff", border: `1px solid ${borderC}`, borderRadius: 8 }}
                 formatter={(v: number) => [v.toFixed(2) + "×", "D/E"]}
               />
               <Bar dataKey="de" fill="#f59e0b" radius={[0, 4, 4, 0]} />

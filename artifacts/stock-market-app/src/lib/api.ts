@@ -504,8 +504,13 @@ export interface SectorProfitability {
 }
 
 export interface SectorFinancialHealth {
-  debtToEquity: number | null;
-  sampleSize:   number;
+  debtToEquity:   number | null;
+  sampleSize:     number;
+  roa:            number | null;
+  roaSampleSize:  number;
+  earningsGrowth: number | null;
+  revenueGrowth:  number | null;
+  isBanking:      boolean;
 }
 
 export interface ConstituentStock {
