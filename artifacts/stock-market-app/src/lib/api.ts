@@ -335,6 +335,9 @@ export const api = {
   stockDetail: (symbol: string) =>
     fetchApi<StockQuote>(`/stocks/${encodeURIComponent(symbol)}`),
 
+  stockFinancials: (symbol: string) =>
+    fetchApi<StockFinancials>(`/stocks/${encodeURIComponent(symbol)}/financials`),
+
   patterns: (params?: { universe?: string; signal?: string; category?: string }) => {
     const filtered = Object.fromEntries(
       Object.entries(params ?? {}).filter(([, v]) => v != null && v !== ""),
@@ -565,4 +568,78 @@ export interface SectorDetailData {
   constituents:    ConstituentStock[];
   topGainers:      ConstituentStock[];
   topLosers:       ConstituentStock[];
+}
+
+// ── Stock Financials (TradingView-style) ────────────────────────────────────
+
+export interface FinancialOverview {
+  marketCap:       number | null;
+  trailingPE:      number | null;
+  forwardPE:       number | null;
+  priceToBook:     number | null;
+  priceToSales:    number | null;
+  evToEbitda:      number | null;
+  trailingEps:     number | null;
+  forwardEps:      number | null;
+  roe:             number | null;
+  roa:             number | null;
+  debtToEquity:    number | null;
+  currentRatio:    number | null;
+  grossMargin:     number | null;
+  operatingMargin: number | null;
+  netMargin:       number | null;
+  dividendYield:   number | null;
+  dividendRate:    number | null;
+  earningsGrowth:  number | null;
+  revenueGrowth:   number | null;
+  bookValue:       number | null;
+  weekChange52:    number | null;
+}
+
+export interface IncomeRow {
+  date:            string;
+  revenue:         number | null;
+  grossProfit:     number | null;
+  operatingIncome: number | null;
+  netIncome:       number | null;
+  ebitda:          number | null;
+}
+
+export interface BalanceSheetRow {
+  date:        string;
+  totalAssets: number | null;
+  totalDebt:   number | null;
+  equity:      number | null;
+  cash:        number | null;
+}
+
+export interface CashFlowRow {
+  date:        string;
+  operatingCF: number | null;
+  investingCF: number | null;
+  financingCF: number | null;
+  freeCF:      number | null;
+  capex:       number | null;
+}
+
+export interface DividendRow {
+  date:   string;
+  amount: number;
+}
+
+export interface EpsRow {
+  date: string;
+  eps:  number | null;
+}
+
+export interface StockFinancials {
+  symbol:          string;
+  companyName:     string;
+  currency:        string;
+  overview:        FinancialOverview;
+  incomeStatement: { annual: IncomeRow[]; quarterly: IncomeRow[] };
+  balanceSheet:    { annual: BalanceSheetRow[] };
+  cashFlow:        { annual: CashFlowRow[] };
+  dividends:       DividendRow[];
+  eps:             { annual: EpsRow[]; quarterly: EpsRow[] };
 }

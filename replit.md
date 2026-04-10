@@ -64,6 +64,23 @@ workspace/
 See `GITHUB_PUSH.md` for instructions on pushing to GitHub.
 Run: `pnpm --filter @workspace/scripts run push-github`
 
+## Key Features
+
+### Stock Analysis Page
+- **Technicals view**: EMA (9/21/50/200), RSI with zone indicator, MACD crossover, Bollinger Bands position, Support/Resistance levels, Entry signal with Target/Stop-Loss/R:R
+- **Financials view** (TradingView-style, 6 tabs):
+  - **Overview** — Valuation & Profitability metric cards + mini Revenue/Net Income charts
+  - **Income Statement** — Revenue vs Profits bar chart + EBITDA bar chart + sortable table (Annual/Quarterly toggle)
+  - **Statistics & Ratios** — Valuation / Profitability / Financial Health stat rows
+  - **Dividends** — Annual dividend payout chart + recent dividend payment table
+  - **Earnings** — Diluted EPS bar chart with positive/negative colour coding + growth % table
+  - **Revenue** — Revenue + Gross Profit bars with YoY growth % line overlay + table
+
+### Backend API — `/api/stocks/{symbol}/financials`
+- Returns: `overview`, `incomeStatement` (annual+quarterly), `balanceSheet`, `cashFlow`, `dividends`, `eps`
+- All monetary values in ₹ Crores; NaN values safely serialised as `null`
+- 31 TDD tests in `tests/test_financials_endpoint.py`
+
 ## Tech Stack
 
 | Layer | Technology |

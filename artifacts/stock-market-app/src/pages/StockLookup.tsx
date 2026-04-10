@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { Search, TrendingUp, TrendingDown, AlertCircle, Target } from "lucide-react";
+import { Search, TrendingUp, TrendingDown, AlertCircle, Target, BarChart2 } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
+import StockFinancials from "@/components/financials/StockFinancials";
 
 const NIFTY100_QUICK = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","ITC","SBIN","BHARTIARTL","KOTAKBANK","BAJFINANCE","AXISBANK","MARUTI","HCLTECH","WIPRO","TITAN","SUNPHARMA"];
 
@@ -14,6 +15,7 @@ function Badge({ label, type }: { label?: string; type: "bull" | "bear" | "neutr
 export default function StockLookup() {
   const [input, setInput] = useState("");
   const [symbol, setSymbol] = useState("");
+  const [view, setView] = useState<"technicals" | "financials">("technicals");
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["stock", symbol],
@@ -27,14 +29,17 @@ export default function StockLookup() {
 
   function handleSearch(sym?: string) {
     const s = (sym || input).toUpperCase().trim();
-    if (s) setSymbol(s);
+    if (s) {
+      setSymbol(s);
+      setView("technicals");
+    }
   }
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Stock Analysis</h1>
-        <p className="text-sm text-gray-500">Enter any NSE symbol for detailed technical analysis</p>
+        <p className="text-sm text-gray-500">Enter any NSE symbol for technical and fundamental analysis</p>
       </div>
 
       <div className="flex gap-2">
@@ -82,6 +87,7 @@ export default function StockLookup() {
 
       {data && !data.error && (
         <div className="space-y-4">
+          {/* Stock header */}
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
             <div className="flex items-start justify-between">
               <div>
@@ -102,7 +108,25 @@ export default function StockLookup() {
             <p className="mt-3 text-sm text-gray-600 leading-relaxed">{data.insight}</p>
           </div>
 
-          {ta && (
+          {/* View toggle: Technicals | Financials */}
+          <div className="flex gap-1 bg-gray-100 rounded-lg p-1 w-fit">
+            <button
+              onClick={() => setView("technicals")}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "technicals" ? "bg-white text-indigo-700 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+            >
+              <TrendingUp className="w-3.5 h-3.5" /> Technicals
+            </button>
+            <button
+              onClick={() => setView("financials")}
+              data-testid="financials-tab-btn"
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "financials" ? "bg-white text-indigo-700 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+            >
+              <BarChart2 className="w-3.5 h-3.5" /> Financials
+            </button>
+          </div>
+
+          {/* Technicals view */}
+          {view === "technicals" && ta && (
             <div className="grid md:grid-cols-2 gap-4">
               <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
                 <h3 className="font-semibold text-gray-800 mb-3">Trend & EMA</h3>
@@ -111,22 +135,10 @@ export default function StockLookup() {
                     <span className="text-gray-500">Trend</span>
                     <Badge label={ta.trend} type={ta.trend?.includes("BULL") ? "bull" : ta.trend?.includes("BEAR") ? "bear" : "neutral"} />
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">EMA 9</span>
-                    <span className="font-medium">₹{ta.ema?.ema9?.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">EMA 21</span>
-                    <span className="font-medium">₹{ta.ema?.ema21?.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">EMA 50</span>
-                    <span className="font-medium">₹{ta.ema?.ema50?.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">EMA 200</span>
-                    <span className="font-medium">₹{ta.ema?.ema200?.toFixed(2)}</span>
-                  </div>
+                  <div className="flex justify-between"><span className="text-gray-500">EMA 9</span><span className="font-medium">₹{ta.ema?.ema9?.toFixed(2)}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">EMA 21</span><span className="font-medium">₹{ta.ema?.ema21?.toFixed(2)}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">EMA 50</span><span className="font-medium">₹{ta.ema?.ema50?.toFixed(2)}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">EMA 200</span><span className="font-medium">₹{ta.ema?.ema200?.toFixed(2)}</span></div>
                 </div>
               </div>
 
@@ -169,8 +181,7 @@ export default function StockLookup() {
                     <p className="text-xs font-medium text-red-600 uppercase mb-2">Resistances</p>
                     {ta.resistances?.map((r: number, i: number) => (
                       <div key={i} className={`flex justify-between py-1 border-b border-gray-50 ${i === 0 && ta.nearestResistance === r ? "font-semibold text-red-600" : "text-gray-700"}`}>
-                        <span>R{i + 1}</span>
-                        <span>₹{r?.toFixed(2)}</span>
+                        <span>R{i + 1}</span><span>₹{r?.toFixed(2)}</span>
                       </div>
                     ))}
                   </div>
@@ -178,8 +189,7 @@ export default function StockLookup() {
                     <p className="text-xs font-medium text-green-600 uppercase mb-2">Supports</p>
                     {ta.supports?.map((s: number, i: number) => (
                       <div key={i} className={`flex justify-between py-1 border-b border-gray-50 ${ta.nearestSupport === s ? "font-semibold text-green-600" : "text-gray-700"}`}>
-                        <span>S{i + 1}</span>
-                        <span>₹{s?.toFixed(2)}</span>
+                        <span>S{i + 1}</span><span>₹{s?.toFixed(2)}</span>
                       </div>
                     ))}
                   </div>
@@ -188,7 +198,8 @@ export default function StockLookup() {
             </div>
           )}
 
-          {er && (
+          {/* Entry signal */}
+          {view === "technicals" && er && (
             <div className={`rounded-xl border p-5 ${er.signal === "BULLISH" ? "bg-green-50 border-green-200" : er.signal === "BEARISH" ? "bg-red-50 border-red-200" : "bg-gray-50 border-gray-200"}`}>
               <div className="flex items-start gap-3">
                 <Target className={`w-5 h-5 mt-0.5 ${er.signal === "BULLISH" ? "text-green-600" : er.signal === "BEARISH" ? "text-red-600" : "text-gray-500"}`} />
@@ -211,6 +222,11 @@ export default function StockLookup() {
                 </div>
               </div>
             </div>
+          )}
+
+          {/* Financials view */}
+          {view === "financials" && (
+            <StockFinancials symbol={data.symbol} />
           )}
         </div>
       )}
