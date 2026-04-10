@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Switch, Route, Router as WouterRouter, Link, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -17,7 +17,13 @@ import {
 } from "lucide-react";
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
+  defaultOptions: {
+    queries: {
+      // Never retry a 401 — the token is gone; retry once for other errors
+      retry: (failureCount, error: any) => error?.status === 401 ? false : failureCount < 1,
+      refetchOnWindowFocus: false,
+    },
+  },
 });
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -156,16 +162,28 @@ function AppRoutes({ onSignOut }: { onSignOut: () => void }) {
 function AdminApp() {
   const [token, setToken] = useState<string | null>(() => getAdminToken());
 
+  const handleSignOut = useCallback(() => {
+    clearAdminToken();
+    setToken(null);
+    queryClient.clear();
+  }, []);
+
   function handleLogin(t: string) {
     setToken(t);
     queryClient.clear();
   }
 
-  function handleSignOut() {
-    clearAdminToken();
-    setToken(null);
-    queryClient.clear();
-  }
+  // Auto-detect expired/invalid session: any 401 from any query → back to login
+  useEffect(() => {
+    return queryClient.getQueryCache().subscribe((event) => {
+      if (event.type === "updated") {
+        const err = event.query.state.error as any;
+        if (err?.status === 401) {
+          handleSignOut();
+        }
+      }
+    });
+  }, [handleSignOut]);
 
   if (!token) {
     return <LoginPage onLogin={handleLogin} />;
