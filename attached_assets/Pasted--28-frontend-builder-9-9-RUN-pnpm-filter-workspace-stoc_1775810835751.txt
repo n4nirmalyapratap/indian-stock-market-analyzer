@@ -1,0 +1,83 @@
+
+#28 [frontend builder 9/9] RUN pnpm --filter @workspace/stock-market-app run build
+#28 1.013
+#28 1.013 > @workspace/stock-market-app@0.0.0 build /workspace/artifacts/stock-market-app
+#28 1.013 > vite build --config vite.config.ts
+#28 1.013
+#28 1.297 /workspace/node_modules/.pnpm/rollup@4.60.1/node_modules/rollup/dist/native.js:115
+#28 1.297               throw new Error(
+#28 1.297                     ^
+#28 1.297
+#28 1.297 Error: Cannot find module @rollup/rollup-linux-x64-musl. npm has a bug related to optional dependencies (https://github.com/npm/cli/issues/4828). Please try `npm i` again after removing both package-lock.json and node_modules directory.
+#28 1.297     at requireWithFriendlyError (/workspace/node_modules/.pnpm/rollup@4.60.1/node_modules/rollup/dist/native.js:115:9)
+#28 1.297     at Object.<anonymous> (/workspace/node_modules/.pnpm/rollup@4.60.1/node_modules/rollup/dist/native.js:124:76)
+#28 1.297     at Module._compile (node:internal/modules/cjs/loader:1812:14)
+#28 1.297     at Object..js (node:internal/modules/cjs/loader:1943:10)
+#28 1.297     at Module.load (node:internal/modules/cjs/loader:1533:32)
+#28 1.297     at Module._load (node:internal/modules/cjs/loader:1335:12)
+#28 1.297     at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+#28 1.297     at loadCJSModuleWithModuleLoad (node:internal/modules/esm/translators:328:3)
+#28 1.297     at ModuleWrap.<anonymous> (node:internal/modules/esm/translators:233:7)
+#28 1.297     at ModuleJob.run (node:internal/modules/esm/module_job:430:25) {
+#28 1.297   [cause]: Error: Cannot find module '@rollup/rollup-linux-x64-musl'
+#28 1.297   Require stack:
+#28 1.297   - /workspace/node_modules/.pnpm/rollup@4.60.1/node_modules/rollup/dist/native.js
+#28 1.297       at Module._resolveFilename (node:internal/modules/cjs/loader:1456:15)
+#28 1.297       at defaultResolveImpl (node:internal/modules/cjs/loader:1066:19)
+#28 1.297       at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1071:22)
+#28 1.297       at Module._load (node:internal/modules/cjs/loader:1242:25)
+#28 1.297       at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+#28 1.297       at Module.require (node:internal/modules/cjs/loader:1556:12)
+#28 1.297       at require (node:internal/modules/helpers:152:16)
+#28 1.297       at requireWithFriendlyError (/workspace/node_modules/.pnpm/rollup@4.60.1/node_modules/rollup/dist/native.js:97:10)
+#28 1.297       at Object.<anonymous> (/workspace/node_modules/.pnpm/rollup@4.60.1/node_modules/rollup/dist/native.js:124:76)
+#28 1.297       at Module._compile (node:internal/modules/cjs/loader:1812:14) {
+#28 1.297     code: 'MODULE_NOT_FOUND',
+#28 1.297     requireStack: [
+#28 1.297       '/workspace/node_modules/.pnpm/rollup@4.60.1/node_modules/rollup/dist/native.js'
+#28 1.297     ]
+#28 1.297   }
+#28 1.297 }
+#28 1.297
+#28 1.297 Node.js v24.14.1
+#28 1.333 /workspace/artifacts/stock-market-app:
+#28 1.333  ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @workspace/stock-market-app@0.0.0 build: `vite build --config vite.config.ts`
+#28 1.333 Exit status 1
+#28 ERROR: process "/bin/sh -c pnpm --filter @workspace/stock-market-app run build" did not complete successfully: exit code: 1
+
+#27 [backend 5/7] RUN pip install --no-cache-dir -r requirements.txt
+#27 33.62 Collecting markdown-it-py>=2.2.0 (from rich->curl_cffi>=0.15->yfinance>=0.2.48->-r requirements.txt (line 10))
+#27 33.64   Downloading markdown_it_py-4.0.0-py3-none-any.whl.metadata (7.3 kB)
+#27 33.69 Collecting pygments<3.0.0,>=2.13.0 (from rich->curl_cffi>=0.15->yfinance>=0.2.48->-r requirements.txt (line 10))
+#27 33.70   Downloading pygments-2.20.0-py3-none-any.whl.metadata (2.5 kB)
+#27 CANCELED
+------
+ > [frontend builder 9/9] RUN pnpm --filter @workspace/stock-market-app run build:
+1.297     requireStack: [
+1.297       '/workspace/node_modules/.pnpm/rollup@4.60.1/node_modules/rollup/dist/native.js'
+1.297     ]
+1.297   }
+1.297 }
+1.297
+1.297 Node.js v24.14.1
+1.333 /workspace/artifacts/stock-market-app:
+1.333  ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @workspace/stock-market-app@0.0.0 build: `vite build --config vite.config.ts`
+1.333 Exit status 1
+------
+Dockerfile:27
+
+--------------------
+
+  25 |     ENV PORT=3000 BASE_PATH=/ NODE_ENV=production
+
+  26 |
+
+  27 | >>> RUN pnpm --filter @workspace/stock-market-app run build
+
+  28 |
+
+  29 |     # ── Stage 2: Serve with nginx ──────────────────────────────────────────────────
+
+--------------------
+
+target frontend: failed to solve: process "/bin/sh -c pnpm --filter @workspace/stock-market-app run build" did not complete successfully: exit code: 1
