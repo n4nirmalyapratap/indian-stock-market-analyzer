@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { fetchApi } from "@/lib/api";
 import { fmtINR, pct, fmt, clr, bg, computeHeatBars, QUICK_STRATEGIES } from "@/lib/options-utils";
 import { useTheme } from "@/context/ThemeContext";
@@ -571,6 +571,37 @@ function StrategyInsightCard({
   );
 }
 
+// ── NSE expiry helpers ────────────────────────────────────────────────────────
+function getNSEExpiries(n = 14): Array<{ date: string; label: string; monthly: boolean }> {
+  const results: Array<{ date: string; label: string; monthly: boolean }> = [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const d = new Date(today);
+  // Skip to the *next* Thursday (not today even if it is Thursday)
+  d.setDate(d.getDate() + 1);
+  while (d.getDay() !== 4) d.setDate(d.getDate() + 1);
+  for (let i = 0; i < n; i++) {
+    const iso = d.toISOString().slice(0, 10);
+    const nextWeek = new Date(d);
+    nextWeek.setDate(d.getDate() + 7);
+    const isMonthly = nextWeek.getMonth() !== d.getMonth();
+    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const short = `${d.getDate()} ${months[d.getMonth()]}`;
+    const label = `${short}${isMonthly ? " ★ Monthly" : " · Weekly"}`;
+    results.push({ date: iso, label, monthly: isMonthly });
+    d.setDate(d.getDate() + 7);
+  }
+  return results;
+}
+
+function dteFromDate(dateStr: string): number {
+  const target = new Date(dateStr);
+  target.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.max(1, Math.round((target.getTime() - today.getTime()) / 86400000));
+}
+
 // ── TABS ──────────────────────────────────────────────────────────────────────
 type Tab = "strategy" | "backtest" | "risk" | "smart";
 
@@ -609,13 +640,14 @@ const OUTLOOK_ICON: Record<string, string> = {
 };
 
 function SmartBuilderTab({
-  symbol, spotInfo, setLegs, setTab, isDark,
+  symbol, spotInfo, setLegs, setTab, isDark, doFetchSpot,
 }: {
   symbol: string;
   spotInfo: SpotInfo | null;
   setLegs: (legs: Leg[]) => void;
   setTab:  (t: Tab) => void;
   isDark:  boolean;
+  doFetchSpot: () => Promise<SpotInfo | null>;
 }) {
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState("");
@@ -646,9 +678,11 @@ function SmartBuilderTab({
     }
   }
 
-  function useStrategy(rec: SuggestedStrategy) {
-    const ls = spotInfo?.lot_size ?? 75;
-    const iv = spotInfo?.hv30     ?? 0.20;
+  async function useStrategy(rec: SuggestedStrategy) {
+    let info = spotInfo;
+    if (!info) info = await doFetchSpot();
+    const ls = info?.lot_size ?? 75;
+    const iv = info?.hv30     ?? 0.20;
     const newLegs: Leg[] = rec.legs.map(l => ({
       id: crypto.randomUUID(), action: l.action, option_type: l.option_type,
       strike: l.strike, premium: 0, lots: l.lots, lot_size: ls, iv,
@@ -935,10 +969,15 @@ export default function OptionsStrategyTester() {
 
   // Strategy builder state
   const [legs, setLegs]   = useState<Leg[]>([]);
-  const [T, setT]         = useState(30);     // days to expiry
+  const NSE_EXPIRIES = getNSEExpiries(14);
+  const [expiryDate, setExpiryDate] = useState(NSE_EXPIRIES[0].date);
+  const [T, setT] = useState(() => dteFromDate(NSE_EXPIRIES[0].date));
   const [analysis, setAnalysis] = useState<any>(null);
   const [loadingAnalysis, setLoadingAnalysis] = useState(false);
   const [analysisErr, setAnalysisErr] = useState("");
+
+  // Sync T whenever expiryDate changes
+  useEffect(() => { setT(dteFromDate(expiryDate)); }, [expiryDate]);
 
   // Backtest state
   const [btStrategy, setBtStrategy] = useState("short_straddle");
@@ -951,6 +990,12 @@ export default function OptionsStrategyTester() {
   const [btResult, setBtResult]     = useState<any>(null);
   const [loadingBt, setLoadingBt]   = useState(false);
   const [btErr, setBtErr]           = useState("");
+
+  // Backtest animation
+  const [btPlayIdx, setBtPlayIdx]     = useState(0);
+  const [btPlaying, setBtPlaying]     = useState(false);
+  const [btPlaySpeed, setBtPlaySpeed] = useState(120); // ms per step
+  const btIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Risk state
   const [varResult, setVarResult]       = useState<any>(null);
@@ -1017,15 +1062,16 @@ export default function OptionsStrategyTester() {
   // ── Analyse strategy ─────────────────────────────────────────────────────────
   async function analyseStrategy() {
     if (!legs.length) { setAnalysisErr("Add at least one leg"); return; }
-    if (!spotInfo)    { setAnalysisErr("Fetch spot price first"); return; }
+    const si = spotInfo ?? await doFetchSpot();
+    if (!si) { setAnalysisErr("Could not load spot price — please try again"); return; }
     setLoadingAnalysis(true);
     setAnalysisErr("");
     try {
       const res = await post("/options/strategy", {
-        legs:    legs.map(l => ({ ...l, iv: l.iv || spotInfo.hv30 })),
-        S:       spotInfo.spot,
+        legs:    legs.map(l => ({ ...l, iv: l.iv || si.hv30 })),
+        S:       si.spot,
         T:       T / 365,
-        sigma:   spotInfo.hv30,
+        sigma:   si.hv30,
         r:       0.07,
         spot_range_pct: 0.20,
       });
@@ -1042,12 +1088,31 @@ export default function OptionsStrategyTester() {
     }
   }
 
+  // ── Backtest animation effect ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (!btPlaying || !btResult) return;
+    const total = btResult.equity_curve?.length ?? 0;
+    btIntervalRef.current = setInterval(() => {
+      setBtPlayIdx(prev => {
+        if (prev >= total - 1) {
+          setBtPlaying(false);
+          return prev;
+        }
+        return prev + 1;
+      });
+    }, btPlaySpeed);
+    return () => { if (btIntervalRef.current) clearInterval(btIntervalRef.current); };
+  }, [btPlaying, btResult, btPlaySpeed]);
+
   // ── Run backtest ─────────────────────────────────────────────────────────────
   async function runBacktest() {
     if (!symbol.trim()) { setBtErr("Enter a symbol"); return; }
     setLoadingBt(true);
     setBtErr("");
     setBtResult(null);
+    setBtPlaying(false);
+    setBtPlayIdx(0);
+    if (btIntervalRef.current) clearInterval(btIntervalRef.current);
     try {
       const res = await post("/options/backtest", {
         symbol:    symbol.trim().toUpperCase(),
@@ -1061,6 +1126,9 @@ export default function OptionsStrategyTester() {
         otm_pct:    btOtmPct / 100,
       });
       setBtResult(res);
+      // Start playback automatically
+      setBtPlayIdx(0);
+      setBtPlaying(true);
     } catch (e: any) {
       setBtErr(e?.message || "Backtest failed");
     } finally {
@@ -1331,13 +1399,22 @@ export default function OptionsStrategyTester() {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <label className="text-[10px] text-gray-400 font-medium">DTE</label>
-                <input
-                  type="number" min={1} max={365}
-                  value={T}
-                  onChange={e => setT(Number(e.target.value))}
-                  className="w-14 border border-gray-200 rounded px-2 py-0.5 text-xs text-center"
-                />
+                <label className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Expiry</label>
+                <select
+                  value={expiryDate}
+                  onChange={e => setExpiryDate(e.target.value)}
+                  className={`border rounded px-2 py-0.5 text-[11px] font-medium ${isDark ? "bg-slate-700 border-slate-600 text-slate-200" : "border-gray-200 bg-white text-gray-700"}`}
+                >
+                  {NSE_EXPIRIES.map(ex => (
+                    <option key={ex.date} value={ex.date}
+                      style={ex.monthly ? { fontWeight: 700 } : {}}>
+                      {ex.label}
+                    </option>
+                  ))}
+                </select>
+                <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${isDark ? "bg-slate-700 text-indigo-400" : "bg-indigo-50 text-indigo-600"}`}>
+                  {T}d
+                </span>
               </div>
             </div>
 
@@ -1681,26 +1758,149 @@ export default function OptionsStrategyTester() {
                 ))}
               </div>
 
-              {/* Equity curve */}
-              <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-                <h3 className="font-semibold text-gray-800 mb-3">Equity Curve (Cumulative P&L)</h3>
-                <ResponsiveContainer width="100%" height={280}>
-                  <LineChart data={btResult.equity_curve}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={chartGrid} />
-                    <XAxis dataKey="date" tick={chartTick}
-                           tickFormatter={(d: string) => d.slice(0, 7)} />
-                    <YAxis tickFormatter={(v: number) => fmtINR(v)} tick={chartTick} />
-                    <Tooltip
-                      formatter={(v: number) => [fmtINR(v), "Cum P&L"]}
-                      contentStyle={tooltipStyle}
-                    />
-                    <ReferenceLine y={0} stroke="#9ca3af" />
-                    <Line type="monotone" dataKey="cumulative_pnl"
-                          stroke="#6366f1" strokeWidth={2} dot={false}
-                          activeDot={{ r: 3 }} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
+              {/* Animated equity curve simulation */}
+              {(() => {
+                const curve      = btResult.equity_curve ?? [];
+                const totalPts   = curve.length;
+                const visibleCurve = curve.slice(0, btPlayIdx + 1);
+                const currentPt  = curve[btPlayIdx];
+                const currentPnl = currentPt?.cumulative_pnl ?? 0;
+                const isProfit   = currentPnl >= 0;
+                const progress   = totalPts > 1 ? btPlayIdx / (totalPts - 1) : 1;
+                // Find current active trade
+                const activeTrade = btResult.trades?.find((t: any) =>
+                  t.entry_date <= (currentPt?.date ?? "") &&
+                  (currentPt?.date ?? "") <= t.exit_date
+                );
+                return (
+                  <div className={`rounded-xl border shadow-sm overflow-hidden ${isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200"}`}>
+                    {/* Header with live P&L card */}
+                    <div className={`flex items-center justify-between gap-4 px-5 py-4 border-b ${isDark ? "border-slate-700 bg-slate-800" : "border-gray-100 bg-white"}`}>
+                      <div>
+                        <h3 className={`font-semibold text-sm ${isDark ? "text-slate-100" : "text-gray-800"}`}>
+                          Equity Simulation
+                        </h3>
+                        <p className={`text-[11px] mt-0.5 ${isDark ? "text-slate-400" : "text-gray-400"}`}>
+                          {currentPt?.date ?? "—"} · trade {btPlayIdx + 1} of {totalPts}
+                        </p>
+                      </div>
+
+                      {/* Live P&L card */}
+                      <div className={`flex items-center gap-4 px-4 py-2.5 rounded-xl border ${
+                        isProfit
+                          ? isDark ? "bg-emerald-950/40 border-emerald-700/50" : "bg-emerald-50 border-emerald-200"
+                          : isDark ? "bg-rose-950/40 border-rose-800/50" : "bg-rose-50 border-rose-200"
+                      }`}>
+                        <div className="text-center">
+                          <p className={`text-[10px] font-medium uppercase tracking-wide ${isDark ? "text-slate-400" : "text-gray-400"}`}>Cum P&L</p>
+                          <p className={`text-lg font-bold font-mono ${isProfit ? "text-emerald-600" : "text-rose-600"}`}>
+                            {fmtINR(currentPnl)}
+                          </p>
+                        </div>
+                        {activeTrade && (
+                          <>
+                            <div className={`w-px h-8 ${isDark ? "bg-slate-600" : "bg-gray-200"}`} />
+                            <div className="text-center">
+                              <p className={`text-[10px] font-medium uppercase tracking-wide ${isDark ? "text-slate-400" : "text-gray-400"}`}>Trade P&L</p>
+                              <p className={`text-sm font-bold ${clr(activeTrade.trade_pnl)}`}>
+                                {fmtINR(activeTrade.trade_pnl)}
+                              </p>
+                            </div>
+                            <div className="text-center">
+                              <p className={`text-[10px] font-medium uppercase tracking-wide ${isDark ? "text-slate-400" : "text-gray-400"}`}>Spot</p>
+                              <p className={`text-sm font-bold ${isDark ? "text-slate-200" : "text-gray-700"}`}>
+                                ₹{(activeTrade.spot_entry ?? 0).toLocaleString("en-IN")}
+                              </p>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Chart */}
+                    <div className="px-4 pt-4 pb-2">
+                      <ResponsiveContainer width="100%" height={260}>
+                        <LineChart data={visibleCurve} margin={{ top: 5, right: 16, left: 10, bottom: 5 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke={chartGrid} />
+                          <XAxis dataKey="date" tick={chartTick}
+                                 tickFormatter={(d: string) => d.slice(0, 7)} />
+                          <YAxis tickFormatter={(v: number) => fmtINR(v)} tick={chartTick} width={72} />
+                          <Tooltip
+                            formatter={(v: number) => [fmtINR(v), "Cum P&L"]}
+                            contentStyle={tooltipStyle}
+                          />
+                          <ReferenceLine y={0} stroke={isDark ? "#475569" : "#9ca3af"} strokeDasharray="4 4" />
+                          <Line
+                            type="monotone" dataKey="cumulative_pnl"
+                            stroke={isProfit ? "#10b981" : "#ef4444"}
+                            strokeWidth={2.5} dot={false} isAnimationActive={false}
+                            activeDot={{ r: 4, fill: isProfit ? "#10b981" : "#ef4444" }}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    {/* Progress bar */}
+                    <div className={`mx-4 mb-3 h-1.5 rounded-full overflow-hidden ${isDark ? "bg-slate-700" : "bg-gray-100"}`}>
+                      <div
+                        className={`h-full rounded-full transition-all ${isProfit ? "bg-emerald-500" : "bg-rose-500"}`}
+                        style={{ width: `${progress * 100}%` }}
+                      />
+                    </div>
+
+                    {/* Controls */}
+                    <div className={`px-4 pb-4 flex items-center gap-3 flex-wrap`}>
+                      {/* Play/Pause */}
+                      <button
+                        onClick={() => {
+                          if (btPlayIdx >= totalPts - 1) { setBtPlayIdx(0); setBtPlaying(true); return; }
+                          setBtPlaying(p => !p);
+                        }}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white transition shadow-sm
+                          ${isProfit ? "bg-emerald-600 hover:bg-emerald-700" : "bg-indigo-600 hover:bg-indigo-700"}`}
+                      >
+                        {btPlaying
+                          ? <><span className="w-3.5 h-3.5 flex items-center justify-center gap-0.5"><span className="w-1 h-3 bg-white rounded-sm inline-block" /><span className="w-1 h-3 bg-white rounded-sm inline-block" /></span>Pause</>
+                          : <><Play className="w-3.5 h-3.5" />{btPlayIdx >= totalPts - 1 ? "Replay" : "Play"}</>
+                        }
+                      </button>
+
+                      {/* Reset */}
+                      <button
+                        onClick={() => { setBtPlaying(false); setBtPlayIdx(0); }}
+                        className={`p-2 rounded-lg border transition ${isDark ? "border-slate-600 text-slate-400 hover:text-slate-200 hover:border-slate-400" : "border-gray-200 text-gray-400 hover:text-gray-700 hover:border-gray-300"}`}
+                        title="Reset to start"
+                      >
+                        <RefreshCw className="w-4 h-4" />
+                      </button>
+
+                      {/* Scrub slider */}
+                      <input
+                        type="range" min={0} max={totalPts - 1} value={btPlayIdx}
+                        onChange={e => { setBtPlaying(false); setBtPlayIdx(Number(e.target.value)); }}
+                        className="flex-1 min-w-[100px] accent-indigo-600 cursor-pointer"
+                      />
+
+                      {/* Speed */}
+                      <div className="flex items-center gap-1.5">
+                        <span className={`text-[10px] font-medium ${isDark ? "text-slate-400" : "text-gray-400"}`}>Speed</span>
+                        {[{ label: "0.5×", ms: 240 }, { label: "1×", ms: 120 }, { label: "2×", ms: 60 }, { label: "5×", ms: 24 }].map(s => (
+                          <button
+                            key={s.ms}
+                            onClick={() => setBtPlaySpeed(s.ms)}
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded border transition
+                              ${btPlaySpeed === s.ms
+                                ? "bg-indigo-600 text-white border-indigo-600"
+                                : isDark ? "border-slate-600 text-slate-400 hover:border-indigo-500 hover:text-indigo-400" : "border-gray-200 text-gray-400 hover:border-indigo-400 hover:text-indigo-600"}`}
+                          >
+                            {s.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Trade log */}
               <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -1916,6 +2116,7 @@ export default function OptionsStrategyTester() {
           setLegs={setLegs}
           setTab={setTab}
           isDark={isDark}
+          doFetchSpot={doFetchSpot}
         />
       )}
 
