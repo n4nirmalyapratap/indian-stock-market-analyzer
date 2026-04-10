@@ -450,26 +450,45 @@ const HEATMAP_METRICS: { key: keyof SectorHeatmapItem; label: string }[] = [
   { key: "changeYTD", label: "YTD" },
 ];
 
-function heatColor(val: number | null): string {
-  if (val == null) return "#6b7280";
-  if (val >= 3)   return "#15803d";
-  if (val >= 1.5) return "#16a34a";
-  if (val >= 0.5) return "#4ade80";
-  if (val >= -0.5) return "#6b7280";
-  if (val >= -1.5) return "#f87171";
-  if (val >= -3)   return "#ef4444";
-  return "#dc2626";
-}
+function heatStyle(val: number | null, isDark: boolean): { bg: string; text: string } {
+  if (val == null) return { bg: isDark ? "#1e293b" : "#f1f5f9", text: isDark ? "#64748b" : "#94a3b8" };
+  const abs = Math.abs(val);
+  const pos = val > 0;
 
-function textColorForBg(val: number | null): string {
-  if (val == null) return "#fff";
-  return Math.abs(val) >= 0.5 ? "#fff" : "#1f2937";
+  // Dead-flat neutral band (< 0.12%)
+  if (abs < 0.12) return { bg: isDark ? "#334155" : "#e2e8f0", text: isDark ? "#94a3b8" : "#475569" };
+
+  if (isDark) {
+    if (pos) {
+      if (abs < 0.5)  return { bg: "#14532d", text: "#86efac" };   // dim green
+      if (abs < 1.5)  return { bg: "#166534", text: "#86efac" };   // medium green
+      if (abs < 3.0)  return { bg: "#15803d", text: "#d1fae5" };   // strong green
+      return                 { bg: "#16a34a", text: "#ffffff" };    // very strong
+    } else {
+      if (abs < 0.5)  return { bg: "#450a0a", text: "#fca5a5" };   // dim red
+      if (abs < 1.5)  return { bg: "#7f1d1d", text: "#fecaca" };   // medium red
+      if (abs < 3.0)  return { bg: "#991b1b", text: "#fecaca" };   // strong red
+      return                 { bg: "#b91c1c", text: "#ffffff" };    // very strong
+    }
+  } else {
+    if (pos) {
+      if (abs < 0.5)  return { bg: "#dcfce7", text: "#166534" };   // pale green
+      if (abs < 1.5)  return { bg: "#86efac", text: "#14532d" };   // soft green
+      if (abs < 3.0)  return { bg: "#22c55e", text: "#ffffff" };   // strong green
+      return                 { bg: "#16a34a", text: "#ffffff" };    // very strong
+    } else {
+      if (abs < 0.5)  return { bg: "#ffe4e6", text: "#9f1239" };   // pale red
+      if (abs < 1.5)  return { bg: "#fca5a5", text: "#7f1d1d" };   // soft red
+      if (abs < 3.0)  return { bg: "#ef4444", text: "#ffffff" };   // strong red
+      return                 { bg: "#dc2626", text: "#ffffff" };    // very strong
+    }
+  }
 }
 
 function SectorHeatMap({ data, isDark }: { data: SectorHeatmapItem[]; isDark: boolean }) {
   const [metric, setMetric] = useState<keyof SectorHeatmapItem>("change1d");
   const [hoveredSymbol, setHoveredSymbol] = useState<string | null>(null);
-  const total = data.reduce((s, d) => s + d.marketCap, 0);
+  const muTxt = isDark ? "#64748b" : "#94a3b8";
 
   return (
     <Card isDark={isDark}>
@@ -480,8 +499,8 @@ function SectorHeatMap({ data, isDark }: { data: SectorHeatmapItem[]; isDark: bo
             <span className="font-semibold text-sm" style={{ color: isDark ? "#f1f5f9" : "#111827" }}>
               Sector Heat Map
             </span>
-            <span className="text-xs" style={{ color: isDark ? "#64748b" : "#9ca3af" }}>
-              Block size = market cap · Color = performance
+            <span className="text-xs hidden sm:inline" style={{ color: muTxt }}>
+              Color = performance intensity
             </span>
           </div>
           <div className="flex gap-1">
@@ -501,42 +520,57 @@ function SectorHeatMap({ data, isDark }: { data: SectorHeatmapItem[]; isDark: bo
           </div>
         </div>
       </CardHeader>
-      <div className="p-3">
-        <div className="flex flex-wrap rounded-lg overflow-hidden gap-0.5">
+
+      <div className="p-3 space-y-3">
+        {/* Uniform 7-column grid — 2 clean rows for 14 sectors, no blank gaps */}
+        <div className="grid gap-1.5" style={{ gridTemplateColumns: "repeat(7, 1fr)" }}>
           {data.map(sector => {
-            const val = sector[metric] as number | null;
-            const pct = total > 0 ? (sector.marketCap / total * 100) : 5;
-            const minW = Math.max(pct, 4);
+            const val    = sector[metric] as number | null;
+            const style  = heatStyle(val, isDark);
             const hovered = hoveredSymbol === sector.symbol;
+            const name   = sector.name.replace(/nifty\s+/i, "").replace("NIFTY ", "");
+
             return (
               <Link key={sector.symbol} href={`/sectors/${encodeURIComponent(sector.symbol)}`}>
                 <div
-                  className="relative flex flex-col items-center justify-center cursor-pointer rounded-md transition-all"
+                  className="relative flex flex-col items-center justify-center rounded-xl cursor-pointer select-none"
                   style={{
-                    width:      `calc(${minW}% - 2px)`,
-                    minWidth:   80,
-                    height:     sector.marketCap > 20 ? 90 : sector.marketCap > 8 ? 74 : 64,
-                    background: heatColor(val),
-                    opacity:    hovered ? 0.85 : 1,
-                    transform:  hovered ? "scale(1.03)" : "scale(1)",
-                    padding:    "4px 6px",
+                    height:     84,
+                    background: style.bg,
+                    transform:  hovered ? "scale(1.05)" : "scale(1)",
+                    transition: "transform 0.15s ease, box-shadow 0.15s ease",
+                    boxShadow:  hovered ? `0 4px 18px rgba(0,0,0,${isDark ? "0.5" : "0.15"})` : "none",
+                    gap: "2px",
                   }}
                   onMouseEnter={() => setHoveredSymbol(sector.symbol)}
                   onMouseLeave={() => setHoveredSymbol(null)}
                 >
-                  <span className="text-xs font-bold text-center leading-tight"
-                    style={{ color: textColorForBg(val) }}>
-                    {sector.name.replace("Nifty ", "").replace("NIFTY ", "")}
+                  <span
+                    className="text-xs font-semibold text-center leading-tight px-1"
+                    style={{ color: style.text, maxWidth: "90%" }}
+                  >
+                    {name}
                   </span>
-                  <span className="text-xs font-semibold mt-0.5"
-                    style={{ color: textColorForBg(val) }}>
+                  <span
+                    className="text-sm font-bold tabular-nums"
+                    style={{ color: style.text }}
+                  >
                     {val != null ? (val >= 0 ? "+" : "") + val.toFixed(2) + "%" : "—"}
                   </span>
+
+                  {/* Tooltip */}
                   {hovered && (
-                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 bg-gray-900 text-white text-xs rounded-lg px-2.5 py-2 whitespace-nowrap shadow-xl pointer-events-none">
-                      <div className="font-semibold">{sector.name}</div>
-                      <div>Market Cap: ₹{sector.marketCap}L Cr</div>
-                      <div>Performance: {val != null ? (val >= 0 ? "+" : "") + val.toFixed(2) + "%" : "—"}</div>
+                    <div
+                      className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 rounded-lg px-3 py-2 whitespace-nowrap shadow-2xl pointer-events-none text-xs"
+                      style={{ background: isDark ? "#0f172a" : "#1e293b", color: "#f1f5f9", border: `1px solid ${isDark ? "#334155" : "#475569"}` }}
+                    >
+                      <div className="font-semibold mb-0.5">{sector.name}</div>
+                      <div style={{ color: "#94a3b8" }}>
+                        Mkt Cap ≈ ₹{sector.marketCap}L Cr
+                      </div>
+                      <div style={{ color: val == null ? "#94a3b8" : val >= 0 ? "#4ade80" : "#f87171" }}>
+                        {val != null ? (val >= 0 ? "▲ +" : "▼ ") + val.toFixed(2) + "%" : "—"}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -544,14 +578,20 @@ function SectorHeatMap({ data, isDark }: { data: SectorHeatmapItem[]; isDark: bo
             );
           })}
         </div>
-        <div className="flex items-center justify-end gap-3 mt-3">
-          <div className="flex items-center gap-1.5 text-xs" style={{ color: isDark ? "#94a3b8" : "#6b7280" }}>
-            <span>Strong Loss</span>
-            {["#dc2626","#f87171","#6b7280","#4ade80","#16a34a"].map(c => (
-              <div key={c} className="w-4 h-3 rounded-sm" style={{ background: c }} />
-            ))}
-            <span>Strong Gain</span>
-          </div>
+
+        {/* Elegant gradient legend */}
+        <div className="flex items-center justify-end gap-2">
+          <span className="text-xs" style={{ color: muTxt }}>Strong Loss</span>
+          <div
+            className="h-2 rounded-full"
+            style={{
+              width: 120,
+              background: isDark
+                ? "linear-gradient(to right, #991b1b, #7f1d1d, #334155, #166534, #15803d)"
+                : "linear-gradient(to right, #dc2626, #f87171, #e2e8f0, #4ade80, #16a34a)",
+            }}
+          />
+          <span className="text-xs" style={{ color: muTxt }}>Strong Gain</span>
         </div>
       </div>
     </Card>
@@ -691,12 +731,12 @@ export default function Sectors() {
             Top-down investing: Market → Sector → Stock · Click any sector for a deep dive
           </p>
         </div>
-        <Link href="/sectors">
-          <div className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg transition-colors"
-            style={{ background: isDark ? "#1e293b" : "#f3f4f6", color: muTxt }}>
-            Rotation Analysis <ChevronRight className="w-3 h-3" />
-          </div>
-        </Link>
+        <button
+          onClick={() => document.getElementById("rotation-section")?.scrollIntoView({ behavior: "smooth" })}
+          className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg transition-colors"
+          style={{ background: isDark ? "#1e293b" : "#f3f4f6", color: muTxt }}>
+          Rotation Analysis <ChevronRight className="w-3 h-3" />
+        </button>
       </div>
 
       {heatmapLoading ? (
@@ -707,7 +747,7 @@ export default function Sectors() {
 
       <TopMovers isDark={isDark} />
 
-      <div>
+      <div id="rotation-section">
         <h2 className="text-base font-bold mb-3" style={{ color: hdrTxt }}>Rotation & Strength Analysis</h2>
       </div>
 
