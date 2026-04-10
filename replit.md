@@ -133,6 +133,25 @@ scripts/src/push-github.ts                      ← GitHub push script (uses Rep
 
 ---
 
+## Code Review Fixes (April 2026)
+
+The following bugs were found in a deep code review and fixed:
+
+1. **main.py** — Removed TEST MODE warmup block; startup cache warmup now correctly gated behind `not is_market_open() AND cache_is_thin` check
+2. **SectorDetail.tsx** — Fixed period selector (3MO/6MO/1Y/5Y) so clicking a period now lifts state to parent and triggers a React Query refetch with the new period; previous local state was disconnected from the API call
+3. **sectors_service.py** — Fixed all 4 SECTOR_INDICES Yahoo tickers that were using proxy stocks instead of real index tickers: NIFTY FINANCIAL SERVICES → `^CNXFIN`, NIFTY CONSUMER DURABLES → `^CNXCONDURAB`, NIFTY OIL AND GAS → `^CNXOILGAS`, NIFTY HEALTHCARE INDEX → `^CNXHEALTH`
+4. **sector_analytics_service.py** — Fixed duplicate SECTOR_YAHOO_TICKER mappings: NIFTY OIL AND GAS → `^CNXOILGAS` (was `^CNXENERGY`, a duplicate of NIFTY ENERGY), NIFTY HEALTHCARE → `^CNXHEALTH` (was `^CNXPHARMA`, a duplicate of NIFTY PHARMA)
+5. **sector_analytics_service.py** — Fixed heatmap cache key to include trading date (`heatmap:{YYYY-MM-DD}`) so yesterday's cached data is never served on the next day
+6. **stocks.py** — Replaced deprecated `asyncio.get_event_loop().run_in_executor()` with `asyncio.to_thread()` (Python 3.10+ best practice)
+7. **stocks_service.py** — Replaced silent `except Exception: pass` blocks with `except Exception as e: logger.warning(...)` for observability
+8. **api.ts** — Added missing `EconomicPhase`, `PortfolioStrategy`, `PortfolioTopPick` TypeScript interfaces; extended `SectorRotation` with `economicPhase`, `portfolioStrategy`, `timestamp`, `tierCounts`, `tiers`, `topPerformers`, `laggards`, `currentlyFocused`
+9. **App.tsx** — Fixed wouter `Route` TypeScript error for `WhatsAppBot`/`TelegramBot` components with optional `embedded` prop
+10. **StockChat.tsx** — Replaced invalid `title` prop on Lucide icons with `aria-label`
+
+**Note on `^CNXOILGAS` / `^CNXHEALTH`**: Yahoo Finance does not yet index these newer NSE indices. The backend correctly uses NSE as the primary source; the RS chart will show "Historical data unavailable" for these two sectors since Yahoo doesn't have their history — this is honest behavior, preferable to showing wrong data from a proxy ticker.
+
+---
+
 ## GitHub Integration
 
 - Connected via Replit GitHub connector (OAuth — no PAT needed)
