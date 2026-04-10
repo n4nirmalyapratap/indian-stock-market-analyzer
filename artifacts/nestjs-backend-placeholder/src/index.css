@@ -602,7 +602,7 @@ html.dark .dark-drawer textarea::placeholder { color: #64748b !important; }
 }
 
 ::view-transition-new(root) {
-  animation: theme-ripple-reveal 0.48s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  animation: theme-ripple-reveal 0.9s cubic-bezier(0.4, 0, 0.2, 1) both;
   z-index: 1;
   mix-blend-mode: normal;
 }
@@ -610,8 +610,13 @@ html.dark .dark-drawer textarea::placeholder { color: #64748b !important; }
 @keyframes theme-ripple-reveal {
   from {
     clip-path: circle(0 at var(--ripple-x, 50%) var(--ripple-y, 50%));
+    opacity: 0.6;
+  }
+  15% {
+    opacity: 1;
   }
   to {
     clip-path: circle(150vmax at var(--ripple-x, 50%) var(--ripple-y, 50%));
+    opacity: 1;
   }
 }
