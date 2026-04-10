@@ -69,9 +69,20 @@ Flow:
 2. Get current GitHub `HEAD` SHA for the branch
 3. Walk the entire workspace (respecting `.gitignore` skip rules)
 4. Upload all files as Git blobs via `POST /repos/.../git/blobs`
-5. Create a new Git tree from those blobs
+5. Create a **complete new Git tree** from those blobs (no `base_tree`)
 6. Create a new commit with that tree
 7. Update the branch ref to point to the new commit
+
+### ⚠️ Critical: `base_tree` must NOT be used
+
+The GitHub trees API accepts an optional `base_tree` parameter. **Do not add it.**
+
+If `base_tree` is set, GitHub inherits every file from the previous commit's tree
+and only adds/updates the provided entries. This means **deleted files are never
+removed from GitHub** — they silently persist across all future commits.
+
+By omitting `base_tree`, the new tree is built exclusively from the files uploaded
+in the current run, which exactly mirrors the workspace state including deletions.
 
 ---
 
