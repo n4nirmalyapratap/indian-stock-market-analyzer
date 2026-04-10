@@ -96,7 +96,7 @@ scripts/
 
 | Suite | Command | Count |
 |---|---|---|
-| Backend pytest | `cd artifacts/python-backend && python3 -m pytest tests/ -v` | 116 |
+| Backend pytest | `cd artifacts/python-backend && python3 -m pytest tests/ -v` | 221 (116 indicators/patterns/log + 105 Hydra) |
 | Frontend vitest | `pnpm --filter @workspace/stock-market-app run test` | 37 |
 | E2E Playwright | via Replit testing skill `runTest()` | full flows |
 

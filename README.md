@@ -294,19 +294,20 @@ docker compose up --build -d
 
 The project has a three-layer test suite.
 
-### Backend unit tests (pytest — 116 tests)
+### Backend unit tests (pytest — 221 tests)
 
 ```bash
 cd artifacts/python-backend
 python3 -m pytest tests/ -v
 ```
 
-| File | What it covers |
-|---|---|
-| `test_indicators.py` | SMA, EMA, RSI, MACD, Bollinger Bands, ATR, VWAP, Support/Resistance |
-| `test_data_quality.py` | RSI range, MACD structure, Z-score, VWAP cumulative behaviour, Hydra engine |
-| `test_patterns.py` | Candle helpers (body/shadow/range), doji, hammer, shooting star, engulfing |
-| `test_log_buffer.py` | Ring-buffer log store |
+| File | Tests | What it covers |
+|---|---|---|
+| `test_indicators.py` | 50 | SMA, EMA, RSI, MACD, Bollinger Bands, ATR, VWAP, Support/Resistance |
+| `test_data_quality.py` | 27 | RSI range, MACD structure, Z-score, VWAP cumulative behaviour |
+| `test_patterns.py` | 29 | Candle helpers, doji, hammer, shooting star, engulfing |
+| `test_log_buffer.py` | 10 | Ring-buffer log store |
+| `test_hydra.py` | 105 | Full Hydra-Alpha Engine — all 7 services: symbol extraction, intent routing, NLP pipeline, forecast output contract, sentiment scoring, OU pairs calibration + signals, VaR calculator, event-driven backtester |
 
 ### Frontend unit tests (Vitest — 37 tests)
 
