@@ -1,0 +1,58 @@
+version: "3.9"
+
+# ── Indian Stock Market Analyzer — Docker Compose ─────────────────────────────
+#
+# Two containers:
+#   backend   — Python FastAPI on port 8090 (internal)
+#   frontend  — nginx serving built React app on port 80 (public)
+#               nginx also proxies /api/* → backend:8090
+#
+# Usage (development / local):
+#   docker compose up --build
+#
+# Usage (production — detached):
+#   docker compose up --build -d
+#
+# Then open:  http://localhost
+# API health: http://localhost/api/healthz
+# ──────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Python FastAPI backend ──────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./artifacts/python-backend
+      dockerfile: Dockerfile
+    container_name: stock-backend
+    restart: unless-stopped
+    environment:
+      PORT: "8090"
+      # Optional — add Twilio / Telegram credentials here or in a .env file
+      # TWILIO_ACCOUNT_SID: ""
+      # TWILIO_AUTH_TOKEN: ""
+      # TELEGRAM_BOT_TOKEN: ""
+      SESSION_SECRET: "${SESSION_SECRET:-changeme-in-production}"
+    ports:
+      # Expose directly for debugging (remove in production if not needed)
+      - "8090:8090"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8090/api/healthz')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ── React/Vite frontend via nginx ───────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: artifacts/stock-market-app/Dockerfile
+    container_name: stock-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
