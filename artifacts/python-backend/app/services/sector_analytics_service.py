@@ -306,12 +306,14 @@ class SectorAnalyticsService:
             return_exceptions=True,
         )
 
-        # For any sector whose Yahoo index returned empty history, fetch constituent fallback
+        # For any sector whose Yahoo index returned no usable history, fetch constituent fallback.
+        # "No usable" = empty list OR history that's too short to compute a 1W change.
         fallback_tasks = []
         fallback_indices = []
         for i, (nse_sym, _) in enumerate(symbols_needed):
             hist = hist_results[i] if not isinstance(hist_results[i], Exception) else []
-            if not hist:
+            needs_fallback = (not hist) or (_pct_change_from_history(hist, 5) is None)
+            if needs_fallback:
                 constituents = SECTOR_CONSTITUENTS.get(nse_sym, [])
                 fallback_tasks.append(_constituent_pct_changes(constituents))
                 fallback_indices.append(i)
