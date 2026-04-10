@@ -233,8 +233,8 @@ function App() {
         <TooltipProvider>
           <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
             <Router />
+            <GlobalAssistant />
           </WouterRouter>
-          <GlobalAssistant />
           <Toaster />
         </TooltipProvider>
       </QueryClientProvider>
