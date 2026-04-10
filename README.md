@@ -181,6 +181,92 @@ This project runs on **Replit** with:
 
 ---
 
+## Docker Deployment (AWS / Azure / self-hosted)
+
+The project ships with a complete Docker setup — two containers, one command.
+
+### Architecture
+
+```
+                  ┌─────────────────────────────┐
+Browser ──────────►  frontend container (nginx)  │ :80
+                  │                             │
+                  │  /api/*  ──────────────────►│───► backend:8090
+                  │  /*  → React SPA (static)   │
+                  └─────────────────────────────┘
+                                                    │
+                                          ┌─────────▼──────────┐
+                                          │  backend container  │ :8090
+                                          │  Python FastAPI     │
+                                          └────────────────────┘
+```
+
+### Quick start (local)
+
+```bash
+# Build and start both containers
+docker compose up --build
+
+# App is live at:
+open http://localhost
+
+# Verify backend health:
+curl http://localhost/api/healthz
+```
+
+### Production (detached)
+
+```bash
+SESSION_SECRET=your-secret docker compose up --build -d
+```
+
+### Environment variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `SESSION_SECRET` | Yes (prod) | Session signing key — set to a long random string |
+| `TWILIO_ACCOUNT_SID` | No | WhatsApp bot via Twilio |
+| `TWILIO_AUTH_TOKEN` | No | WhatsApp bot via Twilio |
+| `TELEGRAM_BOT_TOKEN` | No | Telegram bot polling |
+
+Pass them in a `.env` file at the repo root — Docker Compose picks it up automatically:
+```bash
+SESSION_SECRET=supersecretkey123
+TELEGRAM_BOT_TOKEN=123456:ABCDEF...
+```
+
+### Deploying to AWS / Azure
+
+**AWS ECS (Fargate):**
+1. Push images to ECR: `docker tag stock-backend <ecr-url>; docker push`
+2. Create two ECS task definitions (backend + frontend)
+3. Put an ALB in front: `/api/*` → backend target group, `/*` → frontend target group
+
+**Azure Container Apps:**
+1. Push to ACR: `az acr build ...`
+2. Deploy two container apps in the same environment
+3. Set `BACKEND_URL=http://backend` (Container Apps resolves by name within the env)
+
+**Self-hosted (EC2 / VM):**
+```bash
+git clone https://github.com/n4nirmalyapratap/indian-stock-market-analyzer
+cd indian-stock-market-analyzer
+echo "SESSION_SECRET=changeme" > .env
+docker compose up --build -d
+```
+
+### Key files
+
+| File | Purpose |
+|---|---|
+| `docker-compose.yml` | Orchestrates both containers |
+| `artifacts/python-backend/Dockerfile` | Python 3.11 + FastAPI backend image |
+| `artifacts/stock-market-app/Dockerfile` | Node 24 build → nginx static image |
+| `artifacts/stock-market-app/nginx.conf` | Serves SPA + proxies `/api/*` to backend |
+| `.dockerignore` | Excludes `node_modules`, caches, deprecated folders |
+
+---
+
 ## GitHub
 
 Repository: [n4nirmalyapratap/indian-stock-market-analyzer](https://github.com/n4nirmalyapratap/indian-stock-market-analyzer)
