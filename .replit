@@ -1,4 +1,4 @@
-modules = ["nodejs-24", "python-3.11", "postgresql-16"]
+modules = ["nodejs-24", "python-3.11"]
 
 [deployment]
 router = "application"
@@ -11,6 +11,27 @@ env = { "CI" = "true" }
 [workflows]
 runButton = "Project"
 
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Python Backend"
+
+[[workflows.workflow]]
+name = "Python Backend"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/workspace/artifacts/python-backend && python run.py"
+waitForPort = 8090
+
+[workflows.workflow.metadata]
+outputType = "console"
+
 [agent]
 stack = "PNPM_WORKSPACE"
 expertMode = true
@@ -19,10 +40,6 @@ integrations = ["github:1.0.0"]
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
-
-[[ports]]
-localPort = 3002
-externalPort = 3002
 
 [[ports]]
 localPort = 8080
@@ -34,17 +51,15 @@ externalPort = 80
 
 [[ports]]
 localPort = 8090
+externalPort = 3001
+
+[[ports]]
+localPort = 19845
 externalPort = 3000
 
 [[ports]]
 localPort = 22133
-externalPort = 3003
-
-[userenv]
-
-[userenv.shared]
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "NiftyAdmin@2026"
+externalPort = 3002
 
 [nix]
 channel = "stable-25_05"
