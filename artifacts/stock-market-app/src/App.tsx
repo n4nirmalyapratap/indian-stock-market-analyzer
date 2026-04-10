@@ -12,7 +12,7 @@ import Patterns from "@/pages/Patterns";
 import Scanners from "@/pages/Scanners";
 import HydraAlpha from "@/pages/HydraAlpha";
 import OptionsStrategyTester from "@/pages/OptionsStrategyTester";
-import SettingsPage from "@/pages/SettingsPage";
+import SettingsPage, { ClerkUserInfo } from "@/pages/SettingsPage";
 import NotFound from "@/pages/not-found";
 import TradingPlatform from "@/pages/TradingPlatform";
 import SectorDetail from "@/pages/SectorDetail";
@@ -339,6 +339,28 @@ function LayoutNoClerk({ children }: { children: React.ReactNode }) {
 }
 
 
+// ── Clerk-aware Settings wrapper (must be inside ClerkProvider) ───────────────
+
+function SettingsWithClerk() {
+  const { user }    = useUser();
+  const { signOut } = useClerk();
+
+  const clerkUser: ClerkUserInfo | undefined = user ? {
+    name:      user.fullName || user.firstName || user.emailAddresses[0]?.emailAddress || "User",
+    email:     user.emailAddresses[0]?.emailAddress || "",
+    imageUrl:  user.imageUrl,
+    joinedAt:  user.createdAt ? new Date(user.createdAt).getTime() : undefined,
+  } : undefined;
+
+  return (
+    <SettingsPage
+      clerkUser={clerkUser}
+      onSignOut={() => signOut({ redirectUrl: "/" })}
+    />
+  );
+}
+
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 function AppRoutes() {
@@ -355,7 +377,7 @@ function AppRoutes() {
         <Route path="/scanners"        component={Scanners} />
         <Route path="/hydra"           component={HydraAlpha} />
         <Route path="/options"         component={OptionsStrategyTester} />
-        <Route path="/settings"        component={SettingsPage} />
+        <Route path="/settings"        component={SettingsWithClerk} />
         <Route path="/chart/:symbol"   component={ChartView} />
         <Route component={NotFound} />
       </Switch>
