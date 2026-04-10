@@ -5,7 +5,7 @@ import { useTheme } from "@/context/ThemeContext";
 import {
   TrendingUp, TrendingDown, Plus, Trash2, Play, BarChart2,
   AlertTriangle, RefreshCw, ChevronDown, Target, Activity,
-  Shield, Zap, Info, X, Lightbulb, ArrowUpDown, BookOpen
+  Shield, Zap, Info, X
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -253,109 +253,320 @@ function detectStrategy(legs: Array<{ action: string; option_type: string; lots:
   return null;
 }
 
+// ── Market-fit scoring ────────────────────────────────────────────────────────
+
+type StrategyCategory = "buy_vol" | "sell_vol" | "buy_dir" | "sell_dir" | "spread" | "pin";
+type FitVerdict       = "recommended" | "caution" | "avoid";
+
+interface FitSignal {
+  label:  string;
+  value:  string;
+  status: "good" | "warn" | "bad";
+}
+
+interface MarketFit {
+  verdict:  FitVerdict;
+  score:    number;   // 0–100
+  signals:  FitSignal[];
+  headline: string;
+}
+
+const STRATEGY_CATEGORY: Record<string, StrategyCategory> = {
+  "Long Call":        "buy_dir",
+  "Long Put":         "buy_dir",
+  "Short Call":       "sell_dir",
+  "Short Put":        "sell_dir",
+  "Long Straddle":    "buy_vol",
+  "Long Strangle":    "buy_vol",
+  "Short Straddle":   "sell_vol",
+  "Short Strangle":   "sell_vol",
+  "Bull Call Spread": "spread",
+  "Bear Put Spread":  "spread",
+  "Iron Condor":      "sell_vol",
+  "Butterfly":        "pin",
+};
+
+function computeMarketFit(
+  name: string | null,
+  spotInfo: SpotInfo,
+  payoff: any,
+  greeks: any,
+): MarketFit | null {
+  if (!name || !spotInfo) return null;
+  const cat    = STRATEGY_CATEGORY[name];
+  if (!cat) return null;
+
+  const hvPct  = spotInfo.hv30_pct;          // 0–100 percentile
+  const hv     = +(spotInfo.hv30 * 100).toFixed(1); // annualised %
+  const spot   = spotInfo.spot;
+  const maxP   = payoff?.max_profit  as number | null;
+  const maxL   = payoff?.max_loss    as number | null;
+  const bes    = (payoff?.breakevens ?? []) as number[];
+  const theta  = greeks?.theta  ?? 0;
+  const vega   = greeks?.vega   ?? 0;
+
+  const rr     = (maxP != null && maxL != null && maxL !== 0)
+    ? Math.abs(maxP / maxL)
+    : null;
+  const beGapPct = bes.length >= 1
+    ? Math.min(...bes.map(b => Math.abs(b - spot) / spot * 100))
+    : null;
+
+  const signals: FitSignal[] = [];
+  let score = 50;
+
+  // ── Vol-regime signal (universal) ─────────────────────────────────────────
+  const volLabel = hvPct < 30 ? "Low"
+    : hvPct < 55 ? "Moderate"
+    : hvPct < 75 ? "High"
+    : "Very High";
+
+  if (cat === "buy_vol" || cat === "buy_dir") {
+    const ok = hvPct < 40 ? "good" : hvPct < 60 ? "warn" : "bad";
+    signals.push({
+      label: "Vol Regime",
+      value: `HV ${hv}% (${hvPct}th pct) — ${volLabel}`,
+      status: ok,
+    });
+    score += hvPct < 35 ? +30 : hvPct < 50 ? +10 : hvPct < 65 ? -10 : -30;
+  } else if (cat === "sell_vol" || cat === "sell_dir") {
+    const ok = hvPct > 60 ? "good" : hvPct > 40 ? "warn" : "bad";
+    signals.push({
+      label: "Vol Regime",
+      value: `HV ${hv}% (${hvPct}th pct) — ${hvPct > 60 ? "premium rich ✓" : hvPct > 40 ? "fair" : "premium thin ✗"}`,
+      status: ok,
+    });
+    score += hvPct > 65 ? +30 : hvPct > 50 ? +10 : hvPct > 40 ? -10 : -30;
+  } else if (cat === "spread") {
+    const ok = hvPct > 30 && hvPct < 70 ? "good" : "warn";
+    signals.push({
+      label: "Vol Regime",
+      value: `HV ${hv}% (${hvPct}th pct) — ${ok === "good" ? "moderate, ideal for spreads" : "extreme vol, less favourable"}`,
+      status: ok,
+    });
+    score += ok === "good" ? +15 : -10;
+  } else {  // pin (butterfly)
+    const ok = hvPct < 35 ? "good" : hvPct < 50 ? "warn" : "bad";
+    signals.push({
+      label: "Vol Regime",
+      value: `HV ${hv}% (${hvPct}th pct) — ${hvPct < 35 ? "calm, pin play viable" : hvPct < 50 ? "moderate, marginal" : "too volatile for pin"}`,
+      status: ok,
+    });
+    score += hvPct < 30 ? +30 : hvPct < 45 ? +10 : hvPct < 60 ? -15 : -30;
+  }
+
+  // ── Breakeven distance ────────────────────────────────────────────────────
+  if (beGapPct !== null) {
+    if (cat === "sell_vol") {
+      // For sell-vol: wider BEs = safer → high gap = good
+      const ok = beGapPct > 5 ? "good" : beGapPct > 2.5 ? "warn" : "bad";
+      signals.push({
+        label: "Buffer to BE",
+        value: `${beGapPct.toFixed(1)}% from spot ${ok === "good" ? "— wide safety zone" : ok === "warn" ? "— moderate" : "— tight, gap risk"}`,
+        status: ok,
+      });
+      score += beGapPct > 5 ? +15 : beGapPct > 2.5 ? +5 : -10;
+    } else {
+      // For buy/spread: smaller gap = easier to reach profit
+      const ok = beGapPct < 3 ? "good" : beGapPct < 6 ? "warn" : "bad";
+      signals.push({
+        label: "Distance to BE",
+        value: `${beGapPct.toFixed(1)}% move needed ${ok === "good" ? "— achievable" : ok === "warn" ? "— moderate effort" : "— large move required"}`,
+        status: ok,
+      });
+      score += beGapPct < 3 ? +15 : beGapPct < 6 ? +5 : -15;
+    }
+  }
+
+  // ── Theta signal ──────────────────────────────────────────────────────────
+  const thetaDay = Math.round(theta);
+  if (cat === "sell_vol" || cat === "sell_dir") {
+    const ok = theta > 100 ? "good" : theta > 0 ? "warn" : "bad";
+    signals.push({
+      label: "Time Decay",
+      value: `+₹${Math.abs(thetaDay).toLocaleString("en-IN")}/day in your favour`,
+      status: ok,
+    });
+    score += theta > 200 ? +15 : theta > 50 ? +8 : theta > 0 ? +3 : -10;
+  } else if (cat === "buy_vol" || cat === "buy_dir") {
+    const ok = Math.abs(theta) < 200 ? "warn" : "bad";
+    signals.push({
+      label: "Time Decay",
+      value: `-₹${Math.abs(thetaDay).toLocaleString("en-IN")}/day working against you`,
+      status: ok,
+    });
+    score += Math.abs(theta) < 100 ? +5 : Math.abs(theta) < 300 ? 0 : -10;
+  }
+
+  // ── R:R signal ────────────────────────────────────────────────────────────
+  if (rr !== null) {
+    const ok = rr > 1.5 ? "good" : rr > 0.6 ? "warn" : "bad";
+    signals.push({
+      label: "Reward : Risk",
+      value: `${rr.toFixed(2)}× ${ok === "good" ? "— favourable" : ok === "warn" ? "— acceptable" : "— unfavourable"}`,
+      status: ok,
+    });
+    score += rr > 2 ? +15 : rr > 1.2 ? +8 : rr > 0.6 ? +2 : -12;
+  }
+
+  // ── Vega signal for vol strategies ───────────────────────────────────────
+  if ((cat === "buy_vol" || cat === "sell_vol") && vega !== 0) {
+    const isLong = vega > 0;
+    const ok: FitSignal["status"] =
+      (isLong && cat === "buy_vol") || (!isLong && cat === "sell_vol") ? "good" : "bad";
+    signals.push({
+      label: "Vol Exposure",
+      value: `${isLong ? "+" : ""}${vega.toFixed(0)} vega — ${isLong ? "profits if IV rises" : "profits if IV falls"}`,
+      status: ok,
+    });
+    score += ok === "good" ? +5 : -5;
+  }
+
+  // ── Clamp score ───────────────────────────────────────────────────────────
+  score = Math.max(0, Math.min(100, score));
+
+  const verdict: FitVerdict = score >= 65 ? "recommended" : score >= 42 ? "caution" : "avoid";
+
+  // ── Headline narrative ─────────────────────────────────────────────────────
+  const headlines: Record<FitVerdict, Record<StrategyCategory, string>> = {
+    recommended: {
+      buy_vol:  `HV is at ${hvPct}th pct — vol is cheap. Good time to buy a ${name} ahead of potential expansion.`,
+      sell_vol: `HV at ${hvPct}th pct means premium is rich. ${name} is well-positioned to collect theta.`,
+      buy_dir:  `Premium cost is moderate (HV ${hvPct}th pct). Reasonable entry for a directional bet.`,
+      sell_dir: `Elevated vol (${hvPct}th pct) inflates premium — good time to sell. Defined range expected.`,
+      spread:   `Moderate vol (${hvPct}th pct) and healthy R:R make this spread a cost-effective play.`,
+      pin:      `Vol is suppressed (${hvPct}th pct). Market calm — Butterfly is a strong pin strategy here.`,
+    },
+    caution: {
+      buy_vol:  `HV is at ${hvPct}th pct — fair, not cheap. Entry is viable but vol expansion is needed sooner.`,
+      sell_vol: `HV at ${hvPct}th pct — premium is moderate. Selling works but margin of safety is thinner.`,
+      buy_dir:  `HV at ${hvPct}th pct makes options fairly priced. Momentum confirmation helps before entry.`,
+      sell_dir: `Vol is moderate — selling works but the premium collected may not justify the risk right now.`,
+      spread:   `Vol is at extremes. Spread still viable but pricing may be less efficient than ideal.`,
+      pin:      `Vol is moderate — Butterfly can work but requires precise timing near expiry.`,
+    },
+    avoid: {
+      buy_vol:  `HV is at ${hvPct}th pct — vol is expensive. Paying high premium for a ${name} is risky. Wait for vol to cool.`,
+      sell_vol: `HV at ${hvPct}th pct — premium is thin. ${name} offers poor risk-reward in this low-vol environment.`,
+      buy_dir:  `High vol (${hvPct}th pct) makes options expensive. The breakeven gap is too wide for the expected move.`,
+      sell_dir: `Vol is low — premium collected is minimal. Unlimited risk for thin reward. Avoid.`,
+      spread:   `Extreme vol makes spread pricing unfavourable. Consider waiting for vol to normalise.`,
+      pin:      `Elevated vol (${hvPct}th pct) — market is too active for a pin strategy. High risk of assignment.`,
+    },
+  };
+
+  const headline = headlines[verdict][cat];
+
+  return { verdict, score, signals, headline };
+}
+
+// ── Verdict colours ───────────────────────────────────────────────────────────
+const VERDICT_STYLE = {
+  recommended: {
+    badge:   "bg-emerald-100 text-emerald-800 border-emerald-300",
+    badgeDk: "bg-emerald-900/40 text-emerald-300 border-emerald-700",
+    bar:     "bg-emerald-500",
+    icon:    "text-emerald-600",
+    iconDk:  "text-emerald-400",
+    label:   "Recommended",
+  },
+  caution: {
+    badge:   "bg-amber-100 text-amber-800 border-amber-300",
+    badgeDk: "bg-amber-900/40 text-amber-300 border-amber-700",
+    bar:     "bg-amber-400",
+    icon:    "text-amber-600",
+    iconDk:  "text-amber-400",
+    label:   "Use with Caution",
+  },
+  avoid: {
+    badge:   "bg-red-100 text-red-800 border-red-300",
+    badgeDk: "bg-red-900/40 text-red-300 border-red-700",
+    bar:     "bg-red-500",
+    icon:    "text-red-600",
+    iconDk:  "text-red-400",
+    label:   "Avoid Right Now",
+  },
+};
+
+const SIGNAL_STYLE: Record<FitSignal["status"], { light: string; dark: string; dot: string }> = {
+  good: { light: "bg-emerald-50 text-emerald-700 border-emerald-200", dark: "bg-emerald-900/30 text-emerald-300 border-emerald-700/50", dot: "bg-emerald-500" },
+  warn: { light: "bg-amber-50 text-amber-700 border-amber-200",       dark: "bg-amber-900/30 text-amber-300 border-amber-700/50",       dot: "bg-amber-400"   },
+  bad:  { light: "bg-red-50 text-red-700 border-red-200",             dark: "bg-red-900/30 text-red-300 border-red-700/50",             dot: "bg-red-500"     },
+};
+
 function StrategyInsightCard({
-  legs, payoff, spot,
+  legs, payoff, greeks, spotInfo,
 }: {
-  legs: Array<{ action: string; option_type: string; lots: number; strike: number }>;
-  payoff: any;
-  spot?: number;
+  legs:     Array<{ action: string; option_type: string; lots: number; strike: number }>;
+  payoff:   any;
+  greeks:   any;
+  spotInfo: SpotInfo | null;
 }) {
   const { theme: appTheme } = useTheme();
   const isDark = appTheme === "dark";
 
-  const name    = detectStrategy(legs);
-  const info    = name ? STRATEGY_INFO[name] : null;
-  const ot      = getOutlookTheme((info?.outlook ?? "neutral") as OutlookKey, isDark);
-  const maxP    = payoff?.max_profit;
-  const maxL    = payoff?.max_loss;
-  const bes     = payoff?.breakevens ?? [];
-  const np      = payoff?.net_premium ?? 0;
-  const isDebit = np < 0;
+  const name = detectStrategy(legs);
+  const fit  = computeMarketFit(name, spotInfo!, payoff, greeks);
 
-  const rrRatio = (maxP != null && maxL != null && maxL !== 0)
-    ? Math.abs(maxP / maxL).toFixed(2)
-    : null;
+  const cardBg  = isDark ? "bg-slate-800/60 border-slate-700"       : "bg-white border-gray-200";
+  const labelCl = isDark ? "text-slate-400"                          : "text-gray-400";
+  const textCl  = isDark ? "text-slate-200"                          : "text-gray-800";
+  const mutedCl = isDark ? "text-slate-400"                          : "text-gray-500";
+  const trackCl = isDark ? "bg-slate-700"                            : "bg-gray-100";
+  const innerCl = isDark ? "bg-slate-700/50 border-slate-600/50"     : "bg-gray-50 border-gray-100";
 
-  const beText = bes.length === 1
-    ? `Market must move to ₹${bes[0].toLocaleString("en-IN")} to break even`
-    : bes.length === 2
-      ? `Profitable between ₹${bes[0].toLocaleString("en-IN")} – ₹${bes[1].toLocaleString("en-IN")}`
-      : null;
+  if (!fit) return null;
 
-  const spotDiff = (spot && bes.length === 1) ? bes[0] - spot : null;
-
-  const labelCls   = isDark ? "text-slate-400 uppercase" : "text-gray-400 uppercase";
-  const valueCls   = isDark ? "text-slate-200 font-semibold" : "text-gray-700 font-semibold";
-  const bodyCls    = isDark ? "text-slate-300" : "text-gray-600";
-  const taglineCls = isDark ? "text-slate-400" : "text-gray-500";
-  const whenLblCls = isDark ? "text-slate-300 font-semibold" : "text-gray-600 font-semibold";
-  const badgeBg    = isDark ? "bg-slate-700/80" : "bg-white/70";
+  const vs = VERDICT_STYLE[fit.verdict];
+  const badgeCl = isDark ? vs.badgeDk : vs.badge;
+  const iconCl  = isDark ? vs.iconDk  : vs.icon;
 
   return (
-    <div className={`rounded-xl border ${ot.border} ${ot.bg} p-3 mt-1`}>
-      {/* Header row */}
-      <div className="flex items-start justify-between gap-2 mb-2">
+    <div className={`rounded-xl border ${cardBg} p-3 mt-2 shadow-sm`}>
+      {/* ── Header: verdict badge + score bar ── */}
+      <div className="flex items-center justify-between gap-3 mb-2.5">
         <div className="flex items-center gap-2">
-          <Lightbulb className={`w-4 h-4 shrink-0 ${ot.text} opacity-80`} />
-          <div>
-            <div className="flex items-center gap-1.5">
-              <span className={`text-[11px] font-bold ${ot.text}`}>
-                {name ?? "Custom Strategy"}
-              </span>
-              <span className={`flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${ot.border} ${ot.text} ${badgeBg}`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${ot.dot}`} />
-                {info?.outlook ? ot.label : "Custom"}
-              </span>
+          <Activity className={`w-4 h-4 shrink-0 ${iconCl}`} />
+          <span className={`text-[10px] font-bold uppercase tracking-wider ${labelCl}`}>
+            Market Fit · {name ?? "Custom"}
+          </span>
+        </div>
+        <span className={`flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${badgeCl}`}>
+          {fit.verdict === "recommended" ? "✅" : fit.verdict === "caution" ? "⚡" : "❌"}
+          {vs.label}
+        </span>
+      </div>
+
+      {/* Score bar */}
+      <div className={`rounded-full h-1.5 w-full ${trackCl} mb-3 overflow-hidden`}>
+        <div
+          className={`h-full rounded-full transition-all duration-700 ${vs.bar}`}
+          style={{ width: `${fit.score}%` }}
+        />
+      </div>
+
+      {/* ── Live signal chips ── */}
+      <div className="flex flex-wrap gap-1.5 mb-2.5">
+        {fit.signals.map((sig, i) => {
+          const sc = SIGNAL_STYLE[sig.status];
+          const cl = isDark ? sc.dark : sc.light;
+          return (
+            <div key={i} className={`flex items-center gap-1 text-[9px] font-medium px-2 py-0.5 rounded-full border ${cl}`}>
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${sc.dot}`} />
+              <span className="font-semibold">{sig.label}:</span>
+              <span>{sig.value}</span>
             </div>
-            {info && <p className={`text-[10px] mt-0.5 ${taglineCls}`}>{info.tagline}</p>}
-          </div>
-        </div>
-        {rrRatio && (
-          <div className="text-right shrink-0">
-            <p className={`text-[9px] ${labelCls}`}>R:R</p>
-            <p className={`text-sm font-bold ${ot.text}`}>{rrRatio}×</p>
-          </div>
-        )}
+          );
+        })}
       </div>
 
-      {/* Risk / Reward tiles */}
-      <div className="grid grid-cols-2 gap-1.5 mb-2">
-        <div className={`${ot.inner} rounded-lg px-2.5 py-1.5`}>
-          <p className={`text-[9px] ${labelCls} mb-0.5`}>Risk</p>
-          <p className={`text-[10px] ${valueCls}`}>{info?.risk ?? (isDebit ? "Limited (debit paid)" : "Unlimited")}</p>
-        </div>
-        <div className={`${ot.inner} rounded-lg px-2.5 py-1.5`}>
-          <p className={`text-[9px] ${labelCls} mb-0.5`}>Reward</p>
-          <p className={`text-[10px] ${valueCls}`}>{info?.reward ?? (isDebit ? "Unlimited" : "Limited (premium)")}</p>
-        </div>
+      {/* ── Narrative ── */}
+      <div className={`rounded-lg border px-2.5 py-2 ${innerCl}`}>
+        <p className={`text-[10px] leading-relaxed ${mutedCl}`}>
+          <span className={`font-semibold ${textCl}`}>Verdict: </span>
+          {fit.headline}
+        </p>
       </div>
-
-      {/* Breakeven row */}
-      {beText && (
-        <div className={`flex items-start gap-1.5 ${ot.inner} rounded-lg px-2.5 py-1.5 mb-1.5`}>
-          <Target className={`w-3 h-3 mt-0.5 shrink-0 ${isDark ? "text-emerald-400" : "text-emerald-600"}`} />
-          <div>
-            <p className={`text-[10px] ${bodyCls}`}>{beText}</p>
-            {spotDiff !== null && (
-              <p className={`text-[9px] mt-0.5 font-medium ${spotDiff > 0 ? "text-orange-400" : isDark ? "text-emerald-400" : "text-emerald-600"}`}>
-                {spotDiff > 0
-                  ? `₹${Math.abs(spotDiff).toLocaleString("en-IN")} above current spot to reach breakeven`
-                  : "Already past breakeven — in profit territory"}
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* When to use */}
-      {info?.when && (
-        <div className={`flex items-start gap-1.5 ${ot.inner} rounded-lg px-2.5 py-1.5`}>
-          <BookOpen className={`w-3 h-3 mt-0.5 shrink-0 ${isDark ? "text-blue-400" : "text-blue-500"}`} />
-          <p className={`text-[10px] ${taglineCls}`}>
-            <span className={whenLblCls}>When to use: </span>{info.when}
-          </p>
-        </div>
-      )}
     </div>
   );
 }
@@ -1000,7 +1211,8 @@ export default function OptionsStrategyTester() {
                   <StrategyInsightCard
                     legs={legs}
                     payoff={analysis.payoff}
-                    spot={spotInfo?.spot}
+                    greeks={analysis.greeks}
+                    spotInfo={spotInfo}
                   />
                 </div>
               </div>
