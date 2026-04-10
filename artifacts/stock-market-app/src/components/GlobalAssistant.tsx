@@ -1033,7 +1033,7 @@ export default function GlobalAssistant() {
          ══════════════════════════════════════════════════════════════════════ */}
       {!open && (
         <div
-          className="fixed z-[9999] flex items-center"
+          className="fixed z-[9999] flex items-center pointer-events-none"
           style={{ right: 0, top: "50%", transform: "translateY(-50%)" }}
         >
           {/* First-visit tooltip — slides in from the tab */}
@@ -1070,6 +1070,7 @@ export default function GlobalAssistant() {
             onMouseEnter={() => setTabHovered(true)}
             onMouseLeave={() => setTabHovered(false)}
             aria-label="Open learning assistant"
+            className="pointer-events-auto"
             style={{
               borderRadius: "10px 0 0 10px",
               width: tabHovered ? 44 : 28,
