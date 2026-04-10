@@ -179,7 +179,36 @@ async function main() {
   const localSha = execSync("git rev-parse HEAD", { cwd: ROOT }).toString().trim();
   console.log(`📌  Local HEAD:   ${localSha.slice(0, 7)}`);
 
+  // ── Pre-flight: detect files on GitHub that are NOT in the workspace ─────────
+  // Because we push a fresh tree (no base_tree), any file present on GitHub but
+  // absent from the workspace will be permanently deleted from GitHub.
+  // We fetch the current GitHub tree and warn loudly before uploading anything.
+  console.log(`\n🔍  Checking for files on GitHub that would be deleted…`);
+  const ghTree = await api(
+    connectors,
+    `/repos/${OWNER}/${REPO}/git/trees/${githubSha}?recursive=1`,
+  ) as { tree: { path: string; type: string }[] };
+
   const files = collectFiles();
+  const workspaceSet = new Set(files);
+
+  const willBeDeleted = ghTree.tree
+    .filter(e => e.type === "blob")
+    .map(e => e.path)
+    .filter(p => !workspaceSet.has(p));
+
+  if (willBeDeleted.length > 0) {
+    console.log(`\n⚠️  FILES ON GITHUB THAT WILL BE DELETED BY THIS PUSH (not in workspace):`);
+    for (const f of willBeDeleted) {
+      console.log(`     🗑  ${f}`);
+    }
+    console.log(`\n   If any of the above are unexpected, stop now and run:`);
+    console.log(`   pnpm --filter @workspace/scripts run restore-files`);
+    console.log(`   then re-run this push.\n`);
+  } else {
+    console.log(`   ✅  No unexpected deletions — workspace matches GitHub.\n`);
+  }
+
   console.log(`📁  Syncing ${files.length} source files…\n`);
 
   const treeEntries: { path: string; mode: string; type: string; sha: string }[] = [];

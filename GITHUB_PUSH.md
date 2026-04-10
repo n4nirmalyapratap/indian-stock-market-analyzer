@@ -15,6 +15,91 @@ Run this after every meaningful change. It will print a commit URL on success.
 
 ---
 
+## 🚨 CRITICAL: Every Push is a Full Workspace Sync
+
+**This is the most important thing to understand before running a push.**
+
+The push script creates a **completely fresh Git tree** from the files currently
+in the Replit workspace. There is no incremental diff. This means:
+
+> **Any file that exists on GitHub but is NOT present in the Replit workspace
+> will be permanently deleted from GitHub when you push.**
+
+### Why this design exists
+
+The script intentionally omits `base_tree` (see technical section below). Using
+`base_tree` would cause the opposite problem: files deleted from the workspace
+would silently persist on GitHub forever. Both choices have a trade-off. We
+chose "workspace is the source of truth" — but that means the workspace must
+always contain ALL files you want on GitHub.
+
+### How to prevent accidental deletions (agent checklist)
+
+Before running a push for the first time on a new Replit workspace, the agent MUST:
+
+1. **Check what is currently on GitHub** — fetch the repo tree:
+   ```
+   GET /repos/{owner}/{repo}/git/trees/HEAD?recursive=1
+   ```
+2. **Compare to the workspace** — identify any file on GitHub that is not in
+   the local workspace. The push script now prints this list automatically (see
+   "Pre-flight deletion report" below).
+3. **Restore any missing files** before pushing:
+   ```bash
+   pnpm --filter @workspace/scripts run restore-files
+   ```
+   Or copy the specific files manually using the GitHub contents API.
+4. Only then run the push.
+
+### What happened on 2026-04-10 (post-mortem)
+
+When this project was set up in Replit, only the `artifacts/` directories were
+copied from the original GitHub repo. Root-level files like `docker-compose.yml`,
+`README.md`, `SETUP.md`, `deploy.sh`, `.dockerignore`, `.env.example`,
+`GITHUB_PUSH.md`, and `scripts/setup-git-hook.sh` were never brought into the
+workspace. The first push then deleted all of them from GitHub because they did
+not exist locally. They were recovered using the `restore-files` script.
+
+**Rule: always run `restore-files` before the very first push on any fresh workspace.**
+
+---
+
+## Pre-flight Deletion Report (built into the push script)
+
+The push script now automatically fetches the current GitHub file list before
+pushing and prints every file that **will be deleted** from GitHub as a result
+of the push. Look for this block in the output:
+
+```
+⚠️  Files on GitHub that WILL BE DELETED by this push (not in workspace):
+     deploy.sh
+     docker-compose.yml
+     README.md
+```
+
+If you see unexpected files in that list, **stop** — do not proceed. Instead:
+1. Fetch those files back from the previous GitHub commit using the GitHub
+   contents API or the `restore-files` script.
+2. Re-run the push once the workspace contains those files.
+
+---
+
+## Restore Script
+
+If files were accidentally deleted by a push, run:
+
+```bash
+pnpm --filter @workspace/scripts run restore-files
+```
+
+`scripts/src/restore-files.ts` is pre-configured with the list of root-level
+project files that should always exist. After restoring, re-run the push.
+
+To recover a specific file from a specific commit SHA, edit the `REF` constant
+in `restore-files.ts` to point to the commit before the deletion.
+
+---
+
 ## First-Time Setup — Agent Must Trigger the Popup (NOT the user)
 
 When the push script fails with `HTTP_401` or "No connection found", the GitHub
@@ -67,11 +152,13 @@ call the GitHub API through Replit's proxy. No token is stored in the code.
 Flow:
 1. Authenticate via `GET /user` — confirms the connector is authorized
 2. Get current GitHub `HEAD` SHA for the branch
-3. Walk the entire workspace (respecting `.gitignore` skip rules)
-4. Upload all files as Git blobs via `POST /repos/.../git/blobs`
-5. Create a **complete new Git tree** from those blobs (no `base_tree`)
-6. Create a new commit with that tree
-7. Update the branch ref to point to the new commit
+3. **Fetch the full file tree from GitHub HEAD** — builds deletion report
+4. Walk the entire workspace (respecting skip rules)
+5. **Print any files that will be deleted** (on GitHub but not in workspace)
+6. Upload all files as Git blobs via `POST /repos/.../git/blobs`
+7. Create a **complete new Git tree** from those blobs (no `base_tree`)
+8. Create a new commit with that tree
+9. Update the branch ref to point to the new commit
 
 ### ⚠️ Critical: `base_tree` must NOT be used
 
@@ -131,6 +218,7 @@ Python threw `ModuleNotFoundError: No module named 'pandas_ta'` at container sta
 | `Cannot find module '@replit/connectors-sdk'` | pnpm packages not installed | Run `pnpm install` first |
 | Push hangs with no output | Network issue in Replit | Restart the shell and try again |
 | `non-JSON response` | GitHub API error or proxy issue | Wait 30 seconds and retry |
+| Files deleted from GitHub after push | Workspace was missing files | Run `restore-files` script, then push again |
 
 ---
 
