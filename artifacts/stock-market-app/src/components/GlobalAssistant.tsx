@@ -1509,31 +1509,31 @@ export default function GlobalAssistant() {
               </div>
 
               {/* Input bar */}
-              <div className="flex-shrink-0 border-t border-indigo-100/60 dark:border-indigo-800/30 px-3 py-3
-                bg-gradient-to-r from-violet-50 to-indigo-50 dark:from-gray-900 dark:to-[#0d0b1e]">
-                <div className="flex items-center gap-2 rounded-2xl border border-indigo-200/70 dark:border-indigo-600/30 px-3.5 py-2.5
-                  bg-white dark:bg-gray-900 shadow-sm
-                  focus-within:border-indigo-400 dark:focus-within:border-indigo-500
-                  focus-within:shadow-[0_0_0_3px_rgba(99,102,241,0.12)] transition-all">
+              <div className="flex-shrink-0 border-t border-indigo-100/60 dark:border-indigo-700/40 px-3 py-3
+                bg-gradient-to-r from-violet-50 to-indigo-50 dark:from-[#0d0b1e] dark:to-[#110e28]">
+                <div className="flex items-center gap-2 rounded-2xl border border-indigo-200/70 dark:border-indigo-500/50 px-3.5 py-2.5
+                  bg-white dark:bg-gray-800 shadow-sm
+                  focus-within:border-indigo-400 dark:focus-within:border-indigo-400
+                  focus-within:shadow-[0_0_0_3px_rgba(99,102,241,0.15)] transition-all">
                   <input
                     type="text"
                     value={aiInput}
                     onChange={e => setAiInput(e.target.value)}
                     onKeyDown={e => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendAiChat())}
                     placeholder="Ask about options, Greeks, strategies…"
-                    className="flex-1 text-[13px] bg-transparent text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-600 outline-none min-w-0"
+                    className="flex-1 text-[13px] bg-transparent text-gray-800 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 outline-none min-w-0"
                   />
                   <button
                     onClick={sendAiChat}
                     disabled={!aiInput.trim() || aiLoading}
                     className="flex-shrink-0 w-8 h-8 rounded-xl flex items-center justify-center transition-all
+                      bg-indigo-600 hover:bg-indigo-500 dark:bg-indigo-500 dark:hover:bg-indigo-400
                       disabled:opacity-40 disabled:cursor-not-allowed"
-                    style={{ background: "linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%)" }}
                   >
                     <Send className="w-3.5 h-3.5 text-white" />
                   </button>
                 </div>
-                <p className="text-[10px] text-center text-indigo-300 dark:text-indigo-600 mt-2">
+                <p className="text-[10px] text-center text-indigo-400 dark:text-indigo-400 mt-2">
                   AI-powered · Options &amp; derivatives focused
                 </p>
               </div>
