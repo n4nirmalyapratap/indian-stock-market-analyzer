@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useLocation } from "wouter";
 import { BookOpen, Send, X, RotateCcw, Sparkles, ChevronRight, ChevronLeft, GraduationCap } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -957,6 +958,9 @@ interface Msg {
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
 export default function GlobalAssistant() {
+  const [loc] = useLocation();
+  const isChartStudio = loc.startsWith("/trading") || loc.startsWith("/chart");
+
   const [open, setOpen]           = useState(false);
   const [msgs, setMsgs]           = useState<Msg[]>([]);
   const [input, setInput]         = useState("");
@@ -1018,6 +1022,9 @@ export default function GlobalAssistant() {
   }
 
   const isEmpty = msgs.length === 0;
+
+  // Hide entirely on Chart Studio — it has its own toolset and the tab would block controls
+  if (isChartStudio) return null;
 
   return (
     <>
