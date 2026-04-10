@@ -70,6 +70,37 @@ const SKIP_EXTS = new Set([
 
 const MAX_FILE_BYTES = 400 * 1024; // 400 KB hard cap (GitHub API proxy limit)
 
+// ── HARD-CODED PROTECTED FILES — NEVER allowed to be deleted from GitHub ──────
+//
+// If any file in this set is detected as "would be deleted" during pre-flight,
+// the push is ABORTED immediately with an error. These files are critical for
+// Docker builds and production deployments.
+//
+// Rule: Dockerfiles, nginx configs, and docker-compose files are sacred.
+// They must always be present in the workspace before a push. If the workspace
+// is missing one of these files, run restore-files first.
+//
+const PROTECTED_FILENAMES = new Set([
+  "Dockerfile",
+  "nginx.conf",
+  "docker-compose.yml",
+  ".dockerignore",
+]);
+
+// Also protect any file whose path contains these substrings
+const PROTECTED_PATH_SUBSTRINGS = [
+  "Dockerfile",
+  "docker-compose",
+  "nginx.conf",
+  ".dockerignore",
+];
+
+function isProtected(filePath: string): boolean {
+  const name = path.basename(filePath);
+  if (PROTECTED_FILENAMES.has(name)) return true;
+  return PROTECTED_PATH_SUBSTRINGS.some(s => filePath.includes(s));
+}
+
 // ── File walker ───────────────────────────────────────────────────────────────
 
 function shouldSkipFile(name: string): boolean {
@@ -196,6 +227,21 @@ async function main() {
     .filter(e => e.type === "blob")
     .map(e => e.path)
     .filter(p => !workspaceSet.has(p));
+
+  // Hard-coded protection: if a protected file (Dockerfile, nginx.conf, etc.)
+  // would be deleted, ABORT immediately — never allow Docker files to be lost.
+  const protectedViolations = willBeDeleted.filter(isProtected);
+  if (protectedViolations.length > 0) {
+    console.log(`\n🚨  PUSH ABORTED — PROTECTED FILES MISSING FROM WORKSPACE:`);
+    for (const f of protectedViolations) {
+      console.log(`     🛡  ${f}  ← Dockerfile / nginx / docker-compose (NEVER deletable)`);
+    }
+    console.log(`\n   These files are critical for Docker builds and cannot be deleted.`);
+    console.log(`   Restore them first:`);
+    console.log(`   pnpm --filter @workspace/scripts run restore-files`);
+    console.log(`   Then re-run this push.\n`);
+    process.exit(1);
+  }
 
   if (willBeDeleted.length > 0) {
     console.log(`\n⚠️  FILES ON GITHUB THAT WILL BE DELETED BY THIS PUSH (not in workspace):`);
