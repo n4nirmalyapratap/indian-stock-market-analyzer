@@ -392,7 +392,16 @@ async def get_corporate_events() -> dict:
 
 
 async def get_news_stats() -> dict:
-    cached = _cache_get("feed") or []
+    # If feed cache is empty (e.g. fresh backend restart), populate it first
+    # so stats are never stuck at zero just because the cache hasn't warmed up yet.
+    cached = _cache_get("feed")
+    if not cached:
+        try:
+            result = await get_news_feed()
+            cached = result.get("articles", [])
+        except Exception:
+            cached = []
+
     sentiments = {"bullish": 0, "bearish": 0, "neutral": 0}
     sources: dict[str, int] = {}
     for a in cached:
