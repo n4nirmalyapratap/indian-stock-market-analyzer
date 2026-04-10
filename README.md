@@ -20,8 +20,8 @@ WhatsApp bot — all powered by a **Python FastAPI backend**.
 | UI | shadcn/ui |
 | WhatsApp | Twilio (webhook-based) |
 
-> **Node.js is NOT used for any active functionality.**
-> All previous Node.js / NestJS backend directories have been **permanently deleted**.
+> **Node.js is used only for the React/Vite frontend** (build tooling + dev server).
+> All Node.js / NestJS *backend* directories have been **permanently deleted** — the backend is Python only.
 
 ---
 

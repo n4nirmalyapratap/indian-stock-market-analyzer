@@ -97,6 +97,17 @@ The following are **never pushed** (mirrors `.gitignore`):
 | Extensions | `.png`, `.jpg`, `.gif`, `.webp`, `.ico`, `.woff`, `.ttf`, `.mp4`, `.pdf`, `.zip` |
 | Size | Files larger than 400 KB are skipped with a warning |
 
+### ⚠️ pandas_ta must NOT be in SKIP_DIRS
+
+`artifacts/python-backend/pandas_ta/` is a local package shim that must be in the
+GitHub repo so Docker builds can include it via `COPY . .`.
+
+It was incorrectly added to `SKIP_DIRS` in April 2026 (labelled "Vendored shim — not real source").
+This caused three Docker build failures because cloned repos had no `pandas_ta/` shim, and
+Python threw `ModuleNotFoundError: No module named 'pandas_ta'` at container startup.
+
+**Never add `"pandas_ta"` back to `SKIP_DIRS` in `push-github.ts`.**
+
 ---
 
 ## Rate Limiting & Retries
