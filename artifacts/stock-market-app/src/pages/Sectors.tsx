@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { api, SectorHeatmapItem } from "@/lib/api";
-import { TrendingUp, TrendingDown, Info, Target, Shield, BarChart2, Zap, Activity, ChevronRight } from "lucide-react";
+import { Info, Target, Shield, BarChart2, Zap, Activity, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 
 // ── Theme-aware tier config ────────────────────────────────────────────────────
@@ -485,9 +485,27 @@ function heatStyle(val: number | null, isDark: boolean): { bg: string; text: str
   }
 }
 
+type SortDir = "default" | "desc" | "asc";
+
+const SORT_OPTIONS: { dir: SortDir; icon: ReactNode; title: string }[] = [
+  { dir: "default", icon: <ArrowUpDown className="w-3 h-3" />, title: "Default order" },
+  { dir: "desc",    icon: <ArrowDown   className="w-3 h-3" />, title: "Best → Worst"  },
+  { dir: "asc",     icon: <ArrowUp     className="w-3 h-3" />, title: "Worst → Best"  },
+];
+
 function SectorHeatMap({ data, isDark }: { data: SectorHeatmapItem[]; isDark: boolean }) {
   const [metric, setMetric] = useState<keyof SectorHeatmapItem>("change1d");
+  const [sort, setSort]     = useState<SortDir>("default");
   const muTxt = isDark ? "#64748b" : "#94a3b8";
+
+  const sorted = sort === "default" ? data : [...data].sort((a, b) => {
+    const av = a[metric] as number | null;
+    const bv = b[metric] as number | null;
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return sort === "desc" ? bv - av : av - bv;
+  });
 
   return (
     <Card isDark={isDark}>
@@ -502,20 +520,42 @@ function SectorHeatMap({ data, isDark }: { data: SectorHeatmapItem[]; isDark: bo
               Color = performance intensity
             </span>
           </div>
-          <div className="flex gap-1">
-            {HEATMAP_METRICS.map(m => (
-              <button
-                key={m.key as string}
-                onClick={() => setMetric(m.key)}
-                className="px-2.5 py-1 rounded text-xs font-medium transition-colors"
-                style={{
-                  background: metric === m.key ? "#6366f1" : isDark ? "#334155" : "#f3f4f6",
-                  color: metric === m.key ? "#fff" : isDark ? "#cbd5e1" : "#374151",
-                }}
-              >
-                {m.label}
-              </button>
-            ))}
+          <div className="flex items-center gap-1.5">
+            {/* Period metric buttons */}
+            <div className="flex gap-1">
+              {HEATMAP_METRICS.map(m => (
+                <button
+                  key={m.key as string}
+                  onClick={() => setMetric(m.key)}
+                  className="px-2.5 py-1 rounded text-xs font-medium transition-colors"
+                  style={{
+                    background: metric === m.key ? "#6366f1" : isDark ? "#334155" : "#f3f4f6",
+                    color: metric === m.key ? "#fff" : isDark ? "#cbd5e1" : "#374151",
+                  }}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+            {/* Divider */}
+            <div className="w-px h-5 mx-0.5" style={{ background: isDark ? "#334155" : "#e2e8f0" }} />
+            {/* Sort buttons */}
+            <div className="flex gap-0.5">
+              {SORT_OPTIONS.map(({ dir, icon, title }) => (
+                <button
+                  key={dir}
+                  onClick={() => setSort(dir)}
+                  title={title}
+                  className="w-7 h-7 flex items-center justify-center rounded transition-colors"
+                  style={{
+                    background: sort === dir ? "#6366f1" : isDark ? "#334155" : "#f3f4f6",
+                    color:      sort === dir ? "#fff"    : isDark ? "#cbd5e1" : "#374151",
+                  }}
+                >
+                  {icon}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </CardHeader>
@@ -523,7 +563,7 @@ function SectorHeatMap({ data, isDark }: { data: SectorHeatmapItem[]; isDark: bo
       <div className="p-3 pr-4 space-y-3">
         {/* Uniform 7-column grid — 2 clean rows for 14 sectors, no blank gaps */}
         <div className="grid gap-1.5" style={{ gridTemplateColumns: "repeat(7, 1fr)", paddingRight: "2px" }}>
-          {data.map((sector) => {
+          {sorted.map((sector) => {
             const val  = sector[metric] as number | null;
             const hs   = heatStyle(val, isDark);
             const name = sector.name.replace(/nifty\s+/i, "").replace("NIFTY ", "");
@@ -580,106 +620,6 @@ function SectorHeatMap({ data, isDark }: { data: SectorHeatmapItem[]; isDark: bo
   );
 }
 
-// ── Top Movers ────────────────────────────────────────────────────────────────
-
-function TopMovers({ isDark }: { isDark: boolean }) {
-  const [period, setPeriod] = useState<"1d" | "1w" | "1m" | "1y">("1d");
-
-  const { data: movers, isLoading } = useQuery({
-    queryKey:  ["sectorTopMovers", period],
-    queryFn:   () => api.sectorTopMovers(period),
-    staleTime: 5 * 60 * 1000,
-  });
-
-  const hdrTxt = isDark ? "#f1f5f9" : "#111827";
-  const muTxt  = isDark ? "#94a3b8" : "#6b7280";
-  const borderCol = isDark ? "#334155" : "#e2e8f0";
-
-  return (
-    <Card isDark={isDark}>
-      <CardHeader isDark={isDark}>
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-2">
-            <Zap className="w-4 h-4 text-yellow-500" />
-            <span className="font-semibold text-sm" style={{ color: hdrTxt }}>Top Movers</span>
-          </div>
-          <div className="flex gap-1">
-            {(["1d","1w","1m","1y"] as const).map(p => (
-              <button key={p} onClick={() => setPeriod(p)}
-                className="px-2.5 py-1 rounded text-xs font-medium transition-colors"
-                style={{
-                  background: period === p ? "#6366f1" : isDark ? "#334155" : "#f3f4f6",
-                  color: period === p ? "#fff" : isDark ? "#cbd5e1" : "#374151",
-                }}>
-                {p.toUpperCase()}
-              </button>
-            ))}
-          </div>
-        </div>
-      </CardHeader>
-      {isLoading ? (
-        <div className="p-4 space-y-2">
-          {[...Array(5)].map((_, i) => <div key={i} className="h-8 animate-pulse rounded" style={{ background: isDark ? "#334155" : "#f3f4f6" }} />)}
-        </div>
-      ) : (
-        <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x" style={{ borderColor: borderCol }}>
-          <div className="p-4">
-            <div className="flex items-center gap-1.5 text-xs font-semibold mb-3" style={{ color: "#16a34a" }}>
-              <TrendingUp className="w-3.5 h-3.5" /> Top Gainers
-            </div>
-            <div className="space-y-2">
-              {movers?.gainers?.map(s => {
-                const val = s[`change${period === "1d" ? "1d" : period === "1w" ? "1w" : period === "1m" ? "1m" : "1y"}` as keyof SectorHeatmapItem] as number | null;
-                return (
-                  <Link key={s.symbol} href={`/sectors/${encodeURIComponent(s.symbol)}`}>
-                    <div className="flex items-center justify-between hover:opacity-80 transition-opacity cursor-pointer">
-                      <div>
-                        <div className="text-xs font-semibold" style={{ color: hdrTxt }}>
-                          {s.name.replace("Nifty ", "")}
-                        </div>
-                        <div className="text-xs" style={{ color: muTxt }}>{s.category}</div>
-                      </div>
-                      <div className="flex items-center gap-1 text-xs font-bold" style={{ color: "#16a34a" }}>
-                        <TrendingUp className="w-3 h-3" />
-                        {val != null ? (val >= 0 ? "+" : "") + val.toFixed(2) + "%" : "—"}
-                      </div>
-                    </div>
-                  </Link>
-                );
-              }) ?? <p className="text-xs" style={{ color: muTxt }}>No data</p>}
-            </div>
-          </div>
-          <div className="p-4">
-            <div className="flex items-center gap-1.5 text-xs font-semibold mb-3" style={{ color: "#dc2626" }}>
-              <TrendingDown className="w-3.5 h-3.5" /> Top Losers
-            </div>
-            <div className="space-y-2">
-              {movers?.losers?.map(s => {
-                const val = s[`change${period === "1d" ? "1d" : period === "1w" ? "1w" : period === "1m" ? "1m" : "1y"}` as keyof SectorHeatmapItem] as number | null;
-                return (
-                  <Link key={s.symbol} href={`/sectors/${encodeURIComponent(s.symbol)}`}>
-                    <div className="flex items-center justify-between hover:opacity-80 transition-opacity cursor-pointer">
-                      <div>
-                        <div className="text-xs font-semibold" style={{ color: hdrTxt }}>
-                          {s.name.replace("Nifty ", "")}
-                        </div>
-                        <div className="text-xs" style={{ color: muTxt }}>{s.category}</div>
-                      </div>
-                      <div className="flex items-center gap-1 text-xs font-bold" style={{ color: "#dc2626" }}>
-                        <TrendingDown className="w-3 h-3" />
-                        {val != null ? (val >= 0 ? "+" : "") + val.toFixed(2) + "%" : "—"}
-                      </div>
-                    </div>
-                  </Link>
-                );
-              }) ?? <p className="text-xs" style={{ color: muTxt }}>No data</p>}
-            </div>
-          </div>
-        </div>
-      )}
-    </Card>
-  );
-}
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function Sectors() {
@@ -729,7 +669,6 @@ export default function Sectors() {
         <SectorHeatMap data={heatmapData} isDark={isDark} />
       ) : null}
 
-      <TopMovers isDark={isDark} />
 
       <div id="rotation-section">
         <h2 className="text-base font-bold mb-3" style={{ color: hdrTxt }}>Rotation & Strength Analysis</h2>
