@@ -25,7 +25,7 @@ import { ThemeProvider, useTheme } from "@/context/ThemeContext";
 import { setTokenGetter } from "@/lib/api";
 import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
-  MessageCircle, Send, Brain, TrendingUp, CandlestickChart,
+  Brain, TrendingUp, CandlestickChart,
   Settings, ChevronRight, ChevronLeft, ChevronDown, Sun, Moon,
   Newspaper, LogOut, User,
 } from "lucide-react";
@@ -60,10 +60,7 @@ const MAIN_NAV = [
   { path: "/options",  label: "Options Tester", icon: TrendingUp },
 ];
 
-const SETTINGS_NAV = [
-  { path: "/whatsapp", label: "WhatsApp Bot", icon: MessageCircle },
-  { path: "/telegram", label: "Telegram Bot", icon: Send },
-];
+const SETTINGS_NAV: { path: string; label: string; icon: React.ElementType }[] = [];
 
 function NavLink({ path, label, icon: Icon, open, indent = false }: {
   path: string; label: string; icon: React.ElementType; open: boolean; indent?: boolean;
