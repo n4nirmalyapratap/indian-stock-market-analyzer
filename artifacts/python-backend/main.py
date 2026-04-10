@@ -22,6 +22,7 @@ from app.routes.cache import router as cache_router
 from app.routes.options import router as options_router
 from app.routes.chat import router as chat_router
 from app.routes.assistant import router as assistant_router
+from app.routes.sector_analytics import router as sector_analytics_router
 from app.services.market_cache_service import is_market_open, cache_status
 from app.services import market_cache_service as _mcs
 from app.services.yahoo_service import YahooService as _YahooService
@@ -184,4 +185,5 @@ app.include_router(hydra_router,     prefix="/api")
 app.include_router(cache_router,     prefix="/api")
 app.include_router(options_router,   prefix="/api")
 app.include_router(chat_router,      prefix="/api")
-app.include_router(assistant_router, prefix="/api")
+app.include_router(assistant_router,        prefix="/api")
+app.include_router(sector_analytics_router, prefix="/api")

@@ -308,4 +308,100 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify({ url }),
     }),
+
+  sectorHeatmap: () =>
+    fetchApi<SectorHeatmapItem[]>("/sector-analytics/heatmap"),
+
+  sectorTopMovers: (period: "1d" | "1w" | "1m" | "1y" = "1d") =>
+    fetchApi<SectorTopMovers>(`/sector-analytics/top-movers?period=${period}`),
+
+  sectorDetail: (sector: string, period: "3mo" | "6mo" | "1y" | "5y" = "1y") =>
+    fetchApi<SectorDetailData>(`/sector-analytics/${encodeURIComponent(sector)}/detail?period=${period}`),
 };
+
+// ─── Sector Analytics types ───────────────────────────────────────────────────
+
+export interface SectorHeatmapItem {
+  symbol:    string;
+  name:      string;
+  category:  string;
+  lastPrice: number;
+  change1d:  number | null;
+  change1w:  number | null;
+  change1m:  number | null;
+  change3m:  number | null;
+  change6m:  number | null;
+  change1y:  number | null;
+  changeYTD: number | null;
+  marketCap: number;
+  advances:  number;
+  declines:  number;
+}
+
+export interface SectorTopMovers {
+  period:  string;
+  gainers: SectorHeatmapItem[];
+  losers:  SectorHeatmapItem[];
+}
+
+export interface RSPoint {
+  date:   string;
+  ratio:  number;
+  sector: number;
+  nifty:  number;
+}
+
+export interface SectorValuation {
+  pe:           number | null;
+  pb:           number | null;
+  ps:           number | null;
+  evEbitda:     number | null;
+  pe_equal:     number | null;
+  pb_equal:     number | null;
+  ps_equal:     number | null;
+  evEbitda_equal: number | null;
+  method:       string;
+  sampleSize:   number;
+}
+
+export interface SectorProfitability {
+  netMargin:  number | null;
+  roe:        number | null;
+  sampleSize: number;
+}
+
+export interface SectorFinancialHealth {
+  debtToEquity: number | null;
+  sampleSize:   number;
+}
+
+export interface ConstituentStock {
+  symbol:       string;
+  name:         string;
+  price:        number | null;
+  change1d:     number | null;
+  marketCap:    number | null;
+  pe:           number | null;
+  pb:           number | null;
+  ps:           number | null;
+  evEbitda:     number | null;
+  roe:          number | null;
+  debtToEquity: number | null;
+  dividendYield: number | null;
+  beta:         number | null;
+  industry:     string | null;
+}
+
+export interface SectorDetailData {
+  symbol:          string;
+  name:            string;
+  marketCap:       number;
+  relativeStrength: RSPoint[];
+  performance:     Record<string, number | null>;
+  valuation:       SectorValuation;
+  profitability:   SectorProfitability;
+  financialHealth: SectorFinancialHealth;
+  constituents:    ConstituentStock[];
+  topGainers:      ConstituentStock[];
+  topLosers:       ConstituentStock[];
+}
