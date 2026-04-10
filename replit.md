@@ -255,4 +255,5 @@ BASE_PATH=/ PORT=3002 pnpm --filter @workspace/stock-market-app run dev
 - GlobalAssistant (Learn tab) must be placed INSIDE WouterRouter in App.tsx
 - GlobalAssistant returns null on `/trading` and `/chart/*` routes
 - UI style: glass cards (`bg-indigo-600 dark:bg-white/10`), Tailwind + `dark:` variants
+- **DARK/LIGHT MODE — MANDATORY**: Every UI element MUST work correctly in both light and dark mode. Never use bare `style={{ background: "#hex" }}` or `style={{ color: "#hex" }}` inline styles for surfaces, text, or borders — they are invisible to Tailwind's dark-mode system. Always use Tailwind classes with `dark:` variants (e.g. `bg-white dark:bg-gray-900`, `text-gray-800 dark:text-white`). For gradients, use `bg-gradient-to-br from-white to-violet-50 dark:from-gray-900 dark:to-indigo-950`. Inline styles are only acceptable for decorative elements that are intentionally the same colour in both modes (e.g. a coloured avatar icon gradient).
 - Always add `feedparser` and `nsepython` to `requirements.txt` if used
