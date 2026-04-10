@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 
 type Theme = "dark" | "light";
 
@@ -6,12 +7,14 @@ interface ThemeContextValue {
   theme: Theme;
   setTheme: (t: Theme) => void;
   toggle: () => void;
+  toggleWithRipple: (x: number, y: number) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue>({
   theme: "dark",
   setTheme: () => {},
   toggle: () => {},
+  toggleWithRipple: () => {},
 });
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
@@ -22,6 +25,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       return "dark";
     }
   });
+
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
 
   useEffect(() => {
     const root = document.documentElement;
@@ -34,10 +40,31 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, [theme]);
 
   function setTheme(t: Theme) { setThemeState(t); }
+
   function toggle() { setThemeState(t => t === "dark" ? "light" : "dark"); }
 
+  function toggleWithRipple(x: number, y: number) {
+    const next: Theme = themeRef.current === "dark" ? "light" : "dark";
+    const root = document.documentElement;
+
+    root.style.setProperty("--ripple-x", `${x}px`);
+    root.style.setProperty("--ripple-y", `${y}px`);
+
+    if (!("startViewTransition" in document)) {
+      toggle();
+      return;
+    }
+
+    (document as Document & { startViewTransition: (cb: () => void) => unknown })
+      .startViewTransition(() => {
+        flushSync(() => {
+          setThemeState(next);
+        });
+      });
+  }
+
   return (
-    <ThemeContext.Provider value={{ theme, setTheme, toggle }}>
+    <ThemeContext.Provider value={{ theme, setTheme, toggle, toggleWithRipple }}>
       {children}
     </ThemeContext.Provider>
   );

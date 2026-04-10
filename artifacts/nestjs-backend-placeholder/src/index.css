@@ -593,3 +593,25 @@ html.dark ::-webkit-scrollbar-thumb:hover {
 }
 html.dark .dark-drawer input::placeholder,
 html.dark .dark-drawer textarea::placeholder { color: #64748b !important; }
+
+/* ── Theme switch ripple animation (View Transitions API) ──────────────────── */
+::view-transition-old(root) {
+  animation: none;
+  z-index: 0;
+  mix-blend-mode: normal;
+}
+
+::view-transition-new(root) {
+  animation: theme-ripple-reveal 0.48s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  z-index: 1;
+  mix-blend-mode: normal;
+}
+
+@keyframes theme-ripple-reveal {
+  from {
+    clip-path: circle(0 at var(--ripple-x, 50%) var(--ripple-y, 50%));
+  }
+  to {
+    clip-path: circle(150vmax at var(--ripple-x, 50%) var(--ripple-y, 50%));
+  }
+}

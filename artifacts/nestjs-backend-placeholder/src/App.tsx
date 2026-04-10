@@ -66,11 +66,11 @@ function NavLink({ path, label, icon: Icon, open, indent = false }: {
 }
 
 function ThemeToggle({ open }: { open: boolean }) {
-  const { theme, toggle } = useTheme();
+  const { theme, toggleWithRipple } = useTheme();
   const isDark = theme === "dark";
   return (
     <button
-      onClick={toggle}
+      onClick={(e) => toggleWithRipple(e.clientX, e.clientY)}
       title={isDark ? "Switch to light mode" : "Switch to dark mode"}
       className={`w-full flex items-center gap-2.5 rounded-lg transition py-2
         ${open ? "px-2.5 mx-1.5 w-[calc(100%-12px)]" : "px-0 justify-center"}
