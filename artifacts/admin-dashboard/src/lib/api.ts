@@ -5,24 +5,25 @@ export class ApiError extends Error {
   }
 }
 
-let _getToken: ((opts?: Record<string, unknown>) => Promise<string | null>) | null = null;
+const SESSION_KEY = "admin_token";
 
-export function setTokenGetter(fn: (opts?: Record<string, unknown>) => Promise<string | null>) {
-  _getToken = fn;
+export function getAdminToken(): string | null {
+  return sessionStorage.getItem(SESSION_KEY);
+}
+
+export function setAdminToken(token: string) {
+  sessionStorage.setItem(SESSION_KEY, token);
+}
+
+export function clearAdminToken() {
+  sessionStorage.removeItem(SESSION_KEY);
 }
 
 const BASE = "/api";
 
-export async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
-  const authHeaders: Record<string, string> = {};
-  if (_getToken) {
-    try {
-      const token = await _getToken();
-      if (token) authHeaders["Authorization"] = `Bearer ${token}`;
-    } catch {
-      // not signed in yet
-    }
-  }
+export async function fetchAdmin<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = getAdminToken();
+  const authHeaders: Record<string, string> = token ? { "X-Admin-Token": token } : {};
   const existing = (options?.headers as Record<string, string>) ?? {};
   const res = await fetch(`${BASE}${path}`, {
     ...options,
@@ -38,10 +39,18 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
 const J = { "Content-Type": "application/json" };
 
 export const api = {
-  health: () => fetchApi<{ status: string }>("/healthz"),
+  login: (username: string, password: string) =>
+    fetchAdmin<{ token: string; expires_in: number }>("/admin/login", {
+      method: "POST",
+      headers: J,
+      body: JSON.stringify({ username, password }),
+    }),
+
+  health: () =>
+    fetch(`${BASE}/healthz`).then(r => r.json() as Promise<{ status: string }>),
 
   adminStatus: () =>
-    fetchApi<{
+    fetchAdmin<{
       uptime: number;
       started_at: string;
       python_version: string;
@@ -51,7 +60,7 @@ export const api = {
     }>("/admin/status"),
 
   adminUsers: () =>
-    fetchApi<{
+    fetchAdmin<{
       users: Array<{
         id: string;
         email: string | null;
@@ -65,10 +74,10 @@ export const api = {
     }>("/admin/users"),
 
   adminLogs: (lines?: number) =>
-    fetchApi<{ logs: string[]; total: number }>(`/admin/logs${lines ? `?lines=${lines}` : ""}`),
+    fetchAdmin<{ logs: string[]; total: number }>(`/admin/logs${lines ? `?lines=${lines}` : ""}`),
 
   whatsappStatus: () =>
-    fetchApi<{
+    fetchAdmin<{
       status: string;
       enabled: boolean;
       qrCode: string | null;
@@ -80,23 +89,23 @@ export const api = {
     }>("/whatsapp/status"),
 
   whatsappMessages: () =>
-    fetchApi<Array<{ from: string; text: string; timestamp: string; response: string }>>("/whatsapp/messages"),
+    fetchAdmin<Array<{ from: string; text: string; timestamp: string; response: string }>>("/whatsapp/messages"),
 
   whatsappMessage: (from: string, message: string) =>
-    fetchApi<{ from: string; text: string; timestamp: string; response: string }>("/whatsapp/message", {
+    fetchAdmin<{ from: string; text: string; timestamp: string; response: string }>("/whatsapp/message", {
       method: "POST",
       headers: J,
       body: JSON.stringify({ from, message }),
     }),
 
   telegramStatus: () =>
-    fetchApi<Record<string, unknown>>("/telegram/status"),
+    fetchAdmin<Record<string, unknown>>("/telegram/status"),
 
   telegramMessages: () =>
-    fetchApi<Array<{ from: string; text: string; timestamp: string; response: string }>>("/telegram/messages"),
+    fetchAdmin<Array<{ from: string; text: string; timestamp: string; response: string }>>("/telegram/messages"),
 
   telegramTest: (text: string) =>
-    fetchApi<{ text: string; response: string; timestamp: string }>("/telegram/test", {
+    fetchAdmin<{ text: string; response: string; timestamp: string }>("/telegram/test", {
       method: "POST",
       headers: J,
       body: JSON.stringify({ text }),

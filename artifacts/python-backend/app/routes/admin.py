@@ -1,8 +1,9 @@
 import os
 import sys
 import time
+import secrets
 import logging
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Header
 from fastapi.responses import JSONResponse
 
 router = APIRouter(tags=["admin"])
@@ -10,17 +11,70 @@ logger = logging.getLogger(__name__)
 
 _start_time = time.time()
 
+# In-memory session store: token -> expiry timestamp
+_sessions: dict[str, float] = {}
+_SESSION_TTL = 8 * 3600  # 8 hours
+
+
+def _purge_expired():
+    now = time.time()
+    expired = [t for t, exp in _sessions.items() if exp < now]
+    for t in expired:
+        del _sessions[t]
+
+
+def _valid_session(token: str) -> bool:
+    _purge_expired()
+    return token in _sessions and _sessions[token] > time.time()
+
+
+# ── Login (public — no auth required) ────────────────────────────────────────
+
+@router.post("/admin/login")
+async def admin_login(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON"})
+
+    username = body.get("username", "").strip()
+    password = body.get("password", "")
+
+    expected_user = os.environ.get("ADMIN_USERNAME", "admin")
+    expected_pass = os.environ.get("ADMIN_PASSWORD", "")
+
+    if not expected_pass:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "ADMIN_PASSWORD not configured on server."},
+        )
+
+    if username != expected_user or password != expected_pass:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Invalid username or password."},
+        )
+
+    token = secrets.token_hex(32)
+    _sessions[token] = time.time() + _SESSION_TTL
+    return {"token": token, "expires_in": _SESSION_TTL}
+
+
+# ── Helper: check admin session ───────────────────────────────────────────────
+
+def _require_admin(request: Request) -> bool:
+    token = request.headers.get("X-Admin-Token", "")
+    return _valid_session(token)
+
+
+# ── Protected admin endpoints ─────────────────────────────────────────────────
 
 @router.get("/admin/status")
-async def admin_status():
-    """Backend runtime metrics."""
-    import app.routes as _r_pkg
-    import fastapi
+async def admin_status(request: Request):
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
 
     uptime = time.time() - _start_time
-
-    # Count registered routes by inspecting the FastAPI app via the request
-    # (we can't import `app` here to avoid circular imports — count from sys.modules)
     endpoints = 0
     try:
         from main import app as _app  # noqa: PLC0415
@@ -39,8 +93,10 @@ async def admin_status():
 
 
 @router.get("/admin/users")
-async def admin_users():
-    """List users from Clerk using CLERK_SECRET_KEY."""
+async def admin_users(request: Request):
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+
     secret_key = os.environ.get("CLERK_SECRET_KEY", "")
     if not secret_key:
         return JSONResponse(
@@ -83,10 +139,11 @@ async def admin_users():
 
 
 @router.get("/admin/logs")
-async def admin_logs(lines: int = 100):
-    """Tail the Python backend log file (if available) or return empty."""
-    log_lines: list[str] = []
+async def admin_logs(request: Request, lines: int = 100):
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
 
+    log_lines: list[str] = []
     log_file = os.environ.get("LOG_FILE", "")
     if log_file and os.path.exists(log_file):
         try:
@@ -96,7 +153,6 @@ async def admin_logs(lines: int = 100):
         except Exception as e:
             log_lines = [f"[Error reading log file: {e}]"]
     else:
-        # Fallback: return a note since uvicorn logs to stdout
         log_lines = [
             "Logs are written to stdout/stderr (Replit workflow console).",
             "To enable file logging set LOG_FILE=/tmp/app.log and restart.",

@@ -1,7 +1,6 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { Switch, Route, Router as WouterRouter, Link, useLocation } from "wouter";
-import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
-import { ClerkProvider, SignIn, Show, useClerk, useUser, useAuth } from "@clerk/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
@@ -10,7 +9,8 @@ import UsersPage from "@/pages/UsersPage";
 import LogsPage from "@/pages/LogsPage";
 import WhatsAppBot from "@/pages/WhatsAppBot";
 import TelegramBot from "@/pages/TelegramBot";
-import { setTokenGetter } from "@/lib/api";
+import LoginPage from "@/pages/LoginPage";
+import { getAdminToken, clearAdminToken } from "@/lib/api";
 import {
   Activity, Users, Terminal, MessageCircle, Send,
   ChevronLeft, ChevronRight, LogOut, ShieldAlert,
@@ -20,17 +20,7 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
 });
 
-const clerkPubKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
-const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
-
-if (!clerkPubKey) throw new Error("Missing VITE_CLERK_PUBLISHABLE_KEY");
-
-const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || "";
-
-function stripBase(path: string) {
-  return basePath && path.startsWith(basePath) ? path.slice(basePath.length) || "/" : path;
-}
 
 const NAV = [
   { path: "/",          label: "App Status",   icon: Activity      },
@@ -62,43 +52,6 @@ function NavLink({ path, label, icon: Icon, open }: {
   );
 }
 
-function UserProfile({ open }: { open: boolean }) {
-  const { user } = useUser();
-  const { signOut } = useClerk();
-  if (!user) return null;
-  const name = user.fullName || user.firstName || user.emailAddresses[0]?.emailAddress || "Admin";
-  const initials = name.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2);
-  if (!open) {
-    return (
-      <button onClick={() => signOut({ redirectUrl: "/" })} title="Sign out"
-        className="w-full flex justify-center py-2 text-gray-400 hover:text-red-400 transition">
-        <LogOut className="w-4 h-4" />
-      </button>
-    );
-  }
-  return (
-    <div className="mx-1.5 mb-1">
-      <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-gray-50">
-        {user.imageUrl ? (
-          <img src={user.imageUrl} alt={name} className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
-        ) : (
-          <div className="w-7 h-7 rounded-full bg-indigo-500 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-            {initials}
-          </div>
-        )}
-        <div className="flex-1 min-w-0">
-          <p className="text-xs font-medium text-gray-900 truncate">{name}</p>
-          <p className="text-[10px] text-gray-400 truncate">{user.emailAddresses[0]?.emailAddress}</p>
-        </div>
-        <button onClick={() => signOut({ redirectUrl: "/" })} title="Sign out"
-          className="text-gray-400 hover:text-red-400 transition flex-shrink-0">
-          <LogOut className="w-3.5 h-3.5" />
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function MobileNav() {
   const [loc] = useLocation();
   return (
@@ -118,7 +71,7 @@ function MobileNav() {
   );
 }
 
-function Layout({ children }: { children: React.ReactNode }) {
+function Layout({ children, onSignOut }: { children: React.ReactNode; onSignOut: () => void }) {
   const [open, setOpen] = useState(() => localStorage.getItem("admin-sidebar") !== "false");
   useEffect(() => { localStorage.setItem("admin-sidebar", String(open)); }, [open]);
 
@@ -144,7 +97,16 @@ function Layout({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="border-t border-gray-100 py-2 flex-shrink-0">
-          <UserProfile open={open} />
+          <button
+            onClick={onSignOut}
+            title="Sign out"
+            className={`w-full flex items-center gap-2.5 rounded-lg transition py-2
+              ${open ? "px-2.5 w-[calc(100%-12px)] mx-1.5" : "px-0 justify-center"}
+              text-gray-400 hover:text-red-500 hover:bg-red-50`}
+          >
+            <LogOut className="w-4 h-4 flex-shrink-0" />
+            {open && <span className="text-sm font-medium whitespace-nowrap">Sign out</span>}
+          </button>
           <button
             onClick={() => setOpen(o => !o)}
             className={`w-full flex items-center gap-2.5 rounded-lg transition py-2 mt-0.5
@@ -163,6 +125,9 @@ function Layout({ children }: { children: React.ReactNode }) {
             <ShieldAlert className="w-4 h-4 text-white" />
           </div>
           <span className="font-bold text-gray-900 text-sm flex-1">Admin Panel</span>
+          <button onClick={onSignOut} className="text-gray-400 hover:text-red-500 transition">
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
         <MobileNav />
         <main className="flex-1 overflow-auto p-4 md:p-6">
@@ -173,119 +138,52 @@ function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
-function AdminGate({ children }: { children: React.ReactNode }) {
-  const { user } = useUser();
-  const email = user?.emailAddresses[0]?.emailAddress ?? "";
-  const role = (user?.publicMetadata as any)?.role;
+function AppRoutes({ onSignOut }: { onSignOut: () => void }) {
+  return (
+    <Layout onSignOut={onSignOut}>
+      <Switch>
+        <Route path="/"         component={AppStatus} />
+        <Route path="/users"    component={UsersPage} />
+        <Route path="/whatsapp" component={() => <WhatsAppBot />} />
+        <Route path="/telegram" component={() => <TelegramBot />} />
+        <Route path="/logs"     component={LogsPage} />
+        <Route component={NotFound} />
+      </Switch>
+    </Layout>
+  );
+}
 
-  const isAdmin = role === "admin" || (ADMIN_EMAIL && email === ADMIN_EMAIL) || !ADMIN_EMAIL;
+function AdminApp() {
+  const [token, setToken] = useState<string | null>(() => getAdminToken());
 
-  if (!isAdmin) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center">
-        <div className="bg-white rounded-2xl border border-red-100 shadow-sm p-10 max-w-sm w-full text-center">
-          <ShieldAlert className="w-12 h-12 text-red-400 mx-auto mb-4" />
-          <h2 className="text-lg font-bold text-gray-900 mb-2">Access Denied</h2>
-          <p className="text-sm text-gray-500 mb-5">
-            You don't have admin privileges. Contact the administrator to grant access.
-          </p>
-          <p className="text-xs text-gray-400 font-mono">{email}</p>
-        </div>
-      </div>
-    );
+  function handleLogin(t: string) {
+    setToken(t);
+    queryClient.clear();
   }
 
-  return <>{children}</>;
-}
+  function handleSignOut() {
+    clearAdminToken();
+    setToken(null);
+    queryClient.clear();
+  }
 
-function AuthTokenInjector() {
-  const { getToken } = useAuth();
-  const qc = useQueryClient();
-  const { user } = useUser();
-  const prevRef = useRef<string | null | undefined>(undefined);
+  if (!token) {
+    return <LoginPage onLogin={handleLogin} />;
+  }
 
-  useEffect(() => { setTokenGetter(getToken); }, [getToken]);
-
-  useEffect(() => {
-    const id = user?.id ?? null;
-    if (prevRef.current !== undefined && prevRef.current !== id) qc.clear();
-    prevRef.current = id;
-  }, [user?.id, qc]);
-
-  return null;
-}
-
-function AdminSignIn() {
-  return (
-    <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center py-12 px-4">
-      <div className="mb-8 flex flex-col items-center">
-        <div className="w-12 h-12 rounded-full bg-indigo-600 flex items-center justify-center mb-3">
-          <ShieldAlert className="w-6 h-6 text-white" />
-        </div>
-        <p className="text-white font-bold text-lg">Admin Panel</p>
-        <p className="text-gray-400 text-sm">Nifty Node — Restricted Access</p>
-      </div>
-      <SignIn
-        routing="path"
-        path={`${basePath}/sign-in`}
-        fallbackRedirectUrl={`${basePath}/`}
-      />
-    </div>
-  );
-}
-
-function AppRoutes() {
-  return (
-    <AdminGate>
-      <Layout>
-        <Switch>
-          <Route path="/"         component={AppStatus} />
-          <Route path="/users"    component={UsersPage} />
-          <Route path="/whatsapp" component={() => <WhatsAppBot />} />
-          <Route path="/telegram" component={() => <TelegramBot />} />
-          <Route path="/logs"     component={LogsPage} />
-          <Route component={NotFound} />
-        </Switch>
-      </Layout>
-    </AdminGate>
-  );
-}
-
-function ClerkProviderWithRoutes() {
-  const [, setLocation] = useLocation();
-  return (
-    <ClerkProvider
-      publishableKey={clerkPubKey}
-      proxyUrl={clerkProxyUrl}
-      routerPush={(to) => setLocation(stripBase(to))}
-      routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
-    >
-      <QueryClientProvider client={queryClient}>
-        <Switch>
-          <Route path="/sign-in/*?" component={AdminSignIn} />
-          <Route>
-            <Show when="signed-in">
-              <AuthTokenInjector />
-              <AppRoutes />
-            </Show>
-            <Show when="signed-out">
-              <AdminSignIn />
-            </Show>
-          </Route>
-        </Switch>
-      </QueryClientProvider>
-    </ClerkProvider>
-  );
+  return <AppRoutes onSignOut={handleSignOut} />;
 }
 
 function App() {
   return (
-    <TooltipProvider>
-      <WouterRouter base={basePath}>
-        <ClerkProviderWithRoutes />
-      </WouterRouter>
-      <Toaster />
-    </TooltipProvider>
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <WouterRouter base={basePath}>
+          <AdminApp />
+        </WouterRouter>
+        <Toaster />
+      </TooltipProvider>
+    </QueryClientProvider>
   );
 }
 

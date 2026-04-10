@@ -72,13 +72,32 @@ async def verify_clerk_token(token: str) -> dict:
     return payload
 
 
+def _check_admin_token(token: str) -> bool:
+    """Check whether the token is a valid admin session (imported lazily to avoid circular)."""
+    try:
+        from app.routes.admin import _valid_session  # noqa: PLC0415
+        return _valid_session(token)
+    except Exception:
+        return False
+
+
 class ClerkAuthMiddleware(BaseHTTPMiddleware):
     SKIP_PATHS = {"/api/healthz"}
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
+        # Admin routes use their own token auth — handled inside the route handlers
+        if path.startswith("/api/admin"):
+            return await call_next(request)
+
         if not path.startswith("/api") or path in self.SKIP_PATHS:
+            return await call_next(request)
+
+        # Allow requests carrying a valid admin session token to pass through any /api/* route
+        admin_token = request.headers.get("X-Admin-Token", "")
+        if admin_token and _check_admin_token(admin_token):
+            request.state.user_id = "admin"
             return await call_next(request)
 
         if not JWKS_URL:

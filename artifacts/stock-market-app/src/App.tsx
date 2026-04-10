@@ -10,8 +10,6 @@ import Sectors from "@/pages/Sectors";
 import StockLookup from "@/pages/StockLookup";
 import Patterns from "@/pages/Patterns";
 import Scanners from "@/pages/Scanners";
-import WhatsAppBot from "@/pages/WhatsAppBot";
-import TelegramBot from "@/pages/TelegramBot";
 import HydraAlpha from "@/pages/HydraAlpha";
 import OptionsStrategyTester from "@/pages/OptionsStrategyTester";
 import SettingsPage from "@/pages/SettingsPage";
@@ -346,8 +344,6 @@ function AppRoutes() {
         <Route path="/stocks"          component={StockLookup} />
         <Route path="/patterns"        component={Patterns} />
         <Route path="/scanners"        component={Scanners} />
-        <Route path="/whatsapp"        component={() => <WhatsAppBot />} />
-        <Route path="/telegram"        component={() => <TelegramBot />} />
         <Route path="/hydra"           component={HydraAlpha} />
         <Route path="/options"         component={OptionsStrategyTester} />
         <Route path="/settings"        component={SettingsPage} />
