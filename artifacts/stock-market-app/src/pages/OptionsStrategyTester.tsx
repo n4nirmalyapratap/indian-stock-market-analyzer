@@ -572,7 +572,286 @@ function StrategyInsightCard({
 }
 
 // ── TABS ──────────────────────────────────────────────────────────────────────
-type Tab = "strategy" | "backtest" | "risk";
+type Tab = "strategy" | "backtest" | "risk" | "smart";
+
+// ── Smart Builder ─────────────────────────────────────────────────────────────
+interface SuggestedLeg { action: "buy"|"sell"; option_type: "call"|"put"; strike: number; lots: number; }
+interface SuggestedStrategy {
+  name: string; description: string; category: string; outlook: string;
+  fit_score: number; rationale: string; key_risk: string; is_custom: boolean;
+  legs: SuggestedLeg[];
+}
+interface SmartSuggestResult {
+  market_state: {
+    vol_regime: string; vol_bias: string; hv_pct: number; hv: number;
+    spot: number; atm: number; step: number; lot_size: number;
+  };
+  recommendations: SuggestedStrategy[];
+}
+
+const VOL_REGIME_CHIP: Record<string, string> = {
+  low:       "bg-sky-50   text-sky-700   border border-sky-200",
+  moderate:  "bg-amber-50 text-amber-700 border border-amber-200",
+  high:      "bg-orange-50 text-orange-700 border border-orange-200",
+  very_high: "bg-rose-50  text-rose-700  border border-rose-200",
+};
+const VOL_REGIME_LABEL: Record<string, string> = {
+  low: "Low Vol", moderate: "Moderate Vol", high: "High Vol", very_high: "Very High Vol",
+};
+const BIAS_CHIP: Record<string, string> = {
+  expanding:   "bg-rose-50  text-rose-700",
+  contracting: "bg-sky-50   text-sky-700",
+  stable:      "bg-gray-50  text-gray-600",
+};
+const OUTLOOK_ICON: Record<string, string> = {
+  bullish: "↑", bearish: "↓", neutral: "↔", volatile: "↕",
+};
+
+function SmartBuilderTab({
+  symbol, spotInfo, setLegs, setTab, isDark,
+}: {
+  symbol: string;
+  spotInfo: SpotInfo | null;
+  setLegs: (legs: Leg[]) => void;
+  setTab:  (t: Tab) => void;
+  isDark:  boolean;
+}) {
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState("");
+  const [result,   setResult]   = useState<SmartSuggestResult | null>(null);
+  const [expanded, setExpanded] = useState<number | null>(null);
+
+  const card  = isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200";
+  const muted = isDark ? "text-slate-400" : "text-gray-500";
+  const h3    = isDark ? "text-slate-100" : "text-gray-800";
+  const body  = isDark ? "bg-slate-900" : "bg-gray-50";
+
+  async function fetchSuggestions() {
+    if (!symbol) return;
+    setLoading(true);
+    setError("");
+    try {
+      const data = await post<SmartSuggestResult>("/options/smart-suggest",
+        { symbol: symbol.trim().toUpperCase(), top_n: 5 });
+      setResult(data);
+      setExpanded(0);
+    } catch (e: any) {
+      setError(e?.message || "Failed to get suggestions");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function useStrategy(rec: SuggestedStrategy) {
+    const ls  = spotInfo?.lot_size ?? 75;
+    const iv  = spotInfo?.hv30     ?? 0.20;
+    const newLegs: Leg[] = rec.legs.map(l => ({
+      id:          crypto.randomUUID(),
+      action:      l.action,
+      option_type: l.option_type,
+      strike:      l.strike,
+      premium:     0,
+      lots:        l.lots,
+      lot_size:    ls,
+      iv,
+    }));
+    setLegs(newLegs);
+    setTab("strategy");
+  }
+
+  function scoreColor(s: number) {
+    return s >= 65 ? "bg-emerald-500" : s >= 42 ? "bg-amber-400" : "bg-rose-400";
+  }
+  function scoreLabelCls(s: number) {
+    return s >= 65 ? "text-emerald-600" : s >= 42 ? "text-amber-500" : "text-rose-500";
+  }
+
+  return (
+    <div className={`flex flex-col gap-4 p-4 ${body} rounded-2xl border ${isDark ? "border-slate-700" : "border-gray-200"} min-h-[480px]`}>
+
+      {/* Header */}
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className={`text-base font-bold ${h3} flex items-center gap-2`}>
+            <Zap className="w-4 h-4 text-amber-500" />
+            Smart Strategy Builder
+          </h2>
+          <p className={`text-xs mt-0.5 ${muted}`}>
+            Reads live {symbol} market data — scores all 12 pre-defined strategies
+            and invents 5 custom strategies, then ranks them by current market fit.
+          </p>
+        </div>
+        <button
+          onClick={fetchSuggestions}
+          disabled={loading}
+          className="shrink-0 flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60
+                     text-white text-sm font-semibold px-4 py-2 rounded-lg transition shadow-sm"
+        >
+          {loading
+            ? <><RefreshCw className="w-4 h-4 animate-spin" /> Analysing…</>
+            : <><Activity className="w-4 h-4" /> Get AI Suggestions</>}
+        </button>
+      </div>
+
+      {error && (
+        <div className="flex items-center gap-2 text-red-500 text-sm bg-red-50 border border-red-200 rounded-lg p-3">
+          <AlertTriangle className="w-4 h-4 shrink-0" /> {error}
+        </div>
+      )}
+
+      {!result && !loading && !error && (
+        <div className={`flex flex-col items-center justify-center flex-1 gap-3 py-12 ${muted} text-sm text-center`}>
+          <Target className="w-10 h-10 opacity-30" />
+          <div>
+            <p className="font-medium">No analysis yet</p>
+            <p className="text-xs mt-1 opacity-70">Click "Get AI Suggestions" to analyse live {symbol} market conditions</p>
+          </div>
+        </div>
+      )}
+
+      {result && (
+        <>
+          {/* Market State Card */}
+          <div className={`${card} rounded-xl border p-4 flex flex-wrap gap-4 items-center`}>
+            <div>
+              <p className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>Vol Regime</p>
+              <span className={`mt-1 inline-flex items-center text-xs font-semibold px-2.5 py-1 rounded-full ${VOL_REGIME_CHIP[result.market_state.vol_regime] ?? ""}`}>
+                {VOL_REGIME_LABEL[result.market_state.vol_regime] ?? result.market_state.vol_regime}
+              </span>
+            </div>
+            <div>
+              <p className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>HV Percentile</p>
+              <p className={`text-xl font-bold mt-0.5 ${h3}`}>{result.market_state.hv_pct.toFixed(0)}<span className="text-sm font-normal ml-0.5">th</span></p>
+            </div>
+            <div>
+              <p className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>Annualised HV</p>
+              <p className={`text-xl font-bold mt-0.5 ${h3}`}>{result.market_state.hv.toFixed(1)}<span className="text-sm font-normal ml-0.5">%</span></p>
+            </div>
+            <div>
+              <p className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>Vol Bias</p>
+              <span className={`mt-1 inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-full capitalize ${BIAS_CHIP[result.market_state.vol_bias]}`}>
+                {result.market_state.vol_bias}
+              </span>
+            </div>
+            <div className="ml-auto text-right">
+              <p className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>ATM Strike</p>
+              <p className={`text-sm font-bold mt-0.5 ${h3}`}>₹{result.market_state.atm.toLocaleString("en-IN")}</p>
+            </div>
+          </div>
+
+          {/* Recommendation Cards */}
+          <div className="flex flex-col gap-2">
+            <p className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>
+              Top {result.recommendations.length} Strategies — ranked by fit score
+            </p>
+            {result.recommendations.map((rec, i) => {
+              const isOpen = expanded === i;
+              return (
+                <div key={rec.name} className={`${card} rounded-xl border overflow-hidden transition-shadow ${isOpen ? "shadow-md" : ""}`}>
+                  {/* Row: rank + name + score bar + outlook + use */}
+                  <div
+                    className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:opacity-90"
+                    onClick={() => setExpanded(isOpen ? null : i)}
+                  >
+                    {/* Rank badge */}
+                    <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0
+                      ${i === 0 ? "bg-amber-400 text-white" : "bg-gray-100 text-gray-500"}`}>
+                      {i + 1}
+                    </span>
+
+                    {/* Name + badges */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`text-sm font-bold truncate ${h3}`}>{rec.name}</span>
+                        {rec.is_custom && (
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 border border-violet-200 uppercase tracking-wide shrink-0">
+                            Invented
+                          </span>
+                        )}
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium border shrink-0
+                          ${OUTLOOK_CHIP[rec.outlook as Outlook] ?? "bg-gray-50 text-gray-500 border-gray-200"}`}>
+                          {OUTLOOK_ICON[rec.outlook] ?? ""} {rec.outlook}
+                        </span>
+                      </div>
+                      {/* Score bar */}
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <div className="flex-1 h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${scoreColor(rec.fit_score)}`}
+                            style={{ width: `${rec.fit_score}%` }}
+                          />
+                        </div>
+                        <span className={`text-[11px] font-bold shrink-0 ${scoreLabelCls(rec.fit_score)}`}>
+                          {rec.fit_score}/100
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Use button */}
+                    <button
+                      onClick={e => { e.stopPropagation(); useStrategy(rec); }}
+                      className="shrink-0 flex items-center gap-1.5 text-[11px] font-semibold
+                                 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg transition"
+                    >
+                      <Play className="w-3 h-3" /> Use
+                    </button>
+
+                    {/* Expand toggle */}
+                    <ChevronDown className={`w-4 h-4 shrink-0 ${muted} transition-transform ${isOpen ? "rotate-180" : ""}`} />
+                  </div>
+
+                  {/* Expanded details */}
+                  {isOpen && (
+                    <div className={`border-t ${isDark ? "border-slate-700 bg-slate-900/50" : "border-gray-100 bg-gray-50"} px-4 py-3 flex flex-col gap-3`}>
+
+                      {/* Legs summary */}
+                      <div>
+                        <p className={`text-[10px] font-bold uppercase tracking-widest ${muted} mb-1.5`}>Legs</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {rec.legs.map((l, li) => (
+                            <span key={li} className={`text-[11px] font-mono font-medium px-2 py-0.5 rounded
+                              ${l.action === "buy"
+                                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                : "bg-rose-50   text-rose-700   border border-rose-200"}`}>
+                              {l.action === "buy" ? "+" : "−"}{l.lots}× {l.option_type.toUpperCase()} {l.strike.toLocaleString("en-IN")}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Rationale */}
+                      <div>
+                        <p className={`text-[10px] font-bold uppercase tracking-widest ${muted} mb-1`}>Why now?</p>
+                        <p className={`text-xs leading-relaxed ${isDark ? "text-slate-300" : "text-gray-700"}`}>{rec.rationale}</p>
+                      </div>
+
+                      {/* Risk */}
+                      <div className={`flex items-start gap-2 text-xs rounded-lg px-3 py-2
+                        ${isDark ? "bg-rose-950/40 text-rose-300 border border-rose-900/40"
+                                 : "bg-rose-50   text-rose-700  border border-rose-100"}`}>
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                        <span>{rec.key_risk}</span>
+                      </div>
+
+                      {/* Use full button */}
+                      <button
+                        onClick={() => useStrategy(rec)}
+                        className="self-start flex items-center gap-2 text-sm font-semibold
+                                   bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg transition shadow-sm"
+                      >
+                        <Play className="w-3.5 h-3.5" /> Load into Strategy Builder → backtest it
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 export default function OptionsStrategyTester() {
   const { theme } = useTheme();
@@ -901,6 +1180,12 @@ export default function OptionsStrategyTester() {
           <button className={tabCls("strategy")} onClick={() => setTab("strategy")}>Strategy &amp; Payoff</button>
           <button className={tabCls("backtest")} onClick={() => setTab("backtest")}>Backtest</button>
           <button className={tabCls("risk")}     onClick={() => setTab("risk")}>Risk Analysis</button>
+          <button className={tabCls("smart")}    onClick={() => setTab("smart")}>
+            <span className="flex items-center gap-1.5">
+              <Zap className="w-3.5 h-3.5" />
+              Smart Builder
+            </span>
+          </button>
         </nav>
       </div>
 
@@ -1552,6 +1837,17 @@ export default function OptionsStrategyTester() {
             </div>
           )}
         </div>
+      )}
+
+      {/* ── TAB: Smart Builder ──────────────────────────────────────────────── */}
+      {tab === "smart" && (
+        <SmartBuilderTab
+          symbol={symbol}
+          spotInfo={spotInfo}
+          setLegs={setLegs}
+          setTab={setTab}
+          isDark={isDark}
+        />
       )}
 
     </div>

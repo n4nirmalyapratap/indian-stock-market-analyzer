@@ -451,6 +451,37 @@ class ChatReq(BaseModel):
     context:  Optional[Dict[str, Any]] = Field(None, description="Current strategy context")
 
 
+# ── POST /options/smart-suggest ──────────────────────────────────────────────
+
+class SmartSuggestReq(BaseModel):
+    symbol: str = Field(..., description="NSE symbol, e.g. NIFTY or RELIANCE")
+    top_n:  int = Field(5, ge=1, le=12, description="Number of recommendations to return")
+
+
+@router.post("/smart-suggest")
+async def smart_suggest(req: SmartSuggestReq):
+    """
+    Read live market data for the symbol and return ranked strategy recommendations.
+    Combines scoring of all 12 pre-defined strategies *and* 5 custom-invented
+    strategies against current HV percentile, returning the best-fit top_n.
+    """
+    from ..services.strategy_builder_service import build_smart_suggestions
+
+    spot_data = await asyncio.to_thread(_fetch_spot_and_hv_sync, req.symbol)
+    if "error" in spot_data:
+        raise HTTPException(status_code=502, detail=spot_data["error"])
+
+    result = build_smart_suggestions(
+        spot     = spot_data["spot"],
+        atm      = spot_data["atm"],
+        hv       = spot_data.get("hv30", 0.0),
+        hv_pct   = spot_data.get("hv30_pct", 50.0),
+        lot_size = spot_data["lot_size"],
+        top_n    = req.top_n,
+    )
+    return result
+
+
 @router.post("/chat")
 async def options_chat(req: ChatReq):
     """
