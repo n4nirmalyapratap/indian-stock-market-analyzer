@@ -1,3 +1,5 @@
+import logging
+
 from .nse_service import NseService
 from .yahoo_service import YahooService
 from .price_service import PriceService
@@ -5,6 +7,8 @@ from .indicators import (
     calculate_ema, calculate_rsi, calculate_macd,
     calculate_bollinger_bands, calculate_atr, detect_sr,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class StocksService:
@@ -41,8 +45,8 @@ class StocksService:
                     "fiftyTwoWeekLow": week_high.get("min"),
                     "source": "NSE",
                 }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("NSE quote fetch failed for %s: %s", upper, e)
 
         if not quote_data:
             quote_data = await self.yahoo.get_quote(upper)
@@ -54,8 +58,8 @@ class StocksService:
             h = await self.price.get_historical_data(upper, 300)  # 300 days ≈ 210 trading days — enough for EMA 200
             if h:
                 history = h
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Historical data fetch failed for %s: %s", upper, e)
 
         closes = [d["close"] for d in history if d.get("close")]
         analysis = self._analyze(history, closes) if len(closes) > 20 else None

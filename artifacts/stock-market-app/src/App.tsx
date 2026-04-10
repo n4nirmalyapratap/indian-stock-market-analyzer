@@ -216,8 +216,8 @@ function Router() {
         <Route path="/stocks"          component={StockLookup} />
         <Route path="/patterns"        component={Patterns} />
         <Route path="/scanners"        component={Scanners} />
-        <Route path="/whatsapp"        component={WhatsAppBot} />
-        <Route path="/telegram"        component={TelegramBot} />
+        <Route path="/whatsapp"        component={() => <WhatsAppBot />} />
+        <Route path="/telegram"        component={() => <TelegramBot />} />
         <Route path="/hydra"           component={HydraAlpha} />
         <Route path="/options"         component={OptionsStrategyTester} />
         <Route path="/settings"        component={SettingsPage} />

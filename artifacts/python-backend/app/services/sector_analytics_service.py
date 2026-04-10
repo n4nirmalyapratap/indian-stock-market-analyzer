@@ -119,8 +119,8 @@ SECTOR_YAHOO_TICKER: dict[str, str] = {
     "NIFTY FINANCIAL SERVICES": "^CNXFIN",
     "NIFTY PSU BANK":           "^CNXPSUBANK",
     "NIFTY CONSUMER DURABLES":  "^CNXCONSUM",
-    "NIFTY OIL AND GAS":        "^CNXENERGY",
-    "NIFTY HEALTHCARE INDEX":   "^CNXPHARMA",
+    "NIFTY OIL AND GAS":        "^CNXOILGAS",
+    "NIFTY HEALTHCARE INDEX":   "^CNXHEALTH",
     "NIFTY 50":                 "^NSEI",
 }
 
@@ -248,7 +248,9 @@ class SectorAnalyticsService:
         Return heatmap-ready sector data.
         sectors_live: output of SectorsService.get_all_sectors()
         """
-        cached = _cache_get("heatmap")
+        today_str = date.today().strftime("%Y-%m-%d")
+        cache_key_hm = f"heatmap:{today_str}"
+        cached = _cache_get(cache_key_hm)
         if cached:
             return cached
 
@@ -287,7 +289,7 @@ class SectorAnalyticsService:
             })
 
         result.sort(key=lambda s: s["marketCap"], reverse=True)
-        _cache_set("heatmap", result, 5 * 60)
+        _cache_set(cache_key_hm, result, 5 * 60)
         return result
 
     # ── Top movers ────────────────────────────────────────────────────────────

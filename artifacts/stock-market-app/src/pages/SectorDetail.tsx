@@ -96,8 +96,14 @@ function MetricCard({
 
 // ── Overview Tab ──────────────────────────────────────────────────────────────
 
-function OverviewTab({ data, isDark }: { data: SectorDetailData; isDark: boolean }) {
-  const [period, setPeriod] = useState<"3mo" | "6mo" | "1y" | "5y">("1y");
+function OverviewTab({
+  data, isDark, period, onPeriodChange,
+}: {
+  data: SectorDetailData;
+  isDark: boolean;
+  period: "3mo" | "6mo" | "1y" | "5y";
+  onPeriodChange: (p: "3mo" | "6mo" | "1y" | "5y") => void;
+}) {
   const rs = data.relativeStrength ?? [];
   const gridCol = isDark ? "#334155" : "#f1f5f9";
   const axisCol = isDark ? "#94a3b8" : "#6b7280";
@@ -160,7 +166,7 @@ function OverviewTab({ data, isDark }: { data: SectorDetailData; isDark: boolean
             {(["3mo","6mo","1y","5y"] as const).map(p => (
               <button
                 key={p}
-                onClick={() => setPeriod(p)}
+                onClick={() => onPeriodChange(p)}
                 className="px-2.5 py-1 rounded text-xs font-medium transition-colors"
                 style={{
                   background: period === p ? "#6366f1" : isDark ? "#334155" : "#f3f4f6",
@@ -603,7 +609,7 @@ export default function SectorDetail() {
   const { theme } = useTheme();
   const isDark = theme === "dark";
   const [activeTab, setActiveTab] = useState<Tab>("Overview");
-  const [period] = useState<"3mo" | "6mo" | "1y" | "5y">("1y");
+  const [period, setPeriod] = useState<"3mo" | "6mo" | "1y" | "5y">("1y");
 
   const { data, isLoading, error } = useQuery({
     queryKey:  ["sectorDetail", sectorId, period],
@@ -688,7 +694,7 @@ export default function SectorDetail() {
           </div>
 
           <div>
-            {activeTab === "Overview"         && <OverviewTab data={data} isDark={isDark} />}
+            {activeTab === "Overview"         && <OverviewTab data={data} isDark={isDark} period={period} onPeriodChange={setPeriod} />}
             {activeTab === "Performance"      && <PerformanceTab data={data} isDark={isDark} />}
             {activeTab === "Valuation"        && <ValuationTab data={data} isDark={isDark} />}
             {activeTab === "Profitability"    && <ProfitabilityTab data={data} isDark={isDark} />}

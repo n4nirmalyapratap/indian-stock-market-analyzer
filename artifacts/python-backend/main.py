@@ -58,21 +58,24 @@ async def _telegram_polling_loop() -> None:
 
 
 async def _cache_warmup_task() -> None:
-    """On startup, if market is closed and cache is thin, warm up disk cache."""
+    """On startup, warm up disk cache only when market is closed and cache is thin."""
     await asyncio.sleep(5)  # let the server fully start first
-    # ⚠️  TESTING ONLY — REMOVE THIS BLOCK BEFORE DEPLOY ⚠️
-    # In production, warmup should only run when market is closed AND cache is thin.
-    # This block forces a full warmup on every server start regardless of market hours.
-    logger.info("[TEST MODE] Forcing cache warmup on startup regardless of market hours…")
+    if is_market_open():
+        logger.info("Cache warmup skipped — market is open.")
+        return
+    status = cache_status()
+    if not status.get("thin", True):
+        logger.info("Cache warmup skipped — cache is already populated (date=%s).", status.get("cacheDate"))
+        return
+    logger.info("Warming up disk cache (market closed + cache thin)…")
     try:
         result = await _mcs.warmup_cache(_PriceService(_NseService(), _YahooService()))
         logger.info(
-            "[TEST MODE] Cache warmup complete: %d files saved, %d errors (date=%s)",
+            "Cache warmup complete: %d files saved, %d errors (date=%s)",
             result["filesSaved"], result["errors"], result["cacheDate"],
         )
     except Exception as e:
-        logger.warning("[TEST MODE] Cache warmup failed: %s", e)
-    # ⚠️  END OF TESTING-ONLY BLOCK — REMOVE BEFORE DEPLOY ⚠️
+        logger.warning("Cache warmup failed: %s", e)
 
 
 @asynccontextmanager
