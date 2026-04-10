@@ -1,5 +1,29 @@
 # Workspace — Indian Stock Market Analyzer
 
+---
+
+## ⚠️ Development Mandate: Test-Driven Development (TDD)
+
+**All new features must be built using TDD — no exceptions.**
+
+The workflow for every feature, endpoint, or component:
+
+1. **Write failing tests first** — define what correct behaviour looks like before writing any implementation code.
+2. **Write the minimum code to make tests pass** — no speculative code, no untested logic paths.
+3. **Refactor** — clean up implementation while keeping tests green.
+4. **Run the full suite before pushing** — backend pytest + frontend vitest must both be green.
+
+### Test locations
+| Layer | Location | Command |
+|---|---|---|
+| Backend | `artifacts/python-backend/tests/test_<feature>.py` | `cd artifacts/python-backend && python3 -m pytest tests/ -v` |
+| Frontend | `artifacts/stock-market-app/src/lib/__tests__/<feature>.test.ts` | `pnpm --filter @workspace/stock-market-app run test` |
+
+### Why TDD here?
+This project is **data-heavy** (live market data, Black-Scholes pricing, options Greeks, HV percentiles). Pure unit tests catch regressions in financial calculations that are impossible to spot visually. Every pricing formula, scoring function, and strategy-builder rule must have a test.
+
+---
+
 ## Overview
 
 pnpm workspace monorepo. Python FastAPI backend + two React/Vite frontends
@@ -94,11 +118,30 @@ scripts/
 
 ## Testing
 
+All features are built TDD — tests are written first, then the implementation.
+
 | Suite | Command | Count |
 |---|---|---|
-| Backend pytest | `cd artifacts/python-backend && python3 -m pytest tests/ -v` | 221 (116 indicators/patterns/log + 105 Hydra) |
-| Frontend vitest | `pnpm --filter @workspace/stock-market-app run test` | 37 |
-| E2E Playwright | via Replit testing skill `runTest()` | full flows |
+| Backend pytest | `cd artifacts/python-backend && python3 -m pytest tests/ -v` | **513** (2 skipped/VADER) |
+| Frontend vitest | `pnpm --filter @workspace/stock-market-app run test` | **160** |
+
+### Backend test files
+| File | What it covers |
+|---|---|
+| `test_options.py` | Black-Scholes, Greeks, IV, payoff, ATM helpers, backtest metrics |
+| `test_hydra.py` | Hydra Alpha: signals, scoring, pairs, VaR, sentiment |
+| `test_smart_builder.py` | Smart Strategy Builder: market state detection, scoring, custom strategy invention |
+| `test_indicators.py` | Technical indicators (SMA, EMA, RSI, MACD, Bollinger, etc.) |
+| `test_patterns.py` | Candlestick pattern detection |
+| `test_log_buffer.py` | Admin log ring buffer |
+| `test_data_quality.py` | Universe, sector, and stock data integrity |
+
+### Frontend test files
+| File | What it covers |
+|---|---|
+| `options-utils.test.ts` | fmtINR, pct, computeHeatBars, QUICK_STRATEGIES |
+| `indicators.test.ts` | Client-side indicator helpers |
+| `smart-builder.test.ts` | Vol regime detection, score colour, scoring logic |
 
 ## Docker
 
