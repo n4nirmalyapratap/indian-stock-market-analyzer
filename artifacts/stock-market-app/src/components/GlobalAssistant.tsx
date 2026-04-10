@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { BookOpen, Send, X, ChevronDown, RotateCcw, Sparkles, ChevronRight, GraduationCap } from "lucide-react";
+import { BookOpen, Send, X, RotateCcw, Sparkles, ChevronRight, GraduationCap } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Knowledge base — market concepts + every app feature, in plain English
@@ -956,8 +956,9 @@ interface Msg {
 // ─────────────────────────────────────────────────────────────────────────────
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
-export default function GlobalAssistant() {
-  const [open, setOpen]           = useState(false);
+interface Props { open: boolean; onClose: () => void; }
+
+export default function GlobalAssistant({ open, onClose }: Props) {
   const [msgs, setMsgs]           = useState<Msg[]>([]);
   const [input, setInput]         = useState("");
   const [activeCategory, setActive] = useState<string | null>(null);
@@ -999,73 +1000,28 @@ export default function GlobalAssistant() {
 
   const isEmpty = msgs.length === 0;
 
+  if (!open) return null;
+
   return (
     <>
-      {/* ── Floating button ─────────────────────────────────────────────────── */}
-      <div className="fixed bottom-5 right-5 z-[9999] flex flex-col items-end gap-2">
+      {/* ── Backdrop ────────────────────────────────────────────────────────── */}
+      <div
+        className="fixed inset-0 z-[9997] bg-black/30 backdrop-blur-[2px]"
+        onClick={onClose}
+        aria-hidden
+      />
 
-        {/* Glow ring — only when closed */}
-        {!open && (
-          <span className="absolute inset-0 rounded-full animate-ping opacity-20 bg-indigo-400 pointer-events-none" style={{ animationDuration: "2.5s" }} />
-        )}
-
-        <button
-          aria-label="Open learning assistant"
-          onClick={() => setOpen(o => !o)}
-          className={`
-            relative flex items-center gap-2.5
-            rounded-full
-            transition-all duration-300 ease-out
-            select-none
-            ${open
-              ? `h-10 w-10 justify-center
-                 bg-gray-100 dark:bg-white/10
-                 border border-gray-300 dark:border-white/15
-                 shadow-md hover:bg-gray-200 dark:hover:bg-white/15`
-              : `h-11 pl-4 pr-5
-                 bg-indigo-600 dark:bg-white/10
-                 hover:bg-indigo-500 dark:hover:bg-white/15
-                 border border-indigo-500 dark:border-white/20
-                 hover:border-indigo-400 dark:hover:border-white/35
-                 backdrop-blur-xl
-                 shadow-[0_8px_32px_rgba(99,102,241,0.4)]
-                 hover:shadow-[0_8px_40px_rgba(99,102,241,0.6)]
-                 hover:scale-105 active:scale-95`
-            }
-          `}
-        >
-          {open ? (
-            <X className="w-4 h-4 text-gray-600 dark:text-white/80" />
-          ) : (
-            <>
-              {/* Icon badge — white in dark, lighter ring in light */}
-              <div className="w-5 h-5 rounded-full bg-white/25 dark:bg-white/20 flex items-center justify-center flex-shrink-0 shadow-sm">
-                <GraduationCap className="w-3 h-3 text-white" />
-              </div>
-              <span className="text-white text-[13px] font-semibold tracking-wide whitespace-nowrap" style={{ letterSpacing: "0.02em" }}>
-                Learn
-              </span>
-              <Sparkles className="w-3 h-3 text-white/60" />
-            </>
-          )}
-        </button>
-      </div>
-
-      {/* ── Chat panel ──────────────────────────────────────────────────────── */}
-      {open && (
-        <div className="
-          fixed bottom-[68px] right-5 z-[9998]
-          w-[380px] sm:w-[420px]
-          max-h-[calc(100vh-108px)]
-          flex flex-col
-          backdrop-blur-2xl
-          bg-white/80 dark:bg-gray-900/85
-          border border-white/40 dark:border-white/10
-          rounded-2xl
-          shadow-[0_24px_60px_rgba(0,0,0,0.22),0_0_0_1px_rgba(255,255,255,0.08)]
-          dark:shadow-[0_24px_60px_rgba(0,0,0,0.6),0_0_0_1px_rgba(255,255,255,0.05)]
-          overflow-hidden
-        ">
+      {/* ── Right-side drawer panel ──────────────────────────────────────────── */}
+      <div className="
+        fixed inset-y-0 right-0 z-[9998]
+        w-[420px] max-w-[100vw]
+        flex flex-col
+        bg-white dark:bg-gray-900
+        border-l border-gray-200 dark:border-white/[0.07]
+        shadow-[−24px_0_60px_rgba(0,0,0,0.18)]
+        dark:shadow-[-24px_0_60px_rgba(0,0,0,0.55)]
+        overflow-hidden
+      ">
           {/* Header — gradient glass */}
           <div
             className="flex items-center gap-3 px-4 py-3.5 flex-shrink-0 relative overflow-hidden"
@@ -1098,11 +1054,11 @@ export default function GlobalAssistant() {
                 </button>
               )}
               <button
-                onClick={() => setOpen(false)}
+                onClick={onClose}
                 title="Close"
                 className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/15 transition"
               >
-                <ChevronDown className="w-4 h-4" />
+                <X className="w-4 h-4" />
               </button>
             </div>
           </div>
@@ -1278,7 +1234,6 @@ export default function GlobalAssistant() {
             </div>
           </div>
         </div>
-      )}
     </>
   );
 }
