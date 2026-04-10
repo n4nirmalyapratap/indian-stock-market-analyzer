@@ -259,6 +259,48 @@ async def _constituent_pct_changes(constituents: list[str]) -> dict[str, Optiona
     }
 
 
+async def _synthetic_history(constituents: list[str], period: str = "1y") -> list[dict]:
+    """
+    Build a synthetic sector price series from constituent stocks.
+    Each stock is normalised to 100 at its first available date, then
+    the normalised series are averaged across all stocks that share
+    that date.  Result: [{"date": "YYYY-MM-DD", "close": float}, ...]
+    """
+    if not constituents:
+        return []
+
+    hists = await asyncio.gather(
+        *[_yf_history(s, period) for s in constituents[:5]],
+        return_exceptions=True,
+    )
+
+    valid_hists = [h for h in hists if not isinstance(h, Exception) and len(h) > 5]
+    if not valid_hists:
+        return []
+
+    # Build a date-keyed map for each stock, normalised to 100 at its first date
+    stock_maps: list[dict[str, float]] = []
+    for h in valid_hists:
+        base = h[0]["close"]
+        if not base or base <= 0:
+            continue
+        stock_maps.append({row["date"]: row["close"] / base * 100.0 for row in h})
+
+    if not stock_maps:
+        return []
+
+    # Collect all dates that appear in at least one stock, sorted
+    all_dates = sorted({d for m in stock_maps for d in m})
+
+    result: list[dict] = []
+    for d in all_dates:
+        vals = [m[d] for m in stock_maps if d in m]
+        if vals:
+            result.append({"date": d, "close": round(sum(vals) / len(vals), 4)})
+
+    return result
+
+
 def _ytd_change(history: list[dict]) -> Optional[float]:
     if not history:
         return None
@@ -399,6 +441,11 @@ class SectorAnalyticsService:
         if isinstance(nifty_hist, Exception):
             nifty_hist = []
         stock_infos = [s for s in stock_infos if not isinstance(s, Exception)]
+
+        # If Yahoo Finance has no index history for this sector, synthesize
+        # a price series from constituent stocks (normalised equal-weight avg).
+        if len(sector_hist) < 10 and constituents:
+            sector_hist = await _synthetic_history(constituents, period)
 
         result = {
             "symbol":       sector_symbol,
