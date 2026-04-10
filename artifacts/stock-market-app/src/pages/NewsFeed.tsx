@@ -436,7 +436,7 @@ export default function NewsFeed() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [countdown, setCountdown] = useState(8 * 60);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const hdrTxt = isDark ? "#f1f5f9" : "#111827";
   const muTxt  = isDark ? "#94a3b8" : "#6b7280";
@@ -490,9 +490,9 @@ export default function NewsFeed() {
   }, []); // empty deps — interval never re-registers
 
   useEffect(() => {
-    clearTimeout(debounceRef.current);
+    clearTimeout(debounceRef.current ?? undefined);
     debounceRef.current = setTimeout(() => setDebouncedSearch(search), 300);
-    return () => clearTimeout(debounceRef.current);
+    return () => clearTimeout(debounceRef.current ?? undefined);
   }, [search]);
 
   const articles = feed?.articles ?? [];
