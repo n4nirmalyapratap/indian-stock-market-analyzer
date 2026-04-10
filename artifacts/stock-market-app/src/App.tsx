@@ -16,6 +16,7 @@ import OptionsStrategyTester from "@/pages/OptionsStrategyTester";
 import SettingsPage from "@/pages/SettingsPage";
 import NotFound from "@/pages/not-found";
 import TradingPlatform from "@/pages/TradingPlatform";
+import GlobalAssistant from "@/components/GlobalAssistant";
 import { ThemeProvider, useTheme } from "@/context/ThemeContext";
 import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
@@ -236,6 +237,7 @@ function App() {
           <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
             <Router />
           </WouterRouter>
+          <GlobalAssistant />
           <Toaster />
         </TooltipProvider>
       </QueryClientProvider>
