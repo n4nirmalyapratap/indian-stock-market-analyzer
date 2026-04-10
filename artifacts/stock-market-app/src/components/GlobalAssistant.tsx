@@ -1018,32 +1018,34 @@ export default function GlobalAssistant() {
             transition-all duration-300 ease-out
             select-none
             ${open
-              ? "h-10 w-10 justify-center backdrop-blur-xl bg-white/10 dark:bg-white/10 border border-white/20 dark:border-white/15 shadow-lg hover:bg-white/20 dark:hover:bg-white/15"
+              ? `h-10 w-10 justify-center
+                 bg-gray-100 dark:bg-white/10
+                 border border-gray-300 dark:border-white/15
+                 shadow-md hover:bg-gray-200 dark:hover:bg-white/15`
               : `h-11 pl-4 pr-5
+                 bg-indigo-600 dark:bg-white/10
+                 hover:bg-indigo-500 dark:hover:bg-white/15
+                 border border-indigo-500 dark:border-white/20
+                 hover:border-indigo-400 dark:hover:border-white/35
                  backdrop-blur-xl
-                 bg-white/15 dark:bg-white/10
-                 hover:bg-white/25 dark:hover:bg-white/18
-                 border border-white/30 dark:border-white/20
-                 hover:border-white/50 dark:hover:border-white/35
-                 shadow-[0_8px_32px_rgba(99,102,241,0.35)]
-                 hover:shadow-[0_8px_40px_rgba(99,102,241,0.55)]
+                 shadow-[0_8px_32px_rgba(99,102,241,0.4)]
+                 hover:shadow-[0_8px_40px_rgba(99,102,241,0.6)]
                  hover:scale-105 active:scale-95`
             }
           `}
         >
           {open ? (
-            <X className="w-4 h-4 text-white/80" />
+            <X className="w-4 h-4 text-gray-600 dark:text-white/80" />
           ) : (
             <>
-              {/* Gradient icon container */}
-              <div className="w-5 h-5 rounded-full bg-gradient-to-br from-indigo-400 to-violet-500 flex items-center justify-center flex-shrink-0 shadow-sm">
+              {/* Icon badge — white in dark, lighter ring in light */}
+              <div className="w-5 h-5 rounded-full bg-white/25 dark:bg-white/20 flex items-center justify-center flex-shrink-0 shadow-sm">
                 <GraduationCap className="w-3 h-3 text-white" />
               </div>
-              <span className="text-white/90 text-[13px] font-semibold tracking-wide whitespace-nowrap" style={{ letterSpacing: "0.02em" }}>
+              <span className="text-white text-[13px] font-semibold tracking-wide whitespace-nowrap" style={{ letterSpacing: "0.02em" }}>
                 Learn
               </span>
-              {/* Subtle sparkle dot */}
-              <Sparkles className="w-3 h-3 text-indigo-300/60 dark:text-indigo-200/50" />
+              <Sparkles className="w-3 h-3 text-white/60" />
             </>
           )}
         </button>
