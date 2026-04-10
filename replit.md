@@ -21,6 +21,8 @@ WhatsApp bot — all powered by a Python FastAPI backend.
 | Monorepo | pnpm workspaces |
 | Node.js version | 24 |
 
+---
+
 ## Project Structure
 
 ```
@@ -39,9 +41,9 @@ WhatsApp bot — all powered by a Python FastAPI backend.
 │   │   ├── vite.config.ts  ← Vite internal proxy: /api/* → localhost:8090
 │   │   └── src/
 │   │
-│   ├── api-server/         ← ROUTING SHIM ONLY — do NOT touch source code
-│   │   └── .replit-artifact/artifact.toml  ← Registered at path /api, localPort=8090
-│   │                                         Points Replit proxy to Python backend
+│   ├── api-server/         ← ROUTING SHIM ONLY — do NOT touch source code or start workflow
+│   │   └── .replit-artifact/artifact.toml  ← localPort=8090, paths=["/api"]
+│   │                                         Tells Replit proxy: route /api/* → port 8090
 │   │
 │   └── mockup-sandbox/     ← Canvas design tool (do not touch)
 │
@@ -50,73 +52,150 @@ WhatsApp bot — all powered by a Python FastAPI backend.
 └── lib/                    ← Shared TypeScript libraries
 ```
 
+---
+
 ## Workflows (Active)
 
-| Workflow name | Command | Port | Purpose |
+| Workflow name | Command | Port | State |
 |---|---|---|---|
-| `Python Backend` | `bash -c 'cd /home/runner/workspace/artifacts/python-backend && PORT=8090 python3.11 run.py'` | 8090 | FastAPI backend |
-| `artifacts/stock-market-app: web` | `BASE_PATH=/ PORT=3002 pnpm --filter @workspace/stock-market-app run dev` | 3002 | React frontend |
-
-> **⚠️ `Start application`** was the old frontend workflow. It was replaced by
-> `artifacts/stock-market-app: web` when Replit registered the artifact. The old
-> workflow now runs a no-op echo command and is FINISHED. Do not restore it —
-> it conflicts with the artifact workflow on port 3002.
+| `Python Backend` | `bash -c 'cd /home/runner/workspace/artifacts/python-backend && PORT=8090 python3.11 run.py'` | 8090 | RUNNING |
+| `artifacts/stock-market-app: web` | `BASE_PATH=/ PORT=3002 pnpm --filter @workspace/stock-market-app run dev` | 3002 | RUNNING |
+| `Start application` | `echo 'App now served by artifacts/stock-market-app workflow'` | — | FINISHED (no-op) |
+| `artifacts/api-server: API Server` | (do not start) | — | NOT_STARTED |
+| `artifacts/mockup-sandbox: Component Preview Server` | (do not start) | — | NOT_STARTED |
 
 ---
 
 ## ⚠️ Critical: Two-Layer Proxy Architecture
 
-This is the most important thing to understand. There are **two separate proxy layers**
-and they must both be configured correctly for the API to work.
+There are **two separate proxy layers**. Both must be correctly configured or the API will 502.
 
-### Layer 1 — Replit Proxy (outermost)
+### Layer 1 — Replit Proxy (outermost, browser-facing)
 
-The Replit proxy sits at the public domain (e.g., `https://xxx.riker.replit.dev`).
-It routes incoming requests to local ports based on **registered artifact paths**.
+The Replit proxy sits at the public domain (`https://xxx.riker.replit.dev`).
+It routes requests to local ports based on **registered artifact paths** in each artifact's `artifact.toml`.
 
-| Path | Routes to port | Artifact |
+| URL path | Routes to port | Controlled by |
 |---|---|---|
-| `/api/*` | **8090** | `api-server` artifact (shim — do NOT start its workflow) |
-| `/*` (all else) | **3002** | `stock-market-app` artifact |
+| `/api/*` | **8090** | `artifacts/api-server/.replit-artifact/artifact.toml` |
+| `/*` (everything else) | **3002** | `artifacts/stock-market-app/.replit-artifact/artifact.toml` |
 
-The `api-server` artifact (`artifacts/api-server/.replit-artifact/artifact.toml`) is configured
-as a **routing shim** — its `localPort = 8090` and `paths = ["/api"]` tell the Replit proxy
-to send all `/api/...` browser requests directly to the Python backend on port 8090.
+The `api-server` artifact acts as a **routing shim** — `localPort = 8090` and `paths = ["/api"]`
+tell the Replit proxy to forward all `/api/...` browser requests directly to the Python backend.
+Its own workflow is intentionally NOT started.
 
-### Layer 2 — Vite Dev Server Proxy (internal)
+### Layer 2 — Vite Dev Server Proxy (internal, server-side only)
 
-Inside `vite.config.ts`, there is a server-side proxy:
+Inside `vite.config.ts`:
+```js
+proxy: { "/api": { target: "http://localhost:8090" } }
 ```
-/api → http://localhost:8090
-```
-This handles **direct dev-server access** (e.g., `curl localhost:3002/api/...`).
-It is **not used** when the app is accessed through the Replit proxy (i.e., the browser).
-The browser goes directly via Replit proxy → port 8090.
-
-### ❌ The bug that happened (do not repeat)
-
-When the `api-server` artifact had `localPort = 8080` (a dead NestJS service):
-- Browser requests `GET /api/sectors`
-- Replit proxy routes to port 8080 → nothing running → **502 Bad Gateway**
-- Vite's internal proxy was **never reached** because the Replit proxy intercepted first
-
-**Fix applied**: Updated `artifacts/api-server/.replit-artifact/artifact.toml` so
-`localPort = 8090`, pointing the Replit proxy directly at the running Python backend.
+This only applies to requests that reach Vite directly (e.g., `curl localhost:3002/api/...`).
+**It is bypassed entirely when the browser accesses the app through the Replit proxy.**
 
 ---
 
-## ⚠️ Artifact Workflow Conflict (port 3002)
+## Full Incident RCA — "App Not Starting / API 502" (April 2026)
 
-When Replit auto-registers a new artifact for `stock-market-app`, it creates an
-artifact-managed workflow `artifacts/stock-market-app: web`. This conflicts with
-any manually-created workflow (like `Start application`) using the same port.
+This section documents every step taken to fix the startup issues when the `stock-market-app`
+artifact was first registered by Replit. Record it in full so future agents don't repeat the same path.
 
-**Rules:**
-- Only ONE workflow may bind to port 3002 at a time
-- `artifacts/stock-market-app: web` is the **canonical** frontend workflow
-- `Start application` is a legacy no-op — do not restore or restart it with `PORT=3002`
-- The artifact workflow command auto-regenerates from `artifact.toml` — if it
-  shows the wrong package filter, update `artifact.toml` using `verifyAndReplaceArtifactToml`
+### Timeline & findings
+
+#### Step 1 — Artifact auto-registered with wrong package filter
+When Replit registered the `stock-market-app` as a formal artifact, it auto-generated workflow
+`artifacts/stock-market-app: web` with this broken command:
+```
+BASE_PATH=/ PORT=3002 pnpm --filter @workspace/nestjs-backend-placeholder run dev
+```
+`nestjs-backend-placeholder` does not exist in the workspace → workflow immediately exits with:
+```
+No projects matched the filters in "/home/runner/workspace"
+```
+
+**Finding**: Artifact-managed workflows get their command from `artifact.toml`, not from the
+Replit UI workflow configuration. The auto-generated `artifact.toml` had the wrong package name.
+
+#### Step 2 — `configureWorkflow()` cannot override artifact-managed workflows
+Attempted to fix the workflow command using `configureWorkflow()` in the code_execution sandbox:
+```
+Error: "artifacts/stock-market-app: web" is managed by an artifact and cannot be overridden via setRunWorkflow
+```
+**Finding**: Artifact-managed workflows (those whose name matches `artifacts/X: Y`) can only
+be changed by editing `artifact.toml`. You cannot use `configureWorkflow()` on them.
+
+#### Step 3 — `artifact.toml` cannot be edited directly
+Attempting to write to `artifacts/stock-market-app/.replit-artifact/artifact.toml` directly fails:
+```
+Error: You are forbidden from creating or editing the artifact.toml file.
+```
+**Finding**: Must use the `verifyAndReplaceArtifactToml()` sandbox function. Workflow:
+1. Copy `artifact.toml` to a temp path inside the workspace (NOT `/tmp` — cross-device rename fails)
+2. Edit the temp file with the correct package name
+3. Call `verifyAndReplaceArtifactToml({ tempFilePath: "...", artifactTomlPath: "..." })`
+
+#### Step 4 — Port 3002 conflict between two workflows
+After fixing `artifact.toml`, the `artifacts/stock-market-app: web` workflow still exited
+because `Start application` was already bound to port 3002.
+
+**Finding**: Only one process can bind to port 3002. The two workflows had an identical command
+and were fighting over the same port. Resolution:
+1. Reconfigure `Start application` to a no-op: `configureWorkflow({ name: "Start application", command: "echo ...", autoStart: false })`
+2. Restart `Start application` → it runs the echo, finishes, releases port 3002
+3. Restart `artifacts/stock-market-app: web` → now binds port 3002 successfully
+
+#### Step 5 — API returning 502 (proxy layer collision)
+Even with the frontend running, all `/api/...` calls returned 502 in the browser.
+`curl localhost:3002/api/sectors` worked fine (Vite proxy worked), but browser calls failed.
+
+**Finding**: The `api-server` artifact was registered with `localPort = 8080` and `paths = ["/api"]`.
+The Replit proxy (outermost layer) intercepted all `/api/...` browser requests and forwarded
+them to port 8080 — where nothing was running — before Vite's proxy ever got involved.
+`curl localhost:3002/...` bypasses the Replit proxy, which is why it worked but the browser didn't.
+
+Fix: Updated `artifacts/api-server/.replit-artifact/artifact.toml`:
+- Changed `localPort = 8080` → `localPort = 8090`
+- Changed `run` command to point to the Python backend
+- The `api-server` workflow remains NOT_STARTED — only the port routing entry matters
+
+### Checklist to verify working state
+```
+[ ] curl http://localhost:8090/api/healthz  → 200 OK
+[ ] curl http://localhost:3002/api/healthz  → 200 OK (Vite proxy)
+[ ] Workflow "Python Backend" → RUNNING
+[ ] Workflow "artifacts/stock-market-app: web" → RUNNING
+[ ] Workflow "Start application" → FINISHED (no-op, not port 3002)
+[ ] Workflow "artifacts/api-server: API Server" → NOT_STARTED
+[ ] artifacts/api-server/artifact.toml → localPort = 8090
+[ ] artifacts/stock-market-app/artifact.toml → run command uses @workspace/stock-market-app
+```
+
+---
+
+## Debugging — API 502 Errors
+
+1. `curl http://localhost:8090/api/healthz` — if this fails, Python backend is down → restart `Python Backend` workflow
+2. Check `artifacts/api-server/.replit-artifact/artifact.toml`:
+   - `localPort` must be `8090`
+   - `paths` must be `["/api"]`
+   - If wrong → copy to a temp file in the workspace, fix, use `verifyAndReplaceArtifactToml()`
+3. Make sure `artifacts/api-server: API Server` workflow is NOT_STARTED (starting it would conflict on port 8090)
+4. `curl http://localhost:3002/api/healthz` — if this fails but 8090 works, Vite proxy is broken → check `vite.config.ts`
+
+## Debugging — Frontend Not Showing in Canvas Preview
+
+1. Check `artifacts/stock-market-app: web` → must be RUNNING
+2. If FINISHED:
+   - Another workflow likely holds port 3002
+   - Check `Start application` — if RUNNING, reconfigure it to no-op then restart it
+   - Then restart `artifacts/stock-market-app: web`
+3. If workflow command shows `nestjs-backend-placeholder`:
+   - Read `artifacts/stock-market-app/.replit-artifact/artifact.toml`
+   - Copy to `artifacts/stock-market-app/.replit-artifact/artifact-temp.toml`
+   - Fix `run` to `BASE_PATH=/ PORT=3002 pnpm --filter @workspace/stock-market-app run dev`
+   - Call `verifyAndReplaceArtifactToml({ tempFilePath: "...artifact-temp.toml", artifactTomlPath: "...artifact.toml" })`
+   - Restart `artifacts/stock-market-app: web`
+4. Do NOT use `configureWorkflow()` on artifact-managed workflows — it will throw PROHIBITED_ACTION
 
 ---
 
@@ -145,39 +224,12 @@ pnpm --filter @workspace/scripts run push-github
 
 # Health checks
 curl http://localhost:8090/api/healthz      # Python backend direct
-curl http://localhost:3002/api/healthz      # Via Vite proxy (dev)
+curl http://localhost:3002/api/healthz      # Via Vite proxy
 
-# Run manually (debug only)
+# Manual run (debug only — use workflows in normal operation)
 python3.11 artifacts/python-backend/run.py
 BASE_PATH=/ PORT=3002 pnpm --filter @workspace/stock-market-app run dev
 ```
-
----
-
-## Debugging — API 502 Errors
-
-If browser shows 502 on any `/api/...` call:
-
-1. **Check Python backend is running**: `curl http://localhost:8090/api/healthz`
-   - If not → restart workflow `Python Backend`
-2. **Check Replit proxy routing** (`artifacts/api-server/.replit-artifact/artifact.toml`):
-   - `localPort` must be `8090` (not 8080 or anything else)
-   - `paths` must be `["/api"]`
-3. **Check only one workflow uses port 3002**: `artifacts/stock-market-app: web` only
-   - If `Start application` is also running on 3002 → it'll conflict → restart it (it's a no-op now)
-4. **Check `api-server` workflow is NOT running** — it should always be `not_started`
-   - The `api-server` artifact is a routing shim only; starting it would conflict with Python backend on 8090
-
-## Debugging — App Not Showing in Canvas Preview
-
-1. Check `artifacts/stock-market-app: web` workflow is RUNNING (not finished/not_started)
-2. If FINISHED, it likely failed to bind port 3002 because another workflow holds it:
-   - Run `Start application` → it's a no-op now so it'll finish → frees the port
-   - Then restart `artifacts/stock-market-app: web`
-3. If artifact command shows wrong package filter (e.g., `nestjs-backend-placeholder`):
-   - Read `artifacts/stock-market-app/.replit-artifact/artifact.toml`
-   - Fix `run` command to use `--filter @workspace/stock-market-app`
-   - Use `verifyAndReplaceArtifactToml` to apply the change
 
 ---
 
@@ -186,11 +238,14 @@ If browser shows 502 on any `/api/...` call:
 - Python backend MUST use `python3.11` (not generic `python`)
 - All Indian stock symbols use `.NS` suffix for NSE (e.g., RELIANCE.NS)
 - yfinance: ALWAYS use `yf.Ticker(ticker).history()` NOT `yf.download()` for concurrency safety
-- spaCy model (en_core_web_sm) auto-downloads on first run via run.py self-heal block
-- vite.config.ts requires both PORT and BASE_PATH env vars
+- spaCy model (en_core_web_sm) auto-downloads on first run via `run.py` self-heal block
+- `vite.config.ts` requires both `PORT` and `BASE_PATH` env vars or it throws at startup
 - **NEVER touch `artifacts/api-server/` source code** — it is a routing shim only
 - **NEVER touch `artifacts/nestjs-backend/` or `artifacts/api-server/` pnpm packages**
+- **NEVER use `configureWorkflow()` on artifact-managed workflows** — use `verifyAndReplaceArtifactToml()`
+- `artifact.toml` cannot be written directly — always copy → edit copy → `verifyAndReplaceArtifactToml()`
+- Temp files for `verifyAndReplaceArtifactToml` must be inside `/home/runner/workspace/` (not `/tmp/`) to avoid cross-device rename errors
 - GlobalAssistant (Learn tab) must be placed INSIDE WouterRouter in App.tsx
-- GlobalAssistant returns null on /trading and /chart/* routes
+- GlobalAssistant returns null on `/trading` and `/chart/*` routes
 - UI style: glass cards (`bg-indigo-600 dark:bg-white/10`), Tailwind + `dark:` variants
-- Always add feedparser and nsepython to requirements.txt if used
+- Always add `feedparser` and `nsepython` to `requirements.txt` if used
