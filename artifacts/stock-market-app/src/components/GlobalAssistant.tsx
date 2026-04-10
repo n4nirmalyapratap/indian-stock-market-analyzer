@@ -1,17 +1,15 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
 import { BookOpen, Send, X, RotateCcw, Sparkles, ChevronRight, ChevronLeft, GraduationCap, Bot } from "lucide-react";
+import { fetchApi } from "@/lib/api";
 
 // ── Options AI chat helper ────────────────────────────────────────────────────
-const BASE = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
 async function optionsChat(messages: { role: string; content: string }[]): Promise<string> {
-  const res = await fetch(`${BASE}/api/options/chat`, {
+  const d = await fetchApi<{ reply?: string }>("/options/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ messages }),
   });
-  if (!res.ok) throw new Error("AI error");
-  const d = await res.json();
   return d.reply ?? "Sorry, I couldn't get a response.";
 }
 

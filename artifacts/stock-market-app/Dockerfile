@@ -36,12 +36,11 @@ COPY artifacts/stock-market-app/ ./artifacts/stock-market-app/
 RUN pnpm install --no-frozen-lockfile
 
 # ── Build ───────────────────────────────────────────────────────────────────────
-# PORT is required by vite.config.ts at config-parse time (validates the env var
-# is present). It is not used at nginx serve time.
-# BASE_PATH=/ — app is served from the root of the domain.
-# NODE_ENV=production — disables Replit-specific plugins (cartographer, dev-banner)
-#   which reference REPL_ID and are only loaded when NODE_ENV != production.
-ENV PORT=3000 BASE_PATH=/ NODE_ENV=production
+# VITE_CLERK_PUBLISHABLE_KEY must be passed as a build-time ARG so Vite can
+# embed it into the compiled JS bundle. It is not needed at nginx serve time.
+ARG VITE_CLERK_PUBLISHABLE_KEY
+ENV PORT=3000 BASE_PATH=/ NODE_ENV=production \
+    VITE_CLERK_PUBLISHABLE_KEY=${VITE_CLERK_PUBLISHABLE_KEY}
 
 RUN pnpm --filter @workspace/stock-market-app run build
 

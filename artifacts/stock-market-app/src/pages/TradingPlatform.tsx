@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from "react";
 import { useSearch, useLocation } from "wouter";
+import { fetchApi } from "@/lib/api";
 import {
   BarChart2,
   LayoutTemplate, PanelRight, X, Search,
@@ -262,8 +263,8 @@ const SearchModal = forwardRef<SearchModalHandle, {
     debounce.current = setTimeout(async () => {
       setLoading(true);
       try {
-        const res = await fetch(`/api/stocks/search?q=${encodeURIComponent(val.trim())}`);
-        if (res.ok) { const d = await res.json(); setResults(d.results ?? []); setActiveIdx(0); }
+        const d = await fetchApi<{ results: unknown[] }>(`/stocks/search?q=${encodeURIComponent(val.trim())}`);
+        setResults(d.results ?? []); setActiveIdx(0);
       } catch { setResults([]); }
       finally { setLoading(false); }
     }, 160);

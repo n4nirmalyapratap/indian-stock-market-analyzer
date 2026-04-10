@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.middleware.clerk_auth import ClerkAuthMiddleware
 from app.routes.health import router as health_router
 from app.routes.sectors import router as sectors_router
 from app.routes.stocks import router as stocks_router
@@ -160,6 +161,8 @@ app = FastAPI(
     openapi_url="/openapi.json",
     lifespan=lifespan,
 )
+
+app.add_middleware(ClerkAuthMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

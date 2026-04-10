@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from "react";
 import { Plus, Trash2, ChevronDown, Check, X, Pencil, Star } from "lucide-react";
+import { fetchApi } from "@/lib/api";
 
 export interface WatchlistItem {
   symbol: string;
@@ -158,9 +159,7 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd, theme }, r
 
   const fetchSingle = useCallback(async (sym: string, gen: number) => {
     try {
-      const r = await fetch(`/api/stocks/${sym}`);
-      if (fetchGenRef.current !== gen || !r.ok) return;
-      const data = await r.json();
+      const data = await fetchApi<Record<string, unknown>>(`/stocks/${sym}`);
       if (fetchGenRef.current !== gen) return;
       setPrices(prev => ({
         ...prev,
