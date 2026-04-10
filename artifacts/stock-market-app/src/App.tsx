@@ -21,7 +21,7 @@ import { ThemeProvider, useTheme } from "@/context/ThemeContext";
 import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
   MessageCircle, Send, Brain, TrendingUp, CandlestickChart,
-  Settings, ChevronRight, ChevronLeft, ChevronDown, Sun, Moon, GraduationCap,
+  Settings, ChevronRight, ChevronLeft, ChevronDown, Sun, Moon,
 } from "lucide-react";
 
 const queryClient = new QueryClient({
@@ -89,19 +89,12 @@ function Layout({ children }: { children: React.ReactNode }) {
   const [loc] = useLocation();
   const [open, setOpen]           = useState(() => localStorage.getItem("sidebar-open") === "true");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [learnOpen, setLearnOpen] = useState(false);
 
   useEffect(() => { localStorage.setItem("sidebar-open", String(open)); }, [open]);
 
   useEffect(() => {
     if (SETTINGS_NAV.some(({ path }) => loc === path)) setSettingsOpen(true);
   }, [loc]);
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") setLearnOpen(false); };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
 
   const inSettings = SETTINGS_NAV.some(({ path }) => loc === path) || loc === "/settings";
 
@@ -129,30 +122,11 @@ function Layout({ children }: { children: React.ReactNode }) {
           {MAIN_NAV.map((item) => (
             <NavLink key={item.path} {...item} open={open} />
           ))}
-
-          {/* Divider */}
-          <div className="mx-3 my-1.5 border-t border-gray-100 dark:border-white/[0.05]" />
-
-          {/* Learn button */}
-          <button
-            onClick={() => setLearnOpen(l => !l)}
-            title={!open ? "Learn" : undefined}
-            className={`w-full flex items-center gap-2.5 transition rounded-lg mx-1.5
-              ${open ? "px-2.5 py-2 w-[calc(100%-12px)]" : "px-0 py-2 justify-center"}
-              ${learnOpen
-                ? "bg-violet-50 dark:bg-violet-500/20 text-violet-700 dark:text-violet-300"
-                : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white"
-              }`}
-          >
-            <GraduationCap className={`flex-shrink-0 w-[18px] h-[18px] ${learnOpen ? "text-violet-600 dark:text-violet-400" : ""}`} />
-            {open && <span className="text-sm font-medium whitespace-nowrap">Learn</span>}
-          </button>
         </nav>
 
         {/* Bottom: Settings + theme + toggle */}
         <div className="border-t border-gray-100 dark:border-white/[0.05] py-2 flex-shrink-0">
 
-          {/* Settings — inline accordion when open, link to /settings when collapsed */}
           {open ? (
             <div className="space-y-0.5">
               <button
@@ -179,10 +153,8 @@ function Layout({ children }: { children: React.ReactNode }) {
             <NavLink path="/settings" label="Settings" icon={Settings} open={false} />
           )}
 
-          {/* Dark / Light mode toggle */}
           <ThemeToggle open={open} />
 
-          {/* Expand / collapse */}
           <button
             onClick={() => setOpen(o => !o)}
             title={open ? "Collapse sidebar" : "Expand sidebar"}
@@ -222,24 +194,12 @@ function Layout({ children }: { children: React.ReactNode }) {
               </Link>
             );
           })}
-          {/* Learn — mobile */}
-          <button
-            onClick={() => setLearnOpen(l => !l)}
-            className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg text-xs transition flex-shrink-0
-              ${learnOpen ? "bg-violet-50 dark:bg-violet-500/20 text-violet-700 dark:text-violet-300 font-medium" : "text-gray-500 dark:text-gray-400"}`}
-          >
-            <GraduationCap className="w-4 h-4" />
-            Learn
-          </button>
         </div>
 
         <main className={`flex-1 overflow-auto bg-gray-50 dark:bg-gray-950 ${(loc.startsWith("/trading") || loc.startsWith("/chart")) ? "p-0 overflow-hidden" : "p-4 md:p-6"}`}>
           {children}
         </main>
       </div>
-
-      {/* Learn drawer — rendered outside the sidebar so it overlays everything */}
-      <GlobalAssistant open={learnOpen} onClose={() => setLearnOpen(false)} />
     </div>
   );
 }
@@ -274,6 +234,7 @@ function App() {
           <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
             <Router />
           </WouterRouter>
+          <GlobalAssistant />
           <Toaster />
         </TooltipProvider>
       </QueryClientProvider>

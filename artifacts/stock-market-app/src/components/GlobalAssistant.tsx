@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { BookOpen, Send, X, RotateCcw, Sparkles, ChevronRight, GraduationCap } from "lucide-react";
+import { BookOpen, Send, X, RotateCcw, Sparkles, ChevronRight, ChevronLeft, GraduationCap } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Knowledge base — market concepts + every app feature, in plain English
@@ -956,17 +956,36 @@ interface Msg {
 // ─────────────────────────────────────────────────────────────────────────────
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
-interface Props { open: boolean; onClose: () => void; }
-
-export default function GlobalAssistant({ open, onClose }: Props) {
+export default function GlobalAssistant() {
+  const [open, setOpen]           = useState(false);
   const [msgs, setMsgs]           = useState<Msg[]>([]);
   const [input, setInput]         = useState("");
   const [activeCategory, setActive] = useState<string | null>(null);
+  const [showHint, setShowHint]   = useState(false);
+  const [tabHovered, setTabHovered] = useState(false);
   const endRef   = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs]);
   useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 150); }, [open]);
+
+  // First-visit hint — slide out the tooltip after 1.2 s, retract after 5 s
+  useEffect(() => {
+    if (localStorage.getItem("learn-hint-shown")) return;
+    const t1 = setTimeout(() => setShowHint(true), 1200);
+    const t2 = setTimeout(() => {
+      setShowHint(false);
+      localStorage.setItem("learn-hint-shown", "1");
+    }, 5200);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, []);
+
+  // Close on Escape
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
 
   function ask(question: string, entryId?: string) {
     const q = question.trim();
@@ -1000,28 +1019,132 @@ export default function GlobalAssistant({ open, onClose }: Props) {
 
   const isEmpty = msgs.length === 0;
 
-  if (!open) return null;
-
   return (
     <>
-      {/* ── Backdrop ────────────────────────────────────────────────────────── */}
-      <div
-        className="fixed inset-0 z-[9997] bg-black/30 backdrop-blur-[2px]"
-        onClick={onClose}
-        aria-hidden
-      />
+      {/* ══════════════════════════════════════════════════════════════════════
+          PEEK TAB — right-edge, auto-hidden, visible when panel is closed
+         ══════════════════════════════════════════════════════════════════════ */}
+      {!open && (
+        <div
+          className="fixed z-[9999] flex items-center"
+          style={{ right: 0, top: "50%", transform: "translateY(-50%)" }}
+        >
+          {/* First-visit tooltip — slides in from the tab */}
+          <div
+            className="flex items-center gap-2 mr-1.5 pointer-events-none"
+            style={{
+              opacity: showHint ? 1 : 0,
+              transform: showHint ? "translateX(0)" : "translateX(12px)",
+              transition: "opacity 0.4s ease, transform 0.4s ease",
+            }}
+          >
+            <div className="
+              bg-indigo-600 text-white text-xs font-semibold
+              px-3 py-2 rounded-lg shadow-xl whitespace-nowrap
+              flex items-center gap-1.5
+            ">
+              <GraduationCap className="w-3.5 h-3.5" />
+              Learn market concepts
+              <span className="text-white/60">→</span>
+            </div>
+            {/* Small arrow pointing right toward the tab */}
+            <div className="w-0 h-0"
+              style={{
+                borderTop: "5px solid transparent",
+                borderBottom: "5px solid transparent",
+                borderLeft: "6px solid #4f46e5",
+              }}
+            />
+          </div>
 
-      {/* ── Right-side drawer panel ──────────────────────────────────────────── */}
-      <div className="
-        fixed inset-y-0 right-0 z-[9998]
-        w-[420px] max-w-[100vw]
-        flex flex-col
-        bg-white dark:bg-gray-900
-        border-l border-gray-200 dark:border-white/[0.07]
-        shadow-[−24px_0_60px_rgba(0,0,0,0.18)]
-        dark:shadow-[-24px_0_60px_rgba(0,0,0,0.55)]
-        overflow-hidden
-      ">
+          {/* The peek tab */}
+          <button
+            onClick={() => { setOpen(true); setShowHint(false); }}
+            onMouseEnter={() => setTabHovered(true)}
+            onMouseLeave={() => setTabHovered(false)}
+            aria-label="Open learning assistant"
+            style={{
+              borderRadius: "10px 0 0 10px",
+              width: tabHovered ? 44 : 28,
+              height: tabHovered ? 112 : 96,
+              transition: "width 0.25s ease, height 0.25s ease, box-shadow 0.25s ease",
+              boxShadow: tabHovered
+                ? "-8px 0 32px rgba(99,102,241,0.6)"
+                : "-4px 0 20px rgba(99,102,241,0.35)",
+              background: "linear-gradient(180deg, #6366f1 0%, #4f46e5 50%, #7c3aed 100%)",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              cursor: "pointer",
+              border: "none",
+              outline: "none",
+              flexShrink: 0,
+            }}
+          >
+            <GraduationCap
+              style={{
+                width: 13,
+                height: 13,
+                color: "white",
+                flexShrink: 0,
+                opacity: tabHovered ? 1 : 0.9,
+                transition: "opacity 0.2s",
+              }}
+            />
+            <span
+              style={{
+                writingMode: "vertical-rl",
+                transform: "rotate(180deg)",
+                fontSize: 9,
+                fontWeight: 700,
+                letterSpacing: "0.12em",
+                color: "white",
+                textTransform: "uppercase",
+                lineHeight: 1,
+                opacity: tabHovered ? 1 : 0.85,
+                transition: "opacity 0.2s",
+              }}
+            >
+              Learn
+            </span>
+            <ChevronLeft
+              style={{
+                width: 11,
+                height: 11,
+                color: "rgba(255,255,255,0.7)",
+                flexShrink: 0,
+                transform: tabHovered ? "translateX(-2px)" : "none",
+                transition: "transform 0.2s ease",
+              }}
+            />
+          </button>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          BACKDROP + DRAWER — visible when panel is open
+         ══════════════════════════════════════════════════════════════════════ */}
+      {open && (
+        <>
+          <div
+            className="fixed inset-0 z-[9997] bg-black/30 backdrop-blur-[2px]"
+            onClick={() => setOpen(false)}
+            aria-hidden
+          />
+
+          {/* Right-side drawer */}
+          <div className="
+            fixed inset-y-0 right-0 z-[9998]
+            w-[420px] max-w-[100vw]
+            flex flex-col
+            bg-white dark:bg-gray-900
+            border-l border-gray-200 dark:border-white/[0.07]
+            shadow-[-24px_0_60px_rgba(0,0,0,0.18)]
+            dark:shadow-[-24px_0_60px_rgba(0,0,0,0.55)]
+            overflow-hidden
+          ">
           {/* Header — gradient glass */}
           <div
             className="flex items-center gap-3 px-4 py-3.5 flex-shrink-0 relative overflow-hidden"
@@ -1054,7 +1177,7 @@ export default function GlobalAssistant({ open, onClose }: Props) {
                 </button>
               )}
               <button
-                onClick={onClose}
+                onClick={() => setOpen(false)}
                 title="Close"
                 className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/15 transition"
               >
@@ -1234,6 +1357,8 @@ export default function GlobalAssistant({ open, onClose }: Props) {
             </div>
           </div>
         </div>
+        </>
+      )}
     </>
   );
 }
