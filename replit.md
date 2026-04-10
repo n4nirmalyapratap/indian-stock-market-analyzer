@@ -131,7 +131,7 @@ All features are built TDD — tests are written first, then the implementation.
 
 | Suite | Command | Count |
 |---|---|---|
-| Backend pytest | `cd artifacts/python-backend && python3 -m pytest tests/ -v` | **697** (2 skipped/VADER) |
+| Backend pytest | `cd artifacts/python-backend && python3 -m pytest tests/ -v` | **5 857** (2 skipped/VADER) |
 | Frontend vitest | `pnpm --filter @workspace/stock-market-app run test` | **160** |
 
 ### Backend test files
@@ -144,7 +144,8 @@ All features are built TDD — tests are written first, then the implementation.
 | `test_patterns.py` | Candlestick pattern detection |
 | `test_log_buffer.py` | Admin log ring buffer |
 | `test_data_quality.py` | Universe, sector, and stock data integrity |
-| `test_scanners.py` | Scanner engine: `_compute_value` (20 indicator types), `_compare` (all 6 operators), `_eval_condition` (comparisons + crossovers), CRUD operations, default scanner integrity, AND/OR logic, score calculation, result shape, complex multi-condition combinations, edge cases |
+| `test_scanners.py` | Scanner engine: `_compute_value` (all 20 indicator types), `_compare` (all 6 operators), `_eval_condition` (comparisons + crossovers), CRUD (create/read/update/delete with every field), default scanner integrity, AND/OR logic, score calculation, result shape, complex multi-condition combinations, edge cases |
+| `test_scanner_condition_matrix.py` | **Full Cartesian-product matrix** of every condition the "New Scanner" UI can build: 26 left indicators × 7 operators × (26 right indicators + number) = 5 158 parametrized tests. Covers: `_compute_value` for all 26 specs with 300-bar data, indicator-vs-number (130), indicator-vs-indicator simple ops (3 380), crossover-vs-number (52), crossover-vs-indicator (1 352), CRUD round-trip for every indicator+operator (182), semantic correctness assertions, description string content. |
 
 ### Frontend test files
 | File | What it covers |
