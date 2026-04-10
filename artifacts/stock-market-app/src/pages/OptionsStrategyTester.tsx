@@ -185,12 +185,46 @@ const STRATEGY_INFO: Record<string, {
   "Butterfly":        { tagline: "Max profit if spot pins to centre strike",    when: "Expect very small move; approaching expiry",          risk: "Limited (net debit)",     reward: "Limited (highest near centre)", outlook: "neutral" },
 };
 
-const OUTLOOK_THEME: Record<string, { bg: string; border: string; text: string; dot: string; label: string }> = {
-  bullish:  { bg: "bg-emerald-50",  border: "border-emerald-200", text: "text-emerald-800", dot: "bg-emerald-500", label: "Bullish"  },
-  bearish:  { bg: "bg-red-50",      border: "border-red-200",     text: "text-red-800",     dot: "bg-red-500",     label: "Bearish"  },
-  neutral:  { bg: "bg-blue-50",     border: "border-blue-200",    text: "text-blue-800",    dot: "bg-blue-500",    label: "Neutral"  },
-  volatile: { bg: "bg-violet-50",   border: "border-violet-200",  text: "text-violet-800",  dot: "bg-violet-500",  label: "Volatile" },
-};
+type OutlookKey = "bullish" | "bearish" | "neutral" | "volatile";
+
+function getOutlookTheme(outlook: OutlookKey, isDark: boolean) {
+  const themes: Record<OutlookKey, { light: string; dark: string; border: string; text: string; subtext: string; dot: string; label: string; inner: string }> = {
+    bullish:  {
+      light:   "bg-emerald-50",   dark:  "bg-emerald-900/20",
+      border:  isDark ? "border-emerald-700/50" : "border-emerald-200",
+      text:    isDark ? "text-emerald-300"       : "text-emerald-800",
+      subtext: isDark ? "text-emerald-400/80"    : "text-emerald-700",
+      dot:     "bg-emerald-500",  label: "Bullish",
+      inner:   isDark ? "bg-slate-700/60"        : "bg-white/70",
+    },
+    bearish:  {
+      light:   "bg-red-50",       dark:  "bg-red-900/20",
+      border:  isDark ? "border-red-700/50"      : "border-red-200",
+      text:    isDark ? "text-red-300"            : "text-red-800",
+      subtext: isDark ? "text-red-400/80"         : "text-red-700",
+      dot:     "bg-red-500",      label: "Bearish",
+      inner:   isDark ? "bg-slate-700/60"        : "bg-white/70",
+    },
+    neutral:  {
+      light:   "bg-blue-50",      dark:  "bg-blue-900/20",
+      border:  isDark ? "border-blue-700/50"     : "border-blue-200",
+      text:    isDark ? "text-blue-300"           : "text-blue-800",
+      subtext: isDark ? "text-blue-400/80"        : "text-blue-700",
+      dot:     "bg-blue-500",     label: "Neutral",
+      inner:   isDark ? "bg-slate-700/60"        : "bg-white/70",
+    },
+    volatile: {
+      light:   "bg-violet-50",    dark:  "bg-violet-900/20",
+      border:  isDark ? "border-violet-700/50"   : "border-violet-200",
+      text:    isDark ? "text-violet-300"         : "text-violet-800",
+      subtext: isDark ? "text-violet-400/80"      : "text-violet-700",
+      dot:     "bg-violet-500",   label: "Volatile",
+      inner:   isDark ? "bg-slate-700/60"        : "bg-white/70",
+    },
+  };
+  const t = themes[outlook];
+  return { ...t, bg: isDark ? t.dark : t.light };
+}
 
 function detectStrategy(legs: Array<{ action: string; option_type: string; lots: number; strike: number }>): string | null {
   const bc = legs.filter(l => l.action === "buy"  && l.option_type === "call");
@@ -226,9 +260,12 @@ function StrategyInsightCard({
   payoff: any;
   spot?: number;
 }) {
+  const { theme: appTheme } = useTheme();
+  const isDark = appTheme === "dark";
+
   const name    = detectStrategy(legs);
   const info    = name ? STRATEGY_INFO[name] : null;
-  const theme   = info ? OUTLOOK_THEME[info.outlook] : OUTLOOK_THEME.neutral;
+  const ot      = getOutlookTheme((info?.outlook ?? "neutral") as OutlookKey, isDark);
   const maxP    = payoff?.max_profit;
   const maxL    = payoff?.max_loss;
   const bes     = payoff?.breakevens ?? [];
@@ -245,67 +282,78 @@ function StrategyInsightCard({
       ? `Profitable between ₹${bes[0].toLocaleString("en-IN")} – ₹${bes[1].toLocaleString("en-IN")}`
       : null;
 
-  const spotDiff = (spot && bes.length === 1)
-    ? bes[0] - spot
-    : null;
+  const spotDiff = (spot && bes.length === 1) ? bes[0] - spot : null;
+
+  const labelCls   = isDark ? "text-slate-400 uppercase" : "text-gray-400 uppercase";
+  const valueCls   = isDark ? "text-slate-200 font-semibold" : "text-gray-700 font-semibold";
+  const bodyCls    = isDark ? "text-slate-300" : "text-gray-600";
+  const taglineCls = isDark ? "text-slate-400" : "text-gray-500";
+  const whenLblCls = isDark ? "text-slate-300 font-semibold" : "text-gray-600 font-semibold";
+  const badgeBg    = isDark ? "bg-slate-700/80" : "bg-white/70";
 
   return (
-    <div className={`rounded-xl border ${theme.border} ${theme.bg} p-3 mt-1`}>
+    <div className={`rounded-xl border ${ot.border} ${ot.bg} p-3 mt-1`}>
+      {/* Header row */}
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="flex items-center gap-2">
-          <Lightbulb className={`w-4 h-4 shrink-0 ${theme.text} opacity-70`} />
+          <Lightbulb className={`w-4 h-4 shrink-0 ${ot.text} opacity-80`} />
           <div>
             <div className="flex items-center gap-1.5">
-              <span className={`text-[11px] font-bold ${theme.text}`}>
+              <span className={`text-[11px] font-bold ${ot.text}`}>
                 {name ?? "Custom Strategy"}
               </span>
-              <span className={`flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${theme.border} ${theme.text} bg-white/70`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${theme.dot}`} />
-                {info?.outlook ? theme.label : "Custom"}
+              <span className={`flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${ot.border} ${ot.text} ${badgeBg}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${ot.dot}`} />
+                {info?.outlook ? ot.label : "Custom"}
               </span>
             </div>
-            {info && <p className="text-[10px] text-gray-500 mt-0.5">{info.tagline}</p>}
+            {info && <p className={`text-[10px] mt-0.5 ${taglineCls}`}>{info.tagline}</p>}
           </div>
         </div>
         {rrRatio && (
           <div className="text-right shrink-0">
-            <p className="text-[9px] text-gray-400 uppercase">R:R</p>
-            <p className={`text-sm font-bold ${theme.text}`}>{rrRatio}×</p>
+            <p className={`text-[9px] ${labelCls}`}>R:R</p>
+            <p className={`text-sm font-bold ${ot.text}`}>{rrRatio}×</p>
           </div>
         )}
       </div>
 
+      {/* Risk / Reward tiles */}
       <div className="grid grid-cols-2 gap-1.5 mb-2">
-        <div className="bg-white/70 rounded-lg px-2.5 py-1.5">
-          <p className="text-[9px] text-gray-400 uppercase mb-0.5">Risk</p>
-          <p className="text-[10px] font-semibold text-gray-700">{info?.risk ?? (isDebit ? "Limited (debit paid)" : "Unlimited")}</p>
+        <div className={`${ot.inner} rounded-lg px-2.5 py-1.5`}>
+          <p className={`text-[9px] ${labelCls} mb-0.5`}>Risk</p>
+          <p className={`text-[10px] ${valueCls}`}>{info?.risk ?? (isDebit ? "Limited (debit paid)" : "Unlimited")}</p>
         </div>
-        <div className="bg-white/70 rounded-lg px-2.5 py-1.5">
-          <p className="text-[9px] text-gray-400 uppercase mb-0.5">Reward</p>
-          <p className="text-[10px] font-semibold text-gray-700">{info?.reward ?? (isDebit ? "Unlimited" : "Limited (premium)")}</p>
+        <div className={`${ot.inner} rounded-lg px-2.5 py-1.5`}>
+          <p className={`text-[9px] ${labelCls} mb-0.5`}>Reward</p>
+          <p className={`text-[10px] ${valueCls}`}>{info?.reward ?? (isDebit ? "Unlimited" : "Limited (premium)")}</p>
         </div>
       </div>
 
+      {/* Breakeven row */}
       {beText && (
-        <div className="flex items-start gap-1.5 bg-white/60 rounded-lg px-2.5 py-1.5 mb-1.5">
-          <Target className="w-3 h-3 text-emerald-600 mt-0.5 shrink-0" />
+        <div className={`flex items-start gap-1.5 ${ot.inner} rounded-lg px-2.5 py-1.5 mb-1.5`}>
+          <Target className={`w-3 h-3 mt-0.5 shrink-0 ${isDark ? "text-emerald-400" : "text-emerald-600"}`} />
           <div>
-            <p className="text-[10px] text-gray-600">{beText}</p>
+            <p className={`text-[10px] ${bodyCls}`}>{beText}</p>
             {spotDiff !== null && (
-              <p className={`text-[9px] mt-0.5 font-medium ${spotDiff > 0 ? "text-orange-500" : "text-emerald-600"}`}>
+              <p className={`text-[9px] mt-0.5 font-medium ${spotDiff > 0 ? "text-orange-400" : isDark ? "text-emerald-400" : "text-emerald-600"}`}>
                 {spotDiff > 0
                   ? `₹${Math.abs(spotDiff).toLocaleString("en-IN")} above current spot to reach breakeven`
-                  : `Already past breakeven — in profit territory`}
+                  : "Already past breakeven — in profit territory"}
               </p>
             )}
           </div>
         </div>
       )}
 
+      {/* When to use */}
       {info?.when && (
-        <div className="flex items-start gap-1.5 bg-white/60 rounded-lg px-2.5 py-1.5">
-          <BookOpen className="w-3 h-3 text-blue-500 mt-0.5 shrink-0" />
-          <p className="text-[10px] text-gray-500"><span className="font-semibold text-gray-600">When to use: </span>{info.when}</p>
+        <div className={`flex items-start gap-1.5 ${ot.inner} rounded-lg px-2.5 py-1.5`}>
+          <BookOpen className={`w-3 h-3 mt-0.5 shrink-0 ${isDark ? "text-blue-400" : "text-blue-500"}`} />
+          <p className={`text-[10px] ${taglineCls}`}>
+            <span className={whenLblCls}>When to use: </span>{info.when}
+          </p>
         </div>
       )}
     </div>
