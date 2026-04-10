@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, AppUser, ClerkUser } from "@/lib/api";
+import { api, AppUser } from "@/lib/api";
 import {
   Users, RefreshCw, UserPlus, Calendar, Trash2, X, CheckCircle, AlertCircle,
 } from "lucide-react";
@@ -16,11 +16,8 @@ function timeAgo(ts: number | null): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-function Avatar({ name, imageUrl }: { name: string; imageUrl?: string | null }) {
+function Avatar({ name }: { name: string }) {
   const initials = name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2);
-  if (imageUrl) {
-    return <img src={imageUrl} alt={name} className="w-8 h-8 rounded-full object-cover flex-shrink-0" />;
-  }
   return (
     <div className="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
       {initials}
@@ -50,7 +47,6 @@ function AddUserModal({ onClose }: { onClose: () => void }) {
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 px-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
 
-        {/* Header */}
         <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center">
@@ -63,7 +59,6 @@ function AddUserModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        {/* Body */}
         <div className="px-6 py-5">
           {success ? (
             <div className="flex flex-col items-center gap-3 py-4">
@@ -146,9 +141,9 @@ function AddUserModal({ onClose }: { onClose: () => void }) {
 }
 
 
-// ── App Users Tab (custom email+password auth) ────────────────────────────────
+// ── Main page ─────────────────────────────────────────────────────────────────
 
-function AppUsersTab() {
+export default function UsersPage() {
   const [showAdd, setShowAdd] = useState(false);
   const qc = useQueryClient();
 
@@ -164,7 +159,12 @@ function AppUsersTab() {
   });
 
   return (
-    <>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">Users</h1>
+        <p className="text-sm text-gray-500 mt-0.5">Manage all registered email+password users</p>
+      </div>
+
       {showAdd && <AddUserModal onClose={() => setShowAdd(false)} />}
 
       <div className="flex items-center justify-between mb-5">
@@ -202,14 +202,14 @@ function AppUsersTab() {
 
       {isError && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
-          Failed to load app users.
+          Failed to load users.
         </div>
       )}
 
       {data && data.users.length === 0 && (
         <div className="bg-white rounded-xl border border-gray-100 p-10 text-center text-gray-400">
           <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
-          <p className="text-sm font-medium">No app users yet</p>
+          <p className="text-sm font-medium">No users yet</p>
           <p className="text-xs mt-1">Create one with the "Add User" button above.</p>
         </div>
       )}
@@ -262,144 +262,6 @@ function AppUsersTab() {
           </table>
         </div>
       )}
-    </>
-  );
-}
-
-
-// ── Clerk Users Tab (Google OAuth) ─────────────────────────────────────────────
-
-function ClerkUsersTab() {
-  const { data, isLoading, isError, refetch, isFetching } = useQuery({
-    queryKey: ["admin-clerk-users"],
-    queryFn: api.adminUsers,
-    refetchInterval: 60000,
-  });
-
-  return (
-    <>
-      <div className="flex items-center justify-between mb-5">
-        <div className="flex items-center gap-3">
-          {data && (
-            <span className="text-sm text-gray-500">
-              <span className="font-semibold text-gray-900">{data.total}</span> users
-            </span>
-          )}
-        </div>
-        <button
-          onClick={() => refetch()}
-          disabled={isFetching}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 transition disabled:opacity-60"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
-          Refresh
-        </button>
-      </div>
-
-      {isLoading && (
-        <div className="space-y-3">
-          {[1,2,3].map(i => <div key={i} className="bg-gray-100 rounded-xl h-16 animate-pulse" />)}
-        </div>
-      )}
-
-      {isError && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800">
-          <p className="font-medium">Could not load Google users</p>
-          <p className="mt-1 text-amber-700">Make sure <code className="bg-amber-100 px-1 rounded">CLERK_SECRET_KEY</code> is set in your backend secrets.</p>
-        </div>
-      )}
-
-      {data && data.users.length === 0 && (
-        <div className="bg-white rounded-xl border border-gray-100 p-10 text-center text-gray-400">
-          <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
-          <p className="text-sm">No Google sign-in users yet</p>
-        </div>
-      )}
-
-      {data && data.users.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-100 bg-gray-50">
-                <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">User</th>
-                <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Joined</th>
-                <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Last Sign In</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.users.map((u: ClerkUser) => {
-                const name = [u.first_name, u.last_name].filter(Boolean).join(" ") || u.email || "Unknown";
-                return (
-                  <tr key={u.id} className="border-b border-gray-50 hover:bg-gray-50 transition">
-                    <td className="px-5 py-4">
-                      <div className="flex items-center gap-3">
-                        <Avatar name={name} imageUrl={u.image_url} />
-                        <div>
-                          <p className="font-medium text-gray-900">{name}</p>
-                          {u.email && <p className="text-xs text-gray-400">{u.email}</p>}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-5 py-4 text-gray-500">
-                      <div className="flex items-center gap-1.5">
-                        <Calendar className="w-3.5 h-3.5" />
-                        {timeAgo(u.created_at)}
-                      </div>
-                    </td>
-                    <td className="px-5 py-4 text-gray-500">{timeAgo(u.last_sign_in_at)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </>
-  );
-}
-
-
-// ── Main page ─────────────────────────────────────────────────────────────────
-
-type Tab = "app" | "clerk";
-
-export default function UsersPage() {
-  const [tab, setTab] = useState<Tab>("app");
-
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Users</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Manage all registered users</p>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex gap-1 bg-gray-100 rounded-xl p-1 w-fit">
-        {([
-          { key: "app",   label: "App Users",    desc: "Email + password" },
-          { key: "clerk", label: "Google Users",  desc: "Sign in with Google" },
-        ] as const).map(({ key, label, desc }) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-              tab === key
-                ? "bg-white text-gray-900 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            {label}
-            <span className={`ml-1.5 text-xs ${tab === key ? "text-gray-400" : "text-gray-400"}`}>
-              {desc}
-            </span>
-          </button>
-        ))}
-      </div>
-
-      {/* Tab content */}
-      {tab === "app"   && <AppUsersTab />}
-      {tab === "clerk" && <ClerkUsersTab />}
     </div>
   );
 }

@@ -38,16 +38,6 @@ export async function fetchAdmin<T>(path: string, options?: RequestInit): Promis
 
 const J = { "Content-Type": "application/json" };
 
-export type ClerkUser = {
-  id: string;
-  email: string | null;
-  first_name: string | null;
-  last_name: string | null;
-  image_url: string | null;
-  created_at: number;
-  last_sign_in_at: number | null;
-};
-
 export type AppUser = {
   id: string;
   email: string;
@@ -82,10 +72,6 @@ export const api = {
       telegram_configured: boolean;
       whatsapp_configured: boolean;
     }>("/admin/status"),
-
-  // Clerk (Google) users
-  adminUsers: () =>
-    fetchAdmin<{ users: ClerkUser[]; total: number }>("/admin/users"),
 
   // Custom auth (email+password) users
   adminAppUsers: () =>

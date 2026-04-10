@@ -1,15 +1,7 @@
-import { useState, FormEvent, ReactNode } from "react";
+import { useState, FormEvent } from "react";
 import { useCustomAuth } from "@/context/CustomAuthContext";
 
-interface LoginPageProps {
-  /** Pass <GoogleSignInButton /> from App.tsx (a Clerk-aware component). Only shown when showGoogle=true. */
-  googleButton?: ReactNode;
-  showGoogle: boolean;
-  /** @deprecated — use googleButton slot instead */
-  onGoogleSignIn?: () => void;
-}
-
-export default function LoginPage({ googleButton, showGoogle }: LoginPageProps) {
+export default function LoginPage() {
   const { login, register } = useCustomAuth();
 
   const [mode,     setMode]     = useState<"login" | "register">("login");
@@ -33,16 +25,6 @@ export default function LoginPage({ googleButton, showGoogle }: LoginPageProps) 
       setError(err.message || "Something went wrong. Please try again.");
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleGoogle = async () => {
-    if (!onGoogleSignIn) return;
-    setGoogleLoading(true);
-    try {
-      onGoogleSignIn();
-    } catch {
-      setGoogleLoading(false);
     }
   };
 
@@ -79,18 +61,6 @@ export default function LoginPage({ googleButton, showGoogle }: LoginPageProps) 
             </button>
           ))}
         </div>
-
-        {/* Google button — rendered by App.tsx as a Clerk-aware component */}
-        {showGoogle && googleButton && (
-          <>
-            <div className="mb-4">{googleButton}</div>
-            <div className="flex items-center gap-3 mb-4">
-              <div className="flex-1 h-px bg-gray-800" />
-              <span className="text-gray-500 text-xs">or</span>
-              <div className="flex-1 h-px bg-gray-800" />
-            </div>
-          </>
-        )}
 
         {/* Email + password form */}
         <form onSubmit={handleSubmit} className="space-y-3">

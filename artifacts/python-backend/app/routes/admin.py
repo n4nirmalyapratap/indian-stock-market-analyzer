@@ -120,52 +120,13 @@ async def admin_status(request: Request):
     }
 
 
-# ── Clerk users ───────────────────────────────────────────────────────────────
+# ── Google Users (removed — Clerk is not used) ────────────────────────────────
 
 @router.get("/admin/users")
 async def admin_users(request: Request):
     if not _require_admin(request):
         return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
-
-    secret_key = os.environ.get("CLERK_SECRET_KEY", "")
-    if not secret_key:
-        return JSONResponse(
-            status_code=503,
-            content={"error": "CLERK_SECRET_KEY not configured on backend."},
-        )
-
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                "https://api.clerk.com/v1/users",
-                headers={"Authorization": f"Bearer {secret_key}"},
-                params={"limit": 100, "order_by": "-created_at"},
-            )
-            resp.raise_for_status()
-            raw = resp.json()
-
-        users = []
-        for u in raw:
-            primary_email = None
-            for em in (u.get("email_addresses") or []):
-                if em.get("id") == u.get("primary_email_address_id"):
-                    primary_email = em.get("email_address")
-                    break
-            users.append({
-                "id": u.get("id"),
-                "email": primary_email,
-                "first_name": u.get("first_name"),
-                "last_name": u.get("last_name"),
-                "image_url": u.get("image_url"),
-                "created_at": u.get("created_at"),
-                "last_sign_in_at": u.get("last_sign_in_at"),
-            })
-
-        return {"users": users, "total": len(users)}
-    except Exception as e:
-        logger.error("Failed to fetch Clerk users: %s", e)
-        return JSONResponse(status_code=502, content={"error": str(e)})
+    return JSONResponse(status_code=410, content={"error": "Google OAuth (Clerk) is not configured. Only email+password users are supported."})
 
 
 # ── App (custom auth) users ───────────────────────────────────────────────────

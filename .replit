@@ -11,27 +11,6 @@ env = { "CI" = "true" }
 [workflows]
 runButton = "Project"
 
-[[workflows.workflow]]
-name = "Project"
-mode = "parallel"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Python Backend"
-
-[[workflows.workflow]]
-name = "Python Backend"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "bash -c 'cd /home/runner/workspace/artifacts/python-backend && PORT=8090 python run.py'"
-waitForPort = 8090
-
-[workflows.workflow.metadata]
-outputType = "console"
-
 [agent]
 stack = "PNPM_WORKSPACE"
 expertMode = true
@@ -61,12 +40,12 @@ externalPort = 3000
 localPort = 22133
 externalPort = 3003
 
-[nix]
-channel = "stable-25_05"
-packages = ["glibcLocales", "libxcrypt", "pkg-config", "xsimd"]
-
 [userenv]
 
 [userenv.shared]
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "NiftyAdmin@2026"
+
+[nix]
+channel = "stable-25_05"
+packages = ["cargo", "glibcLocales", "libiconv", "libxcrypt", "openssl", "pkg-config", "rustc", "xsimd"]
