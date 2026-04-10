@@ -456,7 +456,8 @@ export default function NewsFeed() {
   const { data: stats, isFetching: statsFetching } = useQuery({
     queryKey: ["newsStats"],
     queryFn:  api.newsStats,
-    staleTime: 8 * 60 * 1000,
+    staleTime: 0,               // always re-fetch fresh — backend has its own 8-min TTL
+    refetchOnMount: "always",   // never serve cached zeros after a backend restart
     placeholderData: keepPreviousData,
   });
 

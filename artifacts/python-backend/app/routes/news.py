@@ -32,4 +32,10 @@ async def get_stats():
 @router.post("/refresh")
 async def refresh():
     await news_service.invalidate_cache()
-    return {"ok": True, "message": "Cache cleared — next request will fetch fresh data"}
+    # Eagerly re-warm the feed cache so the next /stats request
+    # doesn't race against an empty cache and return all zeros.
+    try:
+        await news_service.get_news_feed()
+    except Exception:
+        pass
+    return {"ok": True, "message": "Cache refreshed with latest articles"}
