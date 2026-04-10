@@ -28,14 +28,14 @@ export default function ChartButton({ symbol, className = "" }: ChartButtonProps
       title={`Open ${clean} in Chart Studio`}
       className={`
         inline-flex items-center justify-center w-5 h-5 rounded flex-shrink-0
-        opacity-30 hover:opacity-100
-        text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400
+        opacity-60 hover:opacity-100
+        text-indigo-400 dark:text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-300
         hover:bg-indigo-100 dark:hover:bg-indigo-900/40
         transition-all duration-150
         ${className}
       `}
     >
-      <LineChart className="w-3 h-3" />
+      <LineChart className="w-3.5 h-3.5" />
     </button>
   );
 }
