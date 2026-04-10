@@ -487,7 +487,6 @@ function heatStyle(val: number | null, isDark: boolean): { bg: string; text: str
 
 function SectorHeatMap({ data, isDark }: { data: SectorHeatmapItem[]; isDark: boolean }) {
   const [metric, setMetric] = useState<keyof SectorHeatmapItem>("change1d");
-  const [hoveredSymbol, setHoveredSymbol] = useState<string | null>(null);
   const muTxt = isDark ? "#64748b" : "#94a3b8";
 
   return (
@@ -524,36 +523,23 @@ function SectorHeatMap({ data, isDark }: { data: SectorHeatmapItem[]; isDark: bo
       <div className="p-3 space-y-3">
         {/* Uniform 7-column grid — 2 clean rows for 14 sectors, no blank gaps */}
         <div className="grid gap-1.5" style={{ gridTemplateColumns: "repeat(7, 1fr)" }}>
-          {data.map((sector, idx) => {
-            const val     = sector[metric] as number | null;
-            const hs      = heatStyle(val, isDark);
-            const hovered = hoveredSymbol === sector.symbol;
-            const name    = sector.name.replace(/nifty\s+/i, "").replace("NIFTY ", "");
-            // Top row (first 7 cards) → tooltip below; bottom row → tooltip above
-            const COLS        = 7;
-            const isTopRow    = idx < COLS;
-            const tooltipPos  = isTopRow
-              ? "top-full left-1/2 -translate-x-1/2 mt-2"
-              : "bottom-full left-1/2 -translate-x-1/2 mb-2";
+          {data.map((sector) => {
+            const val  = sector[metric] as number | null;
+            const hs   = heatStyle(val, isDark);
+            const name = sector.name.replace(/nifty\s+/i, "").replace("NIFTY ", "");
+            const capLabel = sector.marketCap >= 10
+              ? `₹${sector.marketCap}L Cr`
+              : `₹${sector.marketCap}L Cr`;
 
             return (
               <Link key={sector.symbol} href={`/sectors/${encodeURIComponent(sector.symbol)}`}>
                 <div
-                  className="relative flex flex-col items-center justify-center rounded-xl cursor-pointer select-none"
-                  style={{
-                    height:     84,
-                    background: hs.bg,
-                    transform:  hovered ? "scale(1.05)" : "scale(1)",
-                    transition: "transform 0.15s ease, box-shadow 0.15s ease",
-                    boxShadow:  hovered ? `0 4px 18px rgba(0,0,0,${isDark ? "0.5" : "0.15"})` : "none",
-                    gap: "2px",
-                  }}
-                  onMouseEnter={() => setHoveredSymbol(sector.symbol)}
-                  onMouseLeave={() => setHoveredSymbol(null)}
+                  className="flex flex-col items-center justify-center rounded-xl cursor-pointer select-none transition-all duration-150 hover:scale-105 hover:shadow-lg"
+                  style={{ height: 88, background: hs.bg, gap: "1px" }}
                 >
                   <span
                     className="text-xs font-semibold text-center leading-tight px-1"
-                    style={{ color: hs.text, maxWidth: "90%" }}
+                    style={{ color: hs.text, maxWidth: "92%" }}
                   >
                     {name}
                   </span>
@@ -563,20 +549,12 @@ function SectorHeatMap({ data, isDark }: { data: SectorHeatmapItem[]; isDark: bo
                   >
                     {val != null ? (val >= 0 ? "+" : "") + val.toFixed(2) + "%" : "—"}
                   </span>
-
-                  {/* Tooltip — flips above/below based on row so it stays inside the panel */}
-                  {hovered && (
-                    <div
-                      className={`absolute ${tooltipPos} z-50 rounded-lg px-3 py-2 whitespace-nowrap shadow-2xl pointer-events-none text-xs`}
-                      style={{ background: isDark ? "#0f172a" : "#1e293b", color: "#f1f5f9", border: `1px solid ${isDark ? "#334155" : "#475569"}` }}
-                    >
-                      <div className="font-semibold mb-0.5">{sector.name}</div>
-                      <div style={{ color: "#94a3b8" }}>Mkt Cap ≈ ₹{sector.marketCap}L Cr</div>
-                      <div style={{ color: val == null ? "#94a3b8" : val >= 0 ? "#4ade80" : "#f87171" }}>
-                        {val != null ? (val >= 0 ? "▲ +" : "▼ ") + val.toFixed(2) + "%" : "—"}
-                      </div>
-                    </div>
-                  )}
+                  <span
+                    className="text-xs tabular-nums"
+                    style={{ color: hs.text, opacity: 0.65, fontSize: "0.65rem" }}
+                  >
+                    {capLabel}
+                  </span>
                 </div>
               </Link>
             );
@@ -714,10 +692,12 @@ export default function Sectors() {
     staleTime: 4 * 60 * 1000,
   });
 
+  // Key includes the current hour so cache auto-busts every 60 min and fetches fresh data
+  const heatmapHour = new Date().toISOString().slice(0, 13);
   const { data: heatmapData, isLoading: heatmapLoading } = useQuery({
-    queryKey:  ["sectorHeatmap"],
+    queryKey:  ["sectorHeatmap", heatmapHour],
     queryFn:   api.sectorHeatmap,
-    staleTime: 5 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
   });
 
   const sectors  = rotation?.sectors ?? [];
