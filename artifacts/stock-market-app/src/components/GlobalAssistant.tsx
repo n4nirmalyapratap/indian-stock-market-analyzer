@@ -1413,9 +1413,9 @@ export default function GlobalAssistant() {
           {aiMode && (
             <>
               {/* Messages area */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0"
-                style={{ background: "linear-gradient(180deg, #f0f0ff 0%, #faf5ff 50%, #f5f3ff 100%)" }}>
-                <style>{`.dark .ai-chat-bg { background: linear-gradient(180deg,#0d0b1e 0%,#100e2a 50%,#0f0c24 100%) !important; }`}</style>
+              <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0
+                bg-gradient-to-b from-indigo-50/60 via-violet-50/40 to-purple-50/60
+                dark:from-[#0d0b1e] dark:via-[#100e2a] dark:to-[#0f0c24]">
                 {aiMsgs.length === 0 && (
                   <div className="flex flex-col items-center pt-6 pb-4 px-2">
                     {/* Glowing orb */}
@@ -1472,18 +1472,12 @@ export default function GlobalAssistant() {
                       </div>
                     ) : (
                       /* ── AI card — wide, allows table overflow ── */
-                      <div className="flex-1 min-w-0 overflow-hidden rounded-2xl rounded-bl-md border border-indigo-100/80 dark:border-indigo-700/30 shadow-md"
-                        style={{ background: "linear-gradient(145deg, #ffffff 0%, #f5f3ff 100%)" }}>
-                        <div className="dark:hidden">
-                          <div className="px-4 pt-3 pb-3.5 overflow-x-auto">
-                            <AiRichText text={m.content} />
-                          </div>
-                        </div>
-                        <div className="hidden dark:block">
-                          <div className="px-4 pt-3 pb-3.5 overflow-x-auto"
-                            style={{ background: "linear-gradient(145deg, #1e1b4b 0%, #1a1035 100%)" }}>
-                            <AiRichText text={m.content} />
-                          </div>
+                      <div className="flex-1 min-w-0 overflow-hidden rounded-2xl rounded-bl-md shadow-md
+                        border border-indigo-100/80 dark:border-indigo-700/30
+                        bg-gradient-to-br from-white to-violet-50/60
+                        dark:from-[#1e1b4b] dark:to-[#1a1035]">
+                        <div className="px-4 pt-3 pb-3.5 overflow-x-auto">
+                          <AiRichText text={m.content} />
                         </div>
                       </div>
                     )}
@@ -1501,8 +1495,8 @@ export default function GlobalAssistant() {
                     <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-md mb-0.5">
                       <Bot style={{ width: 13, height: 13 }} className="text-white" />
                     </div>
-                    <div className="rounded-2xl rounded-bl-md border border-indigo-100/80 dark:border-indigo-700/30 px-5 py-3.5 shadow-md"
-                      style={{ background: "linear-gradient(145deg,#ffffff 0%,#f5f3ff 100%)" }}>
+                    <div className="rounded-2xl rounded-bl-md border border-indigo-100/80 dark:border-indigo-700/30 px-5 py-3.5 shadow-md
+                      bg-gradient-to-br from-white to-violet-50/60 dark:from-[#1e1b4b] dark:to-[#1a1035]">
                       <div className="flex gap-1.5 items-center">
                         <span className="w-2 h-2 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: "0ms" }} />
                         <span className="w-2 h-2 rounded-full bg-violet-400 animate-bounce" style={{ animationDelay: "160ms" }} />
@@ -1515,8 +1509,8 @@ export default function GlobalAssistant() {
               </div>
 
               {/* Input bar */}
-              <div className="flex-shrink-0 border-t border-indigo-100/60 dark:border-indigo-800/30 px-3 py-3"
-                style={{ background: "linear-gradient(135deg,#faf5ff 0%,#f0f0ff 100%)" }}>
+              <div className="flex-shrink-0 border-t border-indigo-100/60 dark:border-indigo-800/30 px-3 py-3
+                bg-gradient-to-r from-violet-50 to-indigo-50 dark:from-gray-900 dark:to-[#0d0b1e]">
                 <div className="flex items-center gap-2 rounded-2xl border border-indigo-200/70 dark:border-indigo-600/30 px-3.5 py-2.5
                   bg-white dark:bg-gray-900 shadow-sm
                   focus-within:border-indigo-400 dark:focus-within:border-indigo-500
