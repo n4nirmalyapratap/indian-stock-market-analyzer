@@ -20,32 +20,17 @@ author = "agent"
 task = "workflow.run"
 args = "Python Backend"
 
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Start application"
-
 [[workflows.workflow]]
 name = "Python Backend"
 author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "bash -c 'cd /home/runner/workspace/artifacts/python-backend && PORT=8090 python3.11 run.py'"
+args = "bash -c 'cd /home/runner/workspace/artifacts/python-backend && PORT=8090 python run.py'"
 waitForPort = 8090
 
 [workflows.workflow.metadata]
 outputType = "console"
-
-[[workflows.workflow]]
-name = "Start application"
-author = "agent"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "echo 'App now served by artifacts/stock-market-app workflow'"
 
 [agent]
 stack = "PNPM_WORKSPACE"
@@ -56,14 +41,22 @@ integrations = ["github:1.0.0"]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
 
-[nix]
-channel = "stable-25_05"
-packages = ["glibcLocales", "libxcrypt", "pkg-config", "xsimd"]
-
 [[ports]]
 localPort = 3002
 externalPort = 3002
 
 [[ports]]
-localPort = 8090
+localPort = 8080
+externalPort = 8080
+
+[[ports]]
+localPort = 8081
 externalPort = 80
+
+[[ports]]
+localPort = 8090
+externalPort = 3000
+
+[nix]
+channel = "stable-25_05"
+packages = ["glibcLocales", "libxcrypt", "pkg-config", "xsimd"]
