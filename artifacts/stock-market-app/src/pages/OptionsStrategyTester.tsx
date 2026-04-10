@@ -1,10 +1,10 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { fetchApi } from "@/lib/api";
 import { useTheme } from "@/context/ThemeContext";
 import {
   TrendingUp, TrendingDown, Plus, Trash2, Play, BarChart2,
   AlertTriangle, RefreshCw, ChevronDown, Target, Activity,
-  Shield, Zap, Info, MessageSquare, Send, X, Bot
+  Shield, Zap, Info, X
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -153,120 +153,6 @@ function Pill({ label, value, color = "gray" }: { label: string; value: string; 
   );
 }
 
-// ── Minimal markdown renderer for chat messages ───────────────────────────────
-function renderMd(text: string) {
-  // Parse inline **bold** and `code`
-  function parseInline(s: string): React.ReactNode[] {
-    const result: React.ReactNode[] = [];
-    const re = /\*\*(.*?)\*\*|`([^`]+)`/g;
-    let last = 0; let m: RegExpExecArray | null;
-    while ((m = re.exec(s)) !== null) {
-      if (m.index > last) result.push(s.slice(last, m.index));
-      if (m[1] !== undefined)
-        result.push(<strong key={m.index} className="font-semibold text-gray-900">{m[1]}</strong>);
-      if (m[2] !== undefined)
-        result.push(<code key={m.index} className="bg-indigo-50 text-indigo-700 px-1 py-0.5 rounded text-[11px] font-mono">{m[2]}</code>);
-      last = re.lastIndex;
-    }
-    if (last < s.length) result.push(s.slice(last));
-    return result;
-  }
-
-  // Group lines into blocks so tables are collected together
-  const lines = text.split("\n");
-  type Block = { type: "table"; rows: string[] } | { type: "line"; text: string };
-  const blocks: Block[] = [];
-  for (const line of lines) {
-    const isTableRow = /^\|.+\|/.test(line.trim());
-    const last = blocks[blocks.length - 1];
-    if (isTableRow) {
-      if (last?.type === "table") { last.rows.push(line); }
-      else { blocks.push({ type: "table", rows: [line] }); }
-    } else {
-      blocks.push({ type: "line", text: line });
-    }
-  }
-
-  return blocks.map((block, bi) => {
-    // ── Render markdown table ──────────────────────────────────────────────
-    if (block.type === "table") {
-      const isSep = (r: string) => /^\|[\s|:-]+\|$/.test(r.trim());
-      const parseRow = (r: string) =>
-        r.replace(/^\||\|$/g, "").split("|").map(c => c.trim());
-
-      const nonSep = block.rows.filter(r => !isSep(r));
-      if (nonSep.length < 1) return null;
-      const [header, ...dataRows] = nonSep;
-      const headers = parseRow(header);
-
-      return (
-        <div key={bi} className="my-3 -mx-1 overflow-x-auto rounded-2xl shadow-md border border-indigo-100/60">
-          <table className="w-full border-collapse text-[11px]" style={{ minWidth: 260 }}>
-            <thead>
-              <tr style={{ background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)" }}>
-                {headers.map((h, hi) => (
-                  <th key={hi}
-                    className={`px-3 py-2.5 text-left font-bold text-white tracking-wide whitespace-nowrap
-                      ${hi === 0 ? "rounded-tl-2xl" : ""} ${hi === headers.length - 1 ? "rounded-tr-2xl" : ""}`}>
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {dataRows.map((row, ri) => (
-                <tr key={ri}
-                  className={`border-t border-indigo-50 transition-colors hover:bg-indigo-50/50
-                    ${ri % 2 === 0 ? "bg-white" : "bg-slate-50/60"}
-                    ${ri === dataRows.length - 1 ? "last-row" : ""}`}>
-                  {parseRow(row).map((cell, ci) => (
-                    <td key={ci}
-                      className={`px-3 py-2 leading-snug
-                        ${ci === 0
-                          ? "font-semibold text-indigo-700 whitespace-nowrap"
-                          : "text-gray-600"}`}>
-                      {parseInline(cell)}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
-    }
-
-    // ── Render regular line ────────────────────────────────────────────────
-    const line = block.text;
-    if (!line.trim()) return <div key={bi} className="h-1" />;
-
-    if (/^#{1,3}\s/.test(line)) {
-      const t = line.replace(/^#+\s/, "");
-      return <p key={bi} className="font-bold text-gray-800 mt-2 mb-0.5 text-sm">{parseInline(t)}</p>;
-    }
-    if (/^[•\-\*]\s/.test(line)) {
-      const t = line.replace(/^[•\-\*]\s/, "");
-      return (
-        <div key={bi} className="flex gap-2 items-start">
-          <span className="text-indigo-400 flex-shrink-0 text-xs mt-0.5">•</span>
-          <span className="text-sm leading-snug text-gray-700">{parseInline(t)}</span>
-        </div>
-      );
-    }
-    if (/^\d+\.\s/.test(line)) {
-      const num = line.match(/^(\d+)\./)?.[1];
-      const t   = line.replace(/^\d+\.\s/, "");
-      return (
-        <div key={bi} className="flex gap-2 items-start">
-          <span className="text-indigo-500 font-semibold flex-shrink-0 text-xs w-4 text-right mt-0.5">{num}.</span>
-          <span className="text-sm leading-snug text-gray-700">{parseInline(t)}</span>
-        </div>
-      );
-    }
-    return <p key={bi} className="text-sm leading-snug text-gray-700">{parseInline(line)}</p>;
-  });
-}
-
 function GreeksBar({ g }: { g: Greeks }) {
   const items = [
     { sym: "Δ", label: "Delta", val: g.delta, tip: "Price sensitivity per ₹1 move" },
@@ -391,49 +277,6 @@ export default function OptionsStrategyTester() {
   const [varHorizon, setVarHorizon]     = useState(5);
   const [varSims, setVarSims]           = useState(10000);
   const [varConf, setVarConf]           = useState(0.95);
-
-  // AI Chat state
-  type ChatMsg = { role: "user" | "assistant"; content: string };
-  const [chatOpen, setChatOpen]       = useState(false);
-  const [chatMsgs, setChatMsgs]       = useState<ChatMsg[]>([]);
-  const [chatInput, setChatInput]     = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMsgs]);
-
-  async function sendChat() {
-    const text = chatInput.trim();
-    if (!text || chatLoading) return;
-    const userMsg: ChatMsg = { role: "user", content: text };
-    setChatMsgs(prev => [...prev, userMsg]);
-    setChatInput("");
-    setChatLoading(true);
-    try {
-      const context = spotInfo ? {
-        symbol,
-        spot:     spotInfo.spot,
-        hv30_pct: spotInfo.hv30_pct,
-        T:        T / 365,
-        legs,
-        analysis,
-      } : undefined;
-      const res = await post<{ reply: string }>("/options/chat", {
-        messages: [...chatMsgs, userMsg],
-        context,
-      });
-      setChatMsgs(prev => [...prev, { role: "assistant", content: res.reply }]);
-    } catch {
-      setChatMsgs(prev => [...prev, {
-        role: "assistant",
-        content: "Sorry, I couldn't reach the AI right now. Please try again.",
-      }]);
-    } finally {
-      setChatLoading(false);
-    }
-  }
 
   // ── Fetch spot ──────────────────────────────────────────────────────────────
   // Returns the SpotInfo so callers (e.g. quick-add) can use it immediately
@@ -595,21 +438,6 @@ export default function OptionsStrategyTester() {
             NSE options — Black-Scholes pricing · event-driven backtesting · Monte Carlo VaR
           </p>
         </div>
-        <button
-          onClick={() => setChatOpen(o => !o)}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all border
-            ${chatOpen
-              ? "bg-indigo-600 text-white border-indigo-600"
-              : "bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50"}`}
-        >
-          <Bot className="w-4 h-4" />
-          AI Assistant
-          {chatMsgs.length > 0 && (
-            <span className={`text-xs font-bold rounded-full px-1.5 py-0.5 ${chatOpen ? "bg-white/20 text-white" : "bg-indigo-100 text-indigo-600"}`}>
-              {chatMsgs.length}
-            </span>
-          )}
-        </button>
       </div>
 
       {/* Symbol bar */}
@@ -1393,138 +1221,6 @@ export default function OptionsStrategyTester() {
         </div>
       )}
 
-      {/* ── AI Strategy Chat — right-side slide-in drawer ─────────────── */}
-
-      {/* Backdrop — click outside to close */}
-      {chatOpen && (
-        <div
-          className="fixed inset-0 z-40"
-          onClick={() => setChatOpen(false)}
-        />
-      )}
-
-      {/* Drawer */}
-      <div
-        className={`dark-drawer fixed top-0 right-0 z-50 h-screen w-[380px] flex flex-col bg-white border-l border-gray-200 shadow-2xl
-          transition-transform duration-300 ease-in-out
-          ${chatOpen ? "translate-x-0" : "translate-x-full"}`}
-      >
-        {/* Drawer header */}
-        <div className="flex items-center gap-2.5 px-4 py-3.5 border-b border-gray-100 bg-white">
-          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-indigo-100">
-            <Bot className="w-4.5 h-4.5 text-indigo-600" style={{ width: 18, height: 18 }} />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="font-semibold text-sm text-gray-900 leading-tight">Options AI Assistant</p>
-            <p className="text-xs text-gray-400 truncate">
-              {spotInfo ? `${symbol} · ₹${spotInfo.spot.toLocaleString("en-IN")}` : "Ask me anything about options"}
-            </p>
-          </div>
-          <button
-            onClick={() => setChatOpen(false)}
-            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
-          {chatMsgs.length === 0 && (
-            <div className="flex flex-col items-center pt-8 pb-4 px-2">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-md mb-4">
-                <Bot className="w-8 h-8 text-white" />
-              </div>
-              <p className="text-base font-bold text-gray-800">Options AI Assistant</p>
-              <p className="text-xs text-gray-400 mt-1 text-center leading-relaxed max-w-[260px]">
-                Ask about Greeks, strategies, IV, or your current position
-              </p>
-
-              <div className="mt-5 w-full space-y-2">
-                <p className="text-[10px] font-bold text-gray-300 uppercase tracking-widest text-center mb-2">Try asking</p>
-                {[
-                  { q: "What is an Iron Condor?",                        icon: "📐" },
-                  { q: "Explain my strategy Greeks",                     icon: "🔢" },
-                  { q: "Best NIFTY strategy for range-bound market?",    icon: "📊" },
-                  { q: "Why is my net premium negative?",                icon: "❓" },
-                ].map(({ q, icon }) => (
-                  <button key={q} onClick={() => setChatInput(q)}
-                    className="w-full flex items-center gap-2.5 text-left bg-gray-50 hover:bg-indigo-50 border border-gray-100 hover:border-indigo-200 rounded-xl px-3.5 py-2.5 transition group">
-                    <span className="text-base">{icon}</span>
-                    <span className="text-xs text-gray-600 group-hover:text-indigo-700 leading-snug">{q}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {chatMsgs.map((m, i) => (
-            <div key={i} className={`flex gap-2.5 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-
-              {/* AI avatar */}
-              {m.role === "assistant" && (
-                <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-sm mt-0.5">
-                  <Bot style={{ width: 14, height: 14 }} className="text-white" />
-                </div>
-              )}
-
-              {m.role === "user" ? (
-                /* User bubble */
-                <div className="max-w-[80%] bg-indigo-600 text-white rounded-2xl rounded-tr-none px-3.5 py-2.5 shadow-sm">
-                  <p className="text-sm leading-relaxed">{m.content}</p>
-                </div>
-              ) : (
-                /* AI message — clean card with markdown */
-                <div className="flex-1 min-w-0 bg-white border border-gray-100 rounded-2xl rounded-tl-none px-4 py-3 shadow-sm space-y-1">
-                  {renderMd(m.content)}
-                </div>
-              )}
-
-              {/* User avatar */}
-              {m.role === "user" && (
-                <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gray-200 flex items-center justify-center mt-0.5">
-                  <span className="text-[10px] font-bold text-gray-500">YOU</span>
-                </div>
-              )}
-            </div>
-          ))}
-
-          {chatLoading && (
-            <div className="flex gap-2.5 justify-start">
-              <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-sm mt-0.5">
-                <Bot style={{ width: 14, height: 14 }} className="text-white" />
-              </div>
-              <div className="bg-white border border-gray-100 rounded-2xl rounded-tl-none px-4 py-3 shadow-sm">
-                <div className="flex gap-1.5 items-center">
-                  <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                  <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                  <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-                </div>
-              </div>
-            </div>
-          )}
-          <div ref={chatEndRef} />
-        </div>
-
-        {/* Input */}
-        <div className="border-t border-gray-100 p-3 flex gap-2 bg-white">
-          <input
-            type="text"
-            value={chatInput}
-            onChange={e => setChatInput(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendChat())}
-            placeholder="Ask about options, Greeks, strategies…"
-            className="flex-1 text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-300"
-          />
-          <button
-            onClick={sendChat}
-            disabled={!chatInput.trim() || chatLoading}
-            className="bg-indigo-600 text-white rounded-xl px-3 py-2 hover:bg-indigo-700 disabled:opacity-40 transition flex-shrink-0"
-          >
-            <Send className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
