@@ -81,6 +81,15 @@ pnpm run typecheck
   `/home/runner/workspace/artifacts/python-backend` — never use relative paths.
 - **Clerk is fully removed** — no `@clerk/*` imports, no `VITE_CLERK_PUBLISHABLE_KEY`,
   no `CLERK_SECRET_KEY` anywhere in the codebase.
+- **Docker changes are mandatory and simultaneous** — any code change that affects
+  deployment must update Docker files at the same time, in the same commit:
+  - New Python dependency → add to `requirements.txt`
+  - New environment variable → add to both `docker-compose.yml` (with `:-` default)
+    and `.env.example` (with documentation comment)
+  - New Vite plugin that is dev-only → guard behind `NODE_ENV !== "production"` in
+    both `artifacts/stock-market-app/vite.config.ts` and
+    `artifacts/admin-dashboard/vite.config.ts`
+  - New route prefix or port → update `nginx.conf` and `docker-compose.yml`
 
 ## Project Structure
 
@@ -146,12 +155,35 @@ All features are built TDD — tests are written first, then the implementation.
 ## Docker
 
 ```bash
-cp .env.example .env   # fill SESSION_SECRET, ADMIN_PASSWORD
+cp .env.example .env          # fill in required values (see .env.example comments)
 docker compose up --build -d
 # User app:   http://localhost
 # Admin:      http://localhost/admin
 # API health: http://localhost/api/healthz
+# API docs:   http://localhost:8090/docs  (dev only — remove port 8090 in prod)
 ```
 
-Required env vars: `SESSION_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`
-Optional: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`
+### Environment variables
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `SESSION_SECRET` | **Yes** | Signs HS256 JWT tokens for user login (32+ random chars) |
+| `ADMIN_PASSWORD` | **Yes** | Admin panel password |
+| `ADMIN_USERNAME` | No (default: `admin`) | Admin panel username |
+| `TWILIO_ACCOUNT_SID` | No | WhatsApp alerts via Twilio |
+| `TWILIO_AUTH_TOKEN` | No | WhatsApp alerts via Twilio |
+| `TELEGRAM_BOT_TOKEN` | No | Telegram bot alerts (get from @BotFather) |
+| `WHATSAPP_ENABLED` | No (default: `false`) | Enable WhatsApp webhook endpoint |
+
+### Docker file map
+
+| File | Purpose |
+|---|---|
+| `docker-compose.yml` | Orchestrates backend + frontend containers, env vars, volumes, healthcheck |
+| `artifacts/python-backend/Dockerfile` | Python 3.11-slim, installs requirements + spaCy model |
+| `artifacts/stock-market-app/Dockerfile` | Multi-stage: builds both React apps, serves from nginx |
+| `artifacts/stock-market-app/nginx.conf` | Routes `/api/` → backend, `/admin/` → admin app, `/` → user app |
+| `.env.example` | Template for `.env` — all vars documented with comments |
+
+### Sync rule
+> When adding a new backend service, frontend feature, or env var — update all Docker files in the same commit. See the **Docker changes are mandatory and simultaneous** rule in Critical Rules above.

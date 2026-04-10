@@ -50,9 +50,15 @@ services:
       # This points to the persistent volume so the DB survives container restarts.
       DATA_DIR: "/app/data"
 
-      # ── Optional integrations ─────────────────────────────────────────────
+      # ── Optional: WhatsApp alerts via Twilio ─────────────────────────────
       TWILIO_ACCOUNT_SID: "${TWILIO_ACCOUNT_SID:-}"
       TWILIO_AUTH_TOKEN:  "${TWILIO_AUTH_TOKEN:-}"
+
+      # ── Optional: Telegram bot alerts ────────────────────────────────────
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+
+      # ── Optional: WhatsApp webhook toggle ────────────────────────────────
+      WHATSAPP_ENABLED: "${WHATSAPP_ENABLED:-false}"
 
     volumes:
       # Persist the SQLite user database (email+password accounts) across restarts.
