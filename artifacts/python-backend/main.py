@@ -27,6 +27,7 @@ from app.routes.sector_analytics import router as sector_analytics_router
 from app.routes.news import router as news_router
 from app.routes.admin import router as admin_router
 from app.routes.auth import router as auth_router
+from app.services.log_buffer import setup_ring_buffer
 from app.services.market_cache_service import is_market_open, cache_status
 from app.services import market_cache_service as _mcs
 from app.services.yahoo_service import YahooService as _YahooService
@@ -84,6 +85,15 @@ async def _cache_warmup_task() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Attach the ring-buffer AFTER uvicorn has configured logging (it resets
+    # the root logger on startup, so setup_ring_buffer() in run.py is too early).
+    # Also hook uvicorn's own loggers explicitly — they set propagate=False.
+    rb = setup_ring_buffer()
+    for _uv_logger in ("uvicorn", "uvicorn.error", "uvicorn.access", "fastapi"):
+        _l = logging.getLogger(_uv_logger)
+        if rb not in _l.handlers:
+            _l.addHandler(rb)
+
     poll_task    = asyncio.create_task(_telegram_polling_loop())
     universe_task = asyncio.create_task(_universe_scheduler())
     warmup_task  = asyncio.create_task(_cache_warmup_task())
