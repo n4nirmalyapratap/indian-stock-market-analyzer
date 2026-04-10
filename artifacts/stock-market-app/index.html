@@ -3,11 +3,65 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
-    <title>NestJS Backend (API)</title>
+    <title>Nifty Node | Indian Stock Market Analysis</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!--
+      Global error capture — catches any JS error that happens BEFORE React renders
+      (e.g. a module-level throw in a bundled import). The React RootErrorBoundary
+      in main.tsx handles errors that occur during and after rendering.
+    -->
+    <script>
+      (function () {
+        var ERR_STYLE =
+          "position:fixed;top:0;left:0;right:0;bottom:0;background:#030712;" +
+          "color:#f8fafc;font-family:system-ui,sans-serif;display:flex;" +
+          "align-items:center;justify-content:center;padding:2rem;z-index:9999;";
+        var CARD_STYLE =
+          "max-width:520px;width:100%;background:#0f172a;border:1px solid #1e293b;" +
+          "border-radius:12px;padding:2rem;";
+        var PRE_STYLE =
+          "background:#020617;border-radius:8px;padding:1rem;font-size:.75rem;" +
+          "color:#94a3b8;overflow-x:auto;white-space:pre-wrap;word-break:break-word;margin:.75rem 0 0;";
+
+        function showError(title, msg) {
+          if (document.getElementById("__global_err")) return; // only show once
+          var wrap = document.createElement("div");
+          wrap.id = "__global_err";
+          wrap.setAttribute("style", ERR_STYLE);
+          wrap.innerHTML =
+            '<div style="' + CARD_STYLE + '">' +
+            '<h2 style="margin:0 0 .25rem;color:#f87171;font-size:1.1rem">' + title + "</h2>" +
+            '<p style="margin:0;color:#64748b;font-size:.8rem">Check browser DevTools for the full stack trace.</p>' +
+            '<pre style="' + PRE_STYLE + '">' + msg + "</pre>" +
+            '<button onclick="location.reload()" style="margin-top:1rem;padding:.5rem 1.25rem;' +
+            "background:#4f46e5;color:#fff;border:none;border-radius:8px;cursor:pointer;" +
+            'font-size:.875rem;font-weight:600">Reload page</button>' +
+            "</div>";
+          document.body.appendChild(wrap);
+        }
+
+        window.onerror = function (msg, src, line, col, err) {
+          showError(
+            "JavaScript Error",
+            (err ? err.toString() : msg) +
+              (src ? "\n\nat " + src + ":" + line + ":" + col : "")
+          );
+          return false;
+        };
+
+        window.addEventListener("unhandledrejection", function (e) {
+          var reason = e.reason;
+          showError(
+            "Unhandled Promise Rejection",
+            reason instanceof Error ? reason.toString() : String(reason)
+          );
+        });
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
