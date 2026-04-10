@@ -184,12 +184,6 @@ async function main() {
   const files = collectFiles();
   console.log(`📁  Syncing ${files.length} source files…\n`);
 
-  const commitInfo = await api(
-    connectors,
-    `/repos/${OWNER}/${REPO}/git/commits/${githubSha}`,
-  ) as { tree: { sha: string } };
-  const baseTreeSha = (commitInfo.tree as { sha: string }).sha;
-
   const treeEntries: { path: string; mode: string; type: string; sha: string }[] = [];
   let done = 0;
 
@@ -238,10 +232,15 @@ async function main() {
     msg = body ? `${subject}\n\n${body}` : subject;
   } catch { /* use default */ }
 
+  // NOTE: base_tree is intentionally omitted here.
+  // Using base_tree would inherit all files from the previous commit's tree,
+  // meaning deleted files would NOT be removed from GitHub.
+  // Without base_tree, GitHub creates a completely fresh tree from only the
+  // files we've uploaded — correctly reflecting the current workspace state.
   const newTree = await api(
     connectors,
     `/repos/${OWNER}/${REPO}/git/trees`,
-    { method: "POST", body: { base_tree: baseTreeSha, tree: treeEntries } },
+    { method: "POST", body: { tree: treeEntries } },
   ) as { sha: string };
 
   const newCommit = await api(
