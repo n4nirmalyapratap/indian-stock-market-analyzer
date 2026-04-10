@@ -2,29 +2,36 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# ── System dependencies ────────────────────────────────────────────────────────
+# gcc/g++ are required to compile C extensions in scipy and other packages.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies from PyPI
+# ── Python dependencies from PyPI ─────────────────────────────────────────────
+# Copied before source so this layer is cached as long as requirements.txt
+# does not change — even if source files change.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install the local pandas_ta shim as a proper pip package.
-# This avoids any PYTHONPATH / sys.path issues at runtime.
-COPY pandas_ta/ ./pandas_ta/
-RUN pip install --no-cache-dir -e ./pandas_ta/
-
-# Download spaCy model at build time so the container starts immediately
+# ── spaCy language model ───────────────────────────────────────────────────────
+# Downloaded at build time so the container starts immediately.
+# This is its own layer — cached unless the spacy version changes.
 RUN python -m spacy download en_core_web_sm
 
-# Copy the rest of the application source
+# ── Application source ─────────────────────────────────────────────────────────
+# Copied last so that source changes only invalidate this layer and nothing above.
+# This includes the pandas_ta/ shim directory (a local package, not on PyPI).
 COPY . .
 
-EXPOSE 8090
+# ── Python path ────────────────────────────────────────────────────────────────
+# pandas_ta is a local folder shim inside /app/pandas_ta/.
+# Setting PYTHONPATH=/app ensures Python finds it regardless of how uvicorn is
+# invoked. This backs up the sys.path.insert already in run.py and indicators.py.
+ENV PYTHONPATH=/app
 
 ENV PORT=8090
+EXPOSE 8090
 
 CMD ["python", "run.py"]
