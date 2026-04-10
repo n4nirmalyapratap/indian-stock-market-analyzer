@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { BookOpen, Send, X, ChevronDown, RotateCcw, Sparkles, ChevronRight } from "lucide-react";
+import { BookOpen, Send, X, ChevronDown, RotateCcw, Sparkles, ChevronRight, GraduationCap } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Knowledge base — market concepts + every app feature, in plain English
@@ -1002,59 +1002,95 @@ export default function GlobalAssistant() {
   return (
     <>
       {/* ── Floating button ─────────────────────────────────────────────────── */}
-      <button
-        aria-label="Open learning assistant"
-        onClick={() => setOpen(o => !o)}
-        className={`
-          fixed bottom-5 right-5 z-[9999]
-          rounded-full shadow-2xl
-          flex items-center justify-center gap-2
-          transition-all duration-200
-          ${open
-            ? "bg-gray-600 dark:bg-gray-700 w-12 h-12"
-            : "bg-indigo-600 hover:bg-indigo-500 hover:scale-105 active:scale-95 pl-4 pr-5 h-12"
-          }
-        `}
-      >
-        {open
-          ? <X className="w-5 h-5 text-white" />
-          : (
+      <div className="fixed bottom-5 right-5 z-[9999] flex flex-col items-end gap-2">
+
+        {/* Glow ring — only when closed */}
+        {!open && (
+          <span className="absolute inset-0 rounded-full animate-ping opacity-20 bg-indigo-400 pointer-events-none" style={{ animationDuration: "2.5s" }} />
+        )}
+
+        <button
+          aria-label="Open learning assistant"
+          onClick={() => setOpen(o => !o)}
+          className={`
+            relative flex items-center gap-2.5
+            rounded-full
+            transition-all duration-300 ease-out
+            select-none
+            ${open
+              ? "h-10 w-10 justify-center backdrop-blur-xl bg-white/10 dark:bg-white/10 border border-white/20 dark:border-white/15 shadow-lg hover:bg-white/20 dark:hover:bg-white/15"
+              : `h-11 pl-4 pr-5
+                 backdrop-blur-xl
+                 bg-white/15 dark:bg-white/10
+                 hover:bg-white/25 dark:hover:bg-white/18
+                 border border-white/30 dark:border-white/20
+                 hover:border-white/50 dark:hover:border-white/35
+                 shadow-[0_8px_32px_rgba(99,102,241,0.35)]
+                 hover:shadow-[0_8px_40px_rgba(99,102,241,0.55)]
+                 hover:scale-105 active:scale-95`
+            }
+          `}
+        >
+          {open ? (
+            <X className="w-4 h-4 text-white/80" />
+          ) : (
             <>
-              <BookOpen className="w-4.5 h-4.5 text-white flex-shrink-0" style={{ width: 18, height: 18 }} />
-              <span className="text-white text-sm font-semibold whitespace-nowrap">Learn</span>
+              {/* Gradient icon container */}
+              <div className="w-5 h-5 rounded-full bg-gradient-to-br from-indigo-400 to-violet-500 flex items-center justify-center flex-shrink-0 shadow-sm">
+                <GraduationCap className="w-3 h-3 text-white" />
+              </div>
+              <span className="text-white/90 text-[13px] font-semibold tracking-wide whitespace-nowrap" style={{ letterSpacing: "0.02em" }}>
+                Learn
+              </span>
+              {/* Subtle sparkle dot */}
+              <Sparkles className="w-3 h-3 text-indigo-300/60 dark:text-indigo-200/50" />
             </>
-          )
-        }
-      </button>
+          )}
+        </button>
+      </div>
 
       {/* ── Chat panel ──────────────────────────────────────────────────────── */}
       {open && (
         <div className="
-          fixed bottom-[72px] right-5 z-[9998]
+          fixed bottom-[68px] right-5 z-[9998]
           w-[380px] sm:w-[420px]
-          max-h-[calc(100vh-110px)]
+          max-h-[calc(100vh-108px)]
           flex flex-col
-          bg-white dark:bg-gray-900
-          border border-gray-200 dark:border-white/10
-          rounded-2xl shadow-2xl overflow-hidden
+          backdrop-blur-2xl
+          bg-white/80 dark:bg-gray-900/85
+          border border-white/40 dark:border-white/10
+          rounded-2xl
+          shadow-[0_24px_60px_rgba(0,0,0,0.22),0_0_0_1px_rgba(255,255,255,0.08)]
+          dark:shadow-[0_24px_60px_rgba(0,0,0,0.6),0_0_0_1px_rgba(255,255,255,0.05)]
+          overflow-hidden
         ">
-          {/* Header */}
-          <div className="flex items-center gap-3 px-4 py-3.5 bg-indigo-600 dark:bg-indigo-700 flex-shrink-0">
-            <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center flex-shrink-0">
-              <BookOpen className="w-5 h-5 text-white" />
+          {/* Header — gradient glass */}
+          <div
+            className="flex items-center gap-3 px-4 py-3.5 flex-shrink-0 relative overflow-hidden"
+            style={{ background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 60%, #6366f1 100%)" }}
+          >
+            {/* Subtle noise texture overlay */}
+            <div className="absolute inset-0 opacity-[0.07]"
+              style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg width='40' height='40' viewBox='0 0 40 40' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23fff' fill-opacity='1'%3E%3Cpath d='M0 0h1v1H0zm2 0h1v1H2zm2 0h1v1H4zm2 0h1v1H6zm2 0h1v1H8zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1zm2 0h1v1h-1z'/%3E%3C/g%3E%3C/svg%3E\")" }}
+            />
+            {/* Soft glow blob */}
+            <div className="absolute -top-4 -right-4 w-20 h-20 rounded-full bg-violet-400/30 blur-2xl pointer-events-none" />
+
+            <div className="w-8 h-8 rounded-lg bg-white/15 backdrop-blur-sm border border-white/20 flex items-center justify-center flex-shrink-0 relative">
+              <GraduationCap className="w-4 h-4 text-white" />
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-white font-bold text-sm leading-tight">Market Learning Assistant</p>
-              <p className="text-indigo-200 text-[11px] leading-tight mt-0.5">
-                Ask anything about the market or this app
+            <div className="flex-1 min-w-0 relative">
+              <p className="text-white font-semibold text-[13px] leading-tight tracking-wide">Market Learning Assistant</p>
+              <p className="text-white/60 text-[10px] leading-tight mt-0.5">
+                Concepts · App features · In plain English
               </p>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-0.5 relative">
               {msgs.length > 0 && (
                 <button
                   onClick={() => { setMsgs([]); setActive(null); }}
                   title="Start over"
-                  className="p-1.5 rounded-lg text-indigo-200 hover:text-white hover:bg-white/15 transition"
+                  className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/15 transition"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
                 </button>
@@ -1062,7 +1098,7 @@ export default function GlobalAssistant() {
               <button
                 onClick={() => setOpen(false)}
                 title="Close"
-                className="p-1.5 rounded-lg text-indigo-200 hover:text-white hover:bg-white/15 transition"
+                className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/15 transition"
               >
                 <ChevronDown className="w-4 h-4" />
               </button>
