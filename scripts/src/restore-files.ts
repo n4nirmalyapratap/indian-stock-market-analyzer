@@ -4,11 +4,19 @@ import * as path from "path";
 
 const OWNER = "n4nirmalyapratap";
 const REPO  = "indian-stock-market-analyzer";
-const REF   = "b658374"; // commit SHA before our push
+// Use "main" so restore-files always pulls the latest good version from GitHub.
+// These files are protected by push-github.ts and will always be on main.
+const REF   = "main";
 
 const ROOT = path.resolve(import.meta.dirname, "../..");
 
+// ── Protected files that must always exist in the workspace ──────────────────
+// These are critical for Docker builds and production deployments.
+// push-github.ts will ABORT if any of these are missing from the workspace.
+// Whenever you add a Dockerfile or nginx.conf to a new artifact, add its path
+// here too so restore-files can recover it automatically.
 const FILES_TO_RESTORE = [
+  // Root infra files
   ".dockerignore",
   ".env.example",
   "GITHUB_PUSH.md",
@@ -17,6 +25,9 @@ const FILES_TO_RESTORE = [
   "deploy.sh",
   "docker-compose.yml",
   "scripts/setup-git-hook.sh",
+  // Docker / nginx files — PROTECTED, never delete
+  "artifacts/stock-market-app/Dockerfile",
+  "artifacts/stock-market-app/nginx.conf",
 ];
 
 async function main() {

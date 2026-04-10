@@ -6,7 +6,7 @@ version: "3.9"
 #   backend   — Python FastAPI on port 8090 (internal)
 #   frontend  — nginx on port 80 (public), serves BOTH apps + proxies /api/*
 #
-#     /          →  User stock market app  (custom email/password auth)
+#     /          →  User stock market app  (Clerk + custom email/password auth)
 #     /admin/    →  Admin dashboard        (username + password login)
 #     /api/*     →  Proxied to backend container (port 8090)
 #
@@ -41,6 +41,10 @@ services:
       # Generate one: python -c "import secrets; print(secrets.token_hex(32))"
       SESSION_SECRET: "${SESSION_SECRET}"
 
+      # ── Clerk Auth (user app — Google OAuth + optional email) ─────────────
+      CLERK_SECRET_KEY:      "${CLERK_SECRET_KEY:-}"
+      CLERK_PUBLISHABLE_KEY: "${CLERK_PUBLISHABLE_KEY:-}"
+
       # ── Admin dashboard credentials ───────────────────────────────────────
       ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
       ADMIN_PASSWORD: "${ADMIN_PASSWORD}"          # REQUIRED — set in .env
@@ -50,15 +54,10 @@ services:
       # This points to the persistent volume so the DB survives container restarts.
       DATA_DIR: "/app/data"
 
-      # ── Optional: WhatsApp alerts via Twilio ─────────────────────────────
+      # ── Optional integrations ─────────────────────────────────────────────
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
       TWILIO_ACCOUNT_SID: "${TWILIO_ACCOUNT_SID:-}"
       TWILIO_AUTH_TOKEN:  "${TWILIO_AUTH_TOKEN:-}"
-
-      # ── Optional: Telegram bot alerts ────────────────────────────────────
-      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
-
-      # ── Optional: WhatsApp webhook toggle ────────────────────────────────
-      WHATSAPP_ENABLED: "${WHATSAPP_ENABLED:-false}"
 
     volumes:
       # Persist the SQLite user database (email+password accounts) across restarts.
@@ -83,6 +82,10 @@ services:
     build:
       context: .
       dockerfile: artifacts/stock-market-app/Dockerfile
+      args:
+        # VITE_CLERK_PUBLISHABLE_KEY is baked into the user-app JS bundle at build time.
+        # Leave empty if you are running without Clerk — app falls back to email+password only.
+        VITE_CLERK_PUBLISHABLE_KEY: "${VITE_CLERK_PUBLISHABLE_KEY:-}"
     container_name: stock-frontend
     restart: unless-stopped
     ports:
