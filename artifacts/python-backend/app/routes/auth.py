@@ -27,7 +27,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "users.db")
+_DATA_DIR = os.environ.get(
+    "DATA_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."),
+)
+_DB_PATH = os.path.join(_DATA_DIR, "users.db")
 
 
 # ── Database helpers ──────────────────────────────────────────────────────────

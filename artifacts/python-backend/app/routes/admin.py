@@ -17,7 +17,11 @@ _start_time = time.time()
 _sessions: dict[str, float] = {}
 _SESSION_TTL = 8 * 3600  # 8 hours
 
-_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "users.db")
+_DATA_DIR = os.environ.get(
+    "DATA_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."),
+)
+_DB_PATH = os.path.join(_DATA_DIR, "users.db")
 
 
 def _purge_expired():
