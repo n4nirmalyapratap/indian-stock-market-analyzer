@@ -986,7 +986,7 @@ export default function GlobalAssistant() {
 
   // Close on Escape
   useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") { setOpen(false); setTabHovered(false); } };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, []);
@@ -1066,7 +1066,7 @@ export default function GlobalAssistant() {
 
           {/* The peek tab */}
           <button
-            onClick={() => { setOpen(true); setShowHint(false); }}
+            onClick={() => { setOpen(true); setShowHint(false); setTabHovered(false); }}
             onMouseEnter={() => setTabHovered(true)}
             onMouseLeave={() => setTabHovered(false)}
             aria-label="Open learning assistant"
@@ -1137,7 +1137,7 @@ export default function GlobalAssistant() {
         <>
           <div
             className="fixed inset-0 z-[9997] bg-black/30 backdrop-blur-[2px]"
-            onClick={() => setOpen(false)}
+            onClick={() => { setOpen(false); setTabHovered(false); }}
             aria-hidden
           />
 
@@ -1184,7 +1184,7 @@ export default function GlobalAssistant() {
                 </button>
               )}
               <button
-                onClick={() => setOpen(false)}
+                onClick={() => { setOpen(false); setTabHovered(false); }}
                 title="Close"
                 className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/15 transition"
               >
