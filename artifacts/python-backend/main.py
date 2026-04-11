@@ -84,20 +84,24 @@ async def _cache_warmup_task() -> None:
 
 
 async def _bug_fixer_loop() -> None:
-    """Run the autonomous bug fixer every 10 minutes in the background."""
-    # Initial delay so the server can fully start before the first run
-    await asyncio.sleep(120)
+    """
+    Run the AI bug analyser every 10 minutes.
+    Analysis only — reads open bugs, uses AI to diagnose root cause and suggest
+    fix steps, stores the analysis in the bug description. Does NOT apply any
+    code changes, run tests, or push to GitHub. Humans decide when to fix/close.
+    """
+    await asyncio.sleep(120)  # let server fully start first
     while True:
         try:
-            logger.info("Bug fixer: starting scheduled run…")
+            logger.info("Bug analyser: starting scheduled run…")
             import sys as _sys  # noqa: PLC0415
             import pathlib as _pl  # noqa: PLC0415
             _sys.path.insert(0, str(_pl.Path(__file__).parent))
             from scripts.bug_fixer import run_all  # noqa: PLC0415
-            results = await run_all(dry_run=False)
-            logger.info("Bug fixer: done — %s", results)
+            results = await run_all()
+            logger.info("Bug analyser: done — %s", results)
         except Exception as exc:
-            logger.warning("Bug fixer loop error: %s", exc)
+            logger.warning("Bug analyser loop error: %s", exc)
         await asyncio.sleep(600)  # 10 minutes
 
 

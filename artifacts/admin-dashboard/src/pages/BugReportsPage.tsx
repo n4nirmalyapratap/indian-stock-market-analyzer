@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchAdmin } from "@/lib/api";
 import {
   Bug, Plus, RefreshCw, Trash2, ChevronDown,
   AlertCircle, AlertTriangle, Info, CheckCircle2, Clock,
-  Wrench, Play, Loader2, Terminal,
+  Microscope, Play, Loader2, Terminal, Sparkles,
 } from "lucide-react";
 
 type BugReport = {
@@ -58,16 +58,16 @@ function Badge({ text, style }: { text: string; style: string }) {
   );
 }
 
-// ── Auto-Fixer Panel ────────────────────────────────────────────────────────
+// ── AI Analyser Panel ──────────────────────────────────────────────────────
 
-function FixerPanel() {
+function AnalyserPanel() {
   const qc = useQueryClient();
   const [expanded, setExpanded] = useState(false);
 
   const { data: status, refetch: refetchStatus } = useQuery<FixerStatus>({
     queryKey: ["fixer-status"],
     queryFn:  () => fetchAdmin<FixerStatus>("/admin/bugs/fixer-status"),
-    refetchInterval: (data) => (data?.state.data?.running ? 2000 : 15000),
+    refetchInterval: (data) => (data?.state.data?.running ? 2000 : 20000),
   });
 
   const trigger = useMutation({
@@ -80,33 +80,30 @@ function FixerPanel() {
   });
 
   const running = status?.running ?? false;
-  const last    = status?.last_run;
+  const last    = status?.last_run && status.last_run.ran_at ? status.last_run : null;
 
   const resultColor = (r: string) => {
-    if (r.startsWith("FIXED"))      return "text-green-700";
-    if (r.startsWith("SKIP"))       return "text-amber-600";
-    if (r.startsWith("ERROR"))      return "text-red-600";
-    if (r.startsWith("TEST_FAIL"))  return "text-orange-600";
-    if (r.startsWith("PATCH_FAIL")) return "text-orange-600";
-    if (r.startsWith("DRY-RUN"))    return "text-blue-600";
+    if (r.startsWith("ANALYSED")) return "text-green-700";
+    if (r.startsWith("SKIP"))     return "text-amber-600";
+    if (r.startsWith("ERROR"))    return "text-red-600";
     return "text-gray-600";
   };
 
   return (
-    <div className="bg-gradient-to-r from-indigo-50 to-violet-50 border border-indigo-200 rounded-xl overflow-hidden">
+    <div className="bg-gradient-to-r from-violet-50 to-indigo-50 border border-violet-200 rounded-xl overflow-hidden">
       <div className="px-5 py-4 flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center flex-shrink-0">
-            <Wrench className="w-5 h-5 text-indigo-600" />
+          <div className="w-10 h-10 bg-violet-100 rounded-lg flex items-center justify-center flex-shrink-0">
+            <Microscope className="w-5 h-5 text-violet-600" />
           </div>
           <div>
-            <p className="font-semibold text-gray-900 text-sm">Autonomous Bug Fixer</p>
+            <p className="font-semibold text-gray-900 text-sm">AI Bug Analyser</p>
             <p className="text-xs text-gray-500">
               {running
-                ? "Running — analysing open bugs and applying fixes…"
+                ? "Analysing open bugs — diagnosing root causes and writing fix recommendations…"
                 : last
                   ? `Last run ${last.ran_at.replace("T", " ").replace("Z", " UTC")} · ${last.duration_s}s · ${last.results.length} bug(s) processed`
-                  : "Runs automatically every 10 minutes. Analyses open bugs, applies safe fixes, runs tests, pushes to GitHub."}
+                  : "Diagnoses open bugs using AI and adds fix recommendations to each ticket. Never modifies code or pushes to GitHub."}
             </p>
           </div>
         </div>
@@ -114,7 +111,7 @@ function FixerPanel() {
           {last && (
             <button
               onClick={() => setExpanded(v => !v)}
-              className="text-xs text-indigo-600 hover:text-indigo-800 underline underline-offset-2"
+              className="text-xs text-violet-600 hover:text-violet-800 underline underline-offset-2"
             >
               {expanded ? "Hide results" : "Show last results"}
             </button>
@@ -122,17 +119,17 @@ function FixerPanel() {
           <button
             onClick={() => trigger.mutate()}
             disabled={running || trigger.isPending}
-            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition disabled:opacity-60"
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-violet-600 text-white rounded-lg hover:bg-violet-700 transition disabled:opacity-60"
           >
             {running
-              ? <><Loader2 className="w-4 h-4 animate-spin" /> Running…</>
-              : <><Play className="w-4 h-4" /> Run Now</>}
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> Analysing…</>
+              : <><Sparkles className="w-4 h-4" /> Analyse All Bugs</>}
           </button>
         </div>
       </div>
 
       {expanded && last && (
-        <div className="border-t border-indigo-200 bg-white/60 px-5 py-4">
+        <div className="border-t border-violet-200 bg-white/60 px-5 py-4">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
             <Terminal className="w-3.5 h-3.5" /> Last Run Results
           </p>
@@ -142,7 +139,7 @@ function FixerPanel() {
             ))}
           </div>
           <p className={`mt-3 text-xs font-medium ${last.status === "ok" ? "text-green-600" : "text-red-600"}`}>
-            {last.status === "ok" ? "✓ Completed successfully" : "✗ Completed with errors"}
+            {last.status === "ok" ? "✓ Complete — open bugs now have AI analysis in their descriptions" : "✗ Completed with errors"}
             {" · "}Duration: {last.duration_s}s
           </p>
         </div>
@@ -311,9 +308,28 @@ function BugCard({ bug }: { bug: BugReport }) {
                 <ChevronDown className={`w-3 h-3 transition-transform ${expanded ? "rotate-180" : ""}`} />
               </button>
             )}
-            {expanded && bug.description && (
-              <p className="text-xs text-gray-600 mt-2 bg-gray-50 rounded-lg p-3 whitespace-pre-wrap">{bug.description}</p>
-            )}
+            {expanded && bug.description && (() => {
+              const AI_TAG = "[AI Analysis]";
+              const hasAnalysis = bug.description.includes(AI_TAG);
+              const [rawDesc, rawAnalysis] = hasAnalysis
+                ? bug.description.split(AI_TAG)
+                : [bug.description, ""];
+              return (
+                <div className="mt-2 space-y-2">
+                  {rawDesc.trim() && (
+                    <p className="text-xs text-gray-600 bg-gray-50 rounded-lg p-3 whitespace-pre-wrap">{rawDesc.trim()}</p>
+                  )}
+                  {hasAnalysis && (
+                    <div className="bg-violet-50 border border-violet-200 rounded-lg p-3">
+                      <p className="text-xs font-semibold text-violet-700 flex items-center gap-1 mb-1.5">
+                        <Sparkles className="w-3 h-3" /> AI Analysis
+                      </p>
+                      <p className="text-xs text-violet-900 whitespace-pre-wrap leading-relaxed">{rawAnalysis.trim()}</p>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
               {bug.reported_by && <span>by {bug.reported_by}</span>}
               <span>{date}</span>
@@ -412,8 +428,8 @@ export default function BugReportsPage() {
         </div>
       </div>
 
-      {/* Auto-Fixer Panel */}
-      <FixerPanel />
+      {/* AI Analyser Panel */}
+      <AnalyserPanel />
 
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
