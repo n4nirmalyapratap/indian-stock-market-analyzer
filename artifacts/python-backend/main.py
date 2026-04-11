@@ -83,6 +83,24 @@ async def _cache_warmup_task() -> None:
         logger.warning("Cache warmup failed: %s", e)
 
 
+async def _bug_fixer_loop() -> None:
+    """Run the autonomous bug fixer every 10 minutes in the background."""
+    # Initial delay so the server can fully start before the first run
+    await asyncio.sleep(120)
+    while True:
+        try:
+            logger.info("Bug fixer: starting scheduled run…")
+            import sys as _sys  # noqa: PLC0415
+            import pathlib as _pl  # noqa: PLC0415
+            _sys.path.insert(0, str(_pl.Path(__file__).parent))
+            from scripts.bug_fixer import run_all  # noqa: PLC0415
+            results = await run_all(dry_run=False)
+            logger.info("Bug fixer: done — %s", results)
+        except Exception as exc:
+            logger.warning("Bug fixer loop error: %s", exc)
+        await asyncio.sleep(600)  # 10 minutes
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Attach the ring-buffer AFTER uvicorn has configured logging (it resets
@@ -97,10 +115,11 @@ async def lifespan(app: FastAPI):
     poll_task    = asyncio.create_task(_telegram_polling_loop())
     universe_task = asyncio.create_task(_universe_scheduler())
     warmup_task  = asyncio.create_task(_cache_warmup_task())
+    fixer_task   = asyncio.create_task(_bug_fixer_loop())
     try:
         yield
     finally:
-        for t in (poll_task, universe_task, warmup_task):
+        for t in (poll_task, universe_task, warmup_task, fixer_task):
             t.cancel()
             try:
                 await t

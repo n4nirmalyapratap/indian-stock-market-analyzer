@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchAdmin } from "@/lib/api";
 import {
   Bug, Plus, RefreshCw, Trash2, ChevronDown,
   AlertCircle, AlertTriangle, Info, CheckCircle2, Clock,
+  Wrench, Play, Loader2, Terminal,
 } from "lucide-react";
 
 type BugReport = {
@@ -19,6 +20,15 @@ type BugReport = {
 };
 
 type BugsResponse = { bugs: BugReport[]; total: number };
+type FixerStatus  = {
+  running: boolean;
+  last_run: {
+    ran_at: string;
+    duration_s: number;
+    results: string[];
+    status: "ok" | "error";
+  } | null;
+};
 
 const SEVERITIES = ["critical", "high", "medium", "low"] as const;
 const STATUSES   = ["open", "in-progress", "fixed", "closed"] as const;
@@ -34,21 +44,10 @@ const severityStyle: Record<string, string> = {
   low:      "bg-blue-50 text-blue-600 border-blue-200",
 };
 const statusStyle: Record<string, string> = {
-  open:        "bg-red-50 text-red-600 border-red-200",
+  open:         "bg-red-50 text-red-600 border-red-200",
   "in-progress":"bg-amber-50 text-amber-700 border-amber-200",
-  fixed:       "bg-green-50 text-green-700 border-green-200",
-  closed:      "bg-gray-100 text-gray-500 border-gray-200",
-};
-const SeverityIcon = ({ s }: { s: string }) => {
-  if (s === "critical") return <AlertCircle className="w-3.5 h-3.5" />;
-  if (s === "high")     return <AlertTriangle className="w-3.5 h-3.5" />;
-  if (s === "low")      return <Info className="w-3.5 h-3.5" />;
-  return <AlertTriangle className="w-3.5 h-3.5" />;
-};
-const StatusIcon = ({ s }: { s: string }) => {
-  if (s === "fixed" || s === "closed") return <CheckCircle2 className="w-3.5 h-3.5" />;
-  if (s === "in-progress") return <RefreshCw className="w-3.5 h-3.5" />;
-  return <Clock className="w-3.5 h-3.5" />;
+  fixed:        "bg-green-50 text-green-700 border-green-200",
+  closed:       "bg-gray-100 text-gray-500 border-gray-200",
 };
 
 function Badge({ text, style }: { text: string; style: string }) {
@@ -58,6 +57,101 @@ function Badge({ text, style }: { text: string; style: string }) {
     </span>
   );
 }
+
+// ── Auto-Fixer Panel ────────────────────────────────────────────────────────
+
+function FixerPanel() {
+  const qc = useQueryClient();
+  const [expanded, setExpanded] = useState(false);
+
+  const { data: status, refetch: refetchStatus } = useQuery<FixerStatus>({
+    queryKey: ["fixer-status"],
+    queryFn:  () => fetchAdmin<FixerStatus>("/admin/bugs/fixer-status"),
+    refetchInterval: (data) => (data?.state.data?.running ? 2000 : 15000),
+  });
+
+  const trigger = useMutation({
+    mutationFn: () => fetchAdmin("/admin/bugs/run-fixer", { method: "POST" }),
+    onSuccess: () => {
+      refetchStatus();
+      qc.invalidateQueries({ queryKey: ["bugs"] });
+      setExpanded(true);
+    },
+  });
+
+  const running = status?.running ?? false;
+  const last    = status?.last_run;
+
+  const resultColor = (r: string) => {
+    if (r.startsWith("FIXED"))      return "text-green-700";
+    if (r.startsWith("SKIP"))       return "text-amber-600";
+    if (r.startsWith("ERROR"))      return "text-red-600";
+    if (r.startsWith("TEST_FAIL"))  return "text-orange-600";
+    if (r.startsWith("PATCH_FAIL")) return "text-orange-600";
+    if (r.startsWith("DRY-RUN"))    return "text-blue-600";
+    return "text-gray-600";
+  };
+
+  return (
+    <div className="bg-gradient-to-r from-indigo-50 to-violet-50 border border-indigo-200 rounded-xl overflow-hidden">
+      <div className="px-5 py-4 flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center flex-shrink-0">
+            <Wrench className="w-5 h-5 text-indigo-600" />
+          </div>
+          <div>
+            <p className="font-semibold text-gray-900 text-sm">Autonomous Bug Fixer</p>
+            <p className="text-xs text-gray-500">
+              {running
+                ? "Running — analysing open bugs and applying fixes…"
+                : last
+                  ? `Last run ${last.ran_at.replace("T", " ").replace("Z", " UTC")} · ${last.duration_s}s · ${last.results.length} bug(s) processed`
+                  : "Runs automatically every 10 minutes. Analyses open bugs, applies safe fixes, runs tests, pushes to GitHub."}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {last && (
+            <button
+              onClick={() => setExpanded(v => !v)}
+              className="text-xs text-indigo-600 hover:text-indigo-800 underline underline-offset-2"
+            >
+              {expanded ? "Hide results" : "Show last results"}
+            </button>
+          )}
+          <button
+            onClick={() => trigger.mutate()}
+            disabled={running || trigger.isPending}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition disabled:opacity-60"
+          >
+            {running
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> Running…</>
+              : <><Play className="w-4 h-4" /> Run Now</>}
+          </button>
+        </div>
+      </div>
+
+      {expanded && last && (
+        <div className="border-t border-indigo-200 bg-white/60 px-5 py-4">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+            <Terminal className="w-3.5 h-3.5" /> Last Run Results
+          </p>
+          <div className="space-y-1 font-mono text-xs">
+            {last.results.map((r, i) => (
+              <p key={i} className={resultColor(r)}>{r}</p>
+            ))}
+          </div>
+          <p className={`mt-3 text-xs font-medium ${last.status === "ok" ? "text-green-600" : "text-red-600"}`}>
+            {last.status === "ok" ? "✓ Completed successfully" : "✗ Completed with errors"}
+            {" · "}Duration: {last.duration_s}s
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Add Bug Modal ───────────────────────────────────────────────────────────
 
 function AddBugModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
@@ -69,7 +163,11 @@ function AddBugModal({ onClose }: { onClose: () => void }) {
 
   const create = useMutation({
     mutationFn: (data: typeof form) =>
-      fetchAdmin("/admin/bugs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }),
+      fetchAdmin("/admin/bugs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["bugs"] }); onClose(); },
     onError: (e: any) => setErr(e.message),
   });
@@ -161,6 +259,8 @@ function AddBugModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+// ── Bug Card ────────────────────────────────────────────────────────────────
+
 function BugCard({ bug }: { bug: BugReport }) {
   const qc = useQueryClient();
   const [expanded, setExpanded] = useState(false);
@@ -196,7 +296,7 @@ function BugCard({ bug }: { bug: BugReport }) {
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs font-mono text-gray-400">#{bug.id}</span>
               <Badge text={bug.severity} style={severityStyle[bug.severity] ?? ""} />
-              <Badge text={bug.status} style={statusStyle[bug.status] ?? ""} />
+              <Badge text={bug.status}   style={statusStyle[bug.status]   ?? ""} />
               {bug.component && (
                 <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{bug.component}</span>
               )}
@@ -208,7 +308,7 @@ function BugCard({ bug }: { bug: BugReport }) {
                 className="text-xs text-indigo-500 hover:text-indigo-700 mt-1 flex items-center gap-0.5"
               >
                 {expanded ? "Hide details" : "Show details"}
-                {expanded ? <ChevronDown className="w-3 h-3 rotate-180" /> : <ChevronDown className="w-3 h-3" />}
+                <ChevronDown className={`w-3 h-3 transition-transform ${expanded ? "rotate-180" : ""}`} />
               </button>
             )}
             {expanded && bug.description && (
@@ -245,22 +345,24 @@ function BugCard({ bug }: { bug: BugReport }) {
   );
 }
 
-const FILTER_STATUSES = ["all", ...STATUSES];
+// ── Main Page ───────────────────────────────────────────────────────────────
+
+const FILTER_STATUSES   = ["all", ...STATUSES];
 const FILTER_SEVERITIES = ["all", ...SEVERITIES];
 
 export default function BugReportsPage() {
-  const [showAdd, setShowAdd] = useState(false);
+  const [showAdd, setShowAdd]             = useState(false);
   const [filterStatus, setFilterStatus]   = useState("all");
   const [filterSeverity, setFilterSeverity] = useState("all");
-  const [search, setSearch] = useState("");
+  const [search, setSearch]               = useState("");
 
   const { data, isLoading, isError, refetch, isFetching } = useQuery<BugsResponse>({
     queryKey: ["bugs"],
-    queryFn: () => fetchAdmin<BugsResponse>("/admin/bugs"),
+    queryFn:  () => fetchAdmin<BugsResponse>("/admin/bugs"),
     refetchInterval: 30000,
   });
 
-  const bugs = data?.bugs ?? [];
+  const bugs     = data?.bugs ?? [];
   const filtered = bugs.filter(b => {
     if (filterStatus   !== "all" && b.status   !== filterStatus)   return false;
     if (filterSeverity !== "all" && b.severity !== filterSeverity) return false;
@@ -270,16 +372,17 @@ export default function BugReportsPage() {
   });
 
   const counts = {
-    open: bugs.filter(b => b.status === "open").length,
+    open:       bugs.filter(b => b.status === "open").length,
     inProgress: bugs.filter(b => b.status === "in-progress").length,
-    fixed: bugs.filter(b => b.status === "fixed" || b.status === "closed").length,
-    critical: bugs.filter(b => b.severity === "critical").length,
+    fixed:      bugs.filter(b => b.status === "fixed" || b.status === "closed").length,
+    critical:   bugs.filter(b => b.severity === "critical").length,
   };
 
   return (
     <div className="space-y-6">
       {showAdd && <AddBugModal onClose={() => setShowAdd(false)} />}
 
+      {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
@@ -287,7 +390,7 @@ export default function BugReportsPage() {
             Bug Tracker
           </h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Track, prioritise, and resolve reported issues
+            All bugs are tracked here first — nothing is resolved without a ticket
           </p>
         </div>
         <div className="flex gap-2">
@@ -309,12 +412,16 @@ export default function BugReportsPage() {
         </div>
       </div>
 
+      {/* Auto-Fixer Panel */}
+      <FixerPanel />
+
+      {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {[
-          { label: "Open",       value: counts.open,       color: "text-red-600",    bg: "bg-red-50",    icon: Clock },
-          { label: "In Progress",value: counts.inProgress, color: "text-amber-700",  bg: "bg-amber-50",  icon: RefreshCw },
-          { label: "Resolved",   value: counts.fixed,      color: "text-green-700",  bg: "bg-green-50",  icon: CheckCircle2 },
-          { label: "Critical",   value: counts.critical,   color: "text-red-700",    bg: "bg-red-100",   icon: AlertCircle },
+          { label: "Open",        value: counts.open,       color: "text-red-600",   bg: "bg-red-50",   icon: Clock },
+          { label: "In Progress", value: counts.inProgress, color: "text-amber-700", bg: "bg-amber-50", icon: RefreshCw },
+          { label: "Resolved",    value: counts.fixed,      color: "text-green-700", bg: "bg-green-50", icon: CheckCircle2 },
+          { label: "Critical",    value: counts.critical,   color: "text-red-700",   bg: "bg-red-100",  icon: AlertCircle },
         ].map(({ label, value, color, bg, icon: Icon }) => (
           <div key={label} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex items-center gap-3">
             <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${bg}`}>
@@ -328,6 +435,7 @@ export default function BugReportsPage() {
         ))}
       </div>
 
+      {/* Filters */}
       <div className="flex flex-wrap gap-3">
         <input
           className="flex-1 min-w-[180px] border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
@@ -357,6 +465,7 @@ export default function BugReportsPage() {
         </div>
       </div>
 
+      {/* Bug list */}
       {isLoading && (
         <div className="space-y-3">
           {[1,2,3].map(i => <div key={i} className="bg-gray-100 rounded-xl h-20 animate-pulse" />)}

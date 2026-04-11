@@ -167,6 +167,8 @@ async def admin_create_user(request: Request):
     email    = (body.get("email") or "").strip().lower()
     password = body.get("password") or ""
     name     = (body.get("name") or "").strip()
+    if not name:
+        return JSONResponse(status_code=400, content={"error": "Name cannot be empty"})
 
     if not email or "@" not in email:
         return JSONResponse(status_code=400, content={"error": "Enter a valid email address"})
@@ -297,6 +299,67 @@ async def validate_secrets(request: Request):
         "summary": {r["key"]: r["source"] for r in rows},
         "unset_count": sum(1 for r in rows if r["source"] == "unset"),
         "total": len(rows),
+    }
+
+
+# ── Bug Fixer ─────────────────────────────────────────────────────────────────
+
+_fixer_running = False
+_fixer_last_run: dict = {}
+
+
+@router.post("/admin/bugs/run-fixer")
+async def run_bug_fixer(request: Request):
+    """Trigger the autonomous bug fixer job. Returns immediately; job runs async."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+
+    global _fixer_running
+    if _fixer_running:
+        return {"status": "already_running", "message": "Bug fixer is already in progress."}
+
+    import asyncio  # noqa: PLC0415
+
+    async def _run():
+        global _fixer_running, _fixer_last_run
+        _fixer_running = True
+        start = time.time()
+        try:
+            import sys as _sys  # noqa: PLC0415
+            from pathlib import Path as _Path  # noqa: PLC0415
+            _fixer_script = _Path(__file__).parents[2] / "scripts" / "bug_fixer.py"
+            _sys.path.insert(0, str(_Path(__file__).parents[2]))
+            from scripts.bug_fixer import run_all  # noqa: PLC0415
+            results = await run_all(dry_run=False)
+            _fixer_last_run = {
+                "ran_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "duration_s": round(time.time() - start, 1),
+                "results": results,
+                "status": "ok",
+            }
+        except Exception as exc:
+            logger.error("Bug fixer error: %s", exc)
+            _fixer_last_run = {
+                "ran_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "duration_s": round(time.time() - start, 1),
+                "results": [f"ERROR: {exc}"],
+                "status": "error",
+            }
+        finally:
+            _fixer_running = False
+
+    asyncio.create_task(_run())
+    return {"status": "started", "message": "Bug fixer started in background."}
+
+
+@router.get("/admin/bugs/fixer-status")
+async def bug_fixer_status(request: Request):
+    """Return current bug fixer status and last run results."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    return {
+        "running": _fixer_running,
+        "last_run": _fixer_last_run,
     }
 
 

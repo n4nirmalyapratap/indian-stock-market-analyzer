@@ -117,7 +117,7 @@ async def _call_with_retry(
 
     for attempt in range(retries + 1):
         try:
-            resp = await client.chat.completions.create(**create_kwargs)
+            resp = await asyncio.wait_for(client.chat.completions.create(**create_kwargs), timeout=10)
             return resp.choices[0].message.content or ""
         except Exception as exc:
             is_rate_limit = "429" in str(exc) or "rate" in str(exc).lower()

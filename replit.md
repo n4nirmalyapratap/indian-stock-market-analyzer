@@ -106,6 +106,48 @@ Run: `pnpm --filter @workspace/scripts run push-github`
 - All monetary values in ₹ Crores; NaN values safely serialised as `null`
 - 31 TDD tests in `tests/test_financials_endpoint.py`
 
+## Bug Tracking Process (MANDATORY — Applies to All Agents)
+
+**Every bug must go through the Bug Tracker before it is resolved. No exceptions.**
+
+### Workflow
+1. **Open** — Before touching any code, create a bug entry:
+   ```bash
+   PYTHONPATH=artifacts/python-backend python3.11 artifacts/python-backend/scripts/add_bug.py \
+     --title "Bug title" --description "Details" --severity medium \
+     --component "Options Strategy Tester" --reported_by "agent"
+   ```
+   Note the returned bug ID (e.g. `#a1b2c3d4`).
+
+2. **In Progress** — When you start working on a fix, update the status:
+   ```bash
+   PYTHONPATH=artifacts/python-backend python3.11 -c "
+   from scripts.add_bug import update_bug_status
+   update_bug_status('a1b2c3d4', 'in-progress', 'Starting fix for ...')
+   "
+   ```
+
+3. **Fixed** — After the fix is confirmed (tests passing + git commit):
+   ```bash
+   PYTHONPATH=artifacts/python-backend python3.11 -c "
+   from scripts.add_bug import update_bug_status
+   update_bug_status('a1b2c3d4', 'fixed', 'Fixed in commit abc1234: explanation of fix')
+   "
+   ```
+
+### Rules
+- Never skip step 1. A bug is NOT being fixed until it is first in the tracker as `open`.
+- A bug is NOT `fixed` until there is actual code change + passing tests.
+- The Autonomous Bug Fixer runs every 10 minutes and may pick up open bugs automatically.
+- Bug fixer results appear in the Bug Tracker admin page under the "Last Run Results" panel.
+
+### Autonomous Bug Fixer
+- File: `artifacts/python-backend/scripts/bug_fixer.py`
+- Runs every 10 minutes via background task in `main.py`
+- Admin endpoint: `POST /admin/bugs/run-fixer` (triggers on demand)
+- Status endpoint: `GET /admin/bugs/fixer-status`
+- Admin UI: Bug Tracker page → "Run Now" button
+
 ## Tech Stack
 
 | Layer | Technology |
