@@ -218,13 +218,14 @@ class SingleOptionReq(BaseModel):
 
 
 class LegModel(BaseModel):
-    action:      str   = Field(..., description="'buy' or 'sell'")
-    option_type: str   = Field(..., description="'call' or 'put'")
-    strike:      float = Field(..., gt=0, description="Strike price (must be > 0)")
-    premium:     float = Field(0.0, description="Price paid/received per unit. 0 = auto-calculate")
-    lots:        int   = Field(1, ge=1)
-    lot_size:    int   = Field(75, ge=1)
-    iv:          float = Field(0.20, description="IV for this leg (used in Greeks)")
+    action:       str            = Field(..., description="'buy' or 'sell'")
+    option_type:  str            = Field(..., description="'call' or 'put'")
+    strike:       float          = Field(..., gt=0, description="Strike price (must be > 0)")
+    premium:      float          = Field(0.0, description="Price paid/received per unit. 0 = auto-calculate")
+    lots:         int            = Field(1, ge=1)
+    lot_size:     int            = Field(75, ge=1)
+    iv:           float          = Field(0.20, description="IV for this leg (used in Greeks)")
+    residual_dte: Optional[int]  = Field(None, description="For time-spreads: days remaining on this leg when the short leg expires. If set, payoff uses BS residual value instead of intrinsic.")
 
     @validator("action")
     def va(cls, v):
@@ -319,12 +320,16 @@ async def analyse_strategy(req: StrategyReq):
     try:
         legs = [leg.dict() for leg in req.legs]
 
-        # Auto-price legs where premium is 0
+        # Auto-price legs where premium is 0.
+        # Time-spread legs (residual_dte set) are priced at T + residual_dte/365
+        # so the far leg's entry premium reflects its longer expiry.
         for leg in legs:
             if leg["premium"] == 0.0:
-                iv = leg.get("iv") or req.sigma
+                iv      = leg.get("iv") or req.sigma
+                res_dte = leg.get("residual_dte") or 0
+                T_leg   = req.T + res_dte / 365.0   # near leg: T_leg==T; far leg: T_leg>T
                 leg["premium"] = round(
-                    bs_price(req.S, leg["strike"], req.T, req.r, iv, leg["option_type"]), 2
+                    bs_price(req.S, leg["strike"], T_leg, req.r, iv, leg["option_type"]), 2
                 )
 
         # Expand spot range to cover all strikes so no breakeven is clipped
@@ -334,7 +339,8 @@ async def analyse_strategy(req: StrategyReq):
         spot_min = min(base_min, min(all_strikes) * 0.95)
         spot_max = max(base_max, max(all_strikes) * 1.05)
 
-        payoff_data = strategy_payoff_curve(legs, spot_min, spot_max)
+        payoff_data = strategy_payoff_curve(legs, spot_min, spot_max,
+                                             r=req.r, sigma=req.sigma)
         greeks      = strategy_greeks_aggregate(legs, req.S, req.T, req.r)
 
         leg_details = []

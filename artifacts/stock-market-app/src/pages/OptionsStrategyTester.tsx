@@ -21,14 +21,15 @@ function get<T = any>(path: string) { return fetchApi<T>(path); }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Leg {
-  id:          string;
-  action:      "buy" | "sell";
-  option_type: "call" | "put";
-  strike:      number;
-  premium:     number;
-  lots:        number;
-  lot_size:    number;
-  iv:          number;
+  id:           string;
+  action:       "buy" | "sell";
+  option_type:  "call" | "put";
+  strike:       number;
+  premium:      number;
+  lots:         number;
+  lot_size:     number;
+  iv:           number;
+  residual_dte?: number;   // time-spread far legs: days remaining when short leg expires
 }
 
 interface SpotInfo { spot: number; hv30: number; hv30_pct: number; lot_size: number; atm: number; }
@@ -606,7 +607,7 @@ function dteFromDate(dateStr: string): number {
 type Tab = "strategy" | "backtest" | "risk" | "smart";
 
 // ── Smart Builder ─────────────────────────────────────────────────────────────
-interface SuggestedLeg { action: "buy"|"sell"; option_type: "call"|"put"; strike: number; lots: number; }
+interface SuggestedLeg { action: "buy"|"sell"; option_type: "call"|"put"; strike: number; lots: number; residual_dte?: number; }
 interface SuggestedStrategy {
   name: string; description: string; category: string; outlook: string;
   fit_score: number; rationale: string; key_risk: string; is_custom: boolean;
@@ -687,6 +688,7 @@ function SmartBuilderTab({
     const newLegs: Leg[] = rec.legs.map(l => ({
       id: crypto.randomUUID(), action: l.action, option_type: l.option_type,
       strike: l.strike, premium: 0, lots: l.lots, lot_size: ls, iv,
+      ...(l.residual_dte != null ? { residual_dte: l.residual_dte } : {}),
     }));
     setLegs(newLegs);
     setTab("strategy");
