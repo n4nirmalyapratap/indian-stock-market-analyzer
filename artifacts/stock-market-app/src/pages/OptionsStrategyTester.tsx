@@ -648,7 +648,7 @@ function SmartBuilderTab({
   setTab:  (t: Tab) => void;
   isDark:  boolean;
   doFetchSpot: () => Promise<SpotInfo | null>;
-  onAnalyse:   (legs: Leg[]) => void;
+  onAnalyse:   (legs: Leg[], name?: string) => void;
 }) {
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState("");
@@ -690,8 +690,8 @@ function SmartBuilderTab({
     }));
     setLegs(newLegs);
     setTab("strategy");
-    // Auto-analyse immediately — pass legs directly since state hasn't committed yet
-    onAnalyse(newLegs);
+    // Auto-analyse immediately — pass legs + name directly since state hasn't committed yet
+    onAnalyse(newLegs, rec.name);
   }
 
   function scoreColor(s: number) {
@@ -971,7 +971,9 @@ export default function OptionsStrategyTester() {
   const [spotErr, setSpotErr] = useState("");
 
   // Strategy builder state
-  const [legs, setLegs]   = useState<Leg[]>([]);
+  const [legs, setLegs]         = useState<Leg[]>([]);
+  const [strategyName, setStrategyName] = useState<string | null>(null);
+  const [analysisDirty, setAnalysisDirty] = useState(false);
   const NSE_EXPIRIES = getNSEExpiries(14);
   const [expiryDate, setExpiryDate] = useState(NSE_EXPIRIES[0].date);
   const [T, setT] = useState(() => dteFromDate(NSE_EXPIRIES[0].date));
@@ -1037,7 +1039,6 @@ export default function OptionsStrategyTester() {
 
   // ── Add leg ─────────────────────────────────────────────────────────────────
   function addLeg(partial?: Partial<Leg>) {
-    const spot = spotInfo?.spot ?? 0;
     const atm  = spotInfo?.atm  ?? 0;
     const ls   = spotInfo?.lot_size ?? 75;
     const hv   = spotInfo?.hv30 ?? 0.20;
@@ -1052,19 +1053,24 @@ export default function OptionsStrategyTester() {
       iv:          hv,
     };
     setLegs(prev => [...prev, newLeg]);
+    setStrategyName(null);   // custom leg = no named strategy
+    setAnalysisDirty(true);
   }
 
   function removeLeg(id: string) {
     setLegs(prev => prev.filter(l => l.id !== id));
+    setAnalysisDirty(true);
   }
 
   function updateLeg(id: string, field: keyof Leg, val: any) {
     setLegs(prev => prev.map(l => l.id === id ? { ...l, [field]: val } : l));
+    setAnalysisDirty(true);
   }
 
   // ── Analyse strategy ─────────────────────────────────────────────────────────
-  // legsParam lets callers (e.g. Smart Builder) pass fresh legs before React state commits
-  async function analyseStrategy(legsParam?: Leg[]) {
+  // legsParam lets callers pass fresh legs; nameParam sets the strategy name chip
+  async function analyseStrategy(legsParam?: Leg[], nameParam?: string) {
+    if (nameParam !== undefined) setStrategyName(nameParam);
     const effectiveLegs = legsParam ?? legs;
     if (!effectiveLegs.length) { setAnalysisErr("Add at least one leg"); return; }
     const si = spotInfo ?? await doFetchSpot();
@@ -1082,6 +1088,7 @@ export default function OptionsStrategyTester() {
         spot_range_pct: 0.20,
       });
       setAnalysis(res);
+      setAnalysisDirty(false);
       // Update premiums from API using the effective legs as base
       setLegs(effectiveLegs.map((l, i) => ({
         ...l,
@@ -1358,6 +1365,8 @@ export default function OptionsStrategyTester() {
                 };
               });
               setLegs(newLegs);
+              setStrategyName(qs.label);
+              setAnalysisDirty(true);
             };
             return (
               <div className="border-b border-gray-100 px-4 py-2 flex flex-wrap items-center gap-x-1.5 gap-y-1.5">
@@ -1391,12 +1400,23 @@ export default function OptionsStrategyTester() {
 
             {/* Legs header */}
             <div className="px-4 py-2 border-b border-gray-100 flex items-center justify-between bg-gray-50/60">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-gray-600">Legs</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-xs font-semibold text-gray-600 shrink-0">Legs</span>
+                {strategyName && (
+                  <span className={`flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full truncate max-w-[130px]
+                    ${strategyName.startsWith("AI:") || strategyName.startsWith("✦")
+                      ? "bg-violet-100 text-violet-700"
+                      : "bg-indigo-50 text-indigo-700"}`}>
+                    {strategyName}
+                  </span>
+                )}
+                {analysisDirty && legs.length > 0 && (
+                  <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0 animate-pulse" title="Legs changed — re-run analysis" />
+                )}
                 {legs.length > 0 && (
                   <button
-                    onClick={() => setLegs([])}
-                    className="flex items-center gap-0.5 text-[10px] text-gray-300 hover:text-red-400 transition px-1.5 py-0.5 rounded hover:bg-red-50 border border-transparent hover:border-red-100"
+                    onClick={() => { setLegs([]); setStrategyName(null); setAnalysisDirty(false); setAnalysis(null); }}
+                    className="flex items-center gap-0.5 text-[10px] text-gray-300 hover:text-red-400 transition px-1.5 py-0.5 rounded hover:bg-red-50 border border-transparent hover:border-red-100 shrink-0"
                     title="Clear all legs"
                   >
                     <X className="w-2.5 h-2.5" />
@@ -1526,17 +1546,88 @@ export default function OptionsStrategyTester() {
               </div>
             )}
 
-            {/* Footer: error + CTA */}
+            {/* Error */}
             {analysisErr && (
               <div className="px-4 py-2 bg-red-50 border-t border-red-100 text-red-600 text-xs">
                 {analysisErr}
+              </div>
+            )}
+
+            {/* ── Sticky Run Analysis footer ─────────────────────────── */}
+            {legs.length > 0 && (
+              <div className={`px-4 py-3 border-t flex items-center justify-between gap-3
+                ${isDark ? "border-slate-700 bg-slate-800/80" : "border-gray-100 bg-gray-50/80"}`}>
+                {/* Status indicator */}
+                <div className="flex items-center gap-2 min-w-0">
+                  {loadingAnalysis ? (
+                    <span className={`text-[11px] font-medium ${isDark ? "text-slate-400" : "text-gray-400"} flex items-center gap-1.5`}>
+                      <RefreshCw className="w-3 h-3 animate-spin text-indigo-500" />
+                      Analysing {strategyName ?? "strategy"}…
+                    </span>
+                  ) : analysisDirty ? (
+                    <span className="flex items-center gap-1.5 text-[11px] font-medium text-amber-600">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
+                      {analysis ? "Legs changed — update payoff" : "Ready to analyse"}
+                    </span>
+                  ) : analysis ? (
+                    <span className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-600">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                      Payoff up to date
+                    </span>
+                  ) : null}
+                </div>
+
+                {/* Run button */}
+                <button
+                  onClick={() => analyseStrategy()}
+                  disabled={loadingAnalysis}
+                  className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold text-white transition-all shrink-0 shadow-sm
+                    ${loadingAnalysis
+                      ? "bg-gray-300 cursor-not-allowed"
+                      : analysisDirty
+                        ? "bg-amber-500 hover:bg-amber-600 active:scale-95"
+                        : analysis
+                          ? "bg-gray-400 hover:bg-indigo-600 active:scale-95"
+                          : "bg-indigo-600 hover:bg-indigo-700 active:scale-95"
+                    }`}
+                >
+                  {loadingAnalysis
+                    ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    : <Zap className="w-3.5 h-3.5" />
+                  }
+                  {loadingAnalysis
+                    ? "Analysing…"
+                    : analysisDirty
+                      ? (analysis ? "Update" : "Run Analysis")
+                      : analysis
+                        ? "Re-run"
+                        : "Run Analysis"
+                  }
+                </button>
               </div>
             )}
           </div>
 
           {/* ── RIGHT: Payoff ────────────────────────────────────────── */}
           <div className="flex-1 flex flex-col min-w-0 p-5">
-            {!analysis ? (
+            {loadingAnalysis && !analysis ? (
+              /* ── Loading skeleton ────────────────────────────────────── */
+              <div className="flex flex-col gap-3 h-full animate-pulse">
+                <div className="grid grid-cols-3 gap-2.5">
+                  {[1,2,3].map(i => (
+                    <div key={i} className="h-16 rounded-xl bg-gray-100" />
+                  ))}
+                </div>
+                <div className="flex-1 rounded-xl bg-gray-100 flex items-center justify-center">
+                  <div className="text-center">
+                    <RefreshCw className="w-8 h-8 text-indigo-300 animate-spin mx-auto mb-2" />
+                    <p className="text-sm font-medium text-gray-400">
+                      Calculating {strategyName ?? "strategy"} payoff…
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : !analysis ? (
               <div className="flex flex-col items-center justify-center h-full text-gray-300">
                 <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-50 to-violet-100 flex items-center justify-center mb-4 shadow-sm">
                   <BarChart2 className="w-8 h-8 text-indigo-300" />
@@ -1546,19 +1637,9 @@ export default function OptionsStrategyTester() {
                 </p>
                 <p className="text-xs text-gray-300 mb-4">
                   {legs.length
-                    ? `${legs.length} leg${legs.length > 1 ? "s" : ""} added — run analysis to see payoff`
+                    ? `${legs.length} leg${legs.length > 1 ? "s" : ""} added — use the Run Analysis button`
                     : "Pick a strategy from the bar above to get started"}
                 </p>
-                {legs.length > 0 && (
-                  <button
-                    onClick={analyseStrategy}
-                    disabled={loadingAnalysis}
-                    className="flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-semibold bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow hover:shadow-md hover:from-indigo-700 hover:to-violet-700 transition-all active:scale-[0.97]"
-                  >
-                    {loadingAnalysis ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                    {loadingAnalysis ? "Analysing…" : "Analyse Strategy"}
-                  </button>
-                )}
               </div>
             ) : (
               <div className="flex flex-col gap-3 h-full">
@@ -1597,7 +1678,20 @@ export default function OptionsStrategyTester() {
                 {/* P&L Chart */}
                 <div className="flex-1 flex flex-col min-h-0">
                   <div className="flex items-center justify-between mb-1.5">
-                    <p className="text-xs font-semibold text-gray-600">P&amp;L at Expiry</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs font-semibold text-gray-600">P&amp;L at Expiry</p>
+                      {strategyName && (
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full
+                          ${strategyName.startsWith("AI:") || strategyName.startsWith("✦")
+                            ? "bg-violet-100 text-violet-700"
+                            : "bg-indigo-50 text-indigo-600"}`}>
+                          {strategyName}
+                        </span>
+                      )}
+                      {loadingAnalysis && (
+                        <RefreshCw className="w-3 h-3 text-indigo-400 animate-spin" />
+                      )}
+                    </div>
                     <div className="flex items-center gap-3">
                       <div className="flex gap-3 text-[10px] text-gray-400">
                         <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-indigo-500 inline-block rounded" /> P&amp;L</span>
