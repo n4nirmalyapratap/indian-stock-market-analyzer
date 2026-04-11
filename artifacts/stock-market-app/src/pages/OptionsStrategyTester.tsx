@@ -297,7 +297,7 @@ function computeMarketFit(
   const cat    = STRATEGY_CATEGORY[name];
   if (!cat) return null;
 
-  const hvPct  = spotInfo.hv30_pct;          // 0–100 percentile
+  const hvPct  = spotInfo.hv30_pct;          // annualised HV as % (e.g. 15.2 = 15.2% HV)
   const hv     = +(spotInfo.hv30 * 100).toFixed(1); // annualised %
   const spot   = spotInfo.spot;
   const maxP   = payoff?.max_profit  as number | null;
@@ -951,7 +951,7 @@ function SmartBuilderTab({
               <div className="flex-1">
                 <p className={`text-xs font-bold ${h3}`}>Standard Strategies — All 12, scored by fit</p>
                 <p className={`text-[10px] ${muted}`}>
-                  Classic strategies scored against current {symbol} HV percentile · sorted best fit first
+                  Classic strategies scored against current {symbol} HV regime · sorted best fit first
                 </p>
               </div>
               <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isDark ? "bg-slate-700 text-slate-300" : "bg-gray-200 text-gray-600"} shrink-0`}>
