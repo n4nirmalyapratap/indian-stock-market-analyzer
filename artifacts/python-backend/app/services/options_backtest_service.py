@@ -5,7 +5,7 @@ Event-driven options strategy backtester for Indian markets.
 Design principles:
 - Point-in-time data: only historical prices known before entry date are used
 - No lookahead bias: HV is calculated from a rolling window ending on entry date
-- Monthly expiry cycle: last Thursday of each month (NIFTY/BANKNIFTY convention)
+- Monthly expiry cycle: last expiry weekday of each month, per-symbol
 - Realistic cost model: commission per lot + bid-ask spread slippage
 - Full P&L tracking: entry premium, exit premium, expiry settlement
 """
@@ -47,19 +47,46 @@ STRATEGIES = [
 ]
 
 
-def _last_thursday(year: int, month: int) -> date:
-    """Return the last Thursday of the given month."""
+# NSE/BSE monthly expiry weekday per instrument (0=Mon … 6=Sun, matches date.weekday())
+# NIFTY/NIFTY50  → last Thursday (3)
+# BANKNIFTY      → last Wednesday (2)
+# FINNIFTY       → last Tuesday  (1)
+# MIDCPNIFTY     → last Monday   (0)
+# SENSEX/BANKEX  → last Friday   (4)
+EXPIRY_DOW: dict[str, int] = {
+    "NIFTY":      3,
+    "NIFTY50":    3,
+    "^NSEI":      3,
+    "BANKNIFTY":  2,
+    "^NSEBANK":   2,
+    "FINNIFTY":   1,
+    "^CNXFIN":    1,
+    "NIFTY_FIN_SERVICE.NS": 1,
+    "MIDCPNIFTY": 0,
+    "^NSMIDCP":   0,
+    "SENSEX":     4,
+    "^BSESN":     4,
+    "BANKEX":     4,
+    "BANKEX.BO":  4,
+    "^BSXN":      4,
+}
+
+
+def _last_weekday_of_month(year: int, month: int, weekday: int) -> date:
+    """Return the last occurrence of `weekday` (0=Mon…6=Sun) in the given month."""
     cal = calendar.monthcalendar(year, month)
-    thursdays = [week[3] for week in cal if week[3] != 0]
-    return date(year, month, max(thursdays))
+    days = [week[weekday] for week in cal if week[weekday] != 0]
+    return date(year, month, max(days))
 
 
-def _expiry_dates(start: date, end: date) -> list[date]:
-    """Generate monthly expiry dates (last Thursday) within [start, end]."""
-    exps = []
-    yr, mo = start.year, start.month
+def _expiry_dates(start: date, end: date, symbol: str = "NIFTY") -> list[date]:
+    """Generate monthly expiry dates (last expiry weekday) within [start, end]."""
+    upper   = symbol.upper()
+    weekday = EXPIRY_DOW.get(upper, 3)   # default Thursday
+    exps    = []
+    yr, mo  = start.year, start.month
     while True:
-        exp = _last_thursday(yr, mo)
+        exp = _last_weekday_of_month(yr, mo, weekday)
         if exp > end:
             break
         if exp >= start:
@@ -238,27 +265,38 @@ def _run_backtest_sync(
     import yfinance as yf
     import pandas as pd
 
-    yf_sym = _to_yf_sym(symbol)
+    candidates = _to_yf_sym_candidates(symbol)
 
-    # ── Fetch historical OHLCV ────────────────────────────────────────────────
-    try:
-        fetch_start = (
-            pd.to_datetime(start_date) - pd.Timedelta(days=60)
-        ).strftime("%Y-%m-%d")
-        raw = yf.download(yf_sym, start=fetch_start, end=end_date,
-                          progress=False, auto_adjust=True)
-    except Exception as exc:
-        return {"error": f"Data fetch failed: {exc}"}
+    # ── Fetch historical OHLCV (try each candidate ticker until one has data) ─
+    fetch_start = (
+        pd.to_datetime(start_date) - pd.Timedelta(days=60)
+    ).strftime("%Y-%m-%d")
 
-    if raw is None or raw.empty or len(raw) < 20:
-        return {"error": "Insufficient historical data for this symbol/date range"}
+    raw = None
+    last_err: str = ""
+    for yf_sym in candidates:
+        try:
+            r = yf.Ticker(yf_sym).history(start=fetch_start, end=end_date,
+                                           auto_adjust=True)
+            if r is not None and not r.empty and len(r) >= 20:
+                raw = r
+                break
+            last_err = f"Insufficient rows for {yf_sym}"
+        except Exception as exc:
+            last_err = str(exc)
 
-    # Flatten MultiIndex columns (yfinance ≥ 0.2 returns MultiIndex for single ticker)
-    if isinstance(raw.columns, pd.MultiIndex):
-        raw.columns = raw.columns.get_level_values(0)
+    if raw is None:
+        return {"error": f"Data fetch failed for {symbol}: {last_err}"}
+
+    # Normalize column names (.history() returns Title-cased columns)
+    raw.columns = [c.split()[0].capitalize() for c in raw.columns]
 
     hist = raw[["Open", "High", "Low", "Close", "Volume"]].copy()
-    hist.index = pd.to_datetime(hist.index).normalize()
+    # Strip timezone info — .history() returns tz-aware (Asia/Kolkata); we need naive dates
+    idx = pd.to_datetime(hist.index)
+    if getattr(idx, "tz", None) is not None:
+        idx = idx.tz_convert("UTC").tz_localize(None)
+    hist.index = idx.normalize()
     hist = hist.sort_index()
 
     # ── Historical Volatility (30-day rolling, annualised, no lookahead) ─────
@@ -267,10 +305,10 @@ def _run_backtest_sync(
     hist["HV30"]    = hist["HV30"].clip(lower=0.05)
     hist["HV30"]    = hist["HV30"].ffill().bfill().fillna(0.20)
 
-    # ── Generate expiry cycle ─────────────────────────────────────────────────
+    # ── Generate expiry cycle (correct weekday per symbol) ───────────────────
     start_dt = pd.to_datetime(start_date).date()
     end_dt   = pd.to_datetime(end_date).date()
-    expiries = _expiry_dates(start_dt, end_dt)
+    expiries = _expiry_dates(start_dt, end_dt, symbol=symbol)
 
     if not expiries:
         return {"error": "No expiry dates fall within the specified date range"}
