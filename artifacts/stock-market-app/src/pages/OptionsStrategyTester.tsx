@@ -584,8 +584,14 @@ const EXPIRY_DOW: Record<string, number> = {
   BANKEX:     5,  // Friday
 };
 
+// SEBI circular (May 2024): only NIFTY 50 and SENSEX retain weekly options contracts.
+// All other indices (BANKNIFTY, FINNIFTY, MIDCPNIFTY, BANKEX) are monthly-only.
+const WEEKLY_SYMBOLS = new Set(["NIFTY", "NIFTY50", "SENSEX"]);
+
 function getNSEExpiries(n = 14, symbol = "NIFTY"): Array<{ date: string; label: string; monthly: boolean }> {
-  const targetDow = EXPIRY_DOW[symbol.toUpperCase()] ?? 4; // default Thursday
+  const sym = symbol.toUpperCase();
+  const targetDow = EXPIRY_DOW[sym] ?? 4; // default Thursday
+  const weeklyAllowed = WEEKLY_SYMBOLS.has(sym);
   const results: Array<{ date: string; label: string; monthly: boolean }> = [];
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -593,15 +599,20 @@ function getNSEExpiries(n = 14, symbol = "NIFTY"): Array<{ date: string; label: 
   // Advance to the next occurrence of the target expiry weekday (never today)
   d.setDate(d.getDate() + 1);
   while (d.getDay() !== targetDow) d.setDate(d.getDate() + 1);
-  for (let i = 0; i < n; i++) {
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  while (results.length < n) {
     const iso = d.toISOString().slice(0, 10);
     const nextWeek = new Date(d);
     nextWeek.setDate(d.getDate() + 7);
     const isMonthly = nextWeek.getMonth() !== d.getMonth();
-    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
     const short = `${d.getDate()} ${months[d.getMonth()]}`;
-    const label = `${short}${isMonthly ? " ★ Monthly" : " · Weekly"}`;
-    results.push({ date: iso, label, monthly: isMonthly });
+    if (weeklyAllowed) {
+      const label = `${short}${isMonthly ? " ★ Monthly" : " · Weekly"}`;
+      results.push({ date: iso, label, monthly: isMonthly });
+    } else if (isMonthly) {
+      // Non-weekly symbol (SEBI rule): only the last occurrence of the expiry day
+      results.push({ date: iso, label: `${short} ★ Monthly`, monthly: true });
+    }
     d.setDate(d.getDate() + 7);
   }
   return results;
@@ -1013,6 +1024,7 @@ export default function OptionsStrategyTester() {
   const [btEntryDte, setBtEntryDte] = useState(30);
   const [btRollDte, setBtRollDte]   = useState(0);
   const [btOtmPct, setBtOtmPct]     = useState(5);
+  const [btUseWeekly, setBtUseWeekly] = useState(false);
   const [btResult, setBtResult]     = useState<any>(null);
   const [loadingBt, setLoadingBt]   = useState(false);
   const [btErr, setBtErr]           = useState("");
@@ -1158,6 +1170,7 @@ export default function OptionsStrategyTester() {
         entry_dte:  btEntryDte,
         roll_dte:   btRollDte,
         otm_pct:    btOtmPct / 100,
+        use_weekly: btUseWeekly,
       });
       setBtResult(res);
       // Start playback automatically
@@ -1827,6 +1840,15 @@ export default function OptionsStrategyTester() {
                 <input type="number" min={1} max={30} value={btOtmPct} step={0.5}
                        onChange={e => setBtOtmPct(Number(e.target.value))}
                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+              </div>
+              <div className="flex flex-col justify-center">
+                <label className="block text-xs text-gray-500 mb-1 font-medium">Expiry Cycle</label>
+                <label className="flex items-center gap-2 cursor-pointer mt-1">
+                  <input type="checkbox" checked={btUseWeekly} onChange={e => setBtUseWeekly(e.target.checked)}
+                         className="w-4 h-4 rounded border-gray-300 accent-indigo-600" />
+                  <span className="text-sm text-gray-700">Weekly (historical)</span>
+                </label>
+                <p className="text-[10px] text-gray-400 mt-0.5 leading-tight">All indices had weekly contracts before SEBI's May 2024 rule</p>
               </div>
             </div>
 

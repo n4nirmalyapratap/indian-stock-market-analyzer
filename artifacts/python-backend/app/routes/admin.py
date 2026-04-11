@@ -245,3 +245,115 @@ async def admin_logs(
 
     records = buf.get_records(limit=lines, level=level or None, search=search or None)
     return {"logs": records, "total": len(records), "structured": True}
+
+
+# ── Bug Reports ────────────────────────────────────────────────────────────────
+
+def _init_bugs_db() -> None:
+    conn = _get_db()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS bug_reports (
+            id          TEXT PRIMARY KEY,
+            title       TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            severity    TEXT NOT NULL DEFAULT 'medium',
+            status      TEXT NOT NULL DEFAULT 'open',
+            component   TEXT NOT NULL DEFAULT '',
+            reported_by TEXT NOT NULL DEFAULT '',
+            created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+@router.get("/admin/bugs")
+async def list_bugs(request: Request):
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    _init_bugs_db()
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT * FROM bug_reports ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    return {"bugs": [dict(r) for r in rows], "total": len(rows)}
+
+
+@router.post("/admin/bugs")
+async def create_bug(request: Request):
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON"})
+
+    title = (body.get("title") or "").strip()
+    if not title:
+        return JSONResponse(status_code=400, content={"error": "title is required"})
+
+    now = int(time.time())
+    bug_id = str(uuid.uuid4())[:8]
+    _init_bugs_db()
+    conn = _get_db()
+    conn.execute(
+        """INSERT INTO bug_reports (id, title, description, severity, status, component, reported_by, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            bug_id,
+            title,
+            body.get("description", ""),
+            body.get("severity", "medium"),
+            "open",
+            body.get("component", ""),
+            body.get("reported_by", ""),
+            now, now,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return {"id": bug_id, "created": True}
+
+
+@router.patch("/admin/bugs/{bug_id}")
+async def update_bug(bug_id: str, request: Request):
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON"})
+
+    allowed = {"title", "description", "severity", "status", "component", "reported_by"}
+    updates = {k: v for k, v in body.items() if k in allowed and v is not None}
+    if not updates:
+        return JSONResponse(status_code=400, content={"error": "No valid fields to update"})
+
+    updates["updated_at"] = int(time.time())
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    values = list(updates.values()) + [bug_id]
+
+    _init_bugs_db()
+    conn = _get_db()
+    cur = conn.execute(f"UPDATE bug_reports SET {set_clause} WHERE id = ?", values)
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        return JSONResponse(status_code=404, content={"error": "Bug not found"})
+    return {"updated": True}
+
+
+@router.delete("/admin/bugs/{bug_id}")
+async def delete_bug(bug_id: str, request: Request):
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    _init_bugs_db()
+    conn = _get_db()
+    cur = conn.execute("DELETE FROM bug_reports WHERE id = ?", (bug_id,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        return JSONResponse(status_code=404, content={"error": "Bug not found"})
+    return {"deleted": True}

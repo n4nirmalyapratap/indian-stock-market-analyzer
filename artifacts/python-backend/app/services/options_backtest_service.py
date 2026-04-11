@@ -79,12 +79,44 @@ def _last_weekday_of_month(year: int, month: int, weekday: int) -> date:
     return date(year, month, max(days))
 
 
-def _expiry_dates(start: date, end: date, symbol: str = "NIFTY") -> list[date]:
-    """Generate monthly expiry dates (last expiry weekday) within [start, end]."""
+def _last_thursday(year: int, month: int) -> date:
+    """Return the last Thursday of the given month (backward-compat wrapper)."""
+    return _last_weekday_of_month(year, month, weekday=3)
+
+
+def _expiry_dates(start: date, end: date, symbol: str = "NIFTY",
+                  use_weekly: bool = False) -> list[date]:
+    """Generate expiry dates within [start, end].
+
+    Args:
+        start, end:  Date range (inclusive).
+        symbol:      Index symbol — determines which weekday is the expiry day.
+        use_weekly:  If True, generate every weekly expiry (every occurrence of
+                     the expiry weekday).  If False (default), generate only the
+                     last occurrence each month (monthly expiry).
+
+    Historical note: SEBI restricted weekly options (May 2024).  Only NIFTY 50
+    and SENSEX still have weekly contracts.  For backtesting periods that pre-date
+    the restriction, pass use_weekly=True to model the historical weekly cycle.
+    """
     upper   = symbol.upper()
     weekday = EXPIRY_DOW.get(upper, 3)   # default Thursday
-    exps    = []
-    yr, mo  = start.year, start.month
+
+    if use_weekly:
+        # Walk day-by-day and collect every occurrence of the target weekday
+        exps = []
+        d = start
+        # Advance to the first occurrence of the target weekday on or after start
+        days_ahead = (weekday - d.weekday()) % 7
+        d = d + timedelta(days=days_ahead)
+        while d <= end:
+            exps.append(d)
+            d = d + timedelta(weeks=1)
+        return exps
+
+    # Monthly: last weekday of each month
+    exps   = []
+    yr, mo = start.year, start.month
     while True:
         exp = _last_weekday_of_month(yr, mo, weekday)
         if exp > end:
@@ -256,6 +288,7 @@ def _run_backtest_sync(
     roll_dte: int,
     otm_pct: float,
     risk_free: float,
+    use_weekly: bool = False,
 ) -> dict:
     """
     Synchronous implementation of the event-driven backtest.
@@ -308,7 +341,7 @@ def _run_backtest_sync(
     # ── Generate expiry cycle (correct weekday per symbol) ───────────────────
     start_dt = pd.to_datetime(start_date).date()
     end_dt   = pd.to_datetime(end_date).date()
-    expiries = _expiry_dates(start_dt, end_dt, symbol=symbol)
+    expiries = _expiry_dates(start_dt, end_dt, symbol=symbol, use_weekly=use_weekly)
 
     if not expiries:
         return {"error": "No expiry dates fall within the specified date range"}
@@ -492,6 +525,7 @@ async def run_backtest(
     roll_dte: int   = 0,
     otm_pct: float  = 0.05,
     risk_free: float = 0.07,
+    use_weekly: bool = False,
 ) -> dict:
     """
     Async wrapper — runs blocking I/O and CPU work in a thread pool
@@ -500,5 +534,5 @@ async def run_backtest(
     return await asyncio.to_thread(
         _run_backtest_sync,
         symbol, strategy, start_date, end_date,
-        lots, lot_size, entry_dte, roll_dte, otm_pct, risk_free,
+        lots, lot_size, entry_dte, roll_dte, otm_pct, risk_free, use_weekly,
     )

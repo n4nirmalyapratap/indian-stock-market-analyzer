@@ -10,10 +10,12 @@ import LogsPage from "@/pages/LogsPage";
 import WhatsAppBot from "@/pages/WhatsAppBot";
 import TelegramBot from "@/pages/TelegramBot";
 import LoginPage from "@/pages/LoginPage";
+import SebiAuditPage from "@/pages/SebiAuditPage";
+import BugReportsPage from "@/pages/BugReportsPage";
 import { getAdminToken, clearAdminToken } from "@/lib/api";
 import {
   Activity, Users, Terminal, MessageCircle, Send,
-  ChevronLeft, ChevronRight, LogOut, ShieldAlert,
+  ChevronLeft, ChevronRight, LogOut, ShieldAlert, ShieldCheck, Bug,
 } from "lucide-react";
 
 const queryClient = new QueryClient({
@@ -34,6 +36,8 @@ const NAV = [
   { path: "/whatsapp",  label: "WhatsApp Bot", icon: MessageCircle },
   { path: "/telegram",  label: "Telegram Bot", icon: Send          },
   { path: "/logs",      label: "Logs",         icon: Terminal      },
+  { path: "/bugs",      label: "Bug Tracker",  icon: Bug           },
+  { path: "/sebi",      label: "SEBI Audit",   icon: ShieldCheck   },
 ];
 
 function NavLink({ path, label, icon: Icon, open }: {
@@ -153,6 +157,8 @@ function AppRoutes({ onSignOut }: { onSignOut: () => void }) {
         <Route path="/whatsapp" component={() => <WhatsAppBot />} />
         <Route path="/telegram" component={() => <TelegramBot />} />
         <Route path="/logs"     component={LogsPage} />
+        <Route path="/bugs"     component={BugReportsPage} />
+        <Route path="/sebi"     component={SebiAuditPage} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

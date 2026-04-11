@@ -2,14 +2,16 @@
 options.py — FastAPI router for the Options Strategy Tester.
 
 Endpoints:
-    POST /options/price       — Price a single European option + Greeks
-    POST /options/strategy    — Analyse a multi-leg strategy (payoff + Greeks + cost)
-    POST /options/backtest    — Run an event-driven historical backtest
-    POST /options/scenario    — 2-D scenario analysis matrix (price × vol shocks)
-    POST /options/var         — Monte Carlo Value at Risk
-    GET  /options/spot/{sym}  — Current spot price + 30-day HV estimate
-    GET  /options/chain/{sym} — Live NSE options chain (current + next expiry)
-    POST /options/chat        — Rule-based options chatbot (zero cost, no external API)
+    POST /options/price        — Price a single European option + Greeks
+    POST /options/strategy     — Analyse a multi-leg strategy (payoff + Greeks + cost)
+    POST /options/backtest     — Run an event-driven historical backtest
+    POST /options/scenario     — 2-D scenario analysis matrix (price × vol shocks)
+    POST /options/var          — Monte Carlo Value at Risk
+    GET  /options/spot/{sym}   — Current spot price + 30-day HV estimate
+    GET  /options/chain/{sym}  — Live NSE options chain (current + next expiry)
+    POST /options/chat         — AI-powered chatbot (rule-based + Gemma 4 / Qwen / OpenAI fallback)
+    POST /options/sebi-audit   — Run SEBI compliance audit (on-demand trigger)
+    GET  /options/sebi-report  — Fetch the latest SEBI audit report
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ from ..services.options_service import (
     RISK_FREE_RATE,
 )
 from ..services.options_backtest_service import run_backtest, STRATEGIES, _to_yf_sym, _to_yf_sym_candidates
-from ..services.options_chatbot import chat_reply
+from ..services.options_chatbot import chat_reply, _AI_FALLBACK_REPLY
 
 router = APIRouter(prefix="/options", tags=["options"])
 logger = logging.getLogger("options_route")
@@ -271,6 +273,7 @@ class BacktestReq(BaseModel):
     roll_dte:   int   = Field(0,  ge=0, le=30, description="Exit N days before expiry (0=hold to expiry)")
     otm_pct:    float = Field(0.05, ge=0.01, le=0.30, description="OTM wing as fraction of spot")
     risk_free:  float = Field(RISK_FREE_RATE)
+    use_weekly: bool  = Field(False, description="Use weekly expiry cycle (historical backtest). SEBI note: only NIFTY and SENSEX have live weekly contracts post-May 2024.")
 
     @validator("strategy")
     def vs(cls, v):
@@ -385,6 +388,7 @@ async def backtest_strategy(req: BacktestReq):
         roll_dte   = req.roll_dte,
         otm_pct    = req.otm_pct,
         risk_free  = req.risk_free,
+        use_weekly = req.use_weekly,
     )
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
@@ -496,14 +500,14 @@ async def smart_suggest(req: SmartSuggestReq):
 @router.post("/chat")
 async def options_chat(req: ChatReq):
     """
-    Options education chatbot — rule-based, zero cost, instant responses.
-    Covers strategies, Greeks, lot sizes, expiry, risk management, and more.
-    Context-aware: uses the user's current legs, spot, and analysis results.
+    Options chatbot — instant rule-based answers with AI fallback for unknown questions.
+    Rule-based: zero latency, zero cost, covers all common options topics.
+    AI fallback (Gemma 4 → Qwen 3 → Llama 3.3 → gpt-4o-mini): activates for
+    questions not covered by the rule engine.
     """
     if not req.messages:
         return {"reply": "Hi! Ask me anything about options strategies, Greeks, or your current position."}
 
-    # Last user message drives the response
     user_msg = next(
         (m.content for m in reversed(req.messages) if m.role == "user"), ""
     )
@@ -511,7 +515,100 @@ async def options_chat(req: ChatReq):
 
     try:
         reply = chat_reply(user_msg, ctx)
+
+        # ── AI fallback for unrecognised questions ──────────────────────────
+        if reply == _AI_FALLBACK_REPLY:
+            from ..services.ai_client import ask_ai_async
+
+            # Build a focused system prompt so the AI stays on-topic
+            strategy_ctx = ""
+            if ctx.get("legs"):
+                legs = ctx["legs"]
+                spot = ctx.get("spot", "?")
+                strategy_ctx = (
+                    f"\n\nUser's current strategy context:\n"
+                    f"- Symbol: {ctx.get('symbol', '?')}, Spot: {spot}\n"
+                    f"- Legs: {legs}\n"
+                    f"- Analysis: {ctx.get('analysis', {})}"
+                )
+
+            system = (
+                "You are an expert Indian stock-market options assistant. "
+                "Answer clearly and concisely in Markdown. "
+                "Focus on NSE options, SEBI rules, and practical strategy advice. "
+                "Keep responses under 250 words unless the user asks for detail."
+                + strategy_ctx
+            )
+
+            history = [{"role": m.role, "content": m.content} for m in req.messages[-6:]]
+
+            ai_text = await ask_ai_async(system=system, history=history)
+            reply = ai_text or (
+                "I couldn't generate a response right now — please try rephrasing "
+                "or ask about a specific strategy, Greek, or SEBI rule."
+            )
+
         return {"reply": reply}
     except Exception as exc:
         logger.error("Chat error: %s", exc)
         raise HTTPException(status_code=502, detail=f"AI service error: {exc}")
+
+
+# ── POST /options/sebi-audit ──────────────────────────────────────────────────
+
+@router.post("/sebi-audit")
+async def trigger_sebi_audit():
+    """
+    Trigger an on-demand SEBI compliance audit.
+    Scrapes the latest SEBI circulars, diffs them against the codebase,
+    and writes a structured Markdown report to reports/.
+    Returns the report text on success.
+    """
+    import subprocess, sys, pathlib
+
+    script = pathlib.Path(__file__).parents[2] / "scripts" / "sebi_audit.py"
+    if not script.exists():
+        raise HTTPException(status_code=404, detail="sebi_audit.py not found")
+
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, str(script)],
+            capture_output=True, text=True, timeout=180,
+            cwd=str(script.parent.parent),
+            env={**__import__("os").environ},
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Audit timed out after 3 minutes")
+
+    # Find the latest report
+    import glob, pathlib as pl
+    reports = sorted(pl.Path(script.parent.parent / "reports").glob("sebi_audit_*.md"))
+    report_text = reports[-1].read_text() if reports else "(no report generated)"
+
+    return {
+        "status": "ok" if result.returncode == 0 else "error",
+        "stdout": result.stdout[-2000:],
+        "stderr": result.stderr[-500:],
+        "report": report_text,
+    }
+
+
+# ── GET /options/sebi-report ──────────────────────────────────────────────────
+
+@router.get("/sebi-report")
+async def get_sebi_report():
+    """Return the most recently generated SEBI audit report as Markdown."""
+    import pathlib as pl
+
+    reports_dir = pl.Path(__file__).parents[2] / "reports"
+    reports = sorted(reports_dir.glob("sebi_audit_*.md")) if reports_dir.exists() else []
+    if not reports:
+        raise HTTPException(status_code=404, detail="No SEBI audit report found. Run /sebi-audit first.")
+
+    latest = reports[-1]
+    return {
+        "filename": latest.name,
+        "generated": latest.stem.replace("sebi_audit_", ""),
+        "report": latest.read_text(),
+    }
