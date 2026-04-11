@@ -326,7 +326,7 @@ function computeMarketFit(
     const ok = hvPct < 40 ? "good" : hvPct < 60 ? "warn" : "bad";
     signals.push({
       label: "Vol Regime",
-      value: `HV ${hv}% (${hvPct}th pct) — ${volLabel}`,
+      value: `HV ${hv}% annualised — ${volLabel}`,
       status: ok,
     });
     score += hvPct < 35 ? +30 : hvPct < 50 ? +10 : hvPct < 65 ? -10 : -30;
@@ -334,7 +334,7 @@ function computeMarketFit(
     const ok = hvPct > 60 ? "good" : hvPct > 40 ? "warn" : "bad";
     signals.push({
       label: "Vol Regime",
-      value: `HV ${hv}% (${hvPct}th pct) — ${hvPct > 60 ? "premium rich ✓" : hvPct > 40 ? "fair" : "premium thin ✗"}`,
+      value: `HV ${hv}% annualised — ${hvPct > 60 ? "premium rich ✓" : hvPct > 40 ? "fair" : "premium thin ✗"}`,
       status: ok,
     });
     score += hvPct > 65 ? +30 : hvPct > 50 ? +10 : hvPct > 40 ? -10 : -30;
@@ -342,7 +342,7 @@ function computeMarketFit(
     const ok = hvPct > 30 && hvPct < 70 ? "good" : "warn";
     signals.push({
       label: "Vol Regime",
-      value: `HV ${hv}% (${hvPct}th pct) — ${ok === "good" ? "moderate, ideal for spreads" : "extreme vol, less favourable"}`,
+      value: `HV ${hv}% annualised — ${ok === "good" ? "moderate, ideal for spreads" : "extreme vol, less favourable"}`,
       status: ok,
     });
     score += ok === "good" ? +15 : -10;
@@ -350,7 +350,7 @@ function computeMarketFit(
     const ok = hvPct < 35 ? "good" : hvPct < 50 ? "warn" : "bad";
     signals.push({
       label: "Vol Regime",
-      value: `HV ${hv}% (${hvPct}th pct) — ${hvPct < 35 ? "calm, pin play viable" : hvPct < 50 ? "moderate, marginal" : "too volatile for pin"}`,
+      value: `HV ${hv}% annualised — ${hvPct < 35 ? "calm, pin play viable" : hvPct < 50 ? "moderate, marginal" : "too volatile for pin"}`,
       status: ok,
     });
     score += hvPct < 30 ? +30 : hvPct < 45 ? +10 : hvPct < 60 ? -15 : -30;
@@ -573,14 +573,26 @@ function StrategyInsightCard({
 }
 
 // ── NSE expiry helpers ────────────────────────────────────────────────────────
-function getNSEExpiries(n = 14): Array<{ date: string; label: string; monthly: boolean }> {
+
+// NSE/BSE weekly expiry day-of-week per instrument (0=Sun, 1=Mon, …, 6=Sat)
+const EXPIRY_DOW: Record<string, number> = {
+  NIFTY:      4,  // Thursday
+  BANKNIFTY:  3,  // Wednesday
+  FINNIFTY:   2,  // Tuesday
+  MIDCPNIFTY: 1,  // Monday
+  SENSEX:     5,  // Friday
+  BANKEX:     5,  // Friday
+};
+
+function getNSEExpiries(n = 14, symbol = "NIFTY"): Array<{ date: string; label: string; monthly: boolean }> {
+  const targetDow = EXPIRY_DOW[symbol.toUpperCase()] ?? 4; // default Thursday
   const results: Array<{ date: string; label: string; monthly: boolean }> = [];
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const d = new Date(today);
-  // Skip to the *next* Thursday (not today even if it is Thursday)
+  // Advance to the next occurrence of the target expiry weekday (never today)
   d.setDate(d.getDate() + 1);
-  while (d.getDay() !== 4) d.setDate(d.getDate() + 1);
+  while (d.getDay() !== targetDow) d.setDate(d.getDate() + 1);
   for (let i = 0; i < n; i++) {
     const iso = d.toISOString().slice(0, 10);
     const nextWeek = new Date(d);
@@ -976,7 +988,8 @@ export default function OptionsStrategyTester() {
   const [legs, setLegs]         = useState<Leg[]>([]);
   const [strategyName, setStrategyName] = useState<string | null>(null);
   const [analysisDirty, setAnalysisDirty] = useState(false);
-  const NSE_EXPIRIES = getNSEExpiries(14);
+  // Expiry list is symbol-aware (BANKNIFTY=Wed, FINNIFTY=Tue, etc.)
+  const NSE_EXPIRIES = getNSEExpiries(14, symbol);
   const [expiryDate, setExpiryDate] = useState(NSE_EXPIRIES[0].date);
   const [T, setT] = useState(() => dteFromDate(NSE_EXPIRIES[0].date));
   const [analysis, setAnalysis] = useState<any>(null);
@@ -985,6 +998,12 @@ export default function OptionsStrategyTester() {
 
   // Sync T whenever expiryDate changes
   useEffect(() => { setT(dteFromDate(expiryDate)); }, [expiryDate]);
+
+  // Reset expiry to nearest correct weekday when symbol changes
+  useEffect(() => {
+    const expiries = getNSEExpiries(14, symbol);
+    setExpiryDate(expiries[0].date);
+  }, [symbol]);
 
   // Backtest state
   const [btStrategy, setBtStrategy] = useState("short_straddle");
@@ -2027,8 +2046,12 @@ export default function OptionsStrategyTester() {
                           <td className="px-3 py-2 font-mono">{t.spot_entry?.toLocaleString("en-IN")}</td>
                           <td className="px-3 py-2 font-mono">{t.spot_exit?.toLocaleString("en-IN")}</td>
                           <td className="px-3 py-2">{t.iv_entry_pct?.toFixed(1)}%</td>
-                          <td className="px-3 py-2 text-green-700">₹{t.entry_credit?.toFixed(0)}</td>
-                          <td className="px-3 py-2 text-red-600">₹{t.exit_debit?.toFixed(0)}</td>
+                          <td className={`px-3 py-2 ${(t.entry_credit ?? 0) >= 0 ? "text-green-700" : "text-red-600"}`}>
+                            {(t.entry_credit ?? 0) >= 0 ? "+" : "−"}₹{Math.abs(t.entry_credit ?? 0).toFixed(0)}
+                          </td>
+                          <td className={`px-3 py-2 ${(t.exit_debit ?? 0) <= 0 ? "text-green-700" : "text-red-600"}`}>
+                            {(t.exit_debit ?? 0) <= 0 ? "+" : "−"}₹{Math.abs(t.exit_debit ?? 0).toFixed(0)}
+                          </td>
                           <td className="px-3 py-2 text-gray-400">₹{t.commission?.toFixed(0)}</td>
                           <td className={`px-3 py-2 font-bold ${clr(t.trade_pnl)}`}>
                             {fmtINR(t.trade_pnl)}
