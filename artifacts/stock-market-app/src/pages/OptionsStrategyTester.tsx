@@ -640,7 +640,7 @@ const OUTLOOK_ICON: Record<string, string> = {
 };
 
 function SmartBuilderTab({
-  symbol, spotInfo, setLegs, setTab, isDark, doFetchSpot,
+  symbol, spotInfo, setLegs, setTab, isDark, doFetchSpot, onAnalyse,
 }: {
   symbol: string;
   spotInfo: SpotInfo | null;
@@ -648,6 +648,7 @@ function SmartBuilderTab({
   setTab:  (t: Tab) => void;
   isDark:  boolean;
   doFetchSpot: () => Promise<SpotInfo | null>;
+  onAnalyse:   (legs: Leg[]) => void;
 }) {
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState("");
@@ -689,6 +690,8 @@ function SmartBuilderTab({
     }));
     setLegs(newLegs);
     setTab("strategy");
+    // Auto-analyse immediately — pass legs directly since state hasn't committed yet
+    onAnalyse(newLegs);
   }
 
   function scoreColor(s: number) {
@@ -1060,15 +1063,18 @@ export default function OptionsStrategyTester() {
   }
 
   // ── Analyse strategy ─────────────────────────────────────────────────────────
-  async function analyseStrategy() {
-    if (!legs.length) { setAnalysisErr("Add at least one leg"); return; }
+  // legsParam lets callers (e.g. Smart Builder) pass fresh legs before React state commits
+  async function analyseStrategy(legsParam?: Leg[]) {
+    const effectiveLegs = legsParam ?? legs;
+    if (!effectiveLegs.length) { setAnalysisErr("Add at least one leg"); return; }
     const si = spotInfo ?? await doFetchSpot();
     if (!si) { setAnalysisErr("Could not load spot price — please try again"); return; }
     setLoadingAnalysis(true);
     setAnalysisErr("");
+    setAnalysis(null);
     try {
       const res = await post("/options/strategy", {
-        legs:    legs.map(l => ({ ...l, iv: l.iv || si.hv30 })),
+        legs:    effectiveLegs.map(l => ({ ...l, iv: l.iv || si.hv30 })),
         S:       si.spot,
         T:       T / 365,
         sigma:   si.hv30,
@@ -1076,8 +1082,8 @@ export default function OptionsStrategyTester() {
         spot_range_pct: 0.20,
       });
       setAnalysis(res);
-      // Update premiums from API
-      setLegs(prev => prev.map((l, i) => ({
+      // Update premiums from API using the effective legs as base
+      setLegs(effectiveLegs.map((l, i) => ({
         ...l,
         premium: res.legs?.[i]?.premium ?? l.premium,
       })));
@@ -2117,6 +2123,7 @@ export default function OptionsStrategyTester() {
           setTab={setTab}
           isDark={isDark}
           doFetchSpot={doFetchSpot}
+          onAnalyse={analyseStrategy}
         />
       )}
 
