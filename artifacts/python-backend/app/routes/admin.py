@@ -247,6 +247,59 @@ async def admin_logs(
     return {"logs": records, "total": len(records), "structured": True}
 
 
+# ── Secrets Management ─────────────────────────────────────────────────────────
+
+@router.get("/admin/secrets")
+async def list_secrets_endpoint(request: Request, reveal: bool = False):
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.lib.secrets_store import list_secrets  # noqa: PLC0415
+    return {"secrets": list_secrets(reveal=reveal)}
+
+
+@router.put("/admin/secrets/{key}")
+async def upsert_secret(key: str, request: Request):
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON"})
+
+    value = body.get("value", "")
+    description = body.get("description", "")
+    masked = body.get("masked", True)
+
+    from app.lib.secrets_store import set_secret  # noqa: PLC0415
+    set_secret(key, value=value, description=description, masked=masked)
+    return {"updated": True, "key": key}
+
+
+@router.delete("/admin/secrets/{key}")
+async def delete_secret_endpoint(key: str, request: Request):
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.lib.secrets_store import delete_secret  # noqa: PLC0415
+    deleted = delete_secret(key)
+    if not deleted:
+        return JSONResponse(status_code=404, content={"error": "Secret not found in DB (env-only secrets cannot be deleted)"})
+    return {"deleted": True, "key": key}
+
+
+@router.post("/admin/secrets/validate")
+async def validate_secrets(request: Request):
+    """Quick-check which known secrets are set (never returns values)."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.lib.secrets_store import list_secrets  # noqa: PLC0415
+    rows = list_secrets(reveal=False)
+    return {
+        "summary": {r["key"]: r["source"] for r in rows},
+        "unset_count": sum(1 for r in rows if r["source"] == "unset"),
+        "total": len(rows),
+    }
+
+
 # ── Bug Reports ────────────────────────────────────────────────────────────────
 
 def _init_bugs_db() -> None:
