@@ -93,7 +93,11 @@ def _to_yf_sym_candidates(symbol: str) -> list[str]:
     """Return ordered list of Yahoo Finance tickers to try for a symbol."""
     upper = symbol.upper()
     _FALLBACKS = {
-        "BANKEX": ["BANKEX.BO", "^BSXN", "^BSESN"],  # last resort: use SENSEX
+        # BANKEX: ^BSXN rarely has data; fall back to SENSEX as last resort
+        "BANKEX":   ["BANKEX.BO", "^BSXN", "^BSESN"],
+        # FINNIFTY: ^CNXFIN returns only 1 bar in recent yfinance versions;
+        #           NIFTY_FIN_SERVICE.NS is the reliable fallback.
+        "FINNIFTY": ["^CNXFIN", "NIFTY_FIN_SERVICE.NS"],
     }
     if upper in _FALLBACKS:
         return _FALLBACKS[upper]
@@ -162,12 +166,14 @@ def _build_legs(strategy: str, S: float, otm_pct: float) -> list[dict]:
             L("buy",  "put",  atm - wide_d),  # far  OTM put  (protection)
         ]
     if strategy == "butterfly":
-        # Long call butterfly: buy lower, sell 2× ATM, buy upper
+        # Long call butterfly: buy lower, sell 2× ATM (single leg, 2 lots), buy upper
+        # Use a 3-leg representation so commission is charged correctly (3 strikes, not 4).
+        def L2(a: str, t: str, k: float, n: int = 1) -> dict:
+            return {"action": a, "option_type": t, "strike": k, "lots_mult": n}
         return [
-            L("buy",  "call", atm - otm_d),
-            L("sell", "call", atm),
-            L("sell", "call", atm),
-            L("buy",  "call", atm + otm_d),
+            {"action": "buy",  "option_type": "call", "strike": atm - otm_d, "lots_mult": 1},
+            {"action": "sell", "option_type": "call", "strike": atm,          "lots_mult": 2},
+            {"action": "buy",  "option_type": "call", "strike": atm + otm_d, "lots_mult": 1},
         ]
     if strategy == "covered_call":
         # Option leg only: short OTM call (underlying position not modelled)
@@ -313,34 +319,39 @@ def _run_backtest_sync(
         except ValueError as e:
             return {"error": str(e)}
 
-        total_commission = COMMISSION_PER_LOT * len(raw_legs) * lots * 2
+        # Commission is per lot: sum across legs respecting lots_mult (butterfly ATM = 2×).
+        total_lots_count = sum(int(leg.get("lots_mult", 1)) for leg in raw_legs) * lots
+        total_commission = COMMISSION_PER_LOT * total_lots_count * 2  # entry + exit
 
         entry_credit = 0.0
         filled_legs: list[dict] = []
 
         for leg in raw_legs:
-            K        = float(leg["strike"])
-            opt_type = leg["option_type"]
-            action   = leg["action"]
+            K            = float(leg["strike"])
+            opt_type     = leg["option_type"]
+            action       = leg["action"]
+            # lots_mult > 1 for butterfly ATM sell (2 lots at ATM, not 4 separate legs)
+            effective_lots = lots * int(leg.get("lots_mult", 1))
 
             raw_price  = _bs_price_fast(S_entry, K, T_entry, risk_free, iv_entry, opt_type)
             fill_price = _apply_slippage(raw_price, action, is_entry=True)
             fill_price = max(0.01, fill_price)
 
             if action == "sell":
-                entry_credit += fill_price * lots * lot_size
+                entry_credit += fill_price * effective_lots * lot_size
             else:
-                entry_credit -= fill_price * lots * lot_size
+                entry_credit -= fill_price * effective_lots * lot_size
 
-            filled_legs.append({**leg, "premium": fill_price, "lots": lots,
+            filled_legs.append({**leg, "premium": fill_price, "lots": effective_lots,
                                  "lot_size": lot_size, "iv": iv_entry})
 
         exit_debit = 0.0
 
         for leg in filled_legs:
-            K        = float(leg["strike"])
-            opt_type = leg["option_type"]
-            action   = leg["action"]
+            K            = float(leg["strike"])
+            opt_type     = leg["option_type"]
+            action       = leg["action"]
+            effective_lots = int(leg["lots"])  # already includes lots_mult from entry loop
 
             if T_exit <= 0:
                 exit_price = max(0.0, S_exit - K) if opt_type == "call" else max(0.0, K - S_exit)
@@ -351,9 +362,9 @@ def _run_backtest_sync(
                 exit_price  = max(0.0, exit_price)
 
             if action == "buy":
-                exit_debit -= exit_price * lots * lot_size
+                exit_debit -= exit_price * effective_lots * lot_size
             else:
-                exit_debit += exit_price * lots * lot_size
+                exit_debit += exit_price * effective_lots * lot_size
 
         trade_pnl = entry_credit - exit_debit - total_commission
         cum_pnl  += trade_pnl
