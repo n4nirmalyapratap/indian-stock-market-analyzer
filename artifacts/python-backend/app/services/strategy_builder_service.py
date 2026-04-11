@@ -31,10 +31,11 @@ class MarketState:
 
 @dataclass
 class StrategyLeg:
-    action:      str     # "buy" | "sell"
-    option_type: str     # "call" | "put"
-    strike:      int
-    lots:        int = 1
+    action:       str            # "buy" | "sell"
+    option_type:  str            # "call" | "put"
+    strike:       int
+    lots:         int = 1
+    residual_dte: Optional[int] = None  # for time-spreads: days remaining on this leg when the short leg expires
 
 
 @dataclass
@@ -204,8 +205,8 @@ def _ai_low_vol(ms: MarketState) -> List[StrategyRecommendation]:
             description="Sell near-term ATM call, buy far-term ATM call — exploits term-structure cheapness",
             category="custom", outlook="neutral",
             legs=[
-                StrategyLeg("sell", "call", a, 1),  # near-term (conceptually)
-                StrategyLeg("buy",  "call", a, 1),  # far-term
+                StrategyLeg("sell", "call", a, 1),               # near-term (~7 DTE)
+                StrategyLeg("buy",  "call", a, 1, residual_dte=21),  # far-term: still has 21 days when short expires
             ],
             fit_score=min(95, base_score + 20),
             rationale=(
@@ -589,10 +590,10 @@ def _ai_very_high_vol(ms: MarketState) -> List[StrategyRecommendation]:
             description="Sell near-term OTM strangle, buy far-term OTM strangle — capture vol term-structure",
             category="custom", outlook="volatile",
             legs=[
-                StrategyLeg("sell", "call", a + 2*s,  1),  # near term
-                StrategyLeg("sell", "put",  a - 2*s,  1),  # near term
-                StrategyLeg("buy",  "call", a + 3*s,  1),  # far term
-                StrategyLeg("buy",  "put",  a - 3*s,  1),  # far term
+                StrategyLeg("sell", "call", a + 2*s, 1),                   # near term OTM call
+                StrategyLeg("sell", "put",  a - 2*s, 1),                   # near term OTM put
+                StrategyLeg("buy",  "call", a + 3*s, 1, residual_dte=21),  # far term OTM call (21 days left when short expires)
+                StrategyLeg("buy",  "put",  a - 3*s, 1, residual_dte=21),  # far term OTM put
             ],
             fit_score=min(73, base_score + 5),
             rationale=(
@@ -661,8 +662,13 @@ def build_smart_suggestions(
             "key_risk":    r.key_risk,
             "is_custom":   r.is_custom,
             "legs": [
-                {"action": l.action, "option_type": l.option_type,
-                 "strike": l.strike, "lots": l.lots}
+                {
+                    "action":       l.action,
+                    "option_type":  l.option_type,
+                    "strike":       l.strike,
+                    "lots":         l.lots,
+                    **({"residual_dte": l.residual_dte} if l.residual_dte is not None else {}),
+                }
                 for l in r.legs
             ],
         }

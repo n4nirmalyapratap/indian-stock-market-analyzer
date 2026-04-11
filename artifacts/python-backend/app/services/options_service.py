@@ -230,7 +230,9 @@ def price_option(S: float, K: float, T: float, r: float, sigma: float,
 def strategy_payoff_curve(legs: list[dict],
                           spot_min: float,
                           spot_max: float,
-                          points: int = 250) -> dict:
+                          points: int = 250,
+                          r: float = RISK_FREE_RATE,
+                          sigma: float = 0.20) -> dict:
     """
     Payoff at expiry across a range of spot prices.
 
@@ -241,6 +243,14 @@ def strategy_payoff_curve(legs: list[dict],
         premium:     float  (price paid/received per unit when entering)
         lots:        int    (number of lots)
         lot_size:    int    (units per lot)
+
+    Optional per-leg field:
+        residual_dte: int — for time-spread far legs.  When set, payoff at the
+                            short leg's expiry uses the Black-Scholes residual
+                            value (residual_dte days remaining) instead of
+                            intrinsic value.  This produces the correct tent-
+                            shaped payoff for Calendar Spreads / Strangles.
+        iv:          float — leg-specific IV used for residual BS pricing.
 
     Returns:
         spots:      List[float] — x-axis values
@@ -260,7 +270,6 @@ def strategy_payoff_curve(legs: list[dict],
         lots     = int(leg.get("lots", 1))
         lot_size = int(leg.get("lot_size", 1))
         action   = leg["action"]   # 'buy' | 'sell'
-        opt_type = leg["option_type"]
         qty      = lots * lot_size
         # buy = pay premium (negative cash flow); sell = receive (positive)
         sign     = -1 if action == "buy" else 1
@@ -269,18 +278,29 @@ def strategy_payoff_curve(legs: list[dict],
     for S in spots:
         total = 0.0
         for leg in legs:
-            K        = float(leg["strike"])
-            prem     = float(leg["premium"])
-            lots     = int(leg.get("lots", 1))
-            lot_size = int(leg.get("lot_size", 1))
-            opt_type = leg["option_type"]
-            action   = leg["action"]
-            qty      = lots * lot_size
-            intrinsic = max(0.0, S - K) if opt_type == "call" else max(0.0, K - S)
-            if action == "buy":
-                leg_pnl = (intrinsic - prem) * qty
+            K           = float(leg["strike"])
+            prem        = float(leg["premium"])
+            lots        = int(leg.get("lots", 1))
+            lot_size    = int(leg.get("lot_size", 1))
+            opt_type    = leg["option_type"]
+            action      = leg["action"]
+            qty         = lots * lot_size
+            res_dte     = leg.get("residual_dte")   # None for normal legs
+            leg_iv      = float(leg.get("iv") or sigma)
+
+            if res_dte and res_dte > 0:
+                # Time-spread far leg: use BS residual value at the short leg's expiry
+                # rather than intrinsic, so Calendar Spreads show the characteristic
+                # tent-shaped payoff instead of a flat zero line.
+                T_residual = res_dte / 365.0
+                value_at_expiry = bs_price(S, K, T_residual, r, leg_iv, opt_type)
             else:
-                leg_pnl = (prem - intrinsic) * qty
+                value_at_expiry = max(0.0, S - K) if opt_type == "call" else max(0.0, K - S)
+
+            if action == "buy":
+                leg_pnl = (value_at_expiry - prem) * qty
+            else:
+                leg_pnl = (prem - value_at_expiry) * qty
             total += leg_pnl
         payoffs.append(round(total, 2))
 
