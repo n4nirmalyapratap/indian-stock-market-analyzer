@@ -110,43 +110,73 @@ Run: `pnpm --filter @workspace/scripts run push-github`
 
 **Every bug must go through the Bug Tracker before it is resolved. No exceptions.**
 
-### Workflow
-1. **Open** — Before touching any code, create a bug entry:
+### Agent Workflow for Fixing Bugs
+
+#### Scenario A — User reports a bug without mentioning a ticket
+1. **Create the ticket first** (before touching any code):
    ```bash
    PYTHONPATH=artifacts/python-backend python3.11 artifacts/python-backend/scripts/add_bug.py \
-     --title "Bug title" --description "Details" --severity medium \
-     --component "Options Strategy Tester" --reported_by "agent"
+     --title "Short bug title" --description "What's wrong and how to reproduce" \
+     --severity medium --component "Options Strategy Tester" --reported_by "agent"
    ```
-   Note the returned bug ID (e.g. `#a1b2c3d4`).
+   Save the returned ID (e.g. `#a1b2c3d4`).
 
-2. **In Progress** — When you start working on a fix, update the status:
+2. **Mark in-progress** when you start the fix:
    ```bash
    PYTHONPATH=artifacts/python-backend python3.11 -c "
    from scripts.add_bug import update_bug_status
-   update_bug_status('a1b2c3d4', 'in-progress', 'Starting fix for ...')
+   update_bug_status('a1b2c3d4', 'in-progress', 'Starting fix — root cause: ...')
    "
    ```
 
-3. **Fixed** — After the fix is confirmed (tests passing + git commit):
+3. **Apply the fix, run tests, push to GitHub.**
+
+4. **Mark fixed** after confirmed working:
    ```bash
    PYTHONPATH=artifacts/python-backend python3.11 -c "
    from scripts.add_bug import update_bug_status
-   update_bug_status('a1b2c3d4', 'fixed', 'Fixed in commit abc1234: explanation of fix')
+   update_bug_status('a1b2c3d4', 'fixed', 'Fixed in commit abc1234: explanation')
    "
    ```
 
-### Rules
-- Never skip step 1. A bug is NOT being fixed until it is first in the tracker as `open`.
-- A bug is NOT `fixed` until there is actual code change + passing tests.
-- The Autonomous Bug Fixer runs every 10 minutes and may pick up open bugs automatically.
-- Bug fixer results appear in the Bug Tracker admin page under the "Last Run Results" panel.
+#### Scenario B — User mentions a specific bug ticket ID
+- Read the bug from the tracker to understand the description and any AI analysis notes.
+- Use the AI analysis (if present in the description under `[AI Analysis]`) as your starting point.
+- Follow steps 2–4 from Scenario A using that ticket ID.
 
-### Autonomous Bug Fixer
-- File: `artifacts/python-backend/scripts/bug_fixer.py`
-- Runs every 10 minutes via background task in `main.py`
-- Admin endpoint: `POST /admin/bugs/run-fixer` (triggers on demand)
-- Status endpoint: `GET /admin/bugs/fixer-status`
-- Admin UI: Bug Tracker page → "Run Now" button
+### Hard Rules
+- NEVER fix a bug without first creating or referencing a ticket. This is non-negotiable.
+- A bug is NOT `fixed` until there is actual code change + passing tests + git push.
+- Only the **human user** (or someone they delegate) changes a bug to `closed`. Agents mark `fixed`, humans close.
+- Agents must never skip the tracker step, even for tiny one-line fixes.
+
+### AI Bug Analyser (read-only background job)
+The analyser runs every 10 minutes automatically (background task in `main.py`).
+
+**What it does:**
+- Reads all open/in-progress bugs that don't have a recent analysis
+- Finds relevant source code for each bug based on component + keywords
+- Uses AI to diagnose the root cause and write numbered fix steps
+- Stores the analysis in the bug's description field under `[AI Analysis]`
+
+**What it does NOT do:**
+- Apply any code changes
+- Run tests
+- Push to GitHub
+- Change bug status
+- Auto-close bugs
+
+The human (or an AI agent delegated by the human) reads the analysis and decides how to act on it.
+
+**Files:**
+- `artifacts/python-backend/scripts/bug_fixer.py` — analyser script
+- `artifacts/python-backend/scripts/add_bug.py` — CLI helper for creating/updating bugs
+
+**Admin UI:** Bug Tracker page → "Analyse All Bugs" button → AI analysis appears in each bug card's expanded view (purple `AI Analysis` panel)
+
+**Endpoints:**
+- `POST /admin/bugs/run-fixer` — trigger analysis on demand (optionally `?bug_id=<id>` for one bug)
+- `GET /admin/bugs/fixer-status` — current analyser status + last run results
 
 ## Tech Stack
 

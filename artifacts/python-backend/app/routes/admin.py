@@ -309,16 +309,23 @@ _fixer_last_run: dict = {}
 
 
 @router.post("/admin/bugs/run-fixer")
-async def run_bug_fixer(request: Request):
-    """Trigger the autonomous bug fixer job. Returns immediately; job runs async."""
+async def run_bug_analyser(request: Request):
+    """
+    Trigger the AI bug analyser for all open bugs (or a specific bug via ?bug_id=).
+    Analysis only — no code changes, no git push.
+    Results are stored in the bug description field for the developer to review.
+    """
     if not _require_admin(request):
         return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
 
     global _fixer_running
     if _fixer_running:
-        return {"status": "already_running", "message": "Bug fixer is already in progress."}
+        return {"status": "already_running", "message": "Analyser is already in progress."}
 
     import asyncio  # noqa: PLC0415
+    from urllib.parse import urlparse, parse_qs  # noqa: PLC0415
+    qs     = parse_qs(str(request.url.query))
+    bug_id = qs.get("bug_id", [None])[0]
 
     async def _run():
         global _fixer_running, _fixer_last_run
@@ -327,10 +334,9 @@ async def run_bug_fixer(request: Request):
         try:
             import sys as _sys  # noqa: PLC0415
             from pathlib import Path as _Path  # noqa: PLC0415
-            _fixer_script = _Path(__file__).parents[2] / "scripts" / "bug_fixer.py"
             _sys.path.insert(0, str(_Path(__file__).parents[2]))
             from scripts.bug_fixer import run_all  # noqa: PLC0415
-            results = await run_all(dry_run=False)
+            results = await run_all(bug_id=bug_id)
             _fixer_last_run = {
                 "ran_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "duration_s": round(time.time() - start, 1),
@@ -338,7 +344,7 @@ async def run_bug_fixer(request: Request):
                 "status": "ok",
             }
         except Exception as exc:
-            logger.error("Bug fixer error: %s", exc)
+            logger.error("Bug analyser error: %s", exc)
             _fixer_last_run = {
                 "ran_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "duration_s": round(time.time() - start, 1),
@@ -349,17 +355,20 @@ async def run_bug_fixer(request: Request):
             _fixer_running = False
 
     asyncio.create_task(_run())
-    return {"status": "started", "message": "Bug fixer started in background."}
+    return {
+        "status": "started",
+        "message": f"AI analyser started — analysing {'bug #' + bug_id if bug_id else 'all open bugs'}.",
+    }
 
 
 @router.get("/admin/bugs/fixer-status")
-async def bug_fixer_status(request: Request):
-    """Return current bug fixer status and last run results."""
+async def bug_analyser_status(request: Request):
+    """Return current bug analyser status and last run summary."""
     if not _require_admin(request):
         return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
     return {
         "running": _fixer_running,
-        "last_run": _fixer_last_run,
+        "last_run": _fixer_last_run if _fixer_last_run else None,
     }
 
 
