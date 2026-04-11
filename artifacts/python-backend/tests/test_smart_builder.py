@@ -251,15 +251,19 @@ class TestInventCustomStrategies:
 
     @pytest.fixture
     def customs_low(self):
-        return _invent_custom_strategies(_ms(hv_pct=20))
-
-    @pytest.fixture
-    def customs_high(self):
-        return _invent_custom_strategies(_ms(hv_pct=80))
+        return _invent_custom_strategies(_ms(hv_pct=20))   # low regime (< 35)
 
     @pytest.fixture
     def customs_mod(self):
-        return _invent_custom_strategies(_ms(hv_pct=50))
+        return _invent_custom_strategies(_ms(hv_pct=50))   # moderate regime (35-55)
+
+    @pytest.fixture
+    def customs_high(self):
+        return _invent_custom_strategies(_ms(hv_pct=65))   # high regime (55-75)
+
+    @pytest.fixture
+    def customs_vhigh(self):
+        return _invent_custom_strategies(_ms(hv_pct=80))   # very_high regime (>= 75)
 
     # ── Count ──────────────────────────────────────────────────────────────
 
@@ -288,10 +292,10 @@ class TestInventCustomStrategies:
         buy_call  = next(l for l in calls if l.action == "buy")
         assert buy_call.strike > sell_call.strike
 
-    def test_jade_lizard_higher_score_in_high_vol(self, customs_low, customs_high):
-        low_score  = next(c for c in customs_low  if c.name == "Jade Lizard").fit_score
-        high_score = next(c for c in customs_high if c.name == "Jade Lizard").fit_score
-        assert high_score > low_score
+    def test_jade_lizard_has_reasonable_fit_score(self, customs_mod):
+        # Jade Lizard is a moderate-regime strategy; it should score reasonably in moderate vol
+        jade = next(c for c in customs_mod if c.name == "Jade Lizard")
+        assert jade.fit_score >= 40
 
     def test_jade_lizard_is_marked_custom(self, customs_mod):
         jade = next(c for c in customs_mod if c.name == "Jade Lizard")
@@ -321,58 +325,61 @@ class TestInventCustomStrategies:
         assert sum(l.lots for l in sells) == 2
 
     # ── Ratio Call Spread ─────────────────────────────────────────────────
+    # Ratio Call Spread is a HIGH-vol regime strategy (hv_pct >= 55)
 
-    def test_ratio_call_spread_present(self, customs_mod):
-        names = [c.name for c in customs_mod]
+    def test_ratio_call_spread_present(self, customs_high):
+        names = [c.name for c in customs_high]
         assert "Ratio Call Spread" in names
 
-    def test_ratio_call_spread_total_lots_3(self, customs_mod):
-        ratio = next(c for c in customs_mod if c.name == "Ratio Call Spread")
+    def test_ratio_call_spread_total_lots_3(self, customs_high):
+        ratio = next(c for c in customs_high if c.name == "Ratio Call Spread")
         assert sum(l.lots for l in ratio.legs) == 3
 
-    def test_ratio_call_spread_sell_2_otm(self, customs_mod):
-        ratio = next(c for c in customs_mod if c.name == "Ratio Call Spread")
+    def test_ratio_call_spread_sell_2_otm(self, customs_high):
+        ratio = next(c for c in customs_high if c.name == "Ratio Call Spread")
         sells = [l for l in ratio.legs if l.action == "sell"]
         assert sum(l.lots for l in sells) == 2
 
-    def test_ratio_call_spread_higher_score_in_high_vol(self, customs_low, customs_high):
-        low_s  = next(c for c in customs_low  if c.name == "Ratio Call Spread").fit_score
-        high_s = next(c for c in customs_high if c.name == "Ratio Call Spread").fit_score
-        assert high_s > low_s
+    def test_ratio_call_spread_has_reasonable_fit_score(self, customs_high):
+        # Ratio Call Spread is a high-vol regime strategy; just verify it has a sensible score
+        ratio = next(c for c in customs_high if c.name == "Ratio Call Spread")
+        assert ratio.fit_score >= 40
 
     # ── Put Back Spread ───────────────────────────────────────────────────
+    # Put Back Spread is a LOW-vol regime strategy (hv_pct < 35)
 
-    def test_put_back_spread_present(self, customs_mod):
-        names = [c.name for c in customs_mod]
+    def test_put_back_spread_present(self, customs_low):
+        names = [c.name for c in customs_low]
         assert "Put Back Spread" in names
 
-    def test_put_back_spread_more_buy_than_sell_puts(self, customs_mod):
-        pbs   = next(c for c in customs_mod if c.name == "Put Back Spread")
+    def test_put_back_spread_more_buy_than_sell_puts(self, customs_low):
+        pbs   = next(c for c in customs_low if c.name == "Put Back Spread")
         buys  = sum(l.lots for l in pbs.legs if l.action == "buy"  and l.option_type == "put")
         sells = sum(l.lots for l in pbs.legs if l.action == "sell" and l.option_type == "put")
         assert buys > sells
 
-    def test_put_back_spread_higher_score_in_low_vol(self, customs_low, customs_high):
-        low_s  = next(c for c in customs_low  if c.name == "Put Back Spread").fit_score
-        high_s = next(c for c in customs_high if c.name == "Put Back Spread").fit_score
-        assert low_s > high_s
+    def test_put_back_spread_has_reasonable_fit_score(self, customs_low):
+        # Put Back Spread is a low-vol regime strategy; verify it has a sensible score
+        pbs = next(c for c in customs_low if c.name == "Put Back Spread")
+        assert pbs.fit_score >= 40
 
     # ── Call Back Spread ──────────────────────────────────────────────────
+    # Call Back Spread is a LOW-vol regime strategy (hv_pct < 35)
 
-    def test_call_back_spread_present(self, customs_mod):
-        names = [c.name for c in customs_mod]
+    def test_call_back_spread_present(self, customs_low):
+        names = [c.name for c in customs_low]
         assert "Call Back Spread" in names
 
-    def test_call_back_spread_more_buy_than_sell_calls(self, customs_mod):
-        cbs   = next(c for c in customs_mod if c.name == "Call Back Spread")
+    def test_call_back_spread_more_buy_than_sell_calls(self, customs_low):
+        cbs   = next(c for c in customs_low if c.name == "Call Back Spread")
         buys  = sum(l.lots for l in cbs.legs if l.action == "buy"  and l.option_type == "call")
         sells = sum(l.lots for l in cbs.legs if l.action == "sell" and l.option_type == "call")
         assert buys > sells
 
-    def test_call_back_spread_higher_score_in_low_vol(self, customs_low, customs_high):
-        low_s  = next(c for c in customs_low  if c.name == "Call Back Spread").fit_score
-        high_s = next(c for c in customs_high if c.name == "Call Back Spread").fit_score
-        assert low_s > high_s
+    def test_call_back_spread_has_reasonable_fit_score(self, customs_low):
+        # Call Back Spread is a low-vol regime strategy; verify it has a sensible score
+        cbs = next(c for c in customs_low if c.name == "Call Back Spread")
+        assert cbs.fit_score >= 40
 
     # ── General invariants ────────────────────────────────────────────────
 
@@ -407,10 +414,20 @@ class TestInventCustomStrategies:
 # ═════════════════════════════════════════════════════════════════════════════
 
 class TestBuildSmartSuggestions:
+    """
+    End-to-end tests for build_smart_suggestions().
 
-    def _suggest(self, hv_pct=50, top_n=5):
+    Response shape:
+        {
+            "market_state":    { vol_regime, vol_bias, hv_pct, hv, spot, atm, step, lot_size },
+            "recommendations": [ ... 12 predefined strategies, all is_custom=False ... ],
+            "ai_suggestions":  [ ...  5 regime-specific AI strategies, all is_custom=True  ],
+        }
+    """
+
+    def _suggest(self, hv_pct=50):
         return build_smart_suggestions(
-            spot=22000.0, atm=22000, hv=0.16, hv_pct=hv_pct, lot_size=75, top_n=top_n,
+            spot=22000.0, atm=22000, hv=0.16, hv_pct=hv_pct, lot_size=75,
         )
 
     def test_returns_market_state_key(self):
@@ -419,11 +436,16 @@ class TestBuildSmartSuggestions:
     def test_returns_recommendations_key(self):
         assert "recommendations" in self._suggest()
 
-    def test_default_top_n_returns_5(self):
-        assert len(self._suggest(top_n=5)["recommendations"]) == 5
+    def test_returns_ai_suggestions_key(self):
+        assert "ai_suggestions" in self._suggest()
 
-    def test_custom_top_n_respected(self):
-        assert len(self._suggest(top_n=3)["recommendations"]) == 3
+    def test_recommendations_count_is_12(self):
+        # All 12 predefined strategies are always returned
+        assert len(self._suggest()["recommendations"]) == 12
+
+    def test_ai_suggestions_count_is_5(self):
+        # 5 regime-specific AI strategies are always returned
+        assert len(self._suggest()["ai_suggestions"]) == 5
 
     def test_recommendations_sorted_descending_by_score(self):
         scores = [r["fit_score"] for r in self._suggest(70)["recommendations"]]
@@ -454,13 +476,18 @@ class TestBuildSmartSuggestions:
         for rec in self._suggest()["recommendations"]:
             assert "is_custom" in rec
 
-    def test_custom_strategy_appears_in_top5_high_vol(self):
-        recs = self._suggest(80)["recommendations"]
-        assert any(r["is_custom"] for r in recs)
+    def test_ai_suggestions_are_all_custom(self):
+        # All 5 AI strategies should be marked is_custom=True
+        for s in self._suggest(80)["ai_suggestions"]:
+            assert s["is_custom"] is True
 
-    def test_custom_strategy_appears_in_top5_low_vol(self):
-        recs = self._suggest(10)["recommendations"]
-        assert any(r["is_custom"] for r in recs)
+    def test_ai_suggestions_present_high_vol(self):
+        ai = self._suggest(80)["ai_suggestions"]
+        assert len(ai) == 5
+
+    def test_ai_suggestions_present_low_vol(self):
+        ai = self._suggest(10)["ai_suggestions"]
+        assert len(ai) == 5
 
     def test_market_state_has_vol_regime(self):
         ms = self._suggest()["market_state"]
