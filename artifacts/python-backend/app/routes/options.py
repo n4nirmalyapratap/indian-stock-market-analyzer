@@ -63,11 +63,16 @@ def _fetch_spot_and_hv_sync(symbol: str) -> dict:
         try:
             t = yf.Ticker(yf_sym)
             h = t.history(period="3mo")
-            if not h.empty:
+            # Require at least 31 rows: 30 for rolling HV window + 1 for log returns.
+            # Some symbols (e.g. ^CNXFIN) return only 1 bar, which would crash the
+            # rolling-30 std calculation even though h.empty is False.
+            if not h.empty and len(h) >= 31:
                 hist = h
                 used_sym = yf_sym
                 break
-            logger.warning(f"{yf_sym}: empty history, trying next candidate")
+            logger.warning(
+                f"{yf_sym}: insufficient history ({len(h)} rows), trying next candidate"
+            )
         except Exception as e:
             logger.warning(f"{yf_sym}: fetch error ({e}), trying next candidate")
 
