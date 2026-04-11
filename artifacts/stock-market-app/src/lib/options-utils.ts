@@ -122,9 +122,9 @@ export const QUICK_STRATEGIES: QuickStrategy[] = [
            { action: "sell", option_type: "put",  lots: 1, otmMult: 1 },
            { action: "buy",  option_type: "put",  lots: 1, otmMult: 2 }] },
   { label: "Butterfly",   category: "Multi-leg", outlook: "neutral",
-    legs: [{ action: "buy",  option_type: "call", lots: 1, spreadMult: -1 },
-           { action: "sell", option_type: "call", lots: 2, spreadMult:  0 },
-           { action: "buy",  option_type: "call", lots: 1, spreadMult:  1 }] },
+    legs: [{ action: "buy",  option_type: "call", lots: 1, otmMult: -1 },
+           { action: "sell", option_type: "call", lots: 2, otmMult:  0 },
+           { action: "buy",  option_type: "call", lots: 1, otmMult:  1 }] },
 ];
 
 /** Expected leg counts per strategy label — ground truth for tests. */

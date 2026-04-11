@@ -760,15 +760,9 @@ def chat_reply(user_message: str, ctx: dict) -> str:
                 "Use a Bear Put Spread if you want defined risk on a moderate bearish view."
             )
 
-    # ── Default ───────────────────────────────────────────────────────────────
-    suggestions = [
-        "iron condor", "straddle", "strangle", "greeks", "delta", "theta",
-        "iv", "breakeven", "backtest", "lot size", "expiry", "compare strategies",
-        "net premium", "risk management", "black-scholes"
-    ]
-    return (
-        f"I didn't recognise that question — but I'm great at options topics!\n\n"
-        f"Try asking about:\n" +
-        "\n".join(f"- **{s.title()}**" for s in suggestions[:8]) +
-        "\n\nOr type **help** to see everything I cover."
-    )
+    # ── AI fallback for unrecognised questions ────────────────────────────────
+    return _AI_FALLBACK_REPLY   # sentinel — caller must resolve async
+
+
+# Sentinel returned when a question needs AI; the route handler upgrades this.
+_AI_FALLBACK_REPLY = "__AI_FALLBACK__"

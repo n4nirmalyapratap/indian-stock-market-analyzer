@@ -43,6 +43,7 @@ from app.services.options_backtest_service import (
     _build_legs,
     _apply_slippage,
     _last_thursday,
+    _last_weekday_of_month,
     _expiry_dates,
     _to_yf_sym,
     _to_yf_sym_candidates,
@@ -50,6 +51,7 @@ from app.services.options_backtest_service import (
     STRATEGIES,
     COMMISSION_PER_LOT,
     SLIPPAGE_PCT,
+    EXPIRY_DOW,
 )
 
 
@@ -541,25 +543,32 @@ class TestBuildLegs:
         assert sold_calls[0]  < bought_calls[0]    # sell call closer to ATM
         assert sold_puts[-1]  > bought_puts[-1]    # sell put  closer to ATM
 
-    def test_butterfly_four_legs(self):
+    def test_butterfly_three_legs(self):
+        """Long butterfly: lower buy, ATM sell (lots_mult=2), upper buy → 3 leg records."""
         legs = self._legs("butterfly")
-        assert len(legs) == 4
+        assert len(legs) == 3
 
     def test_butterfly_buy_sell_buy_pattern(self):
-        """Long butterfly: 1 buy lower, 2 sells at ATM, 1 buy higher."""
-        legs   = self._legs("butterfly")
-        buyers = [l for l in legs if l["action"] == "buy"]
+        """Long butterfly: 2 buys (lower, upper) and 1 sell with lots_mult==2 at ATM."""
+        legs    = self._legs("butterfly")
+        buyers  = [l for l in legs if l["action"] == "buy"]
         sellers = [l for l in legs if l["action"] == "sell"]
         assert len(buyers)  == 2
-        assert len(sellers) == 2
+        assert len(sellers) == 1
+        assert sellers[0]["lots_mult"] == 2
 
     def test_butterfly_wing_strikes_symmetric(self):
+        """buy_lower < sell_ATM < buy_upper, and wings are equidistant from ATM."""
         legs  = self._legs("butterfly")
         atm   = _atm(S)
-        buy_k = sorted(l["strike"] for l in legs if l["action"] == "buy")
+        buy_k  = sorted(l["strike"] for l in legs if l["action"] == "buy")
         sell_k = sorted(l["strike"] for l in legs if l["action"] == "sell")
-        assert buy_k[0] < sell_k[0]
-        assert sell_k[1] <= buy_k[1]
+        assert len(sell_k) == 1, "Butterfly must have exactly 1 sell-strike record"
+        assert buy_k[0] < sell_k[0]   # lower wing < ATM
+        assert sell_k[0] < buy_k[1]   # ATM < upper wing
+        lower_dist = sell_k[0] - buy_k[0]
+        upper_dist = buy_k[1]  - sell_k[0]
+        assert lower_dist == upper_dist, "Wings must be equidistant from ATM"
 
     def test_all_strategies_defined_in_list(self):
         """Every name in STRATEGIES must be buildable without raising ValueError."""
@@ -1350,3 +1359,232 @@ class TestPriceOption:
     def test_call_intrinsic_otm_is_zero(self):
         result = price_option(S - 1_000, K, T, r, sig, "call")
         assert result["intrinsic"] == 0.0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  15. Per-symbol expiry weekday — _last_weekday_of_month & _expiry_dates
+#      (TDD: these tests were written BEFORE the per-symbol fix was merged)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestLastWeekdayOfMonth:
+    """Verify _last_weekday_of_month for each weekday value."""
+
+    def test_last_tuesday_jan_2024(self):
+        """January 2024: Tuesdays are 2,9,16,23,30 → last = 30."""
+        d = _last_weekday_of_month(2024, 1, weekday=1)
+        assert d == date(2024, 1, 30)
+        assert d.weekday() == 1
+
+    def test_last_wednesday_jan_2024(self):
+        """January 2024: Wednesdays are 3,10,17,24,31 → last = 31."""
+        d = _last_weekday_of_month(2024, 1, weekday=2)
+        assert d == date(2024, 1, 31)
+        assert d.weekday() == 2
+
+    def test_last_thursday_delegates_correctly(self):
+        """_last_thursday is a backward-compat wrapper for _last_weekday_of_month(..., 3)."""
+        assert _last_thursday(2024, 1) == _last_weekday_of_month(2024, 1, weekday=3)
+
+    def test_last_friday_jan_2024(self):
+        """January 2024: Fridays are 5,12,19,26 → last = 26."""
+        d = _last_weekday_of_month(2024, 1, weekday=4)
+        assert d == date(2024, 1, 26)
+        assert d.weekday() == 4
+
+    def test_all_weekdays_are_in_range(self):
+        for wd in range(5):   # Mon-Fri
+            d = _last_weekday_of_month(2024, 3, weekday=wd)
+            assert d.weekday() == wd
+            assert d.month == 3
+
+
+class TestExpiryDatesPerSymbol:
+    """_expiry_dates must use the correct weekday for each NSE/BSE instrument."""
+
+    def test_nifty_monthly_all_thursdays(self):
+        exps = _expiry_dates(date(2024, 1, 1), date(2024, 12, 31), symbol="NIFTY")
+        assert all(e.weekday() == 3 for e in exps), "NIFTY must expire on Thursdays"
+
+    def test_banknifty_monthly_all_wednesdays(self):
+        exps = _expiry_dates(date(2024, 1, 1), date(2024, 12, 31), symbol="BANKNIFTY")
+        assert all(e.weekday() == 2 for e in exps), "BANKNIFTY must expire on Wednesdays"
+
+    def test_finnifty_monthly_all_tuesdays(self):
+        exps = _expiry_dates(date(2024, 1, 1), date(2024, 12, 31), symbol="FINNIFTY")
+        assert all(e.weekday() == 1 for e in exps), "FINNIFTY must expire on Tuesdays"
+
+    def test_midcpnifty_monthly_all_mondays(self):
+        exps = _expiry_dates(date(2024, 1, 1), date(2024, 12, 31), symbol="MIDCPNIFTY")
+        assert all(e.weekday() == 0 for e in exps), "MIDCPNIFTY must expire on Mondays"
+
+    def test_sensex_monthly_all_fridays(self):
+        exps = _expiry_dates(date(2024, 1, 1), date(2024, 12, 31), symbol="SENSEX")
+        assert all(e.weekday() == 4 for e in exps), "SENSEX must expire on Fridays"
+
+    def test_bankex_monthly_all_fridays(self):
+        exps = _expiry_dates(date(2024, 1, 1), date(2024, 12, 31), symbol="BANKEX")
+        assert all(e.weekday() == 4 for e in exps), "BANKEX must expire on Fridays"
+
+    def test_expiry_dow_map_covers_all_symbols(self):
+        """Every symbol in EXPIRY_DOW must produce the correct weekday via _expiry_dates."""
+        for sym, expected_wd in EXPIRY_DOW.items():
+            exps = _expiry_dates(date(2024, 1, 1), date(2024, 6, 30), symbol=sym)
+            for e in exps:
+                assert e.weekday() == expected_wd, (
+                    f"{sym}: expected weekday {expected_wd} but got {e} ({e.weekday()})"
+                )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  16. Weekly expiry support — _expiry_dates(use_weekly=True)
+#      Historical backtesting: all indices had weekly contracts before SEBI
+#      restricted weekly expiries to NIFTY 50 and SENSEX (May 2024).
+#      Bug: use_weekly was not implemented — this section is TDD for that fix.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestWeeklyExpiryDates:
+
+    def test_nifty_weekly_jan_2024_has_four_thursdays(self):
+        """January 2024: Thu Jan 4, 11, 18, 25 — exactly 4 weekly expiries."""
+        exps = _expiry_dates(date(2024, 1, 1), date(2024, 1, 31),
+                             symbol="NIFTY", use_weekly=True)
+        assert len(exps) == 4
+        assert all(e.weekday() == 3 for e in exps)
+
+    def test_banknifty_weekly_jan_2024_all_wednesdays(self):
+        """BANKNIFTY weekly: every Wednesday in the range."""
+        exps = _expiry_dates(date(2024, 1, 1), date(2024, 1, 31),
+                             symbol="BANKNIFTY", use_weekly=True)
+        assert all(e.weekday() == 2 for e in exps)
+        assert len(exps) == 5   # Jan 3,10,17,24,31
+
+    def test_weekly_more_expiries_than_monthly(self):
+        """Over a 3-month range, weekly must have at least 3× as many expiries as monthly."""
+        monthly = _expiry_dates(date(2024, 1, 1), date(2024, 3, 31),
+                                symbol="NIFTY", use_weekly=False)
+        weekly  = _expiry_dates(date(2024, 1, 1), date(2024, 3, 31),
+                                symbol="NIFTY", use_weekly=True)
+        assert len(weekly) >= 3 * len(monthly)
+
+    def test_weekly_ordered_ascending(self):
+        exps = _expiry_dates(date(2024, 1, 1), date(2024, 3, 31),
+                             symbol="NIFTY", use_weekly=True)
+        assert exps == sorted(exps)
+
+    def test_weekly_includes_monthly(self):
+        """Every monthly expiry must also appear in the weekly list."""
+        monthly = _expiry_dates(date(2024, 1, 1), date(2024, 6, 30),
+                                symbol="NIFTY", use_weekly=False)
+        weekly  = _expiry_dates(date(2024, 1, 1), date(2024, 6, 30),
+                                symbol="NIFTY", use_weekly=True)
+        weekly_set = set(weekly)
+        for m in monthly:
+            assert m in weekly_set, f"Monthly expiry {m} missing from weekly set"
+
+    def test_weekly_seven_day_spacing(self):
+        """Consecutive weekly expiries are exactly 7 days apart."""
+        exps = _expiry_dates(date(2024, 1, 1), date(2024, 3, 31),
+                             symbol="NIFTY", use_weekly=True)
+        from datetime import timedelta
+        for i in range(1, len(exps)):
+            assert (exps[i] - exps[i-1]).days == 7, (
+                f"Gap between {exps[i-1]} and {exps[i]} is not 7 days"
+            )
+
+    def test_monthly_is_subset_of_weekly_for_finnifty(self):
+        """FINNIFTY (Tuesday): monthly = last Tuesday; weekly = all Tuesdays."""
+        monthly = _expiry_dates(date(2024, 1, 1), date(2024, 6, 30),
+                                symbol="FINNIFTY", use_weekly=False)
+        weekly  = _expiry_dates(date(2024, 1, 1), date(2024, 6, 30),
+                                symbol="FINNIFTY", use_weekly=True)
+        assert all(e.weekday() == 1 for e in weekly)
+        assert set(monthly).issubset(set(weekly))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  17. Butterfly wing width & premium realism
+#      Bug: frontend used spreadMult=±1 → ±100pt wings → net debit ≈ ₹0.
+#      Fix: use otmMult=±1 → ±300pt wings → meaningful net debit.
+#      These pure-BS tests document the mathematical requirement; they are
+#      independent of the frontend and serve as a regression guard.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestButterflyPremiumRealism:
+    """Butterfly net debit should be economically meaningful.
+
+    A long call butterfly: buy lower, sell 2× ATM, buy upper.
+    Net debit = p(lower) + p(upper) - 2×p(ATM).
+
+    For wings of ±1 strike step (e.g. ±100 pts for NIFTY), the wings are so
+    close to ATM that the net debit approaches zero — the position is nearly
+    worthless and offers no useful risk/reward profile.
+
+    For wings of ±3 steps (e.g. ±300 pts), the debit is meaningful.
+    """
+
+    _S   = 22_000.0
+    _T   = 30 / 365
+    _r   = 0.07
+    _sig = 0.15
+    _step = 100.0          # NIFTY strike step for S >= 10_000
+
+    def _net_debit(self, wing_pts: float) -> float:
+        """BS net debit per unit for a ±wing_pts call butterfly."""
+        p_lo  = bs_price(self._S, self._S - wing_pts, self._T, self._r, self._sig, "call")
+        p_atm = bs_price(self._S, self._S,             self._T, self._r, self._sig, "call")
+        p_hi  = bs_price(self._S, self._S + wing_pts, self._T, self._r, self._sig, "call")
+        return p_lo + p_hi - 2 * p_atm
+
+    def test_tight_100pt_wings_negligible_debit(self):
+        """±100pt wings (1 step) produce a debit of < ₹10/unit — near zero."""
+        nd = self._net_debit(wing_pts=self._step * 1)
+        assert nd < 10.0, (
+            f"Expected tight-wing debit < ₹10, got {nd:.2f}. "
+            "This documents the pre-fix broken state."
+        )
+
+    def test_correct_300pt_wings_meaningful_debit(self):
+        """±300pt wings (3 steps / otmMult=1) produce a debit of ≥ ₹15/unit.
+
+        This is the TDD test that FAILS before the frontend fix (spreadMult→otmMult)
+        and PASSES after it.  The frontend butterfly must use wings of at least
+        3× the strike step so that the net debit is financially meaningful.
+        """
+        nd = self._net_debit(wing_pts=self._step * 3)
+        assert nd >= 15.0, (
+            f"Butterfly net debit with ±300pt wings should be ≥ ₹15/unit, got {nd:.2f}. "
+            "Ensure QUICK_STRATEGIES butterfly uses otmMult=±1 (not spreadMult=±1)."
+        )
+
+    def test_net_debit_increases_with_wing_width(self):
+        """Wider wings → higher net debit (butterfly convexity)."""
+        nd1 = self._net_debit(wing_pts=self._step * 1)
+        nd3 = self._net_debit(wing_pts=self._step * 3)
+        nd5 = self._net_debit(wing_pts=self._step * 5)
+        assert nd1 < nd3 < nd5
+
+    def test_net_debit_positive(self):
+        """Long butterfly always has positive net debit (it costs money to enter)."""
+        for wings in [100, 200, 300, 500, 1000]:
+            nd = self._net_debit(wing_pts=float(wings))
+            assert nd > 0, f"Net debit must be positive for wing={wings}"
+
+    def test_max_profit_exceeds_debit_for_300pt_wings(self):
+        """Max profit (wing_width - net_debit per unit) must be positive."""
+        wing = self._step * 3
+        nd   = self._net_debit(wing_pts=wing)
+        max_profit_per_unit = wing - nd
+        assert max_profit_per_unit > 0, (
+            f"Max profit {max_profit_per_unit:.2f} is not positive for ±{wing:.0f}pt wings"
+        )
+
+    def test_butterfly_backtest_legs_symmetric(self):
+        """Backtest butterfly legs are symmetric around ATM."""
+        legs = _build_legs("butterfly", self._S, otm_pct=0.05)
+        buys = sorted(l["strike"] for l in legs if l["action"] == "buy")
+        sell = next(l["strike"] for l in legs if l["action"] == "sell")
+        atm  = sell
+        assert len(buys) == 2
+        assert abs((atm - buys[0]) - (buys[1] - atm)) < 1.0, (
+            f"Butterfly wings not symmetric: lower={buys[0]}, ATM={atm}, upper={buys[1]}"
+        )

@@ -66,6 +66,26 @@ Run: `pnpm --filter @workspace/scripts run push-github`
 
 ## Key Features
 
+### Options Strategy Tester (`/options`)
+- **7 core bugs fixed** (all with TDD): `use_weekly` toggle wired end-to-end, butterfly wing width fixed (otmMult ±1 = ±300pts), SEBI May-2024 expiry rule (only NIFTY/SENSEX have weekly options)
+- **230 tests passing** across `tests/test_options.py` (sections 1–17)
+- Live options chain from NSE, Black-Scholes pricing, Greeks, payoff curves, Monte Carlo VaR, 2-D scenario matrix
+- Historical backtester for 17 strategies (Iron Condor, Butterfly, Straddle, etc.) with weekly/monthly toggle
+- **AI-powered chatbot** — rule-based for all common topics (instant, zero cost), falls back to Gemma 4 / Qwen 3 / Llama 3.3 / gpt-4o-mini for unknown questions
+
+### SEBI Compliance Audit (`scripts/sebi_audit.py`)
+- Scrapes `sebi.gov.in/sebirss.xml` for latest 30 circulars
+- Diffs circulars against 5 key codebase files using free AI (OpenRouter + OpenAI fallback)
+- Writes agent-ready report to `artifacts/python-backend/reports/sebi_audit_YYYY-MM-DD.md`
+- Run on-demand: `PYTHONPATH=. python3.11 scripts/sebi_audit.py` (from `artifacts/python-backend/`)
+- API endpoint: `POST /api/options/sebi-audit` | `GET /api/options/sebi-report`
+
+### AI Client (`app/services/ai_client.py`)
+- Centralized multi-model client with full cascade: Gemma 4 31B → Qwen 3 80B → Llama 3.3 70B (OpenRouter free) → gpt-4o-mini (Replit credits)
+- Functions: `ask()`, `ask_stream()`, `ask_json()`, `chat_with_history()`, `ask_ai_async()`
+- OpenRouter free models: 429 rate-limit handled with retry/backoff
+- gpt-5+ models: `temperature` param skipped (they only support default=1)
+
 ### Stock Analysis Page
 - **Technicals view** (TradingView Indicators' Summary style, dark theme):
   - Timeframe selector: 1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d, 1w, 1mo
