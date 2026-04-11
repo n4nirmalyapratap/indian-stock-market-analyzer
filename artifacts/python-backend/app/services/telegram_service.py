@@ -263,7 +263,11 @@ class TelegramService:
 
     @property
     def token(self) -> Optional[str]:
-        return os.environ.get("TELEGRAM_BOT_TOKEN", self._token or "")
+        try:
+            from app.lib.secrets_store import get_secret  # noqa: PLC0415
+            return get_secret("TELEGRAM_BOT_TOKEN", self._token or "")
+        except Exception:
+            return os.environ.get("TELEGRAM_BOT_TOKEN", self._token or "")
 
     @property
     def configured(self) -> bool:
