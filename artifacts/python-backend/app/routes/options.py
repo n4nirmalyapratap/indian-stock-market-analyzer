@@ -560,41 +560,37 @@ async def options_chat(req: ChatReq):
 async def trigger_sebi_audit():
     """
     Trigger an on-demand SEBI compliance audit.
-    Scrapes the latest SEBI circulars, diffs them against the codebase,
-    and writes a structured Markdown report to reports/.
-    Returns the report text on success.
+    Runs entirely in-process (no subprocess) so all dependencies
+    (openai, etc.) are available.  Saves a Markdown report to reports/.
     """
-    import subprocess, sys, pathlib
+    import sys as _sys
+    import pathlib as pl
 
-    script = pathlib.Path(__file__).parents[2] / "scripts" / "sebi_audit.py"
-    if not script.exists():
-        raise HTTPException(status_code=404, detail="sebi_audit.py not found")
+    # Add python-backend/ to sys.path so `scripts.*` imports resolve
+    backend_root = str(pl.Path(__file__).parents[2])
+    if backend_root not in _sys.path:
+        _sys.path.insert(0, backend_root)
 
     try:
-        result = await asyncio.to_thread(
-            subprocess.run,
-            [sys.executable, str(script)],
-            capture_output=True, text=True, timeout=180,
-            cwd=str(script.parent.parent),
-            env={**__import__("os").environ},
-        )
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="Audit timed out after 3 minutes")
+        from scripts.sebi_audit import run_audit_async
+        result = await run_audit_async(days=90)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Audit failed: {exc}")
 
-    # Find the latest report
-    import glob, pathlib as pl
-    reports = sorted(pl.Path(script.parent.parent / "reports").glob("sebi_audit_*.md"))
+    # Return the freshly written report text as well
+    reports_dir = pl.Path(__file__).parents[2] / "reports"
+    reports = sorted(reports_dir.glob("sebi_audit_*.md")) if reports_dir.exists() else []
     report_text = reports[-1].read_text() if reports else "(no report generated)"
 
     return {
-        "status": "ok" if result.returncode == 0 else "error",
-        "stdout": result.stdout[-2000:],
-        "stderr": result.stderr[-500:],
-        "report": report_text,
+        "status":    result.get("status", "ok"),
+        "log":       result.get("log", ""),
+        "n_issues":  result.get("n_issues", 0),
+        "report":    report_text,
     }
 
 
-# ── GET /options/sebi-report ──────────────────────────────────────────────────
+# ── GET /options/sebi-report  (latest only) ───────────────────────────────────
 
 @router.get("/sebi-report")
 async def get_sebi_report():
@@ -607,8 +603,41 @@ async def get_sebi_report():
         raise HTTPException(status_code=404, detail="No SEBI audit report found. Run /sebi-audit first.")
 
     latest = reports[-1]
+    text = latest.read_text()
     return {
-        "filename": latest.name,
+        "filename":  latest.name,
         "generated": latest.stem.replace("sebi_audit_", ""),
-        "report": latest.read_text(),
+        "report":    text,
+        "n_issues":  text.count("### ISSUE-"),
     }
+
+
+# ── GET /options/sebi-reports (all reports — list view) ───────────────────────
+
+@router.get("/sebi-reports")
+async def list_sebi_reports(full: bool = False):
+    """
+    Return metadata for ALL historical SEBI audit reports, newest first.
+    If full=true, also include the full report text for each entry.
+    """
+    import pathlib as pl
+
+    reports_dir = pl.Path(__file__).parents[2] / "reports"
+    reports = sorted(
+        reports_dir.glob("sebi_audit_*.md"), reverse=True
+    ) if reports_dir.exists() else []
+
+    result = []
+    for p in reports:
+        text = p.read_text()
+        entry = {
+            "filename":  p.name,
+            "generated": p.stem.replace("sebi_audit_", ""),
+            "n_issues":  text.count("### ISSUE-"),
+            "n_lines":   text.count("\n"),
+        }
+        if full:
+            entry["report"] = text
+        result.append(entry)
+
+    return {"reports": result, "total": len(result)}

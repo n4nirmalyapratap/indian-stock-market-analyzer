@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchAdmin } from "@/lib/api";
 import {
   Database, Activity, Globe, Cpu, BarChart2, HeartPulse,
+  ShieldCheck, Bug, Newspaper, ScanLine, TrendingUp, GitBranch,
   Play, RefreshCw, CheckCircle2, XCircle, Clock, Loader2,
 } from "lucide-react";
 
@@ -19,12 +20,18 @@ type Job = {
 };
 
 const ICONS: Record<string, React.ElementType> = {
-  database:     Database,
-  activity:     Activity,
-  globe:        Globe,
-  cpu:          Cpu,
-  "bar-chart":  BarChart2,
-  "heart-pulse": HeartPulse,
+  database:       Database,
+  activity:       Activity,
+  globe:          Globe,
+  cpu:            Cpu,
+  "bar-chart":    BarChart2,
+  "heart-pulse":  HeartPulse,
+  "shield-check": ShieldCheck,
+  bug:            Bug,
+  newspaper:      Newspaper,
+  "scan-line":    ScanLine,
+  "trending-up":  TrendingUp,
+  "git-branch":   GitBranch,
 };
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -32,6 +39,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   "Analysis":    "bg-purple-50 text-purple-700 border-purple-100",
   "AI Engine":   "bg-indigo-50 text-indigo-700 border-indigo-100",
   "Monitoring":  "bg-green-50 text-green-700 border-green-100",
+  "Compliance":  "bg-rose-50 text-rose-700 border-rose-100",
 };
 
 function StatusBadge({ status }: { status: Job["status"] }) {

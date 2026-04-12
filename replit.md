@@ -3,226 +3,236 @@
 ## Project Overview
 
 A full-stack Indian stock market analysis platform with:
-- **User app** (`/`) — React/Vite frontend for stock analysis, charts, news
-- **Admin dashboard** (`/admin`) — React/Vite admin panel for user/system management
-- **Python FastAPI backend** (`/api`) — Serves all API endpoints on port 8090
+- **User app** (`/`) — React/Vite frontend for stock analysis, charts, options, news
+- **Admin dashboard** (`/admin`) — React/Vite admin panel for user/system/compliance management
+- **Python FastAPI backend** (`/api`) — All API endpoints on port 8090
+
+---
 
 ## Architecture
 
 ```
 workspace/
 ├── artifacts/
-│   ├── python-backend/       # FastAPI backend (Python 3.11)
-│   │   ├── app/              # Application logic
-│   │   │   ├── routes/       # API route handlers
-│   │   │   ├── services/     # Business logic services
-│   │   │   ├── middleware/   # Auth & other middleware
-│   │   │   └── lib/          # Shared libraries
-│   │   ├── pandas_ta/        # Local shim wrapping the `ta` library
-│   │   ├── main.py           # FastAPI app entry point
-│   │   └── run.py            # Startup script (downloads spaCy model, starts uvicorn)
-│   ├── stock-market-app/     # User-facing React/Vite app (port 19845, path: /)
-│   ├── admin-dashboard/      # Admin React/Vite app (port 22133, path: /admin)
-│   └── api-server/           # Node.js routing shim (proxies /api → Python backend)
-└── scripts/                  # GitHub push and utility scripts
+│   ├── python-backend/           # FastAPI backend (Python 3.11)
+│   │   ├── app/
+│   │   │   ├── routes/           # All API route handlers
+│   │   │   ├── services/         # Business logic (AI, market data, sentiment, etc.)
+│   │   │   ├── middleware/       # HS256 JWT auth middleware
+│   │   │   └── lib/              # Shared utilities (secrets_store, etc.)
+│   │   ├── pandas_ta/            # LOCAL SHIM — wraps `ta` library (NEVER install from PyPI)
+│   │   ├── scripts/              # Audit, bug tracking, DB init scripts
+│   │   │   ├── sebi_audit.py     # SEBI compliance audit (in-process, no subprocess)
+│   │   │   ├── sebi_circulars_db.py  # 20 SEBI circulars 2019–2024 (5-year DB)
+│   │   │   ├── add_bug.py        # Bug tracker CLI
+│   │   │   └── bug_fixer.py      # AI bug analyser background job
+│   │   ├── reports/              # SEBI audit reports (sebi_audit_YYYY-MM-DD.md)
+│   │   ├── tests/                # pytest test suite (349 tests)
+│   │   ├── requirements.txt      # Python dependencies (keep in sync!)
+│   │   ├── main.py               # FastAPI app entry point
+│   │   └── run.py                # Startup (downloads spaCy model, starts uvicorn)
+│   ├── stock-market-app/         # User React/Vite app  (port 19845, path: /)
+│   ├── admin-dashboard/          # Admin React/Vite app (port 22133, path: /admin)
+│   └── api-server/               # ROUTING SHIM ONLY — proxies /api → port 8090
+│                                 # NEVER touch its source code
+└── scripts/                      # GitHub push utility
+    └── src/push-github.ts
 ```
+
+---
 
 ## Workflows
 
-| Workflow | Description |
-|---|---|
-| `Python Backend` | FastAPI server on port 8090 |
-| `artifacts/stock-market-app: web` | Vite dev server on port 19845 |
-| `artifacts/admin-dashboard: web` | Vite dev server on port 22133 |
-| `artifacts/api-server: API Server` | Node.js proxy shim on port 8080 |
+| Workflow | Command | Port |
+|---|---|---|
+| `Python Backend` | `cd artifacts/python-backend && PORT=8090 python3.11 run.py` | 8090 |
+| `artifacts/stock-market-app: web` | `pnpm --filter @workspace/stock-market-app run dev` | 19845 |
+| `artifacts/admin-dashboard: web` | `pnpm --filter @workspace/admin-dashboard run dev` | 22133 |
+| `artifacts/api-server: API Server` | routing shim (echo only — Python handles everything) | — |
 
-## Important Rules
+---
 
-- **NEVER install `pandas_ta` from PyPI** — there is a local shim at `artifacts/python-backend/pandas_ta/` that wraps the `ta` library
-- **NEVER use `yf.download()`** — always use `yf.Ticker(symbol).history()`
-- **Router is `wouter`** — never use react-router
-- **NEVER touch `artifacts/api-server/` source code** — it is a routing shim only
-- **No Clerk auth** — `ClerkAuthMiddleware` is actually custom HS256 JWT middleware
-- The stock-market-app vite.config proxies `/api` → `http://localhost:8090`
+## Fresh Setup / Reinstall Checklist
 
-## Environment Secrets
+If packages are missing or a new environment is set up, run these in order:
 
+```bash
+# 1. Python packages
+cd artifacts/python-backend
+python3.11 -m pip install -r requirements.txt
+
+# 2. spaCy language model (run.py does this on startup, but if running manually):
+python3.11 -m spacy download en_core_web_sm
+
+# 3. Node packages
+pnpm install --no-frozen-lockfile
+
+# 4. Connect integrations (one-time, in Replit AI integrations panel or via code_execution):
+#    - OpenRouter (for free AI: Gemma 4, Qwen 3, Llama 3.3)
+#    - Sets env vars: AI_INTEGRATIONS_OPENROUTER_BASE_URL, AI_INTEGRATIONS_OPENROUTER_API_KEY
+```
+
+**Required Python packages** (all in `requirements.txt`):
+```
+fastapi, uvicorn[standard], httpx, pandas, numpy, ta, spacy,
+python-multipart, openpyxl, yfinance, scipy, feedparser,
+PyJWT, cryptography, bcrypt, openai, lxml
+```
+
+> `openai` — free HTTP client SDK used to talk to OpenRouter's API. NOT the paid OpenAI service.
+> `lxml` — XML parser for BeautifulSoup (SEBI RSS feed parsing).
+
+**Env secrets** (set in Replit Secrets panel):
 | Secret | Purpose |
 |---|---|
 | `ADMIN_USERNAME` | Admin dashboard login username |
 | `ADMIN_PASSWORD` | Admin dashboard login password |
 | `SESSION_SECRET` | JWT signing secret |
+| `GITHUB_PAT` | GitHub Personal Access Token for git push |
+| `AI_INTEGRATIONS_OPENROUTER_BASE_URL` | Auto-set by OpenRouter integration |
+| `AI_INTEGRATIONS_OPENROUTER_API_KEY` | Auto-set by OpenRouter integration |
+
+---
+
+## Hard Rules (NEVER violate)
+
+- **NEVER install `pandas_ta` from PyPI** — use the local shim at `artifacts/python-backend/pandas_ta/`
+- **NEVER use `yf.download()`** — always use `yf.Ticker(symbol).history()`
+- **Router is `wouter`** — never use react-router in any frontend
+- **NEVER touch `artifacts/api-server/` source** — it is a routing shim only
+- **No Clerk** — `ClerkAuthMiddleware` is actually a custom HS256 JWT middleware
+- **SEBI lot sizes (Nov 2024)**: NIFTY=75, BANKNIFTY=30, FINNIFTY=65, MIDCPNIFTY=120, SENSEX=10, BANKEX=15
+- **Iron Condor rule**: ONLY recommend when VIX ≥ 22 AND composite sentiment is neutral (−30 to +30)
+- **`hydra_db_service.get_history(ticker, days)`** is SYNC (not async), takes `days` not `limit`
+- **`sebi_audit.py`** runs IN-PROCESS via `run_audit_async()` — NEVER call it as a subprocess
+- **NEVER add `"pandas_ta"` to SKIP_DIRS** in `push-github.ts`
+
+---
 
 ## API Authentication
 
 - User endpoints: JWT tokens (HS256) via `Authorization: Bearer <token>`
-- Admin endpoints: Separate admin JWT via `/api/admin/login`
-- Default admin in dev: username from `ADMIN_USERNAME`, password from `ADMIN_PASSWORD`
+- Admin endpoints: Admin JWT via `POST /api/admin/login` → use in `X-Admin-Token` header
+- `ClerkAuthMiddleware` passes `X-Admin-Token` to ALL `/api/*` routes (not just `/api/admin`)
+  so admin dashboard can call options/hydra/etc. endpoints directly
+
+---
 
 ## GitHub Push
 
-See `GITHUB_PUSH.md` for instructions on pushing to GitHub.
-Run: `pnpm --filter @workspace/scripts run push-github`
+```bash
+pnpm --filter @workspace/scripts run push-github
+```
+- Uses `GITHUB_PAT` secret
+- Uploads all source files (406+ blobs) — takes ~3 minutes, be patient
+- If it times out, run again; it is idempotent
+
+---
+
+## AI Client (`app/services/ai_client.py`)
+
+**Free models only — zero per-token cost:**
+1. `google/gemma-4-31b-it:free` — primary (Gemma 4, Google)
+2. `qwen/qwen3-30b-a3b:free` — fallback (Qwen 3, Chinese open-source)
+3. `meta-llama/llama-3.3-70b-instruct:free` — last resort (Llama 3.3, Meta)
+
+**Via OpenRouter** (auto-configured by Replit integration, no API key cost).
+**No paid OpenAI API** — removed entirely.
+
+Rate limits on free tier: ~8 req/min per model. The audit uses batched calls (10 circulars/batch with 1.5s pauses) to stay within limits.
+
+Functions: `ask()`, `ask_stream()`, `ask_json()`, `chat_with_history()`, `ask_ai_async()`
+
+---
+
+## SEBI Compliance Audit
+
+**Files:**
+- `scripts/sebi_audit.py` — main audit logic + `run_audit_async()` entry point
+- `scripts/sebi_circulars_db.py` — 20 SEBI circulars 2019–2024 (hardcoded, always available)
+- `reports/sebi_audit_YYYY-MM-DD.md` — generated reports (one per run date)
+
+**How it works:**
+1. Load 20 historical circulars from built-in 5-year database (no network needed)
+2. Fetch live SEBI RSS feed for last 30 days (graceful fallback if network fails)
+3. Merge + deduplicate (49 total circulars typical)
+4. Split into batches of 10, send each batch to AI as a compressed prompt (~2,500 tokens)
+5. Aggregate findings into final Markdown report
+
+**API endpoints:**
+- `POST /api/options/sebi-audit` — trigger audit (runs in-process, ~60-90 seconds)
+- `GET /api/options/sebi-report` — latest report
+- `GET /api/options/sebi-reports` — all historical reports (with `?full=true` for content)
+
+**CLI (from `artifacts/python-backend/`):**
+```bash
+PYTHONPATH=. python3.11 scripts/sebi_audit.py --days 30
+```
+
+---
 
 ## Key Features
 
 ### Centralized Market Sentiment Engine (`/sentiment`)
-**Single source of truth for all sentiment-related decisions across the app.**
-
-- **Route:** `GET /api/sentiment/market` — full composite snapshot (15-min cache)
-- **Route:** `GET /api/sentiment/sectors` — per-sector heatmap data
-- **Route:** `GET /api/sentiment/refresh` — force-refresh both caches
-- **Service:** `app/services/market_sentiment_engine.py`
-
-**Composite score (-100 to +100) from 4 weighted signals:**
-| Signal | Weight | Source |
-|---|---|---|
-| News NLP | 35% | `news_service.get_summary()` bullish/bearish article ratio |
-| Price Action | 35% | Nifty50 history → `hydra_sentiment_service.price_action_sentiment()` |
-| India VIX | 20% | Yahoo Finance `^NSEVIXY` — inverted (high VIX = bearish) |
-| PCR Proxy | 10% | Synthetic PCR derived from VIX level + 5-day VIX trend |
-
-**Labels:** Extremely Bearish / Bearish / Neutral / Bullish / Extremely Bullish
-
-**Contrarian signals (from research paper):**
-- VIX > 25 AND score < -40 → Peak Fear (potential market bottom)
-- VIX < 12 AND score > 60 → Peak Complacency (potential market top)
-- PCR proxy > 1.4 → Excessive Bearishness (contrarian buy watch)
-- PCR proxy < 0.5 → Excessive Bullishness (contrarian sell watch)
-
-**Frontend page (`SentimentDashboard.tsx`):**
-- SVG speedometer gauge for composite score
-- VIX level bar with gradient zones + interpretation card
-- PCR proxy bar with zone markers + interpretation card
-- News breakdown (bullish/bearish/neutral bars)
-- Nifty50 Price Action KPIs (5d momentum, 20d momentum, RSI14)
-- Sector heatmap (12 sectors, color-coded green→red)
-- Strategy recommendations table (from research paper mapping)
-- Contrarian signal alerts
-
-**Integration points:**
-- `OptionsStrategyTester` — Smart Strategy Builder uses this as supplementary context
-- `hydra_forecast_service.py` — sentiment_bias already used in price forecasting
-- `news_service.py` — `get_summary()` is the news signal source
+- Route: `GET /api/sentiment/market` — composite snapshot (15-min cache)
+- Route: `GET /api/sentiment/sectors` — per-sector heatmap
+- Service: `app/services/market_sentiment_engine.py`
+- Composite score (-100 to +100) from: News NLP (35%), Price Action (35%), India VIX (20%), PCR Proxy (10%)
+- Iron Condor only recommended when VIX ≥ 22 AND sentiment is neutral (-30 to +30)
 
 ### Options Strategy Tester (`/options`)
-- **7 core bugs fixed** (all with TDD): `use_weekly` toggle wired end-to-end, butterfly wing width fixed (otmMult ±1 = ±300pts), SEBI May-2024 expiry rule (only NIFTY/SENSEX have weekly options)
-- **230 tests passing** across `tests/test_options.py` (sections 1–17)
-- Live options chain from NSE, Black-Scholes pricing, Greeks, payoff curves, Monte Carlo VaR, 2-D scenario matrix
-- Historical backtester for 17 strategies (Iron Condor, Butterfly, Straddle, etc.) with weekly/monthly toggle
-- **AI-powered chatbot** — rule-based for all common topics (instant, zero cost), falls back to Gemma 4 / Qwen 3 / Llama 3.3 / gpt-4o-mini for unknown questions
+- 349 tests passing (TDD)
+- Live NSE options chain, Black-Scholes, Greeks, payoff curves, Monte Carlo VaR
+- 17 strategies with weekly/monthly toggle
+- AI chatbot: rule-based for common topics, falls back to free Gemma 4 / Qwen / Llama
 
-### SEBI Compliance Audit (`scripts/sebi_audit.py`)
-- Scrapes `sebi.gov.in/sebirss.xml` for latest 30 circulars
-- Diffs circulars against 5 key codebase files using free AI (OpenRouter + OpenAI fallback)
-- Writes agent-ready report to `artifacts/python-backend/reports/sebi_audit_YYYY-MM-DD.md`
-- Run on-demand: `PYTHONPATH=. python3.11 scripts/sebi_audit.py` (from `artifacts/python-backend/`)
-- API endpoint: `POST /api/options/sebi-audit` | `GET /api/options/sebi-report`
+### Admin Dashboard (`/admin`)
+- 12 background jobs (market data, analysis, AI engine, compliance)
+- SEBI Audit page: master-detail layout, all historical reports, run on-demand
+- Bug Tracker: create/track/AI-analyse bugs
+- User management, system logs, WhatsApp/Telegram integration
 
-### AI Client (`app/services/ai_client.py`)
-- Centralized multi-model client with full cascade: Gemma 4 31B → Qwen 3 80B → Llama 3.3 70B (OpenRouter free) → gpt-4o-mini (Replit credits)
-- Functions: `ask()`, `ask_stream()`, `ask_json()`, `chat_with_history()`, `ask_ai_async()`
-- OpenRouter free models: 429 rate-limit handled with retry/backoff
-- gpt-5+ models: `temperature` param skipped (they only support default=1)
+### Stock Analysis
+- Technicals: TradingView-style with oscillators, MAs, pivots (10 timeframes)
+- Financials: 6 tabs (overview, income, stats, dividends, earnings, revenue)
+- All financials in ₹ Crores; NaN safely serialised as `null`
 
-### Stock Analysis Page
-- **Technicals view** (TradingView Indicators' Summary style, dark theme):
-  - Timeframe selector: 1m, 5m, 15m, 30m, 1h, 2h, 4h, 1d, 1w, 1mo
-  - Summary SVG gauge (speedometer needle) with Buy/Sell/Neutral counts
-  - **Oscillators** sub-gauge + expandable table: RSI(14), Stochastic %K, CCI(20), ADX(14), Awesome Oscillator, Momentum(10), MACD(12,26), StochRSI Fast, Williams %R(14), Bull Bear Power, Ultimate Oscillator(7,14,28)
-  - **Moving Averages** sub-gauge + expandable table: EMA/SMA (10/20/30/50/100/200), Ichimoku Base Line, VWMA(20), HMA(9)
-  - **Pivots** table with Classic / Fibonacci / Camarilla / Woodie / DM tabs (R3–S3)
-- **Financials view** (TradingView-style, 6 tabs):
-  - **Overview** — Valuation & Profitability metric cards + mini Revenue/Net Income charts
-  - **Income Statement** — Revenue vs Profits bar chart + EBITDA bar chart + sortable table (Annual/Quarterly toggle)
-  - **Statistics & Ratios** — Valuation / Profitability / Financial Health stat rows
-  - **Dividends** — Annual dividend payout chart + recent dividend payment table
-  - **Earnings** — Diluted EPS bar chart with positive/negative colour coding + growth % table
-  - **Revenue** — Revenue + Gross Profit bars with YoY growth % line overlay + table
+---
 
-### Backend API — `/api/stocks/{symbol}/financials`
-- Returns: `overview`, `incomeStatement` (annual+quarterly), `balanceSheet`, `cashFlow`, `dividends`, `eps`
-- All monetary values in ₹ Crores; NaN values safely serialised as `null`
-- 31 TDD tests in `tests/test_financials_endpoint.py`
+## Bug Tracking (MANDATORY for all agents)
 
-## Bug Tracking Process (MANDATORY — Applies to All Agents)
+Every bug must have a ticket before code changes:
 
-**Every bug must go through the Bug Tracker before it is resolved. No exceptions.**
+```bash
+# Create ticket
+PYTHONPATH=artifacts/python-backend python3.11 artifacts/python-backend/scripts/add_bug.py \
+  --title "Short title" --description "What's wrong" \
+  --severity medium --component "Options Strategy Tester" --reported_by "agent"
 
-### Agent Workflow for Fixing Bugs
+# Mark in-progress
+PYTHONPATH=artifacts/python-backend python3.11 -c "
+from scripts.add_bug import update_bug_status
+update_bug_status('a1b2c3d4', 'in-progress', 'Root cause: ...')
+"
 
-#### Scenario A — User reports a bug without mentioning a ticket
-1. **Create the ticket first** (before touching any code):
-   ```bash
-   PYTHONPATH=artifacts/python-backend python3.11 artifacts/python-backend/scripts/add_bug.py \
-     --title "Short bug title" --description "What's wrong and how to reproduce" \
-     --severity medium --component "Options Strategy Tester" --reported_by "agent"
-   ```
-   Save the returned ID (e.g. `#a1b2c3d4`).
+# Mark fixed (after code change + tests + push)
+PYTHONPATH=artifacts/python-backend python3.11 -c "
+from scripts.add_bug import update_bug_status
+update_bug_status('a1b2c3d4', 'fixed', 'Fixed in commit abc1234')
+"
+```
 
-2. **Mark in-progress** when you start the fix:
-   ```bash
-   PYTHONPATH=artifacts/python-backend python3.11 -c "
-   from scripts.add_bug import update_bug_status
-   update_bug_status('a1b2c3d4', 'in-progress', 'Starting fix — root cause: ...')
-   "
-   ```
+AI Bug Analyser runs every 10 minutes automatically (background task in `main.py`).
 
-3. **Apply the fix, run tests, push to GitHub.**
-
-4. **Mark fixed** after confirmed working:
-   ```bash
-   PYTHONPATH=artifacts/python-backend python3.11 -c "
-   from scripts.add_bug import update_bug_status
-   update_bug_status('a1b2c3d4', 'fixed', 'Fixed in commit abc1234: explanation')
-   "
-   ```
-
-#### Scenario B — User mentions a specific bug ticket ID
-- Read the bug from the tracker to understand the description and any AI analysis notes.
-- Use the AI analysis (if present in the description under `[AI Analysis]`) as your starting point.
-- Follow steps 2–4 from Scenario A using that ticket ID.
-
-### Hard Rules
-- NEVER fix a bug without first creating or referencing a ticket. This is non-negotiable.
-- A bug is NOT `fixed` until there is actual code change + passing tests + git push.
-- Only the **human user** (or someone they delegate) changes a bug to `closed`. Agents mark `fixed`, humans close.
-- Agents must never skip the tracker step, even for tiny one-line fixes.
-
-### AI Bug Analyser (read-only background job)
-The analyser runs every 10 minutes automatically (background task in `main.py`).
-
-**What it does:**
-- Reads all open/in-progress bugs that don't have a recent analysis
-- Finds relevant source code for each bug based on component + keywords
-- Uses AI to diagnose the root cause and write numbered fix steps
-- Stores the analysis in the bug's description field under `[AI Analysis]`
-
-**What it does NOT do:**
-- Apply any code changes
-- Run tests
-- Push to GitHub
-- Change bug status
-- Auto-close bugs
-
-The human (or an AI agent delegated by the human) reads the analysis and decides how to act on it.
-
-**Files:**
-- `artifacts/python-backend/scripts/bug_fixer.py` — analyser script
-- `artifacts/python-backend/scripts/add_bug.py` — CLI helper for creating/updating bugs
-
-**Admin UI:** Bug Tracker page → "Analyse All Bugs" button → AI analysis appears in each bug card's expanded view (purple `AI Analysis` panel)
-
-**Endpoints:**
-- `POST /admin/bugs/run-fixer` — trigger analysis on demand (optionally `?bug_id=<id>` for one bug)
-- `GET /admin/bugs/fixer-status` — current analyser status + last run results
+---
 
 ## Tech Stack
 
 | Layer | Technology |
 |---|---|
 | User Frontend | React 18, Vite, Tailwind CSS, wouter, TanStack Query, Recharts, ECharts, Lightweight Charts |
-| Admin Frontend | React 18, Vite, Tailwind CSS, wouter, TanStack Query, Recharts |
-| Backend | Python 3.11, FastAPI, uvicorn, yfinance, pandas, scipy, spaCy, ta |
+| Admin Frontend | React 18, Vite, Tailwind CSS, wouter, TanStack Query |
+| Backend | Python 3.11, FastAPI, uvicorn, yfinance, pandas, scipy, spaCy, ta, openai (SDK only), lxml |
+| AI | OpenRouter free tier: Gemma 4 31B, Qwen 3 30B, Llama 3.3 70B |
 | Auth | Custom HS256 JWT (PyJWT + bcrypt) |
-| Routing shim | Node.js + Express (proxies /api path) |
+| Routing shim | Node.js + Express (proxies /api path only) |

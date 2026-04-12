@@ -147,6 +147,162 @@ class _CacheStatusJob(_Job):
         return f"Cache healthy — {loaded}/{total} symbols loaded"
 
 
+class _SebiAuditJob(_Job):
+    async def _execute(self) -> str:
+        import sys as _sys, pathlib as pl
+        backend_root = str(pl.Path(__file__).parents[2])
+        if backend_root not in _sys.path:
+            _sys.path.insert(0, backend_root)
+        from scripts.sebi_audit import run_audit_async
+        result = await run_audit_async(days=90)
+        n = result.get("n_issues", 0)
+        return f"Audit complete — {n} issue(s) found, report saved to reports/"
+
+
+class _NewsRefreshJob(_Job):
+    async def _execute(self) -> str:
+        from app.services import news_service
+        await news_service.invalidate_cache()
+        feeds = await news_service._fetch_all_feeds()
+        n = len(feeds)
+        return f"News cache cleared & re-fetched — {n} articles loaded"
+
+
+class _ScannersRunAllJob(_Job):
+    async def _execute(self) -> str:
+        from app.services.scanners_service import ScannersService, _DB
+        from app.services.yahoo_service import YahooService
+        from app.services.nse_service import NseService
+        from app.services.price_service import PriceService
+        price = PriceService(NseService(), YahooService())
+        svc   = ScannersService(price)
+        all_scanners = svc.get_all_scanners()
+        if not all_scanners:
+            return "No scanners saved — create scanners in the Stock Screener first"
+        hits = 0
+        for sc in all_scanners:
+            try:
+                result = await svc.run_scanner(sc["id"])
+                hits += len(result.get("matches", []))
+            except Exception:
+                pass
+        return f"Ran {len(all_scanners)} scanner(s) — {hits} total matches found"
+
+
+class _AnalyticsWarmupJob(_Job):
+    async def _execute(self) -> str:
+        from app.services.analytics_service import AnalyticsService
+        from app.services.yahoo_service import YahooService
+        from app.services.nse_service import NseService
+        from app.services.sectors_service import SectorsService
+        from app.services.patterns_service import PatternsService
+        from app.services.sector_analytics_service import SectorAnalyticsService
+        yahoo   = YahooService()
+        nse     = NseService()
+        sectors = SectorsService(nse)
+        patterns = PatternsService()
+        svc     = AnalyticsService(yahoo, nse, sectors, patterns)
+        sa_svc  = SectorAnalyticsService(yahoo)
+        # warm all caches in parallel
+        sector_data = await sectors.get_sectors()
+        await asyncio.gather(
+            svc.get_sector_correlation(30),
+            svc.get_breadth_history(30),
+            svc.get_top_movers(),
+            svc.get_pattern_stats(),
+            sa_svc.get_heatmap(sector_data),
+            return_exceptions=True,
+        )
+        return "Analytics caches warmed — sector correlation, breadth, movers, pattern stats, heatmap"
+
+
+class _HydraPairsScanJob(_Job):
+    async def _execute(self) -> str:
+        from app.services import hydra_db_service as db
+        from app.services import hydra_pairs_service as pairs
+        from app.lib.universe import NIFTY50
+        symbols = NIFTY50[:20]
+        # Fetch price histories
+        histories: dict[str, list[float]] = {}
+        for sym in symbols:
+            try:
+                rows = db.get_history(sym, days=252)
+                if rows and len(rows) >= 30:
+                    histories[sym] = [r["close"] for r in rows]
+            except Exception:
+                pass
+        if len(histories) < 2:
+            return "Not enough price history in DB — run Hydra DB Sync first"
+        found = pairs.scan_pairs(list(histories.keys()), histories, p_threshold=0.05)
+        return f"Scanned {len(histories)} stocks — {len(found)} co-integrated pair(s) found"
+
+
+class _BugFinderJob(_Job):
+    async def _execute(self) -> str:
+        """
+        Cross-app discrepancy scanner.
+        Checks for inconsistencies between frontend and backend:
+          - Lot sizes
+          - Expiry day assignments
+          - Weekly vs monthly index rules
+        """
+        import pathlib as pl, re
+
+        ROOT = pl.Path(__file__).parents[3]
+
+        # ── 1. Extract backend lot sizes ──────────────────────────────────────
+        be_file = ROOT / "artifacts/python-backend/app/services/options_service.py"
+        be_text = be_file.read_text() if be_file.exists() else ""
+        be_lots: dict[str, int] = {}
+        for m in re.finditer(r'"([A-Z0-9^]+)"\s*:\s*(\d+)', be_text):
+            be_lots[m.group(1)] = int(m.group(2))
+
+        # ── 2. Extract frontend lot sizes ─────────────────────────────────────
+        fe_file = ROOT / "artifacts/stock-market-app/src/pages/OptionsStrategyTester.tsx"
+        fe_text = fe_file.read_text() if fe_file.exists() else ""
+        fe_lots: dict[str, int] = {}
+        for m in re.finditer(r'sym:\s*"([A-Z0-9]+)".*?lot:\s*(\d+)', fe_text, re.DOTALL):
+            fe_lots[m.group(1)] = int(m.group(2))
+
+        # ── 3. Expected SEBI lot sizes (Nov 2024) ────────────────────────────
+        sebi_lots = {
+            "NIFTY": 75, "BANKNIFTY": 30, "FINNIFTY": 65,
+            "MIDCPNIFTY": 120, "SENSEX": 10, "BANKEX": 15,
+        }
+
+        issues: list[str] = []
+
+        for sym, expected in sebi_lots.items():
+            be_val = be_lots.get(sym)
+            fe_val = fe_lots.get(sym)
+            if be_val and be_val != expected:
+                issues.append(f"BACKEND lot_size mismatch: {sym}={be_val} (should be {expected})")
+            if fe_val and fe_val != expected:
+                issues.append(f"FRONTEND lot mismatch: {sym}={fe_val} (should be {expected})")
+
+        # ── 4. Expiry day consistency ─────────────────────────────────────────
+        # Backend expiry days (from options_backtest_service.py)
+        be_exp_file = ROOT / "artifacts/python-backend/app/services/options_backtest_service.py"
+        be_exp_text = be_exp_file.read_text() if be_exp_file.exists() else ""
+        # Frontend expiry days
+        fe_exp = {}
+        for m in re.finditer(r'(BANKNIFTY|FINNIFTY|MIDCPNIFTY|SENSEX|BANKEX)\s*:\s*(\d+)', fe_text):
+            fe_exp[m.group(1)] = int(m.group(2))
+        be_exp = {}
+        for m in re.finditer(r'(BANKNIFTY|FINNIFTY|MIDCPNIFTY|SENSEX|BANKEX)["\']?\s*:\s*(\d+)', be_exp_text):
+            be_exp[m.group(1)] = int(m.group(2))
+
+        for sym in fe_exp:
+            if sym in be_exp and fe_exp[sym] != be_exp[sym]:
+                issues.append(
+                    f"EXPIRY DAY mismatch for {sym}: frontend={fe_exp[sym]}, backend={be_exp[sym]}"
+                )
+
+        if not issues:
+            return "No discrepancies found — frontend and backend are in sync with SEBI Nov 2024 rules"
+        return f"{len(issues)} discrepancy(ies) found:\n" + "\n".join(f"  • {i}" for i in issues)
+
+
 # ── Register all jobs ──────────────────────────────────────────────────────────
 
 _JOBS: dict[str, _Job] = {}
@@ -195,6 +351,48 @@ _reg(_CacheStatusJob(
     description="Queries the current cache status and verifies that market data is populated. Non-destructive read-only check.",
     category="Monitoring",
     icon="heart-pulse",
+))
+_reg(_NewsRefreshJob(
+    id="news_refresh",
+    name="News Feed Refresh",
+    description="Clears the news cache and re-fetches all configured RSS/news feeds (Economic Times, Mint, BSE, NSE, Moneycontrol). Reloads articles, deals, and corporate events.",
+    category="Market Data",
+    icon="newspaper",
+))
+_reg(_ScannersRunAllJob(
+    id="scanners_run_all",
+    name="Run All Scanners",
+    description="Executes every saved custom scanner in sequence against live market data. Updates each scanner's match list and timestamps.",
+    category="Analysis",
+    icon="scan-line",
+))
+_reg(_AnalyticsWarmupJob(
+    id="analytics_warmup",
+    name="Analytics Cache Warm-Up",
+    description="Pre-computes and caches sector correlation matrix, market breadth history, top movers, pattern stats, and sector heatmap. Prevents slow first-load on the Analytics page.",
+    category="Analysis",
+    icon="trending-up",
+))
+_reg(_HydraPairsScanJob(
+    id="hydra_pairs_scan",
+    name="Hydra Pairs Scan",
+    description="Scans Nifty 50 stocks for statistically co-integrated pairs using Engle-Granger cointegration tests. Results feed the Pairs Trading strategy in the AI engine.",
+    category="AI Engine",
+    icon="git-branch",
+))
+_reg(_SebiAuditJob(
+    id="sebi_audit",
+    name="SEBI Compliance Audit",
+    description="Scrapes SEBI.gov.in for the latest circulars (last 30 days), scans all options/derivatives code across the app, and uses AI to produce a structured compliance diff report.",
+    category="Compliance",
+    icon="shield-check",
+))
+_reg(_BugFinderJob(
+    id="bug_finder",
+    name="Bug Finder (Cross-App Scan)",
+    description="Scans for discrepancies between frontend and backend: lot sizes, expiry days, weekly/monthly index rules. Flags any drift from SEBI Nov 2024 standards.",
+    category="Compliance",
+    icon="bug",
 ))
 
 

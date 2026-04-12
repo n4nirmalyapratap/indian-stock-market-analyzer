@@ -1,12 +1,14 @@
 """
 Centralized AI client for the Indian Stock Market Analyzer.
 
-Strategy (cheapest → reliable):
-  1. OpenRouter :free models (zero cost, shared rate limits)
-       • Primary  : google/gemma-4-31b-it:free      (Gemma 4, Google)
-       • Fallback1: qwen/qwen3-next-80b-a3b-instruct:free  (Qwen 3 80B, Chinese)
-       • Fallback2: meta-llama/llama-3.3-70b-instruct:free (Llama 3.3 70B, Meta)
-  2. OpenAI gpt-4o-mini (Replit-billed, very cheap, always available as last resort)
+Uses ONLY free, open-source models via OpenRouter (zero cost):
+  • Primary  : google/gemma-4-31b-it:free        (Gemma 4, Google)
+  • Fallback1: qwen/qwen3-30b-a3b:free            (Qwen 3, Chinese open-source)
+  • Fallback2: meta-llama/llama-3.3-70b-instruct:free  (Llama 3.3, Meta)
+
+NO paid services. NO OpenAI API key required.
+The openai Python SDK is used purely as an HTTP client to hit OpenRouter's
+free, OpenAI-compatible endpoint.
 
 All credentials are read from the DB secrets store first (admin-managed),
 falling back to environment variables. No restart required after updating secrets.
@@ -39,27 +41,26 @@ def _s(key: str, default: str = "") -> str:
         return os.environ.get(key, default)
 
 
-# ── Model selection ────────────────────────────────────────────────────────────
-AI_FALLBACK2           = "meta-llama/llama-3.3-70b-instruct:free"
-_OPENAI_FALLBACK_MODEL = "gpt-4o-mini"
+# ── Free model cascade (OpenRouter only) ──────────────────────────────────────
+#   All three are :free tier — no charges, no API key billing.
+
+AI_MODEL    = "google/gemma-4-31b-it:free"
+_FALLBACK1  = "qwen/qwen3-30b-a3b:free"
+_FALLBACK2  = "meta-llama/llama-3.3-70b-instruct:free"
 
 
 def _get_ai_model() -> str:
-    return _s("AI_MODEL", "google/gemma-4-31b-it:free")
+    return _s("AI_MODEL", AI_MODEL)
 
 
-def _get_ai_fallback() -> str:
-    return _s("AI_FALLBACK_MODEL", "qwen/qwen3-next-80b-a3b-instruct:free")
+def _get_ai_fallback1() -> str:
+    return _s("AI_FALLBACK_MODEL", _FALLBACK1)
 
 
-# ── Lazy client factory ────────────────────────────────────────────────────────
-# Clients are built on first call (or when credentials change) so that
-# secrets set via the admin panel take effect without a server restart.
+# ── Lazy OpenRouter client ─────────────────────────────────────────────────────
 
 _or_creds: tuple[str, str] = ("", "")
-_oa_creds: tuple[str, str] = ("", "")
 _or_client: Optional[AsyncOpenAI] = None
-_oa_client: Optional[AsyncOpenAI] = None
 
 
 def _or() -> Optional[AsyncOpenAI]:
@@ -73,29 +74,12 @@ def _or() -> Optional[AsyncOpenAI]:
     return _or_client if base else None
 
 
-def _oa() -> Optional[AsyncOpenAI]:
-    """Return (or lazily create) the OpenAI client."""
-    global _oa_client, _oa_creds
-    base = _s("AI_INTEGRATIONS_OPENAI_BASE_URL", "")
-    key  = _s("AI_INTEGRATIONS_OPENAI_API_KEY",  "sk-dummy")
-    if base and (base, key) != _oa_creds:
-        _oa_client = AsyncOpenAI(base_url=base, api_key=key)
-        _oa_creds  = (base, key)
-    return _oa_client if base else None
-
-
 def is_available() -> bool:
-    """Return True if at least one AI client is configured."""
-    return _or() is not None or _oa() is not None
+    """Return True if the OpenRouter client is configured."""
+    return _or() is not None
 
 
 # ── Retry helper ───────────────────────────────────────────────────────────────
-
-_NO_TEMP_MODELS = ("gpt-5", "o4", "o3", "o1")   # gpt-5* and o-series don't support temperature
-
-def _supports_temperature(model: str) -> bool:
-    return not any(model.startswith(p) for p in _NO_TEMP_MODELS)
-
 
 async def _call_with_retry(
     client: AsyncOpenAI,
@@ -107,17 +91,17 @@ async def _call_with_retry(
     backoff: float = 8.0,
 ) -> str:
     """Try one model, retrying on 429 rate-limit errors with exponential backoff."""
-    create_kwargs: dict = dict(
-        model=model,
-        messages=messages,
-        max_completion_tokens=max_tokens,
-    )
-    if _supports_temperature(model):
-        create_kwargs["temperature"] = temperature
-
     for attempt in range(retries + 1):
         try:
-            resp = await asyncio.wait_for(client.chat.completions.create(**create_kwargs), timeout=30)
+            resp = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    max_completion_tokens=max_tokens,
+                    temperature=temperature,
+                ),
+                timeout=60,
+            )
             return resp.choices[0].message.content or ""
         except Exception as exc:
             is_rate_limit = "429" in str(exc) or "rate" in str(exc).lower()
@@ -142,51 +126,37 @@ async def ask(
 ) -> str:
     """
     Send a prompt and return the full response.
-
-    Tries free OpenRouter models first (Gemma 4 → Qwen → Llama), then falls
-    back to OpenAI nano if all free models are rate-limited.
+    Tries free models in order: Gemma 4 → Qwen 3 → Llama 3.3
+    All are free via OpenRouter — no charges.
     """
     or_c = _or()
-    oa_c = _oa()
-    if not or_c and not oa_c:
-        return "[AI unavailable: no API credentials set]"
+    if not or_c:
+        return "[AI unavailable: OpenRouter integration not connected. Go to Admin → Integrations to enable it.]"
 
     messages = [
         {"role": "system", "content": system},
         {"role": "user",   "content": prompt},
     ]
 
-    # 1) Try free OpenRouter cascade
-    if or_c:
-        chosen = model or _get_ai_model()
-        free_cascade = [chosen, _get_ai_fallback(), AI_FALLBACK2]
-        seen: set[str] = set()
-        unique = [m for m in free_cascade if not (m in seen or seen.add(m))]  # type: ignore
+    chosen    = model or _get_ai_model()
+    fallback1 = _get_ai_fallback1()
+    cascade   = list(dict.fromkeys([chosen, fallback1, _FALLBACK2]))  # unique, ordered
 
-        for attempt_model in unique:
-            try:
-                result = await _call_with_retry(
-                    or_c, attempt_model, messages, max_tokens, temperature,
-                    retries=1, backoff=6.0,
-                )
-                log.info("AI: answered by %s", attempt_model)
-                return result
-            except Exception as exc:
-                log.warning("OpenRouter model %s unavailable: %s", attempt_model, str(exc)[:80])
-
-    # 2) Reliable fallback — OpenAI gpt-4o-mini (Replit-billed, minimal cost)
-    if oa_c:
-        log.info("AI: falling back to OpenAI %s", _OPENAI_FALLBACK_MODEL)
+    last_exc: Exception = RuntimeError("no models tried")
+    for attempt_model in cascade:
         try:
             result = await _call_with_retry(
-                oa_c, _OPENAI_FALLBACK_MODEL, messages, max_tokens, temperature,
-                retries=2, backoff=4.0,
+                or_c, attempt_model, messages, max_tokens, temperature,
+                retries=1, backoff=6.0,
             )
+            log.info("AI: answered by %s", attempt_model)
             return result
         except Exception as exc:
-            log.error("OpenAI fallback also failed: %s", exc)
+            last_exc = exc
+            log.warning("OpenRouter model %s unavailable: %s", attempt_model, str(exc)[:120])
 
-    return "[AI unavailable: all models failed — please retry later]"
+    log.error("All free models failed. Last error: %s", last_exc)
+    return "[AI unavailable: all free models are rate-limited — please retry in a minute]"
 
 
 async def ask_stream(
@@ -198,23 +168,17 @@ async def ask_stream(
 ) -> AsyncGenerator[str, None]:
     """
     Stream response tokens. Falls back to ask() if streaming fails.
-    Usage:
-        async for chunk in ask_stream("Explain SEBI rule 9.1"):
-            print(chunk, end="", flush=True)
+    Uses free OpenRouter models only.
     """
     or_c = _or()
-    oa_c = _oa()
-    if not or_c and not oa_c:
+    if not or_c:
         yield "[AI unavailable]"
         return
 
     chosen = model or _get_ai_model()
-    client = or_c or oa_c
-    use_model = chosen if or_c else _OPENAI_FALLBACK_MODEL
-
     try:
-        stream = await client.chat.completions.create(  # type: ignore
-            model=use_model,
+        stream = await or_c.chat.completions.create(
+            model=chosen,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user",   "content": prompt},
@@ -228,9 +192,9 @@ async def ask_stream(
             if delta:
                 yield delta
     except Exception:
-        # Non-streaming fallback
-        text = await ask(prompt, system=system, model=model, max_tokens=max_tokens,
-                         temperature=temperature)
+        # Non-streaming fallback through the full free cascade
+        text = await ask(prompt, system=system, model=model,
+                         max_tokens=max_tokens, temperature=temperature)
         yield text
 
 
@@ -240,10 +204,9 @@ async def ask_json(
     model: str  = "",
     max_tokens: int = 4096,
 ) -> str:
-    """Same as ask() but requests JSON output. Falls back gracefully."""
+    """Same as ask() but requests JSON output."""
     if not is_available():
         return "{}"
-    # Only OpenAI reliably supports JSON mode; use plain ask() for OpenRouter models
     return await ask(prompt, system=system, model=model, max_tokens=max_tokens)
 
 
@@ -256,21 +219,27 @@ async def chat_with_history(
 ) -> str:
     """Multi-turn chat. `messages` = [{"role": "user"|"assistant", "content": "..."}]."""
     or_c = _or()
-    oa_c = _oa()
-    if not or_c and not oa_c:
+    if not or_c:
         return "[AI unavailable]"
+
     full_messages = [{"role": "system", "content": system}] + messages
-    chosen = model or _get_ai_model()
-    if or_c:
+    chosen    = model or _get_ai_model()
+    fallback1 = _get_ai_fallback1()
+    cascade   = list(dict.fromkeys([chosen, fallback1, _FALLBACK2]))
+
+    last_exc: Exception = RuntimeError("no models tried")
+    for attempt_model in cascade:
         try:
-            return await _call_with_retry(or_c, chosen, full_messages, max_tokens,
-                                          temperature, retries=1, backoff=6.0)
+            return await _call_with_retry(
+                or_c, attempt_model, full_messages, max_tokens,
+                temperature, retries=1, backoff=6.0,
+            )
         except Exception as exc:
-            log.warning("OpenRouter chat failed: %s", exc)
-    if oa_c:
-        return await _call_with_retry(oa_c, _OPENAI_FALLBACK_MODEL, full_messages,
-                                      max_tokens, temperature, retries=2, backoff=4.0)
-    return "[AI unavailable]"
+            last_exc = exc
+            log.warning("OpenRouter chat model %s failed: %s", attempt_model, str(exc)[:120])
+
+    log.error("All free chat models failed: %s", last_exc)
+    return "[AI unavailable: all free models are rate-limited — please retry in a minute]"
 
 
 async def ask_ai_async(
@@ -280,9 +249,9 @@ async def ask_ai_async(
     temperature: float = 0.5,
 ) -> str:
     """
-    Convenience wrapper for the route layer: takes a system prompt and a
-    conversation history list and returns the AI reply text.
-    Falls back through the full model chain (OpenRouter → OpenAI gpt-4o-mini).
+    Convenience wrapper for the route layer.
+    Takes a system prompt + conversation history and returns the AI reply.
+    Uses free OpenRouter models only (Gemma 4 → Qwen 3 → Llama 3.3).
     """
     return await chat_with_history(
         messages=history,

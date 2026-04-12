@@ -359,7 +359,7 @@ class TestGetLotSize:
         assert get_lot_size("BANKNIFTY") == 30
 
     def test_finnifty_exact(self):
-        assert get_lot_size("FINNIFTY") == 40
+        assert get_lot_size("FINNIFTY") == 65  # SEBI/HO/MRD/MRD-PoD-2/P/CIR/2024/113 — Nov 2024
 
     def test_sensex_index_ticker(self):
         assert get_lot_size("^BSESN") == 10
@@ -371,7 +371,7 @@ class TestGetLotSize:
         assert get_lot_size("BANKEX") == 15
 
     def test_midcpnifty(self):
-        assert get_lot_size("MIDCPNIFTY") == 75
+        assert get_lot_size("MIDCPNIFTY") == 120  # SEBI/HO/MRD/MRD-PoD-2/P/CIR/2024/113 — Nov 2024
 
     def test_banknifty_wins_over_nifty_substring(self):
         """'BANKNIFTY' contains 'NIFTY' — longest key must win → 30, not 75."""
