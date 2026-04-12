@@ -59,3 +59,9 @@ externalPort = 3000
 [[ports]]
 localPort = 22133
 externalPort = 3002
+
+[userenv]
+
+[userenv.shared]
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "Qwer!234"
