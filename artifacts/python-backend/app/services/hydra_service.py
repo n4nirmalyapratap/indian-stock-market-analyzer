@@ -15,6 +15,7 @@ from . import hydra_pairs_service as pairs
 from . import hydra_backtest_service as backtest
 from . import hydra_var_service as var_svc
 from . import hydra_forecast_service as forecast
+from ..lib.universe import ALL_SYMBOLS
 
 logger = logging.getLogger(__name__)
 
@@ -43,22 +44,70 @@ _SYMBOL_STOPWORDS = {
     "TOP", "BEST", "WORST", "SAME", "BOTH", "EACH", "EVERY", "SUCH",
 }
 
-# ── Known NSE large caps for quick resolution ──────────────────────────────────
-NSE_POPULAR = {
-    "reliance": "RELIANCE", "tcs": "TCS", "infosys": "INFY", "infy": "INFY",
-    "hdfc bank": "HDFCBANK", "hdfcbank": "HDFCBANK", "icici": "ICICIBANK",
-    "sbi": "SBIN", "wipro": "WIPRO", "hcl": "HCLTECH", "bajaj": "BAJFINANCE",
-    "titan": "TITAN", "sunpharma": "SUNPHARMA", "cipla": "CIPLA",
-    "drreddy": "DRREDDY", "maruti": "MARUTI", "tatamotors": "TATAMOTORS",
-    "tata motors": "TATAMOTORS", "tata steel": "TATASTEEL", "tatasteel": "TATASTEEL",
-    "jswsteel": "JSWSTEEL", "jsw steel": "JSWSTEEL", "hindalco": "HINDALCO",
-    "ongc": "ONGC", "bpcl": "BPCL", "ntpc": "NTPC", "powergrid": "POWERGRID",
-    "coalindia": "COALINDIA", "adani": "ADANIPORTS", "lt": "LT", "l&t": "LT",
-    "kotakbank": "KOTAKBANK", "kotak": "KOTAKBANK", "axisbank": "AXISBANK",
-    "axis bank": "AXISBANK", "indusind": "INDUSINDBK", "nestleind": "NESTLEIND",
-    "nestle": "NESTLEIND", "itc": "ITC", "britannia": "BRITANNIA",
-    "asianpaint": "ASIANPAINT", "asian paints": "ASIANPAINT",
+# ── Full universe lookup: every symbol in universe.py, keyed by its lowercase ──
+# e.g. "zomato" → "ZOMATO", "hdfcbank" → "HDFCBANK", "360one" → "360ONE"
+_UNIVERSE_LOOKUP: dict[str, str] = {
+    sym.lower(): sym
+    for sym in ALL_SYMBOLS
+    if not any(c.isspace() for c in sym)   # exclude index names like "NIFTY 50"
 }
+
+# ── Human-readable name aliases (multi-word or non-obvious) ───────────────────
+_FRIENDLY_NAMES: dict[str, str] = {
+    # Popular / consumer tech
+    "zomato": "ZOMATO", "swiggy": "SWIGGY", "nykaa": "NYKAA",
+    "paytm": "PAYTM", "dmart": "DMART", "avenue supermarts": "DMART",
+    "irctc": "IRCTC", "policy bazaar": "POLICYBZR", "policybazaar": "POLICYBZR",
+    # Adani group
+    "adani green": "ADANIGREEN", "adani power": "ADANIPOWER",
+    "adani enterprises": "ADANIENT", "adani ports": "ADANIPORTS",
+    "adani transmission": "ADANITRANS", "adani": "ADANIPORTS",
+    # Tata group
+    "tata motors": "TATAMOTORS", "tata steel": "TATASTEEL",
+    "tata power": "TATAPOWER", "tata tech": "TATATECH",
+    "tata elxsi": "TATAELXSI", "tata comm": "TATACOMM",
+    "tata communications": "TATACOMM", "tata consumer": "TATACONSUM",
+    "tata investment": "TATAINVEST",
+    # Banks
+    "hdfc bank": "HDFCBANK", "hdfcbank": "HDFCBANK",
+    "icici bank": "ICICIBANK", "icici": "ICICIBANK",
+    "axis bank": "AXISBANK", "kotak bank": "KOTAKBANK", "kotak": "KOTAKBANK",
+    "indusind": "INDUSINDBK", "indusind bank": "INDUSINDBK",
+    "idfc first": "IDFCFIRSTB", "bandhan bank": "BANDHANBNK",
+    "rbl bank": "RBLBANK", "yes bank": "YESBANK", "federal bank": "FEDERALBNK",
+    "bank of baroda": "BANKBARODA", "punjab national": "PNB",
+    "canara bank": "CANBK", "sbi": "SBIN", "state bank": "SBIN",
+    # IT
+    "infosys": "INFY", "hcl tech": "HCLTECH", "hcltech": "HCLTECH",
+    "wipro": "WIPRO", "tech mahindra": "TECHM", "techmahindra": "TECHM",
+    "mphasis": "MPHASIS", "coforge": "COFORGE", "persistent": "PERSISTENT",
+    # Pharma
+    "sun pharma": "SUNPHARMA", "dr reddy": "DRREDDY", "dr. reddy": "DRREDDY",
+    "divis lab": "DIVISLAB", "divislab": "DIVISLAB",
+    "lupin": "LUPIN", "biocon": "BIOCON", "cipla": "CIPLA",
+    "aurobindo": "AUROPHARMA", "glenmark": "GLENMARK",
+    # FMCG / consumer
+    "hul": "HINDUNILVR", "hindustan unilever": "HINDUNILVR",
+    "nestle": "NESTLEIND", "nestleind": "NESTLEIND",
+    "asian paints": "ASIANPAINT", "asianpaint": "ASIANPAINT",
+    "colgate": "COLPAL", "dabur": "DABUR", "marico": "MARICO",
+    "godrej": "GODREJCP", "britannia": "BRITANNIA",
+    # Energy / infra
+    "reliance": "RELIANCE", "ongc": "ONGC", "bpcl": "BPCL",
+    "ntpc": "NTPC", "powergrid": "POWERGRID", "coalindia": "COALINDIA",
+    "l&t": "LT", "lt": "LT", "larsen": "LT",
+    # Auto
+    "maruti": "MARUTI", "maruti suzuki": "MARUTI",
+    "bajaj auto": "BAJAJ-AUTO", "hero moto": "HEROMOTOCO",
+    "eicher": "EICHERMOT", "mahindra": "M&M",
+    # Financials
+    "bajaj finance": "BAJFINANCE", "bajaj finserv": "BAJAJFINSV",
+    "muthoot": "MUTHOOTFIN", "hdfc life": "HDFCLIFE", "sbi life": "SBILIFE",
+    "cholafin": "CHOLAFIN", "shriram": "SHRIRAMFIN",
+}
+
+# ── Merged symbol resolver: friendly names + full universe ────────────────────
+_SYMBOL_RESOLVER: dict[str, str] = {**_UNIVERSE_LOOKUP, **_FRIENDLY_NAMES}
 
 AGENT_DESCRIPTIONS = [
     {
@@ -96,17 +145,32 @@ def _extract_symbols(text: str) -> list[str]:
     Extract NSE ticker symbols from free-form text.
     Filters out stopwords and common English words so 'BACKTEST', 'PAIR' etc.
     are never treated as stock tickers.
+    Universe-known symbols are returned as-is (canonical casing from universe.py).
+    Unknown uppercase tokens are also included so novel symbols still work.
     """
-    candidates = re.findall(r'\b([A-Z]{2,10})\b', text.upper())
-    return [c for c in candidates if c not in _SYMBOL_STOPWORDS]
+    candidates = re.findall(r'\b([A-Z0-9]{2,10})\b', text.upper())
+    results = []
+    for c in candidates:
+        if c in _SYMBOL_STOPWORDS:
+            continue
+        # Return the canonical symbol if it's in the universe
+        canonical = _UNIVERSE_LOOKUP.get(c.lower())
+        results.append(canonical if canonical else c)
+    return results
 
 
 def _resolve_symbol(text: str) -> str | None:
-    """Try to resolve a single ticker symbol from free-form text."""
+    """
+    Try to resolve a single NSE ticker from free-form text.
+    Priority: friendly name aliases → full universe lookup → uppercase extraction.
+    Handles any case: 'Zomato', 'ZOMATO', 'zomato', 'Adani Green' all work.
+    """
     lower = text.lower()
-    for name, sym in NSE_POPULAR.items():
+    # 1. Check friendly names (longest match first for multi-word names)
+    for name in sorted(_SYMBOL_RESOLVER, key=len, reverse=True):
         if name in lower:
-            return sym
+            return _SYMBOL_RESOLVER[name]
+    # 2. Fall back to uppercase token extraction
     syms = _extract_symbols(text)
     return syms[0] if syms else None
 
