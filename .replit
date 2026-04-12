@@ -11,6 +11,26 @@ env = { "CI" = "true" }
 [workflows]
 runButton = "Project"
 
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Python Backend"
+
+[[workflows.workflow]]
+name = "Python Backend"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash -c 'cd artifacts/python-backend && PORT=8090 python3.11 run.py'"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
 [agent]
 stack = "PNPM_WORKSPACE"
 expertMode = true
@@ -20,17 +40,17 @@ integrations = ["github:1.0.0"]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
 
-[[ports]]
-localPort = 8080
-externalPort = 8080
+[nix]
+channel = "stable-25_05"
+packages = ["cargo", "glibcLocales", "libiconv", "libxcrypt", "openssl", "pkg-config", "rustc", "xsimd"]
 
 [[ports]]
 localPort = 8081
-externalPort = 80
+externalPort = 8081
 
 [[ports]]
 localPort = 8090
-externalPort = 3001
+externalPort = 80
 
 [[ports]]
 localPort = 19845
@@ -39,12 +59,3 @@ externalPort = 3000
 [[ports]]
 localPort = 22133
 externalPort = 3002
-
-[nix]
-channel = "stable-25_05"
-packages = ["cargo", "glibcLocales", "libiconv", "libxcrypt", "openssl", "pkg-config", "rustc", "xsimd"]
-
-[userenv]
-
-[userenv.shared]
-ADMIN_USERNAME = "admin"

@@ -1,7 +1,6 @@
 /**
  * push-github.ts
- * Push source changes to GitHub using the Replit GitHub connector.
- * No PAT needed — uses Replit OAuth (repo permissions).
+ * Push source changes to GitHub using a Personal Access Token (GITHUB_PAT).
  *
  * Run: pnpm --filter @workspace/scripts run push-github
  *
@@ -12,7 +11,6 @@
  * See GITHUB_PUSH.md for timeout behaviour and retry notes.
  */
 
-import { ReplitConnectors } from "@replit/connectors-sdk";
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
@@ -21,6 +19,12 @@ const OWNER  = "n4nirmalyapratap";
 const REPO   = "indian-stock-market-analyzer";
 const BRANCH = "main";
 const ROOT   = path.resolve(import.meta.dirname, "../..");
+const PAT    = process.env.GITHUB_PAT;
+
+if (!PAT) {
+  console.error("❌  GITHUB_PAT environment variable is not set.");
+  process.exit(1);
+}
 
 // ── Skip rules — mirror /.gitignore exactly so there is one source of truth ──
 //
@@ -68,18 +72,9 @@ const SKIP_EXTS = new Set([
   ".mp4", ".mp3", ".wav", ".pdf", ".zip",
 ]);
 
-const MAX_FILE_BYTES = 400 * 1024; // 400 KB hard cap (GitHub API proxy limit)
+const MAX_FILE_BYTES = 400 * 1024; // 400 KB hard cap
 
 // ── HARD-CODED PROTECTED FILES — NEVER allowed to be deleted from GitHub ──────
-//
-// If any file in this set is detected as "would be deleted" during pre-flight,
-// the push is ABORTED immediately with an error. These files are critical for
-// Docker builds and production deployments.
-//
-// Rule: Dockerfiles, nginx configs, and docker-compose files are sacred.
-// They must always be present in the workspace before a push. If the workspace
-// is missing one of these files, run restore-files first.
-//
 const PROTECTED_FILENAMES = new Set([
   "Dockerfile",
   "nginx.conf",
@@ -87,7 +82,6 @@ const PROTECTED_FILENAMES = new Set([
   ".dockerignore",
 ]);
 
-// Also protect any file whose path contains these substrings
 const PROTECTED_PATH_SUBSTRINGS = [
   "Dockerfile",
   "docker-compose",
@@ -117,7 +111,7 @@ function walkDir(dir: string): string[] {
   try { entries = fs.readdirSync(dir); } catch { return out; }
 
   for (const name of entries) {
-    if (name.startsWith(".") && SKIP_DIRS.has(name)) continue; // hidden dirs
+    if (name.startsWith(".") && SKIP_DIRS.has(name)) continue;
     if (SKIP_DIRS.has(name)) continue;
 
     const full = path.join(dir, name);
@@ -137,29 +131,31 @@ function collectFiles(): string[] {
   return [...new Set(walkDir(ROOT))];
 }
 
-// ── GitHub API helper ─────────────────────────────────────────────────────────
+// ── GitHub API helper (PAT-based, no proxy) ───────────────────────────────────
 
 type GHResp = Record<string, unknown>;
 
 async function api(
-  c: InstanceType<typeof ReplitConnectors>,
   endpoint: string,
   opts: { method?: string; body?: unknown } = {},
 ): Promise<GHResp> {
-  const resp = await c.proxy("github", endpoint, {
+  const resp = await fetch(`https://api.github.com${endpoint}`, {
     method: opts.method ?? "GET",
-    ...(opts.body
-      ? { body: JSON.stringify(opts.body), headers: { "Content-Type": "application/json" } }
-      : {}),
+    headers: {
+      "Authorization": `Bearer ${PAT}`,
+      "Accept": "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      ...(opts.body ? { "Content-Type": "application/json" } : {}),
+    },
+    ...(opts.body ? { body: JSON.stringify(opts.body) } : {}),
   });
-  const text = await resp.text() as string;
+  const text = await resp.text();
   let json: GHResp;
   try {
     json = JSON.parse(text) as GHResp;
   } catch {
     throw new Error(`GitHub API ${opts.method ?? "GET"} ${endpoint} returned non-JSON (HTTP ${resp.status}): ${text.slice(0, 300)}`);
   }
-  // GitHub returns error details in a "message" field on 4xx/5xx responses
   if (resp.status >= 400) {
     const msg = (json.message as string) ?? text.slice(0, 300);
     const errors = json.errors ? `\n  Errors: ${JSON.stringify(json.errors)}` : "";
@@ -170,18 +166,17 @@ async function api(
 
 /** api() with automatic retry on 429 (rate limit) */
 async function apiWithRetry(
-  c: InstanceType<typeof ReplitConnectors>,
   endpoint: string,
   opts: { method?: string; body?: unknown } = {},
   retries = 4,
 ): Promise<GHResp> {
-  let delay = 1000; // ms
+  let delay = 1000;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      return await api(c, endpoint, opts);
+      return await api(endpoint, opts);
     } catch (err) {
       const msg = (err as Error).message ?? "";
-      if (msg.startsWith("HTTP_429") && attempt < retries) {
+      if ((msg.startsWith("HTTP_429") || msg.startsWith("HTTP_403")) && attempt < retries) {
         await new Promise(r => setTimeout(r, delay));
         delay = Math.min(delay * 2, 8000);
         continue;
@@ -195,13 +190,10 @@ async function apiWithRetry(
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const connectors = new ReplitConnectors();
-
-  const user = await api(connectors, "/user") as { login: string };
+  const user = await api("/user") as { login: string };
   console.log(`\n🔗  Authenticated as: ${user.login}`);
 
   const refData = await api(
-    connectors,
     `/repos/${OWNER}/${REPO}/git/ref/heads/${BRANCH}`,
   ) as { object: { sha: string } };
   const githubSha = (refData.object as { sha: string }).sha;
@@ -210,13 +202,8 @@ async function main() {
   const localSha = execSync("git rev-parse HEAD", { cwd: ROOT }).toString().trim();
   console.log(`📌  Local HEAD:   ${localSha.slice(0, 7)}`);
 
-  // ── Pre-flight: detect files on GitHub that are NOT in the workspace ─────────
-  // Because we push a fresh tree (no base_tree), any file present on GitHub but
-  // absent from the workspace will be permanently deleted from GitHub.
-  // We fetch the current GitHub tree and warn loudly before uploading anything.
   console.log(`\n🔍  Checking for files on GitHub that would be deleted…`);
   const ghTree = await api(
-    connectors,
     `/repos/${OWNER}/${REPO}/git/trees/${githubSha}?recursive=1`,
   ) as { tree: { path: string; type: string }[] };
 
@@ -228,8 +215,6 @@ async function main() {
     .map(e => e.path)
     .filter(p => !workspaceSet.has(p));
 
-  // Hard-coded protection: if a protected file (Dockerfile, nginx.conf, etc.)
-  // would be deleted, ABORT immediately — never allow Docker files to be lost.
   const protectedViolations = willBeDeleted.filter(isProtected);
   if (protectedViolations.length > 0) {
     console.log(`\n🚨  PUSH ABORTED — PROTECTED FILES MISSING FROM WORKSPACE:`);
@@ -260,9 +245,8 @@ async function main() {
   const treeEntries: { path: string; mode: string; type: string; sha: string }[] = [];
   let done = 0;
 
-  // Upload blobs in parallel with a concurrency cap.
-  // Replit's GitHub proxy allows max 10 RPS; 4 workers × ~0.5 s/req ≈ 8 RPS.
-  const CONCURRENCY = 4;
+  const CONCURRENCY = 2;
+  const BLOB_DELAY_MS = 500; // throttle to ~4 req/s to stay under secondary rate limit
 
   async function uploadBlob(rel: string): Promise<void> {
     const abs = path.join(ROOT, rel);
@@ -278,16 +262,15 @@ async function main() {
       return;
     }
     const blob = await apiWithRetry(
-      connectors,
       `/repos/${OWNER}/${REPO}/git/blobs`,
       { method: "POST", body: { content, encoding: "base64" } },
     ) as { sha: string };
     treeEntries.push({ path: rel, mode: "100644", type: "blob", sha: blob.sha });
     done++;
     if (done % 10 === 0) process.stdout.write(`  ${done}/${files.length} blobs…\r`);
+    await new Promise(r => setTimeout(r, BLOB_DELAY_MS));
   }
 
-  // Simple concurrency pool
   const queue = [...files];
   async function worker() {
     while (queue.length > 0) {
@@ -306,24 +289,17 @@ async function main() {
   } catch { /* use default */ }
 
   // NOTE: base_tree is intentionally omitted here.
-  // Using base_tree would inherit all files from the previous commit's tree,
-  // meaning deleted files would NOT be removed from GitHub.
-  // Without base_tree, GitHub creates a completely fresh tree from only the
-  // files we've uploaded — correctly reflecting the current workspace state.
   const newTree = await api(
-    connectors,
     `/repos/${OWNER}/${REPO}/git/trees`,
     { method: "POST", body: { tree: treeEntries } },
   ) as { sha: string };
 
   const newCommit = await api(
-    connectors,
     `/repos/${OWNER}/${REPO}/git/commits`,
     { method: "POST", body: { message: msg, tree: newTree.sha, parents: [githubSha] } },
   ) as { sha: string };
 
   await api(
-    connectors,
     `/repos/${OWNER}/${REPO}/git/refs/heads/${BRANCH}`,
     { method: "PATCH", body: { sha: newCommit.sha, force: true } },
   );
