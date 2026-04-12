@@ -242,52 +242,80 @@ def _contrarian_signals(
 
 
 def _strategy_table(composite: float, vix: float) -> list[dict]:
-    """Map sentiment + vol to recommended option strategies (from research paper)."""
-    vol_high = vix >= 22
-    vol_low = vix < 16
+    """Map sentiment + vol to recommended option strategies.
 
+    Iron Condor is a premium-SELLING strategy — it only makes sense when
+    implied volatility is HIGH (VIX ≥ 22) so there is enough premium to
+    collect.  Recommending it in low/moderate vol environments produces a
+    direct contradiction with the Options Strategy Tester, which correctly
+    scores Iron Condor as "Avoid" when HV-percentile < 40.
+
+    Vol regime thresholds (aligned with Strategy Tester scoring):
+      low      → VIX < 16   (HV pct typically < 35 → premium thin)
+      moderate → 16 ≤ VIX < 22 (HV pct ~35-60 → fair, but Iron Condor
+                               risk/reward still poor for most setups)
+      high     → VIX ≥ 22   (HV pct > 60 → premium rich ✓ for Iron Condor)
+    """
+    vol_high = vix >= 22
+    vol_low  = vix < 16
+    # vol_moderate is the implicit else (16 ≤ vix < 22)
+
+    # ── Directional (bullish) ──────────────────────────────────────────────
     if composite >= 30 and not vol_high:
         return [
-            {"strategy": "Bull Call Spread",   "outlook": "Bullish",     "vol": "Low-Moderate",  "risk": "Limited"},
-            {"strategy": "Covered Call",        "outlook": "Bullish",     "vol": "Low-Moderate",  "risk": "Limited"},
-            {"strategy": "Bull Put Spread",     "outlook": "Bullish",     "vol": "Low-Moderate",  "risk": "Limited"},
+            {"strategy": "Bull Call Spread",   "outlook": "Bullish",      "vol": "Low-Moderate", "risk": "Limited"},
+            {"strategy": "Covered Call",        "outlook": "Bullish",      "vol": "Low-Moderate", "risk": "Limited"},
+            {"strategy": "Bull Put Spread",     "outlook": "Bullish",      "vol": "Low-Moderate", "risk": "Limited"},
         ]
     if composite >= 30 and vol_high:
         return [
-            {"strategy": "Long Call",           "outlook": "Bullish",     "vol": "High",          "risk": "Limited"},
+            {"strategy": "Long Call",           "outlook": "Bullish",      "vol": "High",         "risk": "Limited"},
             {"strategy": "Long Straddle",       "outlook": "Any Direction","vol": "High",          "risk": "Limited"},
         ]
+
+    # ── Directional (bearish) ──────────────────────────────────────────────
     if composite <= -30 and not vol_high:
         return [
-            {"strategy": "Bear Put Spread",     "outlook": "Bearish",     "vol": "Low-Moderate",  "risk": "Limited"},
-            {"strategy": "Protective Put",      "outlook": "Bearish",     "vol": "Low-Moderate",  "risk": "Limited"},
-            {"strategy": "Bear Call Spread",    "outlook": "Bearish",     "vol": "Low-Moderate",  "risk": "Limited"},
+            {"strategy": "Bear Put Spread",     "outlook": "Bearish",      "vol": "Low-Moderate", "risk": "Limited"},
+            {"strategy": "Protective Put",      "outlook": "Bearish",      "vol": "Low-Moderate", "risk": "Limited"},
+            {"strategy": "Bear Call Spread",    "outlook": "Bearish",      "vol": "Low-Moderate", "risk": "Limited"},
         ]
     if composite <= -30 and vol_high:
         return [
             {"strategy": "Long Straddle",       "outlook": "Any Direction","vol": "High",          "risk": "Limited"},
             {"strategy": "Long Strangle",       "outlook": "Any Direction","vol": "High",          "risk": "Limited"},
         ]
+
+    # ── Neutral sentiment from here (composite between -30 and +30) ────────
+
     if vol_low:
-        # Low vol → premiums are thin; Iron Condor needs rich IV to be viable.
-        # Butterfly and Covered Call are better fits in a calm, range-bound market.
+        # VIX < 16: premiums thin, range-bound market.
+        # Butterfly profits from pinning; Covered Call generates modest income.
+        # Iron Condor NOT recommended — premium collected is too small to
+        # justify the risk (Strategy Tester scores it "Avoid" here).
         return [
-            {"strategy": "Butterfly Spread",    "outlook": "Range-Bound",    "vol": "Low",       "risk": "Limited"},
-            {"strategy": "Covered Call",         "outlook": "Neutral-Bullish","vol": "Low",       "risk": "Limited"},
-            {"strategy": "Bull Put Spread",      "outlook": "Neutral-Bullish","vol": "Low",       "risk": "Limited"},
+            {"strategy": "Butterfly Spread",   "outlook": "Range-Bound",    "vol": "Low",         "risk": "Limited"},
+            {"strategy": "Covered Call",        "outlook": "Neutral-Bullish","vol": "Low",         "risk": "Limited"},
+            {"strategy": "Bull Put Spread",     "outlook": "Neutral-Bullish","vol": "Low",         "risk": "Limited"},
         ]
+
     if vol_high:
-        # High VIX + neutral sentiment → ideal for premium-selling strategies like Iron Condor.
-        # IV crush after selling the wings is the edge; Long vol plays are also valid.
+        # VIX ≥ 22, neutral: high premiums make Iron Condor attractive.
+        # IV crush after entry is the primary edge.  Long-vol plays are also
+        # valid if a breakout is feared.
         return [
-            {"strategy": "Iron Condor",          "outlook": "Range-Bound",   "vol": "High VIX",  "risk": "Limited"},
-            {"strategy": "Long Straddle",        "outlook": "Any Direction", "vol": "High VIX",  "risk": "Limited"},
-            {"strategy": "Long Strangle",        "outlook": "Any Direction", "vol": "High VIX",  "risk": "Limited"},
+            {"strategy": "Iron Condor",         "outlook": "Range-Bound",   "vol": "High VIX",    "risk": "Limited"},
+            {"strategy": "Long Straddle",       "outlook": "Any Direction", "vol": "High VIX",    "risk": "Limited"},
+            {"strategy": "Long Strangle",       "outlook": "Any Direction", "vol": "High VIX",    "risk": "Limited"},
         ]
+
+    # Moderate vol (16 ≤ VIX < 22), neutral sentiment.
+    # Iron Condor is marginal here (Strategy Tester: "Caution" at best).
+    # Directional credit spreads and income strategies are a better fit.
     return [
-        {"strategy": "Iron Condor",             "outlook": "Range-Bound", "vol": "Moderate",      "risk": "Limited"},
         {"strategy": "Covered Call",            "outlook": "Neutral-Bullish","vol": "Moderate",   "risk": "Limited"},
         {"strategy": "Bull Put Spread",         "outlook": "Neutral-Bullish","vol": "Moderate",   "risk": "Limited"},
+        {"strategy": "Bear Call Spread",        "outlook": "Neutral-Bearish","vol": "Moderate",   "risk": "Limited"},
     ]
 
 
