@@ -5,19 +5,20 @@ import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
   Brain, TrendingUp, CandlestickChart,
   Settings, ChevronRight, ChevronLeft, ChevronDown, Sun, Moon,
-  Newspaper,
+  Newspaper, Gauge,
 } from "lucide-react";
 
 export const MAIN_NAV = [
-  { path: "/",         label: "Dashboard",      icon: LayoutDashboard },
-  { path: "/trading",  label: "Chart Studio",   icon: CandlestickChart },
-  { path: "/sectors",  label: "Market Sectors", icon: BarChart3 },
-  { path: "/news",     label: "News Feed",      icon: Newspaper },
-  { path: "/stocks",   label: "Stock Lookup",   icon: Search },
-  { path: "/patterns", label: "Patterns",       icon: Scan },
-  { path: "/scanners", label: "Scanners",       icon: Filter },
-  { path: "/hydra",    label: "AI Analyzer",    icon: Brain },
-  { path: "/options",  label: "Options Tester", icon: TrendingUp },
+  { path: "/",           label: "Dashboard",      icon: LayoutDashboard },
+  { path: "/trading",    label: "Chart Studio",   icon: CandlestickChart },
+  { path: "/sectors",    label: "Market Sectors", icon: BarChart3 },
+  { path: "/sentiment",  label: "Sentiment",      icon: Gauge },
+  { path: "/news",       label: "News Feed",      icon: Newspaper },
+  { path: "/stocks",     label: "Stock Lookup",   icon: Search },
+  { path: "/patterns",   label: "Patterns",       icon: Scan },
+  { path: "/scanners",   label: "Scanners",       icon: Filter },
+  { path: "/hydra",      label: "AI Analyzer",    icon: Brain },
+  { path: "/options",    label: "Options Tester", icon: TrendingUp },
 ];
 
 export const SETTINGS_NAV: { path: string; label: string; icon: ComponentType }[] = [];

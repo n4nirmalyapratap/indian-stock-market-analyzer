@@ -16,6 +16,7 @@ import NotFound from "@/pages/not-found";
 import TradingPlatform from "@/pages/TradingPlatform";
 import SectorDetail from "@/pages/SectorDetail";
 import NewsFeed from "@/pages/NewsFeed";
+import SentimentDashboard from "@/pages/SentimentDashboard";
 import LoginPage from "@/pages/LoginPage";
 import GlobalAssistant from "@/components/GlobalAssistant";
 import { ThemeProvider } from "@/context/ThemeContext";
@@ -93,6 +94,7 @@ function AppRoutes() {
         <Route path="/sectors/:sectorId" component={SectorDetail} />
         <Route path="/sectors"          component={Sectors} />
         <Route path="/news"            component={NewsFeed} />
+        <Route path="/sentiment"       component={SentimentDashboard} />
         <Route path="/stocks"          component={StockLookup} />
         <Route path="/patterns"        component={Patterns} />
         <Route path="/scanners"        component={Scanners} />

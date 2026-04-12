@@ -66,6 +66,45 @@ Run: `pnpm --filter @workspace/scripts run push-github`
 
 ## Key Features
 
+### Centralized Market Sentiment Engine (`/sentiment`)
+**Single source of truth for all sentiment-related decisions across the app.**
+
+- **Route:** `GET /api/sentiment/market` — full composite snapshot (15-min cache)
+- **Route:** `GET /api/sentiment/sectors` — per-sector heatmap data
+- **Route:** `GET /api/sentiment/refresh` — force-refresh both caches
+- **Service:** `app/services/market_sentiment_engine.py`
+
+**Composite score (-100 to +100) from 4 weighted signals:**
+| Signal | Weight | Source |
+|---|---|---|
+| News NLP | 35% | `news_service.get_summary()` bullish/bearish article ratio |
+| Price Action | 35% | Nifty50 history → `hydra_sentiment_service.price_action_sentiment()` |
+| India VIX | 20% | Yahoo Finance `^NSEVIXY` — inverted (high VIX = bearish) |
+| PCR Proxy | 10% | Synthetic PCR derived from VIX level + 5-day VIX trend |
+
+**Labels:** Extremely Bearish / Bearish / Neutral / Bullish / Extremely Bullish
+
+**Contrarian signals (from research paper):**
+- VIX > 25 AND score < -40 → Peak Fear (potential market bottom)
+- VIX < 12 AND score > 60 → Peak Complacency (potential market top)
+- PCR proxy > 1.4 → Excessive Bearishness (contrarian buy watch)
+- PCR proxy < 0.5 → Excessive Bullishness (contrarian sell watch)
+
+**Frontend page (`SentimentDashboard.tsx`):**
+- SVG speedometer gauge for composite score
+- VIX level bar with gradient zones + interpretation card
+- PCR proxy bar with zone markers + interpretation card
+- News breakdown (bullish/bearish/neutral bars)
+- Nifty50 Price Action KPIs (5d momentum, 20d momentum, RSI14)
+- Sector heatmap (12 sectors, color-coded green→red)
+- Strategy recommendations table (from research paper mapping)
+- Contrarian signal alerts
+
+**Integration points:**
+- `OptionsStrategyTester` — Smart Strategy Builder uses this as supplementary context
+- `hydra_forecast_service.py` — sentiment_bias already used in price forecasting
+- `news_service.py` — `get_summary()` is the news signal source
+
 ### Options Strategy Tester (`/options`)
 - **7 core bugs fixed** (all with TDD): `use_weekly` toggle wired end-to-end, butterfly wing width fixed (otmMult ±1 = ±300pts), SEBI May-2024 expiry rule (only NIFTY/SENSEX have weekly options)
 - **230 tests passing** across `tests/test_options.py` (sections 1–17)
