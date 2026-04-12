@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
 import {
   RefreshCw, AlertTriangle,
-  BarChart2, Info, Gauge, Zap,
+  BarChart2, Info, Gauge,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -482,43 +482,6 @@ export default function SentimentDashboard() {
             </div>
           )}
 
-          {/* ── Strategy recommendations ────────────────────────────────────── */}
-          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
-            <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-widest mb-1 flex items-center gap-2">
-              <Zap className="w-4 h-4 text-amber-500" /> Suggested Option Strategies
-            </h2>
-            <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
-              Based on current sentiment ({sentiment.label}) and India VIX ({sentiment.vix.current.toFixed(1)})
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {sentiment.strategy_recommendations.map((s, i) => (
-                <div key={i} className="bg-gray-50 dark:bg-gray-800 rounded-xl p-4 border border-gray-100 dark:border-gray-700">
-                  <p className="font-bold text-sm text-gray-900 dark:text-white mb-2">{s.strategy}</p>
-                  <div className="space-y-1 text-xs text-gray-600 dark:text-gray-400">
-                    <div className="flex items-center gap-1">
-                      <span className="text-gray-400">Outlook:</span>
-                      <span className={`font-medium ${s.outlook.toLowerCase().includes("bullish") ? "text-emerald-600 dark:text-emerald-400" : s.outlook.toLowerCase().includes("bearish") ? "text-red-600 dark:text-red-400" : "text-gray-600 dark:text-gray-300"}`}>
-                        {s.outlook}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="text-gray-400">Volatility:</span>
-                      <span className="font-medium text-gray-700 dark:text-gray-300">{s.vol}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="text-gray-400">Max Loss:</span>
-                      <span className={`font-medium ${s.risk === "Limited" ? "text-green-600 dark:text-green-400" : "text-orange-600 dark:text-orange-400"}`}>
-                        {s.risk}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <p className="text-xs text-gray-400 mt-3 flex items-center gap-1">
-              <Info className="w-3 h-3" /> Use the Options Strategy Tester for full analysis with Greeks and payoff diagrams.
-            </p>
-          </div>
         </>
       )}
     </div>
