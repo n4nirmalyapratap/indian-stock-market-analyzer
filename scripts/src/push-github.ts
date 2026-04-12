@@ -1,6 +1,9 @@
 /**
  * push-github.ts
- * Push source changes to GitHub using a Personal Access Token (GITHUB_PAT).
+ * Push source changes to GitHub.
+ *
+ * PRIMARY   — GITHUB_PAT secret (Personal Access Token, repo scope)
+ * FALLBACK  — Replit GitHub OAuth connector (proposeIntegration flow)
  *
  * Run: pnpm --filter @workspace/scripts run push-github
  *
@@ -8,9 +11,10 @@
  * the patterns in .gitignore (maintained in SKIP_DIRS, SKIP_FILES, SKIP_EXTS
  * below — keep these in sync with /.gitignore so there is one source of truth).
  *
- * See GITHUB_PUSH.md for timeout behaviour and retry notes.
+ * See GITHUB_PUSH.md for full setup instructions and troubleshooting.
  */
 
+import { ReplitConnectors } from "@replit/connectors-sdk";
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
@@ -19,12 +23,7 @@ const OWNER  = "n4nirmalyapratap";
 const REPO   = "indian-stock-market-analyzer";
 const BRANCH = "main";
 const ROOT   = path.resolve(import.meta.dirname, "../..");
-const PAT    = process.env.GITHUB_PAT;
-
-if (!PAT) {
-  console.error("❌  GITHUB_PAT environment variable is not set.");
-  process.exit(1);
-}
+const PAT    = process.env.GITHUB_PAT ?? "";
 
 // ── Skip rules — mirror /.gitignore exactly so there is one source of truth ──
 //
@@ -75,6 +74,10 @@ const SKIP_EXTS = new Set([
 const MAX_FILE_BYTES = 400 * 1024; // 400 KB hard cap
 
 // ── HARD-CODED PROTECTED FILES — NEVER allowed to be deleted from GitHub ──────
+//
+// If any file in this set is detected as "would be deleted" during pre-flight,
+// the push is ABORTED immediately. These files are critical for Docker builds.
+//
 const PROTECTED_FILENAMES = new Set([
   "Dockerfile",
   "nginx.conf",
@@ -131,14 +134,16 @@ function collectFiles(): string[] {
   return [...new Set(walkDir(ROOT))];
 }
 
-// ── GitHub API helper (PAT-based, no proxy) ───────────────────────────────────
+// ── GitHub API helpers ────────────────────────────────────────────────────────
+//
+// Two implementations that share the same interface:
+//   apiPAT   — direct fetch() using GITHUB_PAT  (primary)
+//   apiOAuth — Replit connector proxy            (fallback)
 
 type GHResp = Record<string, unknown>;
+type ApiOpts = { method?: string; body?: unknown };
 
-async function api(
-  endpoint: string,
-  opts: { method?: string; body?: unknown } = {},
-): Promise<GHResp> {
+async function callPAT(endpoint: string, opts: ApiOpts = {}): Promise<GHResp> {
   const resp = await fetch(`https://api.github.com${endpoint}`, {
     method: opts.method ?? "GET",
     headers: {
@@ -151,9 +156,7 @@ async function api(
   });
   const text = await resp.text();
   let json: GHResp;
-  try {
-    json = JSON.parse(text) as GHResp;
-  } catch {
+  try { json = JSON.parse(text) as GHResp; } catch {
     throw new Error(`GitHub API ${opts.method ?? "GET"} ${endpoint} returned non-JSON (HTTP ${resp.status}): ${text.slice(0, 300)}`);
   }
   if (resp.status >= 400) {
@@ -164,10 +167,36 @@ async function api(
   return json;
 }
 
-/** api() with automatic retry on 429 (rate limit) */
+async function callOAuth(
+  connectors: InstanceType<typeof ReplitConnectors>,
+  endpoint: string,
+  opts: ApiOpts = {},
+): Promise<GHResp> {
+  const resp = await connectors.proxy("github", endpoint, {
+    method: opts.method ?? "GET",
+    ...(opts.body
+      ? { body: JSON.stringify(opts.body), headers: { "Content-Type": "application/json" } }
+      : {}),
+  });
+  const text = await resp.text() as string;
+  let json: GHResp;
+  try { json = JSON.parse(text) as GHResp; } catch {
+    throw new Error(`GitHub API ${opts.method ?? "GET"} ${endpoint} returned non-JSON (HTTP ${resp.status}): ${text.slice(0, 300)}`);
+  }
+  if (resp.status >= 400) {
+    const msg = (json.message as string) ?? text.slice(0, 300);
+    const errors = json.errors ? `\n  Errors: ${JSON.stringify(json.errors)}` : "";
+    throw new Error(`HTTP_${resp.status}: ${msg}${errors}`);
+  }
+  return json;
+}
+
+// Unified api() and apiWithRetry() bound at runtime to whichever transport is active
+let api: (endpoint: string, opts?: ApiOpts) => Promise<GHResp>;
+
 async function apiWithRetry(
   endpoint: string,
-  opts: { method?: string; body?: unknown } = {},
+  opts: ApiOpts = {},
   retries = 4,
 ): Promise<GHResp> {
   let delay = 1000;
@@ -176,9 +205,12 @@ async function apiWithRetry(
       return await api(endpoint, opts);
     } catch (err) {
       const msg = (err as Error).message ?? "";
+      // Retry on 429 (primary rate limit) and 403 (secondary rate limit)
       if ((msg.startsWith("HTTP_429") || msg.startsWith("HTTP_403")) && attempt < retries) {
-        await new Promise(r => setTimeout(r, delay));
-        delay = Math.min(delay * 2, 8000);
+        const wait = delay;
+        process.stdout.write(`  ⏳  Rate limited — waiting ${wait / 1000}s before retry…\r`);
+        await new Promise(r => setTimeout(r, wait));
+        delay = Math.min(delay * 2, 16000);
         continue;
       }
       throw err;
@@ -190,9 +222,43 @@ async function apiWithRetry(
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const user = await api("/user") as { login: string };
-  console.log(`\n🔗  Authenticated as: ${user.login}`);
+  let connectors: InstanceType<typeof ReplitConnectors> | null = null;
 
+  // ── Choose transport ───────────────────────────────────────────────────────
+  if (PAT) {
+    console.log(`\n🔑  Auth method: Personal Access Token (primary)`);
+    api = (endpoint, opts) => callPAT(endpoint, opts);
+  } else {
+    console.log(`\n⚠️   GITHUB_PAT secret not set — falling back to OAuth connector.`);
+    console.log(`    Add GITHUB_PAT in Replit Secrets for faster, more reliable pushes.\n`);
+    connectors = new ReplitConnectors();
+    api = (endpoint, opts) => callOAuth(connectors!, endpoint, opts);
+  }
+
+  // ── Auth check ─────────────────────────────────────────────────────────────
+  const user = await api("/user") as { login: string };
+  console.log(`🔗  Authenticated as: ${user.login}`);
+
+  // If using OAuth, verify the connected account has push access to the repo.
+  // If not, print a clear error and exit — don't silently fail on blob 404s.
+  if (!PAT) {
+    const repoInfo = await api(`/repos/${OWNER}/${REPO}`) as {
+      permissions?: { push: boolean };
+      owner?: { login: string };
+    };
+    const hasPush = repoInfo.permissions?.push ?? false;
+    if (!hasPush) {
+      console.error(`\n❌  OAuth account "${user.login}" does not have push access to ${OWNER}/${REPO}.`);
+      console.error(`    The repo is owned by "${repoInfo.owner?.login}".`);
+      console.error(`\n    Fix options:`);
+      console.error(`    1. (Recommended) Set the GITHUB_PAT secret to a token from "${OWNER}" account.`);
+      console.error(`       → Replit Secrets → add GITHUB_PAT → re-run push-github.`);
+      console.error(`    2. Or add "${user.login}" as a collaborator with Write access on GitHub.`);
+      process.exit(1);
+    }
+  }
+
+  // ── HEAD SHAs ──────────────────────────────────────────────────────────────
   const refData = await api(
     `/repos/${OWNER}/${REPO}/git/ref/heads/${BRANCH}`,
   ) as { object: { sha: string } };
@@ -202,6 +268,7 @@ async function main() {
   const localSha = execSync("git rev-parse HEAD", { cwd: ROOT }).toString().trim();
   console.log(`📌  Local HEAD:   ${localSha.slice(0, 7)}`);
 
+  // ── Pre-flight: detect files that would be deleted ─────────────────────────
   console.log(`\n🔍  Checking for files on GitHub that would be deleted…`);
   const ghTree = await api(
     `/repos/${OWNER}/${REPO}/git/trees/${githubSha}?recursive=1`,
@@ -221,8 +288,7 @@ async function main() {
     for (const f of protectedViolations) {
       console.log(`     🛡  ${f}  ← Dockerfile / nginx / docker-compose (NEVER deletable)`);
     }
-    console.log(`\n   These files are critical for Docker builds and cannot be deleted.`);
-    console.log(`   Restore them first:`);
+    console.log(`\n   Restore them first:`);
     console.log(`   pnpm --filter @workspace/scripts run restore-files`);
     console.log(`   Then re-run this push.\n`);
     process.exit(1);
@@ -240,13 +306,15 @@ async function main() {
     console.log(`   ✅  No unexpected deletions — workspace matches GitHub.\n`);
   }
 
+  // ── Upload blobs ───────────────────────────────────────────────────────────
   console.log(`📁  Syncing ${files.length} source files…\n`);
 
   const treeEntries: { path: string; mode: string; type: string; sha: string }[] = [];
   let done = 0;
 
+  // 2 workers × 500 ms delay ≈ 4 req/s — well under GitHub's secondary rate limit
   const CONCURRENCY = 2;
-  const BLOB_DELAY_MS = 500; // throttle to ~4 req/s to stay under secondary rate limit
+  const BLOB_DELAY_MS = 500;
 
   async function uploadBlob(rel: string): Promise<void> {
     const abs = path.join(ROOT, rel);
@@ -281,6 +349,7 @@ async function main() {
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
   process.stdout.write(`  ${done}/${files.length} blobs created.  \n`);
 
+  // ── Commit message ─────────────────────────────────────────────────────────
   let msg = "chore: periodic sync from Replit";
   try {
     const subject = execSync("git log -1 --pretty=format:%s", { cwd: ROOT }).toString().trim();
@@ -288,7 +357,10 @@ async function main() {
     msg = body ? `${subject}\n\n${body}` : subject;
   } catch { /* use default */ }
 
-  // NOTE: base_tree is intentionally omitted here.
+  // ── Create tree, commit, update ref ───────────────────────────────────────
+  // NOTE: base_tree is intentionally omitted — without it GitHub builds a
+  // completely fresh tree from only the uploaded blobs, correctly reflecting
+  // deletions. With base_tree, deleted files silently persist on GitHub.
   const newTree = await api(
     `/repos/${OWNER}/${REPO}/git/trees`,
     { method: "POST", body: { tree: treeEntries } },
