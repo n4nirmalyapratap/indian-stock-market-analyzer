@@ -269,15 +269,20 @@ def _strategy_table(composite: float, vix: float) -> list[dict]:
             {"strategy": "Long Strangle",       "outlook": "Any Direction","vol": "High",          "risk": "Limited"},
         ]
     if vol_low:
+        # Low vol → premiums are thin; Iron Condor needs rich IV to be viable.
+        # Butterfly and Covered Call are better fits in a calm, range-bound market.
         return [
-            {"strategy": "Iron Condor",         "outlook": "Range-Bound", "vol": "Low",           "risk": "Limited"},
-            {"strategy": "Butterfly Spread",    "outlook": "Range-Bound", "vol": "Low",           "risk": "Limited"},
-            {"strategy": "Short Straddle",      "outlook": "Range-Bound", "vol": "Low",           "risk": "Unlimited"},
+            {"strategy": "Butterfly Spread",    "outlook": "Range-Bound",    "vol": "Low",       "risk": "Limited"},
+            {"strategy": "Covered Call",         "outlook": "Neutral-Bullish","vol": "Low",       "risk": "Limited"},
+            {"strategy": "Bull Put Spread",      "outlook": "Neutral-Bullish","vol": "Low",       "risk": "Limited"},
         ]
     if vol_high:
+        # High VIX + neutral sentiment → ideal for premium-selling strategies like Iron Condor.
+        # IV crush after selling the wings is the edge; Long vol plays are also valid.
         return [
-            {"strategy": "Long Straddle",       "outlook": "Any Direction","vol": "High VIX",      "risk": "Limited"},
-            {"strategy": "Long Strangle",       "outlook": "Any Direction","vol": "High VIX",      "risk": "Limited"},
+            {"strategy": "Iron Condor",          "outlook": "Range-Bound",   "vol": "High VIX",  "risk": "Limited"},
+            {"strategy": "Long Straddle",        "outlook": "Any Direction", "vol": "High VIX",  "risk": "Limited"},
+            {"strategy": "Long Strangle",        "outlook": "Any Direction", "vol": "High VIX",  "risk": "Limited"},
         ]
     return [
         {"strategy": "Iron Condor",             "outlook": "Range-Bound", "vol": "Moderate",      "risk": "Limited"},
