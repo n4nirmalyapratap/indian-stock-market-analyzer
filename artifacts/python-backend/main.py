@@ -27,6 +27,7 @@ from app.routes.sector_analytics import router as sector_analytics_router
 from app.routes.news import router as news_router
 from app.routes.admin import router as admin_router
 from app.routes.auth import router as auth_router
+from app.routes.sentiment import router as sentiment_router
 from app.services.log_buffer import setup_ring_buffer
 from app.services.market_cache_service import is_market_open, cache_status
 from app.services import market_cache_service as _mcs
@@ -232,3 +233,4 @@ app.include_router(sector_analytics_router, prefix="/api")
 app.include_router(news_router,             prefix="/api")
 app.include_router(admin_router,            prefix="/api")
 app.include_router(auth_router,             prefix="/api")
+app.include_router(sentiment_router,        prefix="/api")
