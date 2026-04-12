@@ -30,10 +30,10 @@ LOT_SIZES: dict[str, int] = {
     "^NSEI":       75,
     "BANKNIFTY":   30,
     "^NSEBANK":    30,
-    "FINNIFTY":    40,
-    "^CNXFIN":     40,
-    "MIDCPNIFTY":  75,
-    "^NSMIDCP":    75,
+    "FINNIFTY":    65,   # SEBI/HO/MRD/MRD-PoD-2/P/CIR/2024/113 — effective Nov 2024
+    "^CNXFIN":     65,   # SEBI/HO/MRD/MRD-PoD-2/P/CIR/2024/113 — effective Nov 2024
+    "MIDCPNIFTY":  120,  # SEBI/HO/MRD/MRD-PoD-2/P/CIR/2024/113 — effective Nov 2024
+    "^NSMIDCP":    120,  # SEBI/HO/MRD/MRD-PoD-2/P/CIR/2024/113 — effective Nov 2024
     "SENSEX":      10,
     "^BSESN":      10,
     "BANKEX":      15,

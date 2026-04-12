@@ -1243,8 +1243,8 @@ export default function OptionsStrategyTester() {
         const INDICES = [
           { sym: "NIFTY",      label: "NIFTY 50",     lot: 75, exch: "NSE" },
           { sym: "BANKNIFTY",  label: "BANK NIFTY",   lot: 30, exch: "NSE" },
-          { sym: "FINNIFTY",   label: "FIN NIFTY",    lot: 40, exch: "NSE" },
-          { sym: "MIDCPNIFTY", label: "MIDCAP NIFTY", lot: 75, exch: "NSE" },
+          { sym: "FINNIFTY",   label: "FIN NIFTY",    lot: 65,  exch: "NSE" },
+          { sym: "MIDCPNIFTY", label: "MIDCAP NIFTY", lot: 120, exch: "NSE" },
           { sym: "SENSEX",     label: "SENSEX",        lot: 10, exch: "BSE" },
           { sym: "BANKEX",     label: "BANKEX",        lot: 15, exch: "BSE" },
         ];

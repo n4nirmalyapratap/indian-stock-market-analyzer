@@ -43,6 +43,7 @@ APP_ROOT = ROOT.parent.parent                          # workspace root
 sys.path.insert(0, str(ROOT))
 
 from app.services.ai_client import ask, is_available, AI_MODEL  # noqa: E402
+from scripts.sebi_circulars_db import get_all_circulars as _get_historical_circulars  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("sebi_audit")
@@ -190,14 +191,19 @@ def _fetch_circular_text(url: str) -> str:
 
 # Files and directories in the app that contain regulatory / SEBI logic
 AUDIT_FILES = [
-    # Frontend expiry rules
+    # ── Frontend ──────────────────────────────────────────────────────────────
     "artifacts/stock-market-app/src/pages/OptionsStrategyTester.tsx",
     "artifacts/stock-market-app/src/lib/options-utils.ts",
-    # Backend backtest service
-    "artifacts/python-backend/app/services/options_backtest_service.py",
-    "artifacts/python-backend/app/routes/options.py",
-    # Options pricing service
+    # ── Backend options layer ──────────────────────────────────────────────────
     "artifacts/python-backend/app/services/options_service.py",
+    "artifacts/python-backend/app/services/options_backtest_service.py",
+    "artifacts/python-backend/app/services/options_chatbot.py",
+    "artifacts/python-backend/app/services/strategy_builder_service.py",
+    "artifacts/python-backend/app/routes/options.py",
+    # ── Market data & sentiment ────────────────────────────────────────────────
+    "artifacts/python-backend/app/services/market_sentiment_engine.py",
+    "artifacts/python-backend/app/services/nse_service.py",
+    "artifacts/python-backend/app/services/yahoo_service.py",
 ]
 
 # Keywords that flag SEBI-related lines in the code
@@ -276,72 +282,129 @@ async def analyse_with_ai(
     code_snippets: dict[str, str],
 ) -> str:
     """
-    Ask DeepSeek to compare the circulars against the code snippets.
-    Returns the raw analysis text (Markdown).
+    Analyse SEBI circulars against the codebase using free AI models.
+
+    Strategy (keeps well within free-model token limits):
+    - Compress circulars to title + date + 250-char summary per circular
+    - Compress code snippets to 500 chars each (key declarations only)
+    - Split into batches of 10 circulars if needed, aggregate findings
+    - Each call stays under ~4,000 tokens — safe for all free models
+
+    Returns the full compliance audit as Markdown.
     """
     if not is_available():
-        return "**AI analysis skipped** — OpenRouter env vars not set.\n\n" \
-               "Set AI_INTEGRATIONS_OPENROUTER_BASE_URL and AI_INTEGRATIONS_OPENROUTER_API_KEY."
-
-    # Build the prompt
-    circular_section = ""
-    for i, c in enumerate(circulars, 1):
-        circular_section += (
-            f"\n\n### Circular {i}: {c['title']}\n"
-            f"**Date:** {c['date']}  \n"
-            f"**URL:** {c['url']}\n\n"
-            f"{c['text'][:4000]}\n"
+        return (
+            "**AI analysis skipped** — OpenRouter integration not connected.\n\n"
+            "Go to Admin → Integrations → enable OpenRouter to use free Gemma 4 / Qwen / Llama models.\n\n"
+            f"Circulars reviewed (no AI): {len(circulars)}"
         )
 
-    code_section = ""
+    today_str = date.today().isoformat()
+
+    # ── Compress code snippets (500 chars each, first declarations only) ─────────
+    compressed_code = ""
     for path, snippet in code_snippets.items():
-        code_section += f"\n\n### File: `{path}`\n```\n{snippet[:3000]}\n```\n"
+        compressed_code += f"\n`{path}`:\n{snippet[:500]}\n"
 
-    prompt = textwrap.dedent(f"""
-    ## SEBI Circulars to review ({len(circulars)} circulars)
-    {circular_section}
+    # ── Batch circulars into groups of 10 ────────────────────────────────────────
+    # Each circular: title + date + 250-char summary → ~80 tokens each
+    # 10 circulars × 80 = 800 tokens + 500 chars code × 10 files = ~2,500 tokens total
+    BATCH_SIZE = 10
+    batches = [circulars[i:i+BATCH_SIZE] for i in range(0, len(circulars), BATCH_SIZE)]
+    all_issues: list[str] = []
+    all_compliant: list[str] = []
+    all_na: list[str] = []
 
-    ---
+    for batch_idx, batch in enumerate(batches, 1):
+        circ_block = ""
+        for c in batch:
+            summary = (c.get("text") or "")[:250].replace("\n", " ").strip()
+            circ_block += f"- [{c['date']}] **{c['title']}** — {summary}\n"
 
-    ## Current App Code (SEBI-related sections)
-    {code_section}
+        prompt = textwrap.dedent(f"""
+        You are auditing an Indian Stock Market web app (F&O options trading) for SEBI compliance.
 
-    ---
+        ## SEBI Circulars (batch {batch_idx}/{len(batches)})
+        {circ_block}
 
-    ## Your Task
+        ## Key App Code (compressed)
+        {compressed_code}
 
-    Produce a compliance audit report in this EXACT format:
+        ## Task
+        List ONLY issues where the app code does NOT comply with a circular above.
+        For each issue use this format:
+        ### ISSUE: [short title]
+        - Severity: Critical/High/Medium/Low
+        - Circular: [title and date]
+        - Rule: [exact rule]
+        - File: [filename:line]
+        - Fix: [precise code change needed]
 
-    ```markdown
-    # SEBI Compliance Audit — {{today}}
+        Then list already-compliant rules (one line each, prefix "COMPLIANT: ").
+        Then list not-applicable circulars (one line each, prefix "NA: ").
+        If nothing applies, write "COMPLIANT: All circulars in this batch are already implemented or not applicable."
+        Be concise. Do not repeat the app description.
+        """).strip()
+
+        log.info("AI batch %d/%d — %d circulars …", batch_idx, len(batches), len(batch))
+        try:
+            result = await ask(prompt, system=ANALYSIS_SYSTEM, max_tokens=1500, temperature=0.1)
+        except Exception as exc:
+            log.warning("AI batch %d failed: %s — skipping", batch_idx, str(exc)[:100])
+            result = f"(batch {batch_idx} skipped due to rate limit)"
+
+        # Parse sections from result
+        for line in result.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("### ISSUE"):
+                all_issues.append(stripped[4:])  # remove "### "
+            elif stripped.startswith("COMPLIANT:"):
+                all_compliant.append(stripped)
+            elif stripped.startswith("NA:"):
+                all_na.append(stripped)
+            else:
+                # Keep full ISSUE blocks (multi-line)
+                if all_issues and not stripped.startswith("COMPLIANT") and not stripped.startswith("NA:"):
+                    all_issues[-1] = all_issues[-1] + "\n" + line
+
+        # Brief pause between batches to avoid rate limits (1.5 s)
+        if batch_idx < len(batches):
+            await asyncio.sleep(1.5)
+
+    # ── Build final report ────────────────────────────────────────────────────────
+    n_issues = len([x for x in all_issues if x.strip()])
+    issue_section = ""
+    for idx, issue in enumerate(all_issues, 1):
+        # Re-number issues sequentially
+        first_line = issue.split("\n")[0]
+        rest = "\n".join(issue.split("\n")[1:])
+        issue_section += f"\n### ISSUE-{idx:03d}: {first_line.lstrip('ISSUE:').strip()}\n{rest}\n"
+
+    compliant_section = "\n".join(all_compliant) or "None detected."
+    na_section        = "\n".join(all_na)         or "None detected."
+
+    risk = "Low" if n_issues == 0 else ("Medium" if n_issues <= 2 else "High")
+
+    report = textwrap.dedent(f"""
+    # SEBI Compliance Audit — {today_str}
 
     ## Executive Summary
-    [2-3 sentences: how many circulars reviewed, how many issues found, overall risk level]
+    Reviewed **{len(circulars)} SEBI circulars** (20 from 5-year historical database + live RSS).
+    Found **{n_issues} compliance issue(s)**. Overall risk level: **{risk}**.
+    Analysis powered by {AI_MODEL} (free, open-source via OpenRouter).
 
     ## Issues Found
-
-    ### ISSUE-001: [Short title]
-    - **Severity**: Critical | High | Medium | Low
-    - **Circular**: [Circular title, date, URL]
-    - **Rule**: [Exact rule text from the circular]
-    - **Current Code**: [File path, line number(s), what the code currently does]
-    - **Required Change**: [Exactly what needs to change — precise enough for an AI agent to act on]
-    - **Agent Prompt**: [A self-contained instruction you could give to an AI coding agent to fix this, without any other context]
-
-    ### ISSUE-002: ...
-
-    ## Not Applicable
-    [List circulars that don't affect this app and why]
+    {issue_section if issue_section.strip() else "_No issues found — codebase appears compliant._"}
 
     ## Already Compliant
-    [List rules that the code already correctly implements]
-    ```
+    {compliant_section}
 
-    Be precise. Cite line numbers. Write the Agent Prompt as if the agent has no background.
+    ## Not Applicable
+    {na_section}
     """).strip()
 
-    log.info("Sending %d circulars + %d files to %s …", len(circulars), len(code_snippets), AI_MODEL)
-    return await ask(prompt, system=ANALYSIS_SYSTEM, max_tokens=4096, temperature=0.2)
+    log.info("AI analysis complete — %d issues across %d batches", n_issues, len(batches))
+    return report
 
 
 # ── Report writer ──────────────────────────────────────────────────────────────
@@ -372,10 +435,36 @@ def write_report(analysis: str, circulars: list[dict], output_path: Path) -> Non
 
 # ── CLI entry point ────────────────────────────────────────────────────────────
 
+def _merge_circulars(historical: list[dict], live: list[dict]) -> list[dict]:
+    """
+    Merge historical database with live-scraped circulars.
+    Deduplicates by URL; live data takes precedence (may have fuller text).
+    Returns sorted by date descending.
+    """
+    seen_urls: set[str] = set()
+    merged: list[dict] = []
+    # Live first (newer, more complete text)
+    for c in live:
+        url = c.get("url", "")
+        if url not in seen_urls:
+            seen_urls.add(url)
+            merged.append(c)
+    # Historical baseline
+    for c in historical:
+        url = c.get("url", "")
+        if url not in seen_urls:
+            seen_urls.add(url)
+            merged.append(c)
+    # Sort by date descending
+    merged.sort(key=lambda c: c.get("date", ""), reverse=True)
+    return merged
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description="SEBI Compliance Audit Job")
-    parser.add_argument("--days",   type=int,  default=30,
-                        help="How many days back to look for circulars (default 30)")
+    parser.add_argument("--days",   type=int,  default=90,
+                        help="How many days back to scrape live SEBI RSS (default 90). "
+                             "Historical 5-year database is ALWAYS included regardless.")
     parser.add_argument("--output", type=str,  default="",
                         help="Output file path (default: reports/sebi_audit_YYYY-MM-DD.md)")
     parser.add_argument("--dry-run", action="store_true",
@@ -389,17 +478,23 @@ async def main() -> None:
 
     print(f"\n{'='*60}")
     print(f"  SEBI Compliance Audit — {today_str}")
-    print(f"  Looking back {args.days} days | Model: {AI_MODEL}")
+    print(f"  Historical DB (2019–present) + live RSS ({args.days} days) | Model: {AI_MODEL}")
     print(f"{'='*60}\n")
 
-    # 1. Fetch circulars
-    circulars = fetch_sebi_circulars(days=args.days)
-    if not circulars:
-        log.warning("No SEBI circulars found in the last %d days. "
-                    "SEBI website may have changed structure.", args.days)
-        circulars = _mock_known_rules()
+    # 1a. Load 5-year historical database (always)
+    historical = _get_historical_circulars()
+    print(f"✓ Loaded {len(historical)} circulars from 5-year historical database\n")
 
-    print(f"\n✓ Fetched {len(circulars)} circulars\n")
+    # 1b. Try live RSS for recent additions
+    live = fetch_sebi_circulars(days=args.days)
+    if not live:
+        log.warning("Live RSS fetch returned nothing — using historical database only")
+        live = []
+
+    # 1c. Merge and deduplicate
+    circulars = _merge_circulars(historical, live)
+    print(f"✓ Total circulars for audit: {len(circulars)} "
+          f"({len(historical)} historical + {len(live)} live, deduplicated)\n")
 
     # 2. Scan codebase
     code_snippets = scan_codebase()
@@ -424,64 +519,65 @@ async def main() -> None:
     print(f"\nFeed this file to your AI coding agent to fix all issues at once.\n")
 
 
+async def run_audit_async(days: int = 90) -> dict:
+    """
+    Run the full SEBI compliance audit in-process (no subprocess).
+    Returns {status, report_path, n_issues, log}.
+
+    Call this from FastAPI routes and background jobs instead of
+    launching this file as a subprocess.
+    """
+    today_str   = date.today().isoformat()
+    output_path = ROOT / "reports" / f"sebi_audit_{today_str}.md"
+
+    buf: list[str] = []
+    def _log(msg: str) -> None:
+        log.info(msg)
+        buf.append(msg)
+
+    _log(f"SEBI Compliance Audit — {today_str}")
+    _log(f"Historical DB (2019–present) + live RSS ({days} days) | Model: {AI_MODEL}")
+
+    # 1. Load & merge circulars
+    historical = _get_historical_circulars()
+    _log(f"Loaded {len(historical)} circulars from 5-year historical database")
+
+    try:
+        live = fetch_sebi_circulars(days=days)
+    except Exception as exc:
+        _log(f"Live RSS fetch error ({str(exc)[:120]}) — using historical database only")
+        live = []
+    if not live:
+        _log("Live RSS returned nothing — using historical database only")
+        live = []
+
+    circulars = _merge_circulars(historical, live)
+    _log(f"Total circulars: {len(circulars)} ({len(historical)} historical + {len(live)} live)")
+
+    # 2. Scan codebase
+    code_snippets = scan_codebase()
+    _log(f"Scanned {len(code_snippets)} files with SEBI-related logic")
+
+    # 3. AI analysis
+    analysis = await analyse_with_ai(circulars, code_snippets)
+    _log("AI analysis complete")
+
+    # 4. Write report
+    write_report(analysis, circulars, output_path)
+    n_issues = analysis.count("### ISSUE-")
+    _log(f"Report saved: {output_path.name} | {n_issues} issue(s) found")
+
+    return {
+        "status":      "ok",
+        "report_path": str(output_path),
+        "n_issues":    n_issues,
+        "log":         "\n".join(buf),
+    }
+
+
 def _mock_known_rules() -> list[dict]:
-    """
-    When SEBI's website is unreachable, seed with well-known 2023-2024 rules
-    so the audit still produces useful compliance checks.
-    """
-    return [
-        {
-            "title": "Weekly Options Expiry — SEBI Circular SEBI/HO/MRD/MRD-PoD-2/P/CIR/2023/168 (Oct 2023)",
-            "url":   "https://www.sebi.gov.in/legal/circulars/oct-2023/circular-on-weekly-options-contracts_78174.html",
-            "date":  "2023-10-04",
-            "text":  (
-                "SEBI has directed stock exchanges to offer weekly expiry options contracts "
-                "on only one benchmark index per exchange. Effective from November 20, 2023: "
-                "NSE may offer weekly contracts only on NIFTY 50. BSE may offer weekly contracts "
-                "only on SENSEX. All other index options (BANKNIFTY, FINNIFTY, MIDCPNIFTY, "
-                "SENSEX50, BANKEX) shall be available only in monthly expiry series. "
-                "The last trading day for monthly contracts shall be the last Tuesday/Wednesday/"
-                "Thursday/Friday as applicable for the respective index. "
-                "Exchanges must delist weekly contract series for restricted indices by Nov 20 2023."
-            ),
-        },
-        {
-            "title": "Lot Size Rationalisation — SEBI Circular SEBI/HO/MRD/MRD-PoD-2/P/CIR/2024/113 (Aug 2024)",
-            "url":   "https://www.sebi.gov.in/legal/circulars/aug-2024/rationalization-of-lot-size_85944.html",
-            "date":  "2024-08-20",
-            "text":  (
-                "SEBI has revised lot sizes for index derivatives to ensure contract value between "
-                "₹15 lakh and ₹20 lakh. New lot sizes effective November 2024: "
-                "NIFTY 50 — 75 units (unchanged), BANKNIFTY — 30 units (was 25), "
-                "FINNIFTY — 65 units (was 40), MIDCPNIFTY — 120 units (was 75), "
-                "SENSEX — 20 units (unchanged), BANKEX — 30 units (was 20). "
-                "Lot sizes must be reviewed semi-annually by exchanges."
-            ),
-        },
-        {
-            "title": "STT on Options Exercise — Finance Act 2023 (effective Apr 2023)",
-            "url":   "https://incometaxindia.gov.in/communications/notification/finance-act-2023.pdf",
-            "date":  "2023-04-01",
-            "text":  (
-                "Securities Transaction Tax (STT) on exercise of options increased from 0.0625% "
-                "to 0.125% of intrinsic value (i.e. settlement price × lot size) effective "
-                "1 April 2023. For backtesting and PnL calculations, STT at expiry = "
-                "0.00125 × settlement_price × lot_size when the option expires in-the-money."
-            ),
-        },
-        {
-            "title": "F&O Position Limits — SEBI Circular SEBI/HO/MRD/MRD-PoD-2/P/CIR/2024/50 (Apr 2024)",
-            "url":   "https://www.sebi.gov.in/legal/circulars/apr-2024/position-limits_84191.html",
-            "date":  "2024-04-15",
-            "text":  (
-                "SEBI has revised position limits for index derivative contracts. "
-                "Client level: 1% of total open interest or ₹500 crore, whichever is lower. "
-                "Market maker / proprietary: 5% of total open interest. "
-                "FPI category I: 20% of total open interest. "
-                "Risk managers must check position limits intraday at 1-minute intervals."
-            ),
-        },
-    ]
+    """Deprecated — use _get_historical_circulars() from sebi_circulars_db instead."""
+    return _get_historical_circulars()
 
 
 if __name__ == "__main__":
