@@ -349,8 +349,8 @@ async def _fetch_nifty_price_action() -> dict:
 async def _fetch_news_mood() -> dict:
     """Fetch current news sentiment summary."""
     try:
-        from .news_service import get_summary
-        return await get_summary()
+        from .news_service import get_news_stats
+        return await get_news_stats()
     except Exception as e:
         logger.warning("News mood fetch failed: %s", e)
         return {"totalArticles": 0, "sentiments": {"bullish": 0, "bearish": 0, "neutral": 0}, "marketMood": "neutral"}
