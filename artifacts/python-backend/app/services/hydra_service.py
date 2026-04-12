@@ -162,28 +162,59 @@ def _extract_symbols(text: str) -> list[str]:
 def _resolve_symbol(text: str) -> str | None:
     """
     Try to resolve a single NSE ticker from free-form text.
-    Priority: friendly name aliases → full universe lookup → uppercase extraction.
+    Priority:
+      1. Multi-word friendly names (e.g. 'adani green') — substring match (longest first)
+      2. Single-word universe lookup — whole-word boundary match to avoid 'atam' in 'tatamotors'
+      3. Uppercase token extraction fallback
     Handles any case: 'Zomato', 'ZOMATO', 'zomato', 'Adani Green' all work.
     """
     lower = text.lower()
-    # 1. Check friendly names (longest match first for multi-word names)
-    for name in sorted(_SYMBOL_RESOLVER, key=len, reverse=True):
+
+    # 1a. Multi-word friendly names (e.g. 'adani green') — safe to substring-match
+    #     since a two-word phrase won't accidentally appear inside a single word.
+    #     Checked longest-first so 'adani green' wins over 'adani'.
+    for name in sorted((n for n in _FRIENDLY_NAMES if ' ' in n), key=len, reverse=True):
         if name in lower:
-            return _SYMBOL_RESOLVER[name]
-    # 2. Fall back to uppercase token extraction
+            return _FRIENDLY_NAMES[name]
+
+    # 1b. Single-word friendly names and universe symbols — token-based lookup
+    #     so 'wipro' won't match inside 'tatamotors' and 'pnb' won't match 'pncinfra'.
+    tokens = re.split(r'[\s,;/]+', lower)
+    for tok in tokens:
+        sym = _FRIENDLY_NAMES.get(tok) or _UNIVERSE_LOOKUP.get(tok)
+        if sym:
+            return sym
+
+    # 3. Fall back to uppercase token extraction
     syms = _extract_symbols(text)
     return syms[0] if syms else None
 
 
 def _route_intent(query: str) -> str:
-    """Simple keyword-based intent classifier → agent name. Returns '' if nothing matches."""
+    """
+    Intent classifier → agent name. Returns '' if nothing matches.
+    First tries keyword scoring; if no keyword matches, falls back to
+    structural patterns so shorthand queries like 'CDSL for 5 days'
+    or 'ZOMATO 7 days' still route correctly.
+    """
     lower = query.lower()
     scores = {}
     for agent in AGENT_DESCRIPTIONS:
         score = sum(1 for kw in agent["keywords"] if kw in lower)
         scores[agent["name"]] = score
     best = max(scores, key=scores.get)
-    return best if scores[best] > 0 else ""
+    if scores[best] > 0:
+        return best
+
+    # ── Structural fallbacks when no keyword matched ───────────────────────────
+    # "[symbol] [for] N day/days/week/weeks" → forecast
+    if re.search(r'\d+\s*(day|days|week|weeks)', lower):
+        return "forecast"
+    # "[symbol] and [symbol]" / "vs" / "versus" → pairs
+    if re.search(r'\b(and|vs\.?|versus)\b', lower):
+        return "pairs"
+
+    return ""
 
 
 _HELP_MESSAGE = (
