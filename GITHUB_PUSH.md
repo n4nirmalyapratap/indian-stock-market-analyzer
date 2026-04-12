@@ -11,7 +11,34 @@ Replit GitHub connector. There is no `git push` involved — no PAT, no SSH key.
 pnpm --filter @workspace/scripts run push-github
 ```
 
-Run this after every meaningful change. It will print a commit URL on success.
+Run after every meaningful change. It will print a commit URL on success.
+
+---
+
+## Pulling from GitHub (only when something looks wrong)
+
+**Do not pull before every push.** It is unnecessary and wastes API quota.
+
+Pull only in these situations:
+
+| Situation | What to do |
+|---|---|
+| Fresh Replit environment / workspace wipe | Run pull to restore missing files |
+| Push pre-flight warns a file will be unexpectedly deleted | Run pull to check, then push |
+| You know a file was deleted locally by accident | Run pull to get it back |
+
+```bash
+cd scripts && node_modules/.bin/tsx ./src/pull-github.ts
+```
+
+### How the pull script works (smart — minimal API calls)
+
+1. **ONE** API call to get the current GitHub HEAD SHA.
+2. **ONE** API call to fetch the full recursive file tree (paths + SHAs).
+3. **Zero API calls** to check which files are present — just reads the local filesystem.
+4. Downloads blob content **only for files that are truly missing** locally.
+   In a healthy workspace this means 0 extra API calls and instant completion.
+5. Never overwrites files that already exist locally — your edits are always safe.
 
 ---
 
