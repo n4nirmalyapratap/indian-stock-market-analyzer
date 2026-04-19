@@ -1,6 +1,7 @@
 import { useState, useEffect, ComponentType, ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { useTheme } from "@/context/ThemeContext";
+import { BrandLogo } from "@/components/BrandLogo";
 import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
   Brain, TrendingUp, CandlestickChart,
@@ -93,7 +94,7 @@ export function LayoutShell({
 
         <div className={`flex items-center gap-2.5 border-b border-gray-100 dark:border-white/[0.05] flex-shrink-0 h-[57px]
           ${open ? "px-4" : "justify-center"}`}>
-          <img src="/niftynodes-logo.png" alt="NiftyNodes" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
+          <BrandLogo className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
           {open && (
             <div className="overflow-hidden">
               <p className="font-bold text-gray-900 dark:text-white text-sm whitespace-nowrap">Nifty Node</p>
@@ -155,7 +156,7 @@ export function LayoutShell({
 
       <div className="flex-1 flex flex-col min-w-0 bg-gray-50 dark:bg-gray-950">
         <div className="md:hidden bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 px-4 py-3 flex items-center gap-2">
-          <img src="/niftynodes-logo.png" alt="NiftyNodes" className="w-7 h-7 rounded-full object-cover" />
+          <BrandLogo className="w-7 h-7 rounded-full object-cover" />
           <span className="font-bold text-gray-900 dark:text-white text-sm flex-1">Nifty Node</span>
           <ThemeToggle open={false} />
         </div>

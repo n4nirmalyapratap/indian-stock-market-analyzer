@@ -112,6 +112,37 @@ docker compose logs -f backend   # Python only
 docker compose logs -f frontend  # nginx only
 ```
 
+## Docker Local Development (auto-reload on file changes)
+
+Use this only for local development when you want Docker to reflect frontend and backend code changes automatically without rebuilding after every edit.
+
+### Start the dev stack
+
+```bash
+docker compose down
+docker compose -f docker-compose.dev.yml up --build
+```
+
+### What this does
+
+- `http://localhost/` serves the user app through a dev nginx proxy
+- `http://localhost/admin/` serves the admin app through the same proxy
+- `http://localhost/api/*` still goes to the Python backend
+- Frontend changes reload from Vite dev servers
+- Backend changes reload through `uvicorn --reload`
+
+### Important notes
+
+- Stop the regular production-style stack first with `docker compose down` so port `80` is free
+- The dev stack uses bind mounts, so source edits are reflected live
+- The production file `docker-compose.yml` is unchanged and still meant for rebuild-based runs
+
+### Stop the dev stack
+
+```bash
+docker compose -f docker-compose.dev.yml down
+```
+
 ### Data persistence
 
 User accounts (email + password) are stored in SQLite and kept in a named Docker volume (`userdata`). The database survives:

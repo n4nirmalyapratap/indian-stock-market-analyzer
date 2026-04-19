@@ -95,9 +95,7 @@ function Layout({ children, onSignOut }: { children: React.ReactNode; onSignOut:
         transition-all duration-200 ease-in-out ${open ? "w-52" : "w-[52px]"}`}>
         <div className={`flex items-center gap-2.5 border-b border-gray-100 flex-shrink-0 h-[57px]
           ${open ? "px-4" : "justify-center"}`}>
-          <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center flex-shrink-0">
-            <ShieldAlert className="w-4 h-4 text-white" />
-          </div>
+          <img src="/niftynodes-logo-transparent.png" alt="Nifty Node" className="w-8 h-8 rounded-full object-contain flex-shrink-0" />
           {open && (
             <div className="overflow-hidden">
               <p className="font-bold text-gray-900 text-sm whitespace-nowrap">Admin Panel</p>
@@ -135,9 +133,7 @@ function Layout({ children, onSignOut }: { children: React.ReactNode; onSignOut:
 
       <div className="flex-1 flex flex-col min-w-0">
         <div className="md:hidden bg-white border-b border-gray-100 px-4 py-3 flex items-center gap-3">
-          <div className="w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center">
-            <ShieldAlert className="w-4 h-4 text-white" />
-          </div>
+          <img src="/niftynodes-logo-transparent.png" alt="Nifty Node" className="w-7 h-7 rounded-full object-contain" />
           <span className="font-bold text-gray-900 text-sm flex-1">Admin Panel</span>
           <button onClick={onSignOut} className="text-gray-400 hover:text-red-500 transition">
             <LogOut className="w-4 h-4" />
