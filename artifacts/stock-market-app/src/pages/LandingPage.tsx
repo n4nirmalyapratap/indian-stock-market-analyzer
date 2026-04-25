@@ -1,4 +1,5 @@
 import { useLocation } from "wouter";
+import { BrandLogo } from "@/components/BrandLogo";
 import {
   BarChart3, Brain, TrendingUp, Shield, Zap, Globe,
   ArrowRight, Lock,
@@ -50,11 +51,7 @@ export default function LandingPage() {
       {/* Header */}
       <header className="border-b border-white/[0.06] px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <img
-            src="/niftynodes-logo.png"
-            alt="NiftyNodes"
-            className="w-9 h-9 rounded-full object-cover"
-          />
+          <BrandLogo className="w-9 h-9 rounded-full object-cover" />
           <div>
             <p className="font-bold text-white text-sm leading-tight">Nifty Node</p>
             <p className="text-xs text-gray-500 leading-tight">Indian Stock Market</p>
