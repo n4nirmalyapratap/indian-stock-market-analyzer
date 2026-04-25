@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Eye, EyeOff, AlertCircle } from "lucide-react";
+import { ShieldAlert, Eye, EyeOff, AlertCircle } from "lucide-react";
 import { api, setAdminToken } from "@/lib/api";
 
 export default function LoginPage({ onLogin }: { onLogin: (token: string) => void }) {
@@ -31,11 +31,9 @@ export default function LoginPage({ onLogin }: { onLogin: (token: string) => voi
 
         {/* Header */}
         <div className="flex flex-col items-center mb-8">
-          <img
-            src="/niftynodes-logo-transparent.png"
-            alt="Nifty Node"
-            className="w-14 h-14 rounded-2xl object-contain mb-4 shadow-lg shadow-indigo-500/30"
-          />
+          <div className="w-14 h-14 rounded-2xl bg-indigo-600 flex items-center justify-center mb-4 shadow-lg shadow-indigo-500/30">
+            <ShieldAlert className="w-7 h-7 text-white" />
+          </div>
           <h1 className="text-white font-bold text-xl tracking-tight">Admin Panel</h1>
           <p className="text-gray-400 text-sm mt-1">Nifty Node — Restricted Access</p>
         </div>

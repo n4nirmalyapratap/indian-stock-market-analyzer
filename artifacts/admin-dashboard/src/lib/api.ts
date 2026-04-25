@@ -19,7 +19,7 @@ export function clearAdminToken() {
   sessionStorage.removeItem(SESSION_KEY);
 }
 
-const BASE = (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
+const BASE = "/api";
 
 export async function fetchAdmin<T>(path: string, options?: RequestInit): Promise<T> {
   const token = getAdminToken();

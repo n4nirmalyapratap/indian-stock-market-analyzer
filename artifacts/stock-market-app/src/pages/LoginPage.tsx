@@ -1,6 +1,5 @@
 import { useState, FormEvent } from "react";
 import { useCustomAuth } from "@/context/CustomAuthContext";
-import { BrandLogo } from "@/components/BrandLogo";
 
 export default function LoginPage() {
   const { login, register } = useCustomAuth();
@@ -34,7 +33,11 @@ export default function LoginPage() {
 
       {/* Brand */}
       <div className="mb-8 flex flex-col items-center">
-        <BrandLogo className="w-14 h-14 rounded-full object-cover mb-3 ring-2 ring-indigo-500/30" />
+        <img
+          src="/niftynodes-logo.png"
+          alt="NiftyNodes"
+          className="w-14 h-14 rounded-full object-cover mb-3 ring-2 ring-indigo-500/30"
+        />
         <p className="text-white font-bold text-xl tracking-tight">Nifty Node</p>
         <p className="text-gray-400 text-sm mt-1">Indian Stock Market Analysis</p>
       </div>
