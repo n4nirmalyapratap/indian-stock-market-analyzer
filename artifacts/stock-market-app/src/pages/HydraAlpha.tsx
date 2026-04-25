@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { fetchApi } from "@/lib/api";
+import { BrandLogo } from "@/components/BrandLogo";
 import {
   Brain, Zap, BarChart3, Shield, TrendingUp, TrendingDown,
   Minus, Send, RefreshCw, ChevronDown, ChevronUp, Info,
@@ -228,7 +229,7 @@ function SupervisorTab() {
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
             {m.role === "hydra" && (
-              <img src="/niftynodes-logo.png" alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0 self-start mt-1 mr-2" />
+              <BrandLogo alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0 self-start mt-1 mr-2" />
             )}
             <div className={`max-w-[80%] rounded-2xl px-3.5 py-2.5 ${m.role === "user"
               ? "bg-indigo-600 text-white rounded-br-none"
@@ -248,7 +249,7 @@ function SupervisorTab() {
         ))}
         {loading && (
           <div className="flex justify-start items-end gap-2">
-            <img src="/niftynodes-logo.png" alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
+            <BrandLogo alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
             <div className="bg-gray-100 dark:bg-gray-800 border border-transparent dark:border-gray-700 rounded-2xl rounded-bl-none px-4 py-3">
               <div className="flex gap-1 items-center">
                 {[0, 1, 2].map(i => (
@@ -902,7 +903,7 @@ export default function HydraAlpha() {
       {/* ── Slim header ───────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
         <div className="flex items-center gap-2.5">
-          <img src="/niftynodes-logo.png" alt="NiftyNodes" className="w-8 h-8 rounded-full object-cover" />
+          <BrandLogo className="w-8 h-8 rounded-full object-cover" />
           <div className="leading-tight">
             <p className="text-sm font-bold text-gray-900 dark:text-white">Nifty Node Bot</p>
             <p className="text-[11px] text-gray-400">AI-powered stock analysis</p>

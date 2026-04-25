@@ -118,29 +118,14 @@ PyJWT, cryptography, bcrypt, openai, lxml
 
 ---
 
-## GitHub Sync (Pull → Push)
+## GitHub Push
 
 ```bash
 pnpm --filter @workspace/scripts run push-github
 ```
-
-**Auth order:** GitHub OAuth (primary) → PAT fallback (uses `GITHUB_PAT` secret).
-
-**The script always pull-then-push:**
-
-1. **PULL first** — fetches the GitHub tree and compares every file to the workspace:
-   - File only on GitHub (you pushed there directly) → downloaded into workspace
-   - File differs on BOTH sides → **workspace wins**, GitHub version is NOT downloaded
-   - File unchanged → skipped
-
-2. **PUSH second** — diff-based upload (only files whose content changed):
-   - Computes `git hash-object` SHA for every local file
-   - Compares against existing GitHub blob SHAs
-   - Only uploads files that actually changed → first run ~3 min, incremental runs ~10 sec
-
-**If someone pushed changes directly to GitHub, run this script and it will automatically pull those new/changed files into the workspace before pushing.**
-
-Conflict resolution: workspace always wins when the same file is different on both sides. GitHub-only files are always pulled in.
+- Uses `GITHUB_PAT` secret
+- Uploads all source files (406+ blobs) — takes ~3 minutes, be patient
+- If it times out, run again; it is idempotent
 
 ---
 
