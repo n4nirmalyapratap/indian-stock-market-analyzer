@@ -28,12 +28,12 @@ args = "Start application"
 name = "Python Backend"
 author = "agent"
 
-[workflows.workflow.metadata]
-outputType = "console"
-
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "bash -c 'cd artifacts/python-backend && PORT=8081 python3.11 run.py'"
+args = "bash -c 'cd artifacts/python-backend && PORT=8090 python3.11 run.py'"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [[workflows.workflow]]
 name = "Start application"
@@ -70,7 +70,7 @@ externalPort = 8081
 
 [[ports]]
 localPort = 8090
-externalPort = 80
+externalPort = 8080
 
 [[ports]]
 localPort = 19845
