@@ -13,18 +13,4 @@ tool: sebi_audit.py
 
 ---
 
-# SEBI Compliance Audit — 2026-04-12
-
-## Executive Summary
-Reviewed **49 SEBI circulars** (20 from 5-year historical database + live RSS).
-Found **0 compliance issue(s)**. Overall risk level: **Low**.
-Analysis powered by google/gemma-4-31b-it:free (free, open-source via OpenRouter).
-
-## Issues Found
-_No issues found — codebase appears compliant._
-
-## Already Compliant
-None detected.
-
-## Not Applicable
-None detected.
+[AI unavailable: all free models are rate-limited — please retry in a minute]
