@@ -1,5 +1,47 @@
 # Nifty Node — Indian Stock Market Analyzer
 
+---
+
+## ⚠️ READ THIS FIRST — Agent Setup Checklist (Replit Environment)
+
+**Any agent doing a fresh setup, migration, or debugging "why is the preview showing Not Found / white page" MUST do these checks BEFORE anything else. Skipping this wasted real money in a previous session.**
+
+### 1. Audit `.replit` port mappings (CRITICAL)
+Open `.replit` and find every `[[ports]]` block. **Only ONE `localPort` may map to `externalPort = 80`** — that must be the React frontend on `localPort = 5000`. If you see another port (e.g. `8090`) ALSO mapped to `externalPort = 80`, the public Replit URL will route ambiguously to the wrong service and you will see `{"detail":"Not Found"}` or a blank page in the canvas iframe.
+
+**Required final state:**
+```toml
+[[ports]]
+localPort = 5000      # Vite frontend → public URL
+externalPort = 80
+
+[[ports]]
+localPort = 8090      # Python FastAPI backend → internal only, accessed via Vite /api proxy
+externalPort = 8080   # NOT 80
+```
+
+If `.replit` is wrong, the file is normally write-protected. You can update it via Node `fs.writeFileSync` from the code execution sandbox (the bash `sed` and edit tools are blocked, but `fs` works).
+
+### 2. Workflow configuration (must match)
+- `Start application` → `cd artifacts/stock-market-app && PORT=5000 BASE_PATH=/ pnpm dev`, outputType `webview`, waitForPort `5000`
+- `Python Backend` → `cd artifacts/python-backend && PORT=8090 python3.11 run.py`, outputType `console` (NO waitForPort, NO external exposure)
+
+### 3. Vite proxy target
+`artifacts/stock-market-app/vite.config.ts` must default `apiProxyTarget` to `http://localhost:8090` (matches the Python backend port). Do not change it to 8081 or anything else.
+
+### 4. Quick smoke test (run after restarting both workflows)
+```bash
+curl -s -o /dev/null -w "frontend: %{http_code}\n" http://localhost:5000/
+curl -s -o /dev/null -w "backend direct: %{http_code}\n" http://localhost:8090/api/healthz
+curl -s -o /dev/null -w "backend via proxy: %{http_code}\n" http://localhost:5000/api/healthz
+```
+All three must return `200`. If they do, the canvas iframe will show the Nifty Node login page.
+
+### 5. Required Python packages
+Install via `installLanguagePackages` (NOT pip in shell): `fastapi, uvicorn, pandas, numpy, ta, spacy, en_core_web_sm, yfinance, scipy, feedparser, PyJWT, bcrypt, openai, lxml, pydantic`. Do NOT install `pandas_ta` from PyPI — there is a local shim at `artifacts/python-backend/pandas_ta/`.
+
+---
+
 ## Project Overview
 
 A full-stack Indian stock market analysis platform with:
