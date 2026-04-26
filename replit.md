@@ -49,6 +49,14 @@ A full-stack Indian stock market analysis platform with:
 - **Admin dashboard** (`/admin`) — React/Vite admin panel for user/system/compliance management
 - **Python FastAPI backend** (`/api`) — All API endpoints on port 8090
 
+### Insights module (added 2026-04)
+A new top-level `/insights` section in the user app replicates the ScanX "Insights" experience.
+- Top nav: `Insights` entry in `MAIN_NAV` (`src/LayoutShell.tsx`)
+- Routes: `/insights` and `/insights/:tab*` → `src/pages/insights/InsightsLayout.tsx`
+- Tab pages: `src/pages/insights/tabs/` (Heatmap, FiiDii, CompanyFilings, MfHoldings, BulkBlockDeals, Signals, SlbmRental, MtfInsights, FoBan, TopDeliveries, MarketValuation, Ipo)
+- Backend: `app/routes/insights.py` registered in `main.py`. Endpoints: `/api/insights/{heatmap,fo-ban,top-deliveries,index-valuation,fii-dii,mf-holdings,slbm,mtf,ipos}`. Existing `/api/news/deals` and `/api/news/events` are reused for Bulk/Block Deals and Company Filings.
+- Data sources: yfinance for heatmap/index valuation/top deliveries (5 min cache); NSE service attempt for fo-ban; the rest return `{available:false, message}` when feeds aren't reachable from cloud IPs.
+
 ---
 
 ## Architecture

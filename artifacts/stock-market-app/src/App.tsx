@@ -18,6 +18,7 @@ import SectorDetail from "@/pages/SectorDetail";
 import NewsFeed from "@/pages/NewsFeed";
 import SentimentDashboard from "@/pages/SentimentDashboard";
 import LoginPage from "@/pages/LoginPage";
+import InsightsLayout from "@/pages/insights/InsightsLayout";
 import GlobalAssistant from "@/components/GlobalAssistant";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { CustomAuthProvider, useCustomAuth } from "@/context/CustomAuthContext";
@@ -93,6 +94,8 @@ function AppRoutes() {
         <Route path="/trading"         component={TradingPlatform} />
         <Route path="/sectors/:sectorId" component={SectorDetail} />
         <Route path="/sectors"          component={Sectors} />
+        <Route path="/insights/:tab*"   component={InsightsLayout} />
+        <Route path="/insights"         component={InsightsLayout} />
         <Route path="/news"            component={NewsFeed} />
         <Route path="/sentiment"       component={SentimentDashboard} />
         <Route path="/stocks"          component={StockLookup} />

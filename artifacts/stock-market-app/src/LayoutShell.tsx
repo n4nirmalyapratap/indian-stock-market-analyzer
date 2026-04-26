@@ -6,13 +6,14 @@ import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
   Brain, TrendingUp, CandlestickChart,
   Settings, ChevronRight, ChevronLeft, ChevronDown, Sun, Moon,
-  Newspaper, Gauge,
+  Newspaper, Gauge, Sparkles,
 } from "lucide-react";
 
 export const MAIN_NAV = [
   { path: "/",           label: "Dashboard",      icon: LayoutDashboard },
   { path: "/trading",    label: "Chart Studio",   icon: CandlestickChart },
   { path: "/sectors",    label: "Market Sectors", icon: BarChart3 },
+  { path: "/insights",   label: "Insights",       icon: Sparkles },
   { path: "/sentiment",  label: "Sentiment",      icon: Gauge },
   { path: "/news",       label: "News Feed",      icon: Newspaper },
   { path: "/stocks",     label: "Stock Lookup",   icon: Search },
