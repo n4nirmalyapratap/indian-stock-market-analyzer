@@ -1,116 +1,141 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
-import { PageHeader, PillTabs, Card, Loading, EmptyState, Dropdown } from "../_shared";
-import { FileText } from "lucide-react";
+import { PageHeader, PillTabs, Card, Loading, EmptyState } from "../_shared";
+import { FileText, ExternalLink } from "lucide-react";
 
-type Category = "all" | "results" | "dividend" | "split" | "meeting" | "agm" | "other";
+type Category = "all" | "Result" | "Board Meeting" | "AGM/EGM" | "Dividend" | "Company Update";
 
-interface RawEvent {
-  symbol?: string;
-  company?: string;
-  purpose?: string;
-  date?: string;
-  type?: string;   // already classified by backend (e.g. "Results", "Dividend")
+interface Filing {
+  id: string;
+  symbol: string;
+  company: string;
+  category: string;
+  purpose: string;
+  subject: string;
+  date: string;
+  documentUrl: string;
 }
 
-interface EventsResponse {
-  events: RawEvent[];
-  total?: number;
-  refreshedAt?: string;
+interface FilingsResponse {
+  available: boolean;
+  source?: string;
+  message?: string;
+  items: Filing[];
 }
 
 const CAT_OPTIONS: { value: Category; label: string }[] = [
   { value: "all", label: "All" },
-  { value: "results", label: "Financial Results" },
-  { value: "dividend", label: "Dividend" },
-  { value: "split", label: "Splits / Bonus" },
-  { value: "meeting", label: "Board Meeting" },
-  { value: "agm", label: "AGM / EGM" },
-  { value: "other", label: "Other" },
+  { value: "Result", label: "Result" },
+  { value: "Board Meeting", label: "Board Meeting" },
+  { value: "AGM/EGM", label: "AGM / EGM" },
+  { value: "Dividend", label: "Dividend" },
+  { value: "Company Update", label: "Company Update" },
 ];
 
-function matchCategory(cat: Category, t: string): boolean {
-  if (cat === "all") return true;
-  const lc = (t || "").toLowerCase();
-  switch (cat) {
-    case "results":  return lc.includes("result") || lc.includes("earning");
-    case "dividend": return lc.includes("dividend");
-    case "split":    return lc.includes("split") || lc.includes("bonus");
-    case "meeting":  return lc.includes("board") || lc.includes("meeting");
-    case "agm":      return lc.includes("agm") || lc.includes("egm");
-    case "other":    return !["result","earning","dividend","split","bonus","board","meeting","agm","egm"]
-                              .some(k => lc.includes(k));
-  }
+function fmtDate(s: string) {
+  if (!s) return "—";
+  try { return new Date(s).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }); }
+  catch { return s; }
 }
 
 export default function CompanyFilings() {
   const [cat, setCat] = useState<Category>("all");
-  const [companyFilter, setCompanyFilter] = useState<string>("all");
+  const [search, setSearch] = useState("");
 
-  const { data, isLoading } = useQuery<EventsResponse>({
+  const { data, isLoading } = useQuery<FilingsResponse>({
     queryKey: ["insights/company-filings"],
-    queryFn: () => fetchApi(`/news/events`),
+    queryFn: () => fetchApi(`/insights/company-filings?category=-1&page=1`),
     staleTime: 5 * 60_000,
   });
 
-  const events: RawEvent[] = data?.events || [];
+  const items: Filing[] = data?.items || [];
 
   const filtered = useMemo(() => {
-    let r = events.filter(e => matchCategory(cat, e.type || e.purpose || ""));
-    if (companyFilter !== "all") {
-      r = r.filter(e => (e.company || "").toLowerCase() === companyFilter.toLowerCase());
+    let r = items;
+    if (cat !== "all") {
+      const target = cat.toLowerCase();
+      r = r.filter(it => (it.category || "").toLowerCase().includes(target.split("/")[0]));
+    }
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      r = r.filter(it =>
+        (it.company || "").toLowerCase().includes(q) ||
+        (it.symbol || "").toLowerCase().includes(q) ||
+        (it.purpose || "").toLowerCase().includes(q)
+      );
     }
     return r;
-  }, [events, cat, companyFilter]);
-
-  const companies = useMemo(() => {
-    const set = new Set<string>();
-    events.forEach(e => e.company && set.add(e.company));
-    return ["all", ...Array.from(set).sort()];
-  }, [events]);
+  }, [items, cat, search]);
 
   return (
     <div>
       <PageHeader
         title="Company Filings"
-        info="Latest BSE/NSE corporate disclosures"
+        info="Live BSE corporate disclosures (results, dividends, AGMs, board meetings)"
         right={
-          <Dropdown value={companyFilter} onChange={setCompanyFilter}
-            options={companies.map(c => ({value: c, label: c === "all" ? "All Companies" : c}))}/>
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search company / symbol / purpose"
+            className="text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 w-64 outline-none focus:border-indigo-400 dark:focus:border-indigo-500"
+          />
         }
       />
-      <PillTabs value={cat} onChange={setCat} options={CAT_OPTIONS}/>
+
+      <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+        <PillTabs value={cat} onChange={setCat} options={CAT_OPTIONS}/>
+        {data?.source && (
+          <span className="text-[11px] text-gray-500 dark:text-gray-400">
+            Source: <span className="font-semibold">{data.source}</span> · {filtered.length} of {items.length}
+          </span>
+        )}
+      </div>
 
       {isLoading && <Loading />}
-      {!isLoading && filtered.length === 0 && (
-        <EmptyState title="No filings" message="No corporate filings match the selected filter." icon={<FileText className="w-10 h-10"/>}/>
+      {!isLoading && data?.available === false && (
+        <EmptyState title="Feed unavailable" message={data.message || "BSE feed temporarily unavailable."}
+          icon={<FileText className="w-10 h-10"/>}/>
+      )}
+      {!isLoading && data?.available !== false && filtered.length === 0 && (
+        <EmptyState title="No filings" message="No corporate filings match the selected filter."
+          icon={<FileText className="w-10 h-10"/>}/>
       )}
 
       {filtered.length > 0 && (
-        <Card className="mt-4 overflow-x-auto">
+        <Card className="mt-1 overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="text-xs uppercase text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/40">
               <tr>
                 <th className="px-4 py-3 text-left">Company</th>
-                <th className="px-4 py-3 text-left">Symbol</th>
+                <th className="px-4 py-3 text-left">Code</th>
                 <th className="px-4 py-3 text-left">Category</th>
                 <th className="px-4 py-3 text-left">Purpose</th>
                 <th className="px-4 py-3 text-left">Date</th>
+                <th className="px-4 py-3 text-right">Doc</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.slice(0, 200).map((e, i) => (
-                <tr key={(e.symbol || "") + i} className="border-t border-gray-100 dark:border-white/[0.05]">
+              {filtered.slice(0, 200).map((e) => (
+                <tr key={e.id} className="border-t border-gray-100 dark:border-white/[0.05]">
                   <td className="px-4 py-2.5 font-medium text-gray-900 dark:text-white">{e.company || "—"}</td>
                   <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400">{e.symbol || "—"}</td>
                   <td className="px-4 py-2.5">
-                    <span className="text-xs px-2 py-1 rounded-md bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300">
-                      {e.type || "Other"}
+                    <span className="text-xs px-2 py-1 rounded-md bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 whitespace-nowrap">
+                      {e.category || "Other"}
                     </span>
                   </td>
                   <td className="px-4 py-2.5 text-gray-600 dark:text-gray-300 max-w-md truncate" title={e.purpose}>{e.purpose || "—"}</td>
-                  <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 text-xs">{e.date || "—"}</td>
+                  <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 text-xs whitespace-nowrap">{fmtDate(e.date)}</td>
+                  <td className="px-4 py-2.5 text-right">
+                    {e.documentUrl ? (
+                      <a href={e.documentUrl} target="_blank" rel="noreferrer"
+                         className="inline-flex items-center gap-1 text-xs text-indigo-600 dark:text-indigo-400 hover:underline">
+                        PDF <ExternalLink className="w-3 h-3"/>
+                      </a>
+                    ) : "—"}
+                  </td>
                 </tr>
               ))}
             </tbody>

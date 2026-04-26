@@ -1,0 +1,303 @@
+"""
+Unit tests for the Insights router.
+
+Tests cover:
+- Heatmap colour-bucket helper math (deterministic, no network)
+- Heatmap endpoint normalises yfinance rows correctly (mocked)
+- Heatmap with an unknown index returns a clean unavailable response
+- Company filings adapt BSE API JSON correctly (mocked HTTP)
+- MF holdings parse the AMFI NAVAll text format correctly (mocked HTTP)
+- Signals compute RSI / MA-cross from a known price series
+- Endpoints with no real feed return {"available": False, ...}
+- /insights/indices returns the curated list with > 25 indices
+"""
+from __future__ import annotations
+from unittest.mock import patch, MagicMock
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+# ── Fixtures ─────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def client(monkeypatch):
+    """Build a TestClient against a freshly-imported app with auth disabled."""
+    # Disable Clerk middleware so the test client can call the protected endpoints.
+    monkeypatch.setenv("DISABLE_AUTH", "1")
+    # Re-import to pick up env var (best-effort; if app caches it, tests still
+    # exercise the route logic via direct module imports below).
+    from importlib import reload
+    import app.middleware.clerk_auth as ca
+    try:
+        reload(ca)
+    except Exception:
+        pass
+    from main import app
+    return TestClient(app)
+
+
+@pytest.fixture
+def fake_yf_history():
+    """Return a callable producing a small DataFrame-like for yf.Ticker.history."""
+    import pandas as pd
+    def _make(closes: list[float]):
+        idx = pd.date_range(end="2026-04-25", periods=len(closes), freq="D")
+        return pd.DataFrame({"Open": closes, "High": closes, "Low": closes,
+                             "Close": closes, "Volume": [1_000_000] * len(closes)}, index=idx)
+    return _make
+
+
+# ── Bucket palette tests ─────────────────────────────────────────────────────
+
+def test_bucket_negative_extreme():
+    from app.routes.insights import _bucket_color
+    bg, fg = _bucket_color(-5.0)
+    assert bg.startswith("#")
+    assert fg in ("#ffffff", "#fff", "#FFFFFF")
+
+
+def test_bucket_positive_extreme():
+    from app.routes.insights import _bucket_color
+    bg, fg = _bucket_color(5.0)
+    assert bg.startswith("#")
+
+
+def test_bucket_zero():
+    from app.routes.insights import _bucket_color
+    bg, fg = _bucket_color(0.0)
+    assert bg.startswith("#")
+
+
+# ── Heatmap endpoint ────────────────────────────────────────────────────────
+
+def test_heatmap_unknown_index_returns_unavailable(client):
+    r = client.get("/api/insights/heatmap?index=NIFTY_UNICORN")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["available"] is False
+    assert body["items"] == []
+    assert "not supported" in body["message"].lower()
+
+
+def test_heatmap_normalises_yfinance(client, fake_yf_history):
+    """Mock yfinance and verify each item has the required schema fields."""
+    fake_hist = fake_yf_history([100, 101, 99, 102, 105])
+    fake_ticker = MagicMock()
+    fake_ticker.history.return_value = fake_hist
+    fake_ticker.fast_info = {"marketCap": 1_500_000_000_000}
+
+    with patch("yfinance.Ticker", return_value=fake_ticker):
+        r = client.get("/api/insights/heatmap?index=NIFTYIT&performance=1d")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["available"] is True
+    assert body["index"] == "NIFTYIT"
+    assert isinstance(body["items"], list) and len(body["items"]) > 0
+    item = body["items"][0]
+    for f in ("symbol", "name", "price", "changePct", "marketCap", "color"):
+        assert f in item, f"missing field {f}"
+    # Color must be a hex string we can render directly
+    assert item["color"]["bg"].startswith("#")
+
+
+# ── /indices ─────────────────────────────────────────────────────────────────
+
+def test_indices_endpoint_lists_all_curated_indices(client):
+    r = client.get("/api/insights/indices")
+    assert r.status_code == 200
+    body = r.json()
+    assert "indices" in body
+    codes = {i["code"] for i in body["indices"]}
+    # Must include the major Nifty + sectoral set the UI dropdown shows.
+    expected = {"NIFTY50", "SENSEX", "NIFTYBANK", "NIFTYIT", "NIFTYFMCG",
+                "NIFTYPHARMA", "NIFTYAUTO", "NIFTYMETAL", "NIFTYREALTY",
+                "NIFTYNEXT50", "NIFTY100", "NIFTY200", "NIFTY500"}
+    assert expected.issubset(codes), f"missing: {expected - codes}"
+    assert len(codes) >= 25
+
+
+# ── Company filings (BSE) ───────────────────────────────────────────────────
+
+def test_company_filings_parses_bse_json():
+    """Direct unit test on the BSE adapter without HTTP."""
+    from app.routes.insights import _adapt_bse_announcements
+    sample = {
+        "Table": [
+            {
+                "NEWSID": "abc-123",
+                "SCRIP_CD": 532540,
+                "SLONGNAME": "TCS Ltd",
+                "NEWSSUB": "Board Meeting Outcome",
+                "HEADLINE": "Approved Q4 results",
+                "CATEGORYNAME": "Result",
+                "NEWS_DT": "2026-04-25T14:30:00",
+                "ATTACHMENTNAME": "abc.pdf",
+            }
+        ]
+    }
+    items = _adapt_bse_announcements(sample)
+    assert len(items) == 1
+    it = items[0]
+    assert it["symbol"] == "532540"
+    assert it["company"] == "TCS Ltd"
+    assert it["category"] == "Result"
+    assert it["purpose"]
+    assert it["date"].startswith("2026-04-25")
+    assert it["documentUrl"].startswith("https://www.bseindia.com/xml-data/")
+
+
+def test_company_filings_handles_empty_response():
+    from app.routes.insights import _adapt_bse_announcements
+    assert _adapt_bse_announcements({"Table": []}) == []
+    assert _adapt_bse_announcements({}) == []
+    assert _adapt_bse_announcements(None) == []
+
+
+# ── MF holdings (AMFI parser) ───────────────────────────────────────────────
+
+AMFI_SAMPLE = """Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Net Asset Value;Date
+
+Open Ended Schemes(Equity Scheme - Large Cap Fund)
+
+Aditya Birla Sun Life Mutual Fund
+
+103174;INF209K01YV3;INF209K01YW1;Aditya Birla Sun Life Frontline Equity Fund - Growth;512.34;25-Apr-2026
+103175;INF209K01YX9;INF209K01YY7;Aditya Birla Sun Life Frontline Equity Fund - Direct - Growth;520.10;25-Apr-2026
+
+Axis Mutual Fund
+
+120503;INF846K01EW2;-;Axis Bluechip Fund - Growth;65.43;25-Apr-2026
+"""
+
+
+def test_mf_amfi_parser_extracts_schemes():
+    from app.routes.insights import _parse_amfi_text
+    parsed = _parse_amfi_text(AMFI_SAMPLE)
+    assert len(parsed) >= 3
+    # Each row should carry scheme code, name, NAV, AMC, category
+    s = parsed[0]
+    for f in ("schemeCode", "schemeName", "nav", "date", "amc", "category"):
+        assert f in s, f"missing {f}"
+    assert s["amc"] == "Aditya Birla Sun Life Mutual Fund"
+    assert s["category"].startswith("Open Ended")
+    assert isinstance(s["nav"], float)
+    # Axis row should be present and have its own AMC
+    axis = [r for r in parsed if "Axis Bluechip" in r["schemeName"]]
+    assert len(axis) == 1 and axis[0]["amc"] == "Axis Mutual Fund"
+
+
+def test_mf_amfi_parser_handles_dashes_and_missing_nav():
+    from app.routes.insights import _parse_amfi_text
+    txt = AMFI_SAMPLE + "\n999999;INF000;-;Bad Scheme - N.A.;N.A.;25-Apr-2026\n"
+    parsed = _parse_amfi_text(txt)
+    bad = [r for r in parsed if r["schemeCode"] == "999999"]
+    # N.A. NAV should either be skipped or stored as None
+    if bad:
+        assert bad[0]["nav"] is None
+
+
+# ── Signals ─────────────────────────────────────────────────────────────────
+
+def test_compute_signal_for_constant_series_is_neutral():
+    from app.routes.insights import _compute_signal
+    closes = [100.0] * 60
+    sig = _compute_signal("FAKE.NS", closes)
+    # On flat prices RSI is undefined / 50 by convention; we accept Neutral verdict.
+    assert sig["verdict"] in ("Neutral", "Hold")
+    assert "rsi" in sig and "ma20" in sig and "ma50" in sig
+
+
+def test_compute_signal_for_strong_uptrend_is_bullish():
+    from app.routes.insights import _compute_signal
+    closes = [float(i) for i in range(1, 121)]   # strict uptrend
+    sig = _compute_signal("UP.NS", closes)
+    assert sig["verdict"] in ("Bullish", "Strong Buy", "Buy")
+    # In an uptrend, MA20 must be above MA50.
+    assert sig["ma20"] > sig["ma50"]
+
+
+def test_compute_signal_for_downtrend_is_bearish():
+    from app.routes.insights import _compute_signal
+    closes = [float(i) for i in range(120, 0, -1)]
+    sig = _compute_signal("DOWN.NS", closes)
+    assert sig["verdict"] in ("Bearish", "Strong Sell", "Sell")
+    assert sig["ma20"] < sig["ma50"]
+
+
+# ── Unavailable-feed endpoints ──────────────────────────────────────────────
+
+@pytest.mark.parametrize("path", [
+    "/api/insights/fii-dii",
+    "/api/insights/slbm",
+    "/api/insights/mtf",
+    "/api/insights/ipos",
+    "/api/insights/top-deliveries",
+])
+def test_unavailable_endpoints_return_clean_empty_state(client, path):
+    r = client.get(path)
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("available") is False
+    assert "message" in body and len(body["message"]) > 10
+
+
+# ── Indices count ────────────────────────────────────────────────────────────
+
+def test_indices_have_constituents():
+    from app.routes.insights import INDEX_CONSTITUENTS
+    for code, syms in INDEX_CONSTITUENTS.items():
+        assert isinstance(syms, list) and len(syms) >= 5, f"{code} has too few constituents"
+
+
+# ── Auth-bypass hardening ────────────────────────────────────────────────────
+
+def test_disable_auth_refused_in_production(monkeypatch):
+    """DISABLE_AUTH=1 must NOT bypass auth when ENV=production."""
+    monkeypatch.setenv("DISABLE_AUTH", "1")
+    monkeypatch.setenv("ENV", "production")
+    # Pretend we are NOT in pytest (the middleware checks PYTEST env signals).
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("PYTEST_VERSION", raising=False)
+    from main import app
+    c = TestClient(app)
+    r = c.get("/api/insights/indices")
+    assert r.status_code == 401, "auth bypass leaked in production!"
+
+
+# ── EOD market cache integration ─────────────────────────────────────────────
+
+def test_heatmap_serves_from_disk_when_market_closed(client, tmp_path, monkeypatch):
+    """When market is closed and disk cache has data, yfinance must NOT be hit."""
+    from app.routes import insights as insights_mod
+    # Force market closed
+    monkeypatch.setattr(insights_mod.mcache, "is_market_open", lambda: False)
+
+    # Stub the disk-cache loader so it returns synthetic close prices for any symbol
+    def fake_load(symbol: str, days: int):
+        return [
+            {"date": "2026-04-21", "close": 100.0, "marketCap": 1e12},
+            {"date": "2026-04-22", "close": 101.0, "marketCap": 1e12},
+            {"date": "2026-04-23", "close": 102.0, "marketCap": 1e12},
+            {"date": "2026-04-24", "close": 103.0, "marketCap": 1e12},
+            {"date": "2026-04-25", "close": 104.0, "marketCap": 1e12},
+        ]
+    monkeypatch.setattr(insights_mod.mcache, "load_from_disk", fake_load)
+
+    # Bust the in-process cache so a fresh fetch is forced
+    insights_mod._cache.clear()
+
+    # Now if disk-first works, no yfinance call should happen. We assert by
+    # making yfinance.Ticker raise — if it gets called, we'd see no items.
+    import yfinance as yf
+    monkeypatch.setattr(yf, "Ticker", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("must not hit yfinance")))
+
+    r = client.get("/api/insights/heatmap?index=NIFTYIT&performance=1d")
+    body = r.json()
+    assert body["available"] is True
+    assert len(body["items"]) >= 5
+    # Verify the changePct math came from our synthetic series (100 -> 104 = +4%)
+    sample = body["items"][0]
+    assert abs(sample["changePct"] - 4.0) < 0.01
+    assert sample["color"]["bg"].startswith("#")
