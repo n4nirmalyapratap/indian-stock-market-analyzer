@@ -13,6 +13,7 @@ interface HeatmapItem {
   price: number;
   changePct: number;
   marketCap: number;
+  color?: { bg: string; fg: string };
 }
 
 interface HeatmapResponse {
@@ -28,18 +29,20 @@ interface HeatmapResponse {
 
 interface IndexInfo { code: string; label: string; count: number; }
 
-/** Modern, high-contrast heatmap palette (works on light + dark). */
-function bucket(p: number) {
-  if (p == null || isNaN(p)) return { bg: "bg-slate-300 dark:bg-slate-700", text: "text-slate-900 dark:text-slate-100" };
-  if (p <= -3) return { bg: "bg-[#9b1c1c] dark:bg-[#7f1d1d]",   text: "text-white" };
-  if (p <= -2) return { bg: "bg-[#dc2626] dark:bg-[#b91c1c]",   text: "text-white" };
-  if (p <= -1) return { bg: "bg-[#ef4444] dark:bg-[#dc2626]",   text: "text-white" };
-  if (p <  -0.001) return { bg: "bg-[#fca5a5] dark:bg-[#7f1d1d]/70", text: "text-rose-950 dark:text-rose-100" };
-  if (p <  0.001)  return { bg: "bg-slate-200 dark:bg-slate-700",     text: "text-slate-700 dark:text-slate-200" };
-  if (p <  1)  return { bg: "bg-[#86efac] dark:bg-[#14532d]/70", text: "text-emerald-950 dark:text-emerald-100" };
-  if (p <  2)  return { bg: "bg-[#22c55e] dark:bg-[#16a34a]",   text: "text-white" };
-  if (p <  3)  return { bg: "bg-[#16a34a] dark:bg-[#15803d]",   text: "text-white" };
-  return            { bg: "bg-[#15803d] dark:bg-[#166534]",   text: "text-white" };
+/** Modern, high-contrast palette computed client-side as a fallback when the
+ *  server omits per-item colours. Returns hex pairs so the CSS works with
+ *  inline `style` (bypasses any Tailwind JIT scanning of arbitrary values). */
+function bucket(p: number | null | undefined): { bg: string; fg: string } {
+  if (p == null || isNaN(p)) return { bg: "#94a3b8", fg: "#0f172a" };
+  if (p <= -3)    return { bg: "#7f1d1d", fg: "#ffffff" };
+  if (p <= -2)    return { bg: "#b91c1c", fg: "#ffffff" };
+  if (p <= -1)    return { bg: "#dc2626", fg: "#ffffff" };
+  if (p < -0.001) return { bg: "#ef4444", fg: "#ffffff" };
+  if (p <  0.001) return { bg: "#64748b", fg: "#ffffff" };
+  if (p <  1)     return { bg: "#16a34a", fg: "#ffffff" };
+  if (p <  2)     return { bg: "#15803d", fg: "#ffffff" };
+  if (p <  3)     return { bg: "#166534", fg: "#ffffff" };
+  return            { bg: "#14532d", fg: "#ffffff" };
 }
 
 const PERF_OPTIONS: { value: Performance; label: string }[] = [
@@ -54,7 +57,6 @@ const SORT_OPTIONS: { value: SortBy; label: string }[] = [
   { value: "change",    label: "% Change" },
 ];
 
-/** Custom click-anywhere dropdown — works in light + dark, supports long lists. */
 function MenuDropdown<T extends string>({
   label, value, options, onChange,
 }: {
@@ -159,7 +161,13 @@ export default function Heatmap() {
         <div className="ml-auto flex items-center gap-1.5 text-[11px] flex-wrap">
           {[-3,-2,-1,0,1,2,3].map(v => {
             const b = bucket(v + (v >= 0 ? 0.5 : -0.5));
-            return <span key={v} className={`px-2 py-0.5 rounded-md font-bold ${b.bg} ${b.text}`}>{v >= 0 ? `+${v}%` : `${v}%`}</span>;
+            return (
+              <span key={v}
+                    className="px-2 py-0.5 rounded-md font-bold"
+                    style={{ backgroundColor: b.bg, color: b.fg }}>
+                {v >= 0 ? `+${v}%` : `${v}%`}
+              </span>
+            );
           })}
         </div>
       </div>
@@ -180,12 +188,13 @@ export default function Heatmap() {
         <div className="grid gap-2 select-none"
              style={{ gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))" }}>
           {items.map(it => {
-            const b = bucket(it.changePct ?? 0);
+            const b = it.color ?? bucket(it.changePct);
             const pct = it.changePct ?? 0;
             return (
               <div key={it.symbol}
                    title={`${it.name}  •  ₹${it.price?.toFixed(2)}  •  ${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`}
-                   className={`relative overflow-hidden rounded-xl px-3 py-2.5 ${b.bg} ${b.text} flex flex-col justify-between min-h-[88px] ring-1 ring-black/5 dark:ring-white/10 shadow-sm hover:shadow-lg hover:scale-[1.03] transition-all duration-200 cursor-default`}>
+                   className="relative overflow-hidden rounded-xl px-3 py-2.5 flex flex-col justify-between min-h-[88px] ring-1 ring-black/5 dark:ring-white/10 shadow-sm hover:shadow-lg hover:scale-[1.03] transition-all duration-200 cursor-default"
+                   style={{ backgroundColor: b.bg, color: b.fg }}>
                 <div className="text-[11px] font-extrabold leading-tight tracking-tight uppercase truncate">{it.name}</div>
                 <div className="mt-1">
                   <div className="text-[15px] font-bold leading-none">{it.price?.toFixed(2)}</div>
