@@ -53,21 +53,27 @@ export function Dropdown<T extends string>({ label, value, onChange, options }: 
   onChange: (v: T) => void;
   options: { value: T; label: string }[];
 }) {
+  // Wrapping the <select> in a <label> makes the entire pill a click target,
+  // and `appearance-none` + a cleaner caret keeps the look consistent across
+  // browsers in both light and dark themes.
   return (
-    <div className="inline-flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-1.5">
-      {label && <span>{label}</span>}
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value as T)}
-        className="bg-transparent text-indigo-600 dark:text-indigo-400 font-semibold outline-none cursor-pointer pr-1"
-      >
-        {options.map(o => (
-          <option key={o.value} value={o.value} className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white">
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </div>
+    <label className="inline-flex items-center gap-2 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/80 transition shadow-sm">
+      {label && <span className="text-gray-500 dark:text-gray-400">{label}</span>}
+      <span className="relative inline-flex items-center">
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value as T)}
+          className="appearance-none bg-transparent text-indigo-600 dark:text-indigo-400 font-semibold outline-none cursor-pointer pr-5"
+        >
+          {options.map(o => (
+            <option key={o.value} value={o.value} className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white">
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <svg className="w-3.5 h-3.5 text-indigo-500 pointer-events-none absolute right-0" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.06l3.71-3.83a.75.75 0 111.08 1.04l-4.25 4.39a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z" clipRule="evenodd"/></svg>
+      </span>
+    </label>
   );
 }
 
