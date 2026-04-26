@@ -1,9 +1,26 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
-import { PageHeader, PillTabs, Card, Loading, EmptyState, MenuDropdown } from "../_shared";
+import { PageHeader, PillTabs, Card, Loading, EmptyState, MenuDropdown, ErrorState } from "../_shared";
 import { LineChart as LCIcon, X } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, Legend, CartesianGrid } from "recharts";
+
+// Detect dark mode reactively so recharts (which uses inline styles, not Tailwind
+// classes) can pick gray-* colors that match the rest of the app in either theme.
+function useIsDark() {
+  const [dark, setDark] = useState(() =>
+    typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
+  );
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const obs = new MutationObserver(() =>
+      setDark(document.documentElement.classList.contains("dark")),
+    );
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => obs.disconnect();
+  }, []);
+  return dark;
+}
 
 type Period = "1m" | "6m" | "1y" | "5y" | "10y";
 type Metric = "pe" | "pb" | "dy";
@@ -62,7 +79,14 @@ export default function MarketValuation() {
 
   const codes = selected.join(",");
 
-  const { data, isLoading } = useQuery<ValuationResponse>({
+  const isDark = useIsDark();
+  const cBorder = isDark ? "#374151" : "#e5e7eb";   // gray-700 / gray-200
+  const cMuted  = isDark ? "#9ca3af" : "#6b7280";   // gray-400 / gray-500
+  const cText   = isDark ? "#f9fafb" : "#111827";   // gray-50  / gray-900
+  const cSurf   = isDark ? "#1f2937" : "#ffffff";   // gray-800 / white
+  const cAccent = isDark ? "#818cf8" : "#4f46e5";   // indigo-400 / indigo-600
+
+  const { data, isLoading, error } = useQuery<ValuationResponse>({
     queryKey: ["insights/index-valuation", codes, period, metric],
     queryFn: () => fetchApi(`/insights/index-valuation?indices=${encodeURIComponent(codes)}&period=${period}&metric=${metric}`),
     enabled: codes.length > 0,
@@ -98,12 +122,12 @@ export default function MarketValuation() {
             <Card key={code} className="px-3 py-2 flex items-center gap-2.5 group">
               <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
               <div className="min-w-0">
-                <p className="text-xs font-bold text-foreground leading-tight truncate max-w-[160px]" title={labelFor(code)}>
+                <p className="text-xs font-bold text-gray-900 dark:text-white leading-tight truncate max-w-[160px]" title={labelFor(code)}>
                   {labelFor(code)}
                 </p>
                 {meta?.lastPrice != null && (
                   <p className="text-[11px] tabular-nums leading-tight">
-                    <span className="font-semibold text-foreground">{meta.lastPrice?.toFixed(2)}</span>
+                    <span className="font-semibold text-gray-900 dark:text-white">{meta.lastPrice?.toFixed(2)}</span>
                     <span className={`ml-1 ${(meta.change ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-500"}`}>
                       {(meta.change ?? 0) >= 0 ? "+" : ""}{meta.changePct?.toFixed(2)}%
                     </span>
@@ -112,7 +136,7 @@ export default function MarketValuation() {
               </div>
               {selected.length > 1 && (
                 <button onClick={() => remove(code)}
-                        className="ml-1 w-5 h-5 rounded hover:bg-destructive/15 text-muted-foreground hover:text-destructive transition flex items-center justify-center opacity-0 group-hover:opacity-100"
+                        className="ml-1 w-5 h-5 rounded hover:bg-red-100 dark:hover:bg-red-900/20 text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition flex items-center justify-center opacity-0 group-hover:opacity-100"
                         title="Remove">
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -159,30 +183,30 @@ export default function MarketValuation() {
           <div className="h-[460px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={data.series} margin={{ top: 8, right: 16, left: -8, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" strokeOpacity={0.5}/>
+                <CartesianGrid strokeDasharray="3 3" stroke={cBorder} strokeOpacity={0.5}/>
                 <XAxis
                   dataKey="date"
-                  tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                  stroke="hsl(var(--border))"
+                  tick={{ fontSize: 11, fill: cMuted }}
+                  stroke={cBorder}
                   minTickGap={40}
                 />
                 <YAxis
-                  tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                  stroke="hsl(var(--border))"
+                  tick={{ fontSize: 11, fill: cMuted }}
+                  stroke={cBorder}
                   width={56}
                 />
                 <Tooltip
                   contentStyle={{
-                    background: "hsl(var(--popover))",
-                    border: "1px solid hsl(var(--border))",
+                    background: cSurf,
+                    border: `1px solid ${cBorder}`,
                     borderRadius: 8,
-                    color: "hsl(var(--popover-foreground))",
+                    color: cText,
                     fontSize: 12,
                   }}
-                  labelStyle={{ color: "hsl(var(--muted-foreground))", marginBottom: 4 }}
-                  cursor={{ stroke: "hsl(var(--primary))", strokeOpacity: 0.3 }}
+                  labelStyle={{ color: cMuted, marginBottom: 4 }}
+                  cursor={{ stroke: cAccent, strokeOpacity: 0.3 }}
                 />
-                <Legend wrapperStyle={{ fontSize: 12, color: "hsl(var(--foreground))" }} />
+                <Legend wrapperStyle={{ fontSize: 12, color: cText }} />
                 {selected.map((code, i) => {
                   const lbl = labelFor(code);
                   return (
