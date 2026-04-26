@@ -1,10 +1,12 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
-import { PageHeader, PillTabs, Card, Loading, EmptyState } from "../_shared";
+import { PageHeader, Card, Loading, EmptyState, MenuDropdown } from "../_shared";
 import { FileText, ExternalLink } from "lucide-react";
 
-type Category = "all" | "Result" | "Board Meeting" | "AGM/EGM" | "Dividend" | "Company Update";
+type Category =
+  | "all" | "Result" | "Board Meeting" | "AGM/EGM" | "Dividend"
+  | "Bonus" | "Acquisition" | "Investor Presentation" | "Company Update";
 
 interface Filing {
   id: string;
@@ -24,23 +26,48 @@ interface FilingsResponse {
   items: Filing[];
 }
 
-const CAT_OPTIONS: { value: Category; label: string }[] = [
+const SUB_TABS: { value: Category; label: string }[] = [
   { value: "all", label: "All" },
-  { value: "Result", label: "Result" },
+  { value: "Result", label: "Financial Results" },
+  { value: "Investor Presentation", label: "Investor Presentation" },
   { value: "Board Meeting", label: "Board Meeting" },
   { value: "AGM/EGM", label: "AGM / EGM" },
   { value: "Dividend", label: "Dividend" },
+  { value: "Bonus", label: "Bonus / Split" },
+  { value: "Acquisition", label: "Acquisition" },
   { value: "Company Update", label: "Company Update" },
 ];
 
-function fmtDate(s: string) {
+function fmtRelative(s: string) {
   if (!s) return "—";
-  try { return new Date(s).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }); }
-  catch { return s; }
+  try {
+    const d = new Date(s);
+    const diff = Date.now() - d.getTime();
+    const min = Math.round(diff / 60000);
+    if (min < 60) return `${min} min ago`;
+    const hrs = Math.round(min / 60);
+    if (hrs < 24) return `${hrs} hr${hrs === 1 ? "" : "s"} ago`;
+    const days = Math.round(hrs / 24);
+    if (days < 7) return `${days} day${days === 1 ? "" : "s"} ago`;
+    return d.toLocaleDateString("en-IN", { dateStyle: "medium" });
+  } catch { return s; }
+}
+
+function categoryColor(cat: string) {
+  const c = (cat || "").toLowerCase();
+  if (c.includes("result")) return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300";
+  if (c.includes("dividend")) return "bg-sky-500/15 text-sky-700 dark:text-sky-300";
+  if (c.includes("agm") || c.includes("egm")) return "bg-purple-500/15 text-purple-700 dark:text-purple-300";
+  if (c.includes("board")) return "bg-amber-500/15 text-amber-700 dark:text-amber-300";
+  if (c.includes("acquisition")) return "bg-rose-500/15 text-rose-700 dark:text-rose-300";
+  if (c.includes("bonus") || c.includes("split")) return "bg-pink-500/15 text-pink-700 dark:text-pink-300";
+  if (c.includes("investor")) return "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300";
+  return "bg-muted text-muted-foreground";
 }
 
 export default function CompanyFilings() {
   const [cat, setCat] = useState<Category>("all");
+  const [companyFilter, setCompanyFilter] = useState("");
   const [search, setSearch] = useState("");
 
   const { data, isLoading } = useQuery<FilingsResponse>({
@@ -51,11 +78,28 @@ export default function CompanyFilings() {
 
   const items: Filing[] = data?.items || [];
 
+  // Build the company list dynamically from the current page (real BSE companies).
+  const companyOptions = useMemo(() => {
+    const set = new Map<string, string>();
+    for (const it of items) {
+      if (!it.company) continue;
+      if (!set.has(it.company)) set.set(it.company, it.company);
+    }
+    return Array.from(set.values()).sort().map(c => ({ value: c, label: c }));
+  }, [items]);
+
   const filtered = useMemo(() => {
     let r = items;
     if (cat !== "all") {
       const target = cat.toLowerCase();
-      r = r.filter(it => (it.category || "").toLowerCase().includes(target.split("/")[0]));
+      r = r.filter(it => {
+        const ic = (it.category || "").toLowerCase();
+        const ip = (it.purpose || "").toLowerCase();
+        return ic.includes(target.split("/")[0]) || ip.includes(target.split("/")[0]);
+      });
+    }
+    if (companyFilter) {
+      r = r.filter(it => it.company === companyFilter);
     }
     if (search.trim()) {
       const q = search.trim().toLowerCase();
@@ -66,7 +110,7 @@ export default function CompanyFilings() {
       );
     }
     return r;
-  }, [items, cat, search]);
+  }, [items, cat, companyFilter, search]);
 
   return (
     <div>
@@ -78,20 +122,40 @@ export default function CompanyFilings() {
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search company / symbol / purpose"
-            className="text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 w-64 outline-none focus:border-indigo-400 dark:focus:border-indigo-500"
+            placeholder="Search company / symbol / purpose…"
+            className="text-xs bg-card border border-card-border text-foreground rounded-lg px-3 py-2 w-64 outline-none focus:border-primary placeholder:text-muted-foreground"
           />
         }
       />
 
-      <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
-        <PillTabs value={cat} onChange={setCat} options={CAT_OPTIONS}/>
-        {data?.source && (
-          <span className="text-[11px] text-gray-500 dark:text-gray-400">
-            Source: <span className="font-semibold">{data.source}</span> · {filtered.length} of {items.length}
-          </span>
-        )}
+      {/* Sub-tabs row + company filter */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <div className="flex items-center gap-1.5 flex-wrap flex-1">
+          {SUB_TABS.map(t => {
+            const active = cat === t.value;
+            return (
+              <button
+                key={t.value}
+                onClick={() => setCat(t.value)}
+                className={`text-xs px-3 py-1.5 rounded-lg border transition whitespace-nowrap font-medium
+                  ${active
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-card text-muted-foreground border-card-border hover:bg-accent hover:text-accent-foreground"}`}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+        <MenuDropdown label="Company" value={companyFilter} onChange={setCompanyFilter}
+          options={companyOptions} placeholder="All Companies" maxButtonWidth={240} />
       </div>
+
+      {data?.source && (
+        <p className="text-[11px] text-muted-foreground mb-2">
+          Source: <span className="font-semibold text-foreground">{data.source}</span> · Showing {filtered.length} of {items.length} latest filings
+        </p>
+      )}
 
       {isLoading && <Loading />}
       {!isLoading && data?.available === false && (
@@ -104,35 +168,36 @@ export default function CompanyFilings() {
       )}
 
       {filtered.length > 0 && (
-        <Card className="mt-1 overflow-x-auto">
+        <Card className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="text-xs uppercase text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/40">
+            <thead className="text-xs uppercase text-muted-foreground bg-muted/40">
               <tr>
                 <th className="px-4 py-3 text-left">Company</th>
-                <th className="px-4 py-3 text-left">Code</th>
                 <th className="px-4 py-3 text-left">Category</th>
-                <th className="px-4 py-3 text-left">Purpose</th>
-                <th className="px-4 py-3 text-left">Date</th>
-                <th className="px-4 py-3 text-right">Doc</th>
+                <th className="px-4 py-3 text-left">Description</th>
+                <th className="px-4 py-3 text-left">Reported</th>
+                <th className="px-4 py-3 text-right">Document</th>
               </tr>
             </thead>
             <tbody>
               {filtered.slice(0, 200).map((e) => (
-                <tr key={e.id} className="border-t border-gray-100 dark:border-white/[0.05]">
-                  <td className="px-4 py-2.5 font-medium text-gray-900 dark:text-white">{e.company || "—"}</td>
-                  <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400">{e.symbol || "—"}</td>
+                <tr key={e.id} className="border-t border-card-border hover:bg-accent/30 transition">
                   <td className="px-4 py-2.5">
-                    <span className="text-xs px-2 py-1 rounded-md bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 whitespace-nowrap">
+                    <div className="font-medium text-foreground">{e.company || "—"}</div>
+                    {e.symbol && <div className="text-[11px] text-muted-foreground mt-0.5">{e.symbol}</div>}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <span className={`text-[11px] px-2 py-1 rounded-md whitespace-nowrap font-medium ${categoryColor(e.category || "")}`}>
                       {e.category || "Other"}
                     </span>
                   </td>
-                  <td className="px-4 py-2.5 text-gray-600 dark:text-gray-300 max-w-md truncate" title={e.purpose}>{e.purpose || "—"}</td>
-                  <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 text-xs whitespace-nowrap">{fmtDate(e.date)}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground max-w-md truncate" title={e.purpose}>{e.purpose || "—"}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground text-xs whitespace-nowrap">{fmtRelative(e.date)}</td>
                   <td className="px-4 py-2.5 text-right">
                     {e.documentUrl ? (
                       <a href={e.documentUrl} target="_blank" rel="noreferrer"
-                         className="inline-flex items-center gap-1 text-xs text-indigo-600 dark:text-indigo-400 hover:underline">
-                        PDF <ExternalLink className="w-3 h-3"/>
+                         className="inline-flex items-center gap-1 text-xs text-primary hover:underline font-medium">
+                        View <ExternalLink className="w-3 h-3"/>
                       </a>
                     ) : "—"}
                   </td>

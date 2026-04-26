@@ -2,7 +2,7 @@ import { useLocation } from "wouter";
 import {
   LayoutGrid, BarChart3, FileText, PieChart, Briefcase,
   Activity, Repeat, Users, Ban, Truck, LineChart, Rocket,
-  ChevronRight, Search,
+  Search,
 } from "lucide-react";
 import HeatmapTab from "./tabs/Heatmap";
 import FiiDiiTab from "./tabs/FiiDii";
@@ -35,7 +35,6 @@ const TABS = [
 const DEFAULT_SLUG = "heatmap";
 
 export default function InsightsLayout() {
-  // Parse the slug straight off the URL — robust, no wouter pattern surprises.
   const [loc, navigate] = useLocation();
   const rest = loc.replace(/^\/insights\/?/, "").split("/")[0];
   const slug = rest || DEFAULT_SLUG;
@@ -43,16 +42,16 @@ export default function InsightsLayout() {
   const ActiveComponent = active.Component;
 
   return (
-    <div className="-m-4 md:-m-6 min-h-[calc(100vh-57px)] md:min-h-screen flex bg-gray-50 dark:bg-gray-950">
-      {/* Inner left sidebar (desktop) */}
-      <aside className="hidden md:flex flex-col w-60 border-r border-gray-100 dark:border-white/[0.05] bg-white dark:bg-gray-900 flex-shrink-0 sticky top-0 self-start max-h-screen">
-        <div className="px-5 py-4 border-b border-gray-100 dark:border-white/[0.05] flex items-center gap-2">
-          <div className="w-9 h-9 rounded-full bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center">
-            <Search className="w-4 h-4 text-indigo-500" />
+    <div className="flex gap-4 md:gap-6 min-h-[calc(100vh-12rem)]">
+      {/* Inner left sidebar (desktop) — same Card vibe as the rest of the app */}
+      <aside className="hidden md:flex flex-col w-56 lg:w-60 rounded-xl border border-card-border bg-card text-card-foreground shadow-sm flex-shrink-0 sticky top-4 self-start max-h-[calc(100vh-2rem)]">
+        <div className="px-4 py-3 border-b border-card-border flex items-center gap-2">
+          <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+            <Search className="w-4 h-4 text-primary" />
           </div>
-          <h2 className="font-bold text-gray-900 dark:text-white">Insights</h2>
+          <h2 className="font-bold text-foreground text-sm">Insights</h2>
         </div>
-        <nav className="flex-1 overflow-y-auto py-2">
+        <nav className="flex-1 overflow-y-auto py-1.5">
           {TABS.map(({ slug: s, label, icon: Icon }) => {
             const isActive = s === slug;
             return (
@@ -60,14 +59,13 @@ export default function InsightsLayout() {
                 key={s}
                 type="button"
                 onClick={() => navigate(`/insights/${s}`)}
-                className={`w-full text-left flex items-center gap-3 px-4 py-2.5 mx-2 my-0.5 rounded-lg text-sm transition group cursor-pointer
+                className={`w-full text-left flex items-center gap-2.5 px-3 py-2 mx-1.5 my-0.5 rounded-md text-sm transition cursor-pointer
                   ${isActive
-                    ? "bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 font-semibold"
-                    : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/60"}`}
+                    ? "bg-primary/10 text-primary font-semibold"
+                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"}`}
               >
-                <Icon className={`w-4 h-4 flex-shrink-0 ${isActive ? "text-indigo-600 dark:text-indigo-400" : ""}`} />
+                <Icon className={`w-4 h-4 flex-shrink-0 ${isActive ? "text-primary" : ""}`} />
                 <span className="flex-1 truncate">{label}</span>
-                {isActive && <ChevronRight className="w-4 h-4 text-indigo-500" />}
               </button>
             );
           })}
@@ -75,14 +73,14 @@ export default function InsightsLayout() {
       </aside>
 
       {/* Mobile tab pills (top of content) */}
-      <div className="md:hidden bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-white/[0.05] px-2 py-2 flex gap-1 overflow-x-auto sticky top-0 z-20">
+      <div className="md:hidden -mx-4 px-2 py-2 flex gap-1 overflow-x-auto sticky top-0 z-20 bg-background/80 backdrop-blur border-b border-card-border">
         {TABS.map(({ slug: s, label }) => (
           <button
             key={s}
             type="button"
             onClick={() => navigate(`/insights/${s}`)}
             className={`px-3 py-1.5 text-xs whitespace-nowrap rounded-lg flex-shrink-0 transition
-              ${s === slug ? "bg-indigo-500 text-white" : "text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700"}`}
+              ${s === slug ? "bg-primary text-primary-foreground" : "text-muted-foreground bg-card border border-card-border hover:bg-accent"}`}
           >
             {label}
           </button>
@@ -90,7 +88,7 @@ export default function InsightsLayout() {
       </div>
 
       {/* Content area */}
-      <main className="flex-1 min-w-0 p-4 md:p-6">
+      <main className="flex-1 min-w-0">
         <ActiveComponent key={slug} />
       </main>
     </div>

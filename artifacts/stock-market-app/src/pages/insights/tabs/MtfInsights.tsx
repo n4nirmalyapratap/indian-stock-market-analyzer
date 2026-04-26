@@ -1,24 +1,19 @@
-import { useQuery } from "@tanstack/react-query";
-import { fetchApi } from "@/lib/api";
-import { PageHeader, Loading, EmptyState } from "../_shared";
+import { PageHeader, FeatureLocked } from "../_shared";
 import { Users } from "lucide-react";
 
 export default function MtfInsights() {
-  const { data, isLoading } = useQuery<{ available: boolean; message?: string }>({
-    queryKey: ["insights/mtf"],
-    queryFn: () => fetchApi(`/insights/mtf`),
-    staleTime: 60 * 60_000,
-  });
   return (
     <div>
-      <PageHeader title="MTF Insights" info="Margin Trading Facility positions per broker" />
-      {isLoading ? <Loading /> : (
-        <EmptyState
-          icon={<Users className="w-10 h-10" />}
-          title="MTF data coming soon"
-          message={data?.message || "MTF data is published per-broker by NSE/BSE; an aggregated feed is on the roadmap."}
-        />
-      )}
+      <PageHeader title="MTF Insights"
+        info="Margin Trading Facility — leveraged positions financed by your broker" />
+      <FeatureLocked
+        icon={<Users className="w-6 h-6" />}
+        title="MTF positions per scrip"
+        whatIsThis="Margin Trading Facility (MTF) lets retail clients buy stocks on borrowed money, with the broker funding up to 75% of the trade. Aggregated MTF interest at the scrip level is a useful proxy for retail leverage and crowded longs."
+        sourceName="NSE India"
+        sourceUrl="https://www.nseindia.com/products-services/margin-trading-facility"
+        expectedColumns={["Symbol", "MTF Outstanding", "Daily Change", "% of Free Float", "Top Brokers"]}
+      />
     </div>
   );
 }
