@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
 import { PageHeader, Loading, ErrorState, EmptyState, MenuDropdown, Card } from "../_shared";
@@ -56,17 +56,24 @@ const SORT_OPTIONS: { value: SortBy; label: string }[] = [
 
 /** Squarified treemap layout (Bruls, Huijsen & van Wijk, 2000).
  *  Returns absolute-positioned rectangles inside a fixed-width container.
- *  Falls back to equal-weighted layout if all weights are 0. */
+ *  Tile weight is supplied by the caller — see `weightFor()` below. */
 type Rect = { x: number; y: number; w: number; h: number; item: HeatmapItem };
 
-function squarify(items: HeatmapItem[], width: number, height: number): Rect[] {
+function squarify(
+  items: HeatmapItem[],
+  width: number,
+  height: number,
+  weightFor: (it: HeatmapItem) => number,
+): Rect[] {
   if (!items.length || width <= 0 || height <= 0) return [];
-  // Use market cap; if all zero, fall back to equal weights.
-  const allZero = items.every(it => !it.marketCap || it.marketCap <= 0);
-  const rawWeights = items.map(it => allZero ? 1 : Math.max(it.marketCap || 0, 0));
-  const totalW = rawWeights.reduce((a, b) => a + b, 0) || 1;
+  const rawWeights = items.map(it => Math.max(weightFor(it) || 0, 0));
+  const totalRaw = rawWeights.reduce((a, b) => a + b, 0);
+  // If every weight is zero (e.g. all 0% change), fall back to equal weights
+  // so the treemap still draws useful, equally-sized tiles.
+  const weights = totalRaw > 0 ? rawWeights : items.map(() => 1);
+  const totalW = weights.reduce((a, b) => a + b, 0) || 1;
   const totalArea = width * height;
-  const areas = rawWeights.map(w => (w / totalW) * totalArea);
+  const areas = weights.map(w => (w / totalW) * totalArea);
 
   // Pair (item, area) and sort largest first.
   const queue = items.map((it, i) => ({ it, area: areas[i] }))
@@ -130,6 +137,13 @@ function squarify(items: HeatmapItem[], width: number, height: number): Rect[] {
 function useElementWidth<T extends HTMLElement>() {
   const ref = useRef<T>(null);
   const [w, setW] = useState(0);
+  // Measure synchronously before paint so the treemap has a width on the
+  // very first render — otherwise rects would be empty and the user sees
+  // a blank card until ResizeObserver fires asynchronously.
+  useLayoutEffect(() => {
+    if (!ref.current) return;
+    setW(ref.current.getBoundingClientRect().width);
+  }, []);
   useEffect(() => {
     if (!ref.current) return;
     const ro = new ResizeObserver(entries => {
@@ -172,7 +186,11 @@ export default function Heatmap() {
 
   const indexLabel = data?.label || indexOptions.find(o => o.value === index)?.label || "Nifty 50";
 
-  // Treemap layout — only when sorting by market cap; other sorts use uniform grid.
+  // Treemap layout — always rendered, but the tile-weight function changes
+  // with the sort mode so users see the size shift when they change "Sort":
+  //   marketCap → tile size proportional to market cap
+  //   change    → tile size proportional to |% change| (biggest movers loom large)
+  //   name      → uniform tiles, A→Z order preserved
   const [containerRef, containerW] = useElementWidth<HTMLDivElement>();
   // Choose container height: tighter for few items, taller for many.
   const treemapH = useMemo(() => {
@@ -184,8 +202,14 @@ export default function Heatmap() {
   }, [items.length]);
 
   const rects = useMemo(() => {
-    if (sortBy !== "marketCap" || !containerW) return null;
-    return squarify(items, containerW, treemapH);
+    if (!containerW || items.length === 0) return null;
+    const weightFor =
+      sortBy === "marketCap"
+        ? (it: HeatmapItem) => Math.max(it.marketCap || 0, 0)
+        : sortBy === "change"
+        ? (it: HeatmapItem) => Math.max(Math.abs(it.changePct ?? 0), 0.15)
+        : (_it: HeatmapItem) => 1;
+    return squarify(items, containerW, treemapH, weightFor);
   }, [items, sortBy, containerW, treemapH]);
 
   return (
@@ -238,8 +262,8 @@ export default function Heatmap() {
         <EmptyState title="No data" message="No constituents returned for this index." icon={<LayoutGrid className="w-10 h-10"/>} />
       )}
 
-      {/* Treemap mode (sort = market cap) */}
-      {items.length > 0 && sortBy === "marketCap" && (
+      {/* Treemap (rendered for every sort; weights & tile sizes change per sort) */}
+      {items.length > 0 && (
         <Card className="overflow-hidden p-1">
           <div ref={containerRef} className="relative w-full" style={{ height: treemapH }}>
             {rects?.map(({ x, y, w, h, item }) => {
@@ -278,31 +302,6 @@ export default function Heatmap() {
             })}
           </div>
         </Card>
-      )}
-
-      {/* Uniform grid mode (sort = name / % change) */}
-      {items.length > 0 && sortBy !== "marketCap" && (
-        <div className="grid gap-2 select-none"
-             style={{ gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))" }}>
-          {items.map(it => {
-            const b = it.color ?? bucket(it.changePct);
-            const pct = it.changePct ?? 0;
-            return (
-              <div key={it.symbol}
-                   title={`${it.name} • ₹${it.price?.toFixed(2)} • ${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`}
-                   className="relative overflow-hidden rounded-lg px-3 py-2.5 flex flex-col justify-between min-h-[88px] ring-1 ring-black/5 dark:ring-white/10 shadow-sm hover:shadow-lg hover:scale-[1.03] transition-all duration-150 cursor-default"
-                   style={{ backgroundColor: b.bg, color: b.fg }}>
-                <div className="text-[11px] font-extrabold leading-tight tracking-tight uppercase truncate">{it.name}</div>
-                <div className="mt-1">
-                  <div className="text-[15px] font-bold leading-none">{it.price?.toFixed(2)}</div>
-                  <div className="text-[11px] font-semibold opacity-95 mt-0.5">
-                    {pct >= 0 ? "▲" : "▼"} {Math.abs(pct).toFixed(2)}%
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
       )}
     </div>
   );

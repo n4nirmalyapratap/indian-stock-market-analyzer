@@ -78,26 +78,30 @@ export function Dropdown({ label, value, onChange, options }: {
 /**
  * MenuDropdown — accessible portal-based combobox/listbox with keyboard nav.
  *
- * - Typed against plain strings (avoids TS generic inference fights with
- *   useState setters constrained by `T | ""`).
- * - When `placeholder` is set and a value is currently selected, the menu
- *   automatically prepends a "Clear" / placeholder row so users can return
- *   to the empty (filter-off) state without remounting the component.
+ * Behaviour notes:
+ * - Scrolling INSIDE the dropdown's own list does NOT close the menu (the
+ *   global scroll-to-close listener ignores events whose target is inside
+ *   the menu element).
+ * - The menu only auto-prepends a "Clear" row when `clearable` is true AND
+ *   a value is currently selected — for required selectors (e.g. "Index")
+ *   we don't want a confusing italic "Select…" row at the top.
  * - Positions itself with `position: fixed` and clamps to a viewport-safe
- *   rectangle (margin = 8px on every side).
+ *   rectangle (margin = 8px on every side); flips above when no room below.
  * - Keyboard: Arrow Up/Down moves the highlight, Home/End jump, Enter
- *   selects, Escape closes. Visible search input filters the list.
+ *   selects, Escape closes.
  * - ARIA: trigger uses combobox role; menu uses listbox; rows use option
  *   role with aria-selected. Active row is announced via aria-activedescendant.
  */
 export function MenuDropdown({
-  label, value, options, onChange, placeholder = "Select…", minButtonWidth = 0, maxButtonWidth = 280,
+  label, value, options, onChange, placeholder = "Select…", clearable = false,
+  minButtonWidth = 0, maxButtonWidth = 280,
 }: {
   label?: string;
   value: string;
   options: { value: string; label: string }[];
   onChange: (v: string) => void;
   placeholder?: string;
+  clearable?: boolean;
   minButtonWidth?: number;
   maxButtonWidth?: number;
 }) {
@@ -112,18 +116,18 @@ export function MenuDropdown({
 
   const current = options.find(o => o.value === value);
 
-  // Build the option list. If a placeholder is set AND a value is currently
-  // chosen, prepend a clear row so users can reset the filter from the menu.
+  // Build the option list. Only prepend a "Clear" row when the consumer
+  // explicitly opts in via `clearable` AND a value is currently selected.
   const baseOptions = useMemo(() => {
     const list = (q
       ? options.filter(o => o.label.toLowerCase().includes(q.toLowerCase()))
       : options
     ).slice(0, 300);
-    if (value && placeholder && !q) {
-      return [{ value: "", label: placeholder, _clear: true as const }, ...list];
+    if (clearable && value && !q) {
+      return [{ value: "", label: "Clear selection", _clear: true as const }, ...list];
     }
     return list;
-  }, [options, q, value, placeholder]);
+  }, [options, q, value, clearable]);
 
   useEffect(() => { setActive(0); }, [q, open]);
 
@@ -153,7 +157,13 @@ export function MenuDropdown({
       if (btnRef.current?.contains(t) || menuRef.current?.contains(t)) return;
       setOpen(false);
     };
-    const onScroll = () => setOpen(false);
+    const onScroll = (e: Event) => {
+      // Don't close when the user scrolls INSIDE the dropdown's own list
+      // (or its search input); only close on outer page/parent scrolls.
+      const t = e.target as Node | null;
+      if (t && menuRef.current?.contains(t)) return;
+      setOpen(false);
+    };
     const onResize = () => setOpen(false);
     document.addEventListener("mousedown", onClick);
     window.addEventListener("scroll", onScroll, true);
