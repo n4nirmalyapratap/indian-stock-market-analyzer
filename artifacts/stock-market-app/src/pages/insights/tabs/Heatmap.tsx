@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
 import { PageHeader, Loading, ErrorState, EmptyState, MenuDropdown, Card } from "../_shared";
@@ -134,25 +134,27 @@ function squarify(
   return rects;
 }
 
+// Callback-ref version: the measure & ResizeObserver are wired up the moment
+// the DOM node mounts. This is necessary because the heatmap container only
+// renders AFTER data arrives — a regular `useRef` + `useLayoutEffect([])`
+// would run on the component's first render (during the loading state, when
+// the container isn't in the tree yet) and never measure once the data
+// arrives. With a callback ref, the function fires whenever React attaches
+// the node, so we always get a real width.
 function useElementWidth<T extends HTMLElement>() {
-  const ref = useRef<T>(null);
   const [w, setW] = useState(0);
-  // Measure synchronously before paint so the treemap has a width on the
-  // very first render — otherwise rects would be empty and the user sees
-  // a blank card until ResizeObserver fires asynchronously.
-  useLayoutEffect(() => {
-    if (!ref.current) return;
-    setW(ref.current.getBoundingClientRect().width);
-  }, []);
+  const [node, setNode] = useState<T | null>(null);
+  const setRef = useCallback((n: T | null) => setNode(n), []);
   useEffect(() => {
-    if (!ref.current) return;
+    if (!node) return;
+    setW(node.getBoundingClientRect().width);
     const ro = new ResizeObserver(entries => {
       for (const e of entries) setW(e.contentRect.width);
     });
-    ro.observe(ref.current);
+    ro.observe(node);
     return () => ro.disconnect();
-  }, []);
-  return [ref, w] as const;
+  }, [node]);
+  return [setRef, w] as const;
 }
 
 export default function Heatmap() {
@@ -220,8 +222,8 @@ export default function Heatmap() {
         right={
           data?.indexPrice != null && (
             <div className="flex items-center gap-2 text-xs">
-              <span className="text-muted-foreground font-medium">{indexLabel}</span>
-              <span className="font-bold text-foreground">{data.indexPrice?.toFixed(2)}</span>
+              <span className="text-gray-500 dark:text-gray-400 font-medium">{indexLabel}</span>
+              <span className="font-bold text-gray-900 dark:text-white">{data.indexPrice?.toFixed(2)}</span>
               <span className={`font-semibold ${(data.indexChange ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-500"}`}>
                 {(data.indexChange ?? 0) >= 0 ? "+" : ""}{data.indexChange?.toFixed(2)} ({data.indexChangePct?.toFixed(2)}%)
               </span>

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
-import { PageHeader, Card, Loading, EmptyState, MenuDropdown } from "../_shared";
+import { PageHeader, Card, Loading, EmptyState, MenuDropdown, ErrorState } from "../_shared";
 import { PieChart } from "lucide-react";
 
 interface Scheme {
@@ -36,7 +36,7 @@ export default function MfHoldings() {
   if (search) params.set("search", search);
   params.set("limit", "300");
 
-  const { data, isLoading } = useQuery<MfResponse>({
+  const { data, isLoading, error } = useQuery<MfResponse>({
     queryKey: ["insights/mf-holdings", amc, category, search],
     queryFn: () => fetchApi(`/insights/mf-holdings?${params}`),
     staleTime: 30 * 60_000,
@@ -52,8 +52,8 @@ export default function MfHoldings() {
         info="Live AMFI scheme list with daily Net Asset Values"
         right={
           data?.available && (
-            <span className="text-[11px] text-muted-foreground">
-              <span className="font-semibold text-foreground">{data.matched?.toLocaleString()}</span> of <span className="font-semibold text-foreground">{data.totalSchemes?.toLocaleString()}</span> schemes
+            <span className="text-[11px] text-gray-500 dark:text-gray-400">
+              <span className="font-semibold text-gray-900 dark:text-white">{data.matched?.toLocaleString()}</span> of <span className="font-semibold text-gray-900 dark:text-white">{data.totalSchemes?.toLocaleString()}</span> schemes
             </span>
           )
         }
@@ -66,11 +66,12 @@ export default function MfHoldings() {
           placeholder="All categories" minButtonWidth={180} maxButtonWidth={260} />
         <input value={search} onChange={e => setSearch(e.target.value)}
           placeholder="Search scheme name…"
-          className="text-xs bg-card border border-card-border text-foreground rounded-lg px-3 py-2 w-72 outline-none focus:border-primary placeholder:text-muted-foreground" />
+          className="text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white rounded-lg px-3 py-2 w-72 outline-none focus:border-indigo-600 dark:border-indigo-500 placeholder:text-gray-500 dark:text-gray-400" />
       </div>
 
       {isLoading && <Loading label="Fetching AMFI NAV feed…" />}
-      {!isLoading && data?.available === false && (
+      {error && !isLoading && <ErrorState message={(error as Error).message} />}
+      {!error && !isLoading && data?.available === false && (
         <EmptyState title="Feed unavailable" message={data.message || "AMFI NAV feed temporarily unavailable."}
           icon={<PieChart className="w-10 h-10"/>}/>
       )}
@@ -82,7 +83,7 @@ export default function MfHoldings() {
       {data?.items && data.items.length > 0 && (
         <Card className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="text-xs uppercase text-muted-foreground bg-muted/40">
+            <thead className="text-xs uppercase text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/40">
               <tr>
                 <th className="px-4 py-3 text-left">Scheme</th>
                 <th className="px-4 py-3 text-left">AMC</th>
@@ -93,14 +94,14 @@ export default function MfHoldings() {
             </thead>
             <tbody>
               {data.items.map(s => (
-                <tr key={s.schemeCode} className="border-t border-card-border hover:bg-accent/30 transition">
-                  <td className="px-4 py-2.5 font-medium text-foreground max-w-md truncate" title={s.schemeName}>{s.schemeName}</td>
-                  <td className="px-4 py-2.5 text-muted-foreground text-xs max-w-[200px] truncate" title={s.amc}>{s.amc}</td>
-                  <td className="px-4 py-2.5 text-muted-foreground text-xs max-w-[180px] truncate" title={s.category}>{s.category}</td>
-                  <td className="px-4 py-2.5 text-right font-semibold text-foreground tabular-nums">
+                <tr key={s.schemeCode} className="border-t border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition">
+                  <td className="px-4 py-2.5 font-medium text-gray-900 dark:text-white max-w-md truncate" title={s.schemeName}>{s.schemeName}</td>
+                  <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 text-xs max-w-[200px] truncate" title={s.amc}>{s.amc}</td>
+                  <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 text-xs max-w-[180px] truncate" title={s.category}>{s.category}</td>
+                  <td className="px-4 py-2.5 text-right font-semibold text-gray-900 dark:text-white tabular-nums">
                     {s.nav != null ? s.nav.toFixed(4) : "—"}
                   </td>
-                  <td className="px-4 py-2.5 text-muted-foreground text-xs whitespace-nowrap">{s.date}</td>
+                  <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 text-xs whitespace-nowrap">{s.date}</td>
                 </tr>
               ))}
             </tbody>

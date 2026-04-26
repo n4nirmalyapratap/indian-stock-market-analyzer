@@ -2,6 +2,19 @@ import { ReactNode, useState, useRef, useEffect, useMemo } from "react";
 import { Info, Loader2, Lock, ExternalLink, ChevronDown, Check } from "lucide-react";
 import { createPortal } from "react-dom";
 
+/* ──────────────────────────────────────────────────────────────────────────
+ * Insights design language — uses the same Tailwind utilities as the rest
+ * of the app (Dashboard, Sectors, Sentiment, etc.) so the section feels
+ * native, not bolted on:
+ *   surface  : bg-white dark:bg-gray-800
+ *   page     : bg-gray-50 dark:bg-gray-950 (provided by LayoutShell)
+ *   border   : border-gray-100 dark:border-gray-700/800
+ *   text     : text-gray-900 dark:text-white   (primary)
+ *              text-gray-500 dark:text-gray-400 (muted)
+ *   active   : indigo-50/500-20 + indigo-700/300
+ *   primary  : indigo-600 dark:indigo-400
+ * ────────────────────────────────────────────────────────────────────── */
+
 export function PageHeader({ title, subtitle, info, right }: {
   title: string; subtitle?: string; info?: string; right?: ReactNode;
 }) {
@@ -9,10 +22,10 @@ export function PageHeader({ title, subtitle, info, right }: {
     <div className="flex items-start justify-between gap-4 mb-4 flex-wrap">
       <div className="min-w-0">
         <div className="flex items-center gap-2">
-          <h1 className="text-xl md:text-2xl font-bold text-foreground">{title}</h1>
-          {info && <Info className="w-4 h-4 text-muted-foreground" aria-label={info} />}
+          <h1 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white">{title}</h1>
+          {info && <Info className="w-4 h-4 text-gray-400 dark:text-gray-500" aria-label={info} />}
         </div>
-        {subtitle && <p className="text-sm text-muted-foreground mt-0.5">{subtitle}</p>}
+        {subtitle && <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{subtitle}</p>}
       </div>
       {right && <div className="flex items-center gap-2 flex-wrap">{right}</div>}
     </div>
@@ -21,7 +34,7 @@ export function PageHeader({ title, subtitle, info, right }: {
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`rounded-xl border border-card-border bg-card text-card-foreground shadow-sm ${className}`}>
+    <div className={`rounded-xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm ${className}`}>
       {children}
     </div>
   );
@@ -38,8 +51,8 @@ export function PillTabs({ value, onChange, options }: {
           onClick={() => onChange(o.value)}
           className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition border whitespace-nowrap
             ${o.value === value
-              ? "bg-primary text-primary-foreground border-primary"
-              : "bg-card text-muted-foreground border-card-border hover:bg-accent hover:text-accent-foreground"}`}
+              ? "bg-indigo-600 text-white border-indigo-600 dark:bg-indigo-500 dark:border-indigo-500"
+              : "bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700"}`}
         >
           {o.label}
         </button>
@@ -55,21 +68,21 @@ export function Dropdown({ label, value, onChange, options }: {
   options: { value: string; label: string }[];
 }) {
   return (
-    <label className="inline-flex items-center gap-2 text-xs bg-card border border-card-border rounded-lg px-3 py-2 cursor-pointer hover:bg-accent transition shadow-sm">
-      {label && <span className="text-muted-foreground">{label}</span>}
+    <label className="inline-flex items-center gap-2 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm">
+      {label && <span className="text-gray-500 dark:text-gray-400">{label}</span>}
       <span className="relative inline-flex items-center">
         <select
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="appearance-none bg-transparent text-primary font-semibold outline-none cursor-pointer pr-5"
+          className="appearance-none bg-transparent text-indigo-600 dark:text-indigo-400 font-semibold outline-none cursor-pointer pr-5"
         >
           {options.map(o => (
-            <option key={o.value} value={o.value} className="bg-background text-foreground">
+            <option key={o.value} value={o.value} className="bg-white dark:bg-gray-800 text-gray-900 dark:text-white">
               {o.label}
             </option>
           ))}
         </select>
-        <svg className="w-3.5 h-3.5 text-primary pointer-events-none absolute right-0" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.06l3.71-3.83a.75.75 0 111.08 1.04l-4.25 4.39a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z" clipRule="evenodd"/></svg>
+        <svg className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 pointer-events-none absolute right-0" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.06l3.71-3.83a.75.75 0 111.08 1.04l-4.25 4.39a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z" clipRule="evenodd"/></svg>
       </span>
     </label>
   );
@@ -79,12 +92,9 @@ export function Dropdown({ label, value, onChange, options }: {
  * MenuDropdown — accessible portal-based combobox/listbox with keyboard nav.
  *
  * Behaviour notes:
- * - Scrolling INSIDE the dropdown's own list does NOT close the menu (the
- *   global scroll-to-close listener ignores events whose target is inside
- *   the menu element).
- * - The menu only auto-prepends a "Clear" row when `clearable` is true AND
- *   a value is currently selected — for required selectors (e.g. "Index")
- *   we don't want a confusing italic "Select…" row at the top.
+ * - Scrolling INSIDE the dropdown's own list does NOT close the menu.
+ * - The menu only auto-prepends a "Clear selection" row when `clearable` is
+ *   true AND a value is currently selected.
  * - Positions itself with `position: fixed` and clamps to a viewport-safe
  *   rectangle (margin = 8px on every side); flips above when no room below.
  * - Keyboard: Arrow Up/Down moves the highlight, Home/End jump, Enter
@@ -116,8 +126,6 @@ export function MenuDropdown({
 
   const current = options.find(o => o.value === value);
 
-  // Build the option list. Only prepend a "Clear" row when the consumer
-  // explicitly opts in via `clearable` AND a value is currently selected.
   const baseOptions = useMemo(() => {
     const list = (q
       ? options.filter(o => o.label.toLowerCase().includes(q.toLowerCase()))
@@ -140,9 +148,7 @@ export function MenuDropdown({
     const vh = window.innerHeight;
     const want = Math.max(r.width, 260);
     const width = Math.min(want, vw - margin * 2);
-    // Clamp left so the menu fully fits within the viewport.
     const left = Math.max(margin, Math.min(r.left, vw - width - margin));
-    // Default to opening below; flip above if there isn't room.
     const spaceBelow = vh - r.bottom - margin;
     const top = spaceBelow < 220 && r.top > spaceBelow
       ? Math.max(margin, r.top - Math.min(420, r.top - margin) - 6)
@@ -158,8 +164,7 @@ export function MenuDropdown({
       setOpen(false);
     };
     const onScroll = (e: Event) => {
-      // Don't close when the user scrolls INSIDE the dropdown's own list
-      // (or its search input); only close on outer page/parent scrolls.
+      // Don't close when scrolling INSIDE the dropdown's own list.
       const t = e.target as Node | null;
       if (t && menuRef.current?.contains(t)) return;
       setOpen(false);
@@ -175,7 +180,6 @@ export function MenuDropdown({
     };
   }, [open]);
 
-  // Scroll the active option into view as the user navigates with arrows.
   useEffect(() => {
     if (!open || !listRef.current) return;
     const el = listRef.current.querySelector<HTMLElement>(`[data-idx="${active}"]`);
@@ -212,7 +216,7 @@ export function MenuDropdown({
         onClick={() => setOpen(o => !o)}
         onKeyDown={onKeyDown}
         style={{ minWidth: minButtonWidth, maxWidth: maxButtonWidth }}
-        className="inline-flex items-center gap-2 text-xs bg-card border border-card-border rounded-lg px-3 py-2 hover:bg-accent transition shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="inline-flex items-center gap-2 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
         title={display}
         role="combobox"
         aria-haspopup="listbox"
@@ -220,15 +224,15 @@ export function MenuDropdown({
         aria-controls={open ? `${id}-list` : undefined}
         aria-activedescendant={open ? `${id}-opt-${active}` : undefined}
       >
-        {label && <span className="text-muted-foreground flex-shrink-0">{label}</span>}
-        <span className={`font-semibold truncate text-left flex-1 min-w-0 ${current ? "text-primary" : "text-muted-foreground"}`}>{display}</span>
-        <ChevronDown className={`w-3.5 h-3.5 text-primary flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+        {label && <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">{label}</span>}
+        <span className={`font-semibold truncate text-left flex-1 min-w-0 ${current ? "text-indigo-600 dark:text-indigo-400" : "text-gray-500 dark:text-gray-400"}`}>{display}</span>
+        <ChevronDown className={`w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open && createPortal(
         <div
           ref={menuRef}
           style={{ position: "fixed", top: pos.top, left: pos.left, width: pos.width, maxHeight: "min(420px, 60vh)" }}
-          className="z-[1000] rounded-xl border border-card-border bg-popover text-popover-foreground shadow-2xl overflow-hidden flex flex-col"
+          className="z-[1000] rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-2xl overflow-hidden flex flex-col"
         >
           {showSearch && (
             <input
@@ -238,7 +242,7 @@ export function MenuDropdown({
               onKeyDown={onKeyDown}
               placeholder="Search…"
               aria-label={`Search ${label || "options"}`}
-              className="w-full text-sm px-3 py-2 border-b border-card-border bg-transparent outline-none flex-shrink-0 placeholder:text-muted-foreground"
+              className="w-full text-sm px-3 py-2 border-b border-gray-200 dark:border-gray-700 bg-transparent outline-none flex-shrink-0 placeholder:text-gray-400 text-gray-900 dark:text-white"
             />
           )}
           <div ref={listRef} role="listbox" id={`${id}-list`} className="overflow-y-auto py-1 flex-1">
@@ -257,19 +261,19 @@ export function MenuDropdown({
                   onMouseEnter={() => setActive(idx)}
                   onClick={() => select(o.value)}
                   className={`w-full text-left text-sm px-3.5 py-2 flex items-center justify-between gap-2 transition
-                    ${focused ? "bg-accent" : ""}
+                    ${focused ? "bg-gray-100 dark:bg-gray-700" : ""}
                     ${sel
-                      ? "bg-primary/10 text-primary font-semibold"
+                      ? "bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 font-semibold"
                       : isClear
-                      ? "text-muted-foreground italic"
-                      : "text-foreground hover:bg-accent"}`}
+                      ? "text-gray-500 dark:text-gray-400 italic"
+                      : "text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"}`}
                 >
                   <span className="truncate">{o.label}</span>
-                  {sel && <Check className="w-4 h-4 text-primary flex-shrink-0" />}
+                  {sel && <Check className="w-4 h-4 text-indigo-600 dark:text-indigo-400 flex-shrink-0" />}
                 </button>
               );
             })}
-            {baseOptions.length === 0 && <div className="px-3 py-3 text-xs text-muted-foreground">No matches</div>}
+            {baseOptions.length === 0 && <div className="px-3 py-3 text-xs text-gray-500 dark:text-gray-400">No matches</div>}
           </div>
         </div>,
         document.body,
@@ -280,8 +284,8 @@ export function MenuDropdown({
 
 export function Loading({ label = "Loading…" }: { label?: string }) {
   return (
-    <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-2">
-      <Loader2 className="w-6 h-6 animate-spin text-primary" />
+    <div className="flex flex-col items-center justify-center py-20 text-gray-500 dark:text-gray-400 gap-2">
+      <Loader2 className="w-6 h-6 animate-spin text-indigo-600 dark:text-indigo-400" />
       <p className="text-sm">{label}</p>
     </div>
   );
@@ -290,16 +294,16 @@ export function Loading({ label = "Loading…" }: { label?: string }) {
 export function EmptyState({ title, message, icon }: { title: string; message: string; icon?: ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center py-20 text-center px-4">
-      {icon && <div className="mb-3 text-muted-foreground">{icon}</div>}
-      <h3 className="text-base font-semibold text-foreground">{title}</h3>
-      <p className="text-sm text-muted-foreground mt-1 max-w-md">{message}</p>
+      {icon && <div className="mb-3 text-gray-400 dark:text-gray-500">{icon}</div>}
+      <h3 className="text-base font-semibold text-gray-900 dark:text-white">{title}</h3>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 max-w-md">{message}</p>
     </div>
   );
 }
 
 export function ErrorState({ message }: { message: string }) {
   return (
-    <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+    <div className="rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20 p-4 text-sm text-red-700 dark:text-red-300">
       {message}
     </div>
   );
@@ -307,9 +311,9 @@ export function ErrorState({ message }: { message: string }) {
 
 /**
  * FeatureLocked — honest empty state for data feeds we can't currently
- * reach from this hosting environment (NSE/Moneycontrol/Chittorgarh restrict
- * automated access from cloud IP ranges). Shows what would appear here, and
- * links to the upstream source so the user can view the data directly.
+ * reach from this hosting environment (NSE / Moneycontrol / Chittorgarh
+ * restrict automated access from cloud IP ranges). Shows what would appear
+ * here, and links to the upstream source so the user can view it directly.
  */
 export function FeatureLocked({
   title, sourceName, sourceUrl, whatIsThis, expectedColumns, icon,
@@ -324,17 +328,17 @@ export function FeatureLocked({
   return (
     <Card className="p-6 md:p-8 max-w-3xl mx-auto">
       <div className="flex items-start gap-4">
-        <div className="w-12 h-12 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center flex-shrink-0 ring-1 ring-amber-500/20">
+        <div className="w-12 h-12 rounded-xl bg-amber-100 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center flex-shrink-0 ring-1 ring-amber-200 dark:ring-amber-500/20">
           {icon || <Lock className="w-6 h-6" />}
         </div>
         <div className="flex-1 min-w-0">
-          <h3 className="text-lg font-bold text-foreground">{title}</h3>
-          <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">{whatIsThis}</p>
+          <h3 className="text-lg font-bold text-gray-900 dark:text-white">{title}</h3>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1.5 leading-relaxed">{whatIsThis}</p>
 
-          <div className="mt-4 rounded-lg bg-amber-500/5 border border-amber-500/20 p-3">
+          <div className="mt-4 rounded-lg bg-amber-50 dark:bg-amber-500/5 border border-amber-200 dark:border-amber-500/20 p-3">
             <p className="text-xs font-semibold text-amber-700 dark:text-amber-300 uppercase tracking-wide">Why is this empty?</p>
-            <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-              The upstream source (<span className="font-medium text-foreground">{sourceName}</span>) blocks
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 leading-relaxed">
+              The upstream source (<span className="font-medium text-gray-900 dark:text-white">{sourceName}</span>) blocks
               automated requests from this hosting region. The integration is built — once a routable
               source is configured, this view will populate automatically.
             </p>
@@ -342,10 +346,10 @@ export function FeatureLocked({
 
           {expectedColumns && expectedColumns.length > 0 && (
             <div className="mt-4">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">What you'll see here</p>
+              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1.5">What you'll see here</p>
               <div className="flex flex-wrap gap-1.5">
                 {expectedColumns.map(c => (
-                  <span key={c} className="text-[11px] px-2 py-1 rounded-md bg-muted text-muted-foreground border border-card-border">
+                  <span key={c} className="text-[11px] px-2 py-1 rounded-md bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600">
                     {c}
                   </span>
                 ))}
@@ -357,7 +361,7 @@ export function FeatureLocked({
             href={sourceUrl}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1.5 mt-5 text-xs font-medium text-primary hover:underline"
+            className="inline-flex items-center gap-1.5 mt-5 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
           >
             View on {sourceName} <ExternalLink className="w-3.5 h-3.5" />
           </a>
