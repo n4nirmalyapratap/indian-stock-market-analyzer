@@ -2,6 +2,44 @@ import { ReactNode, useState, useRef, useEffect, useMemo } from "react";
 import { Info, Loader2, Lock, ExternalLink, ChevronDown, Check } from "lucide-react";
 import { createPortal } from "react-dom";
 
+/** Reactively detect dark mode (the app toggles `class="dark"` on <html>).
+ *  Used by Recharts and any other consumers that need real hex colors,
+ *  since recharts uses inline styles that Tailwind's `dark:` variant
+ *  cannot reach. */
+export function useIsDark(): boolean {
+  const [dark, setDark] = useState(() =>
+    typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
+  );
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const obs = new MutationObserver(() =>
+      setDark(document.documentElement.classList.contains("dark")),
+    );
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => obs.disconnect();
+  }, []);
+  return dark;
+}
+
+/** App-wide chart palette derived from Tailwind's gray/indigo scales so
+ *  Recharts (which uses inline styles, not Tailwind classes) matches the
+ *  surrounding app in both light and dark mode. */
+export function useChartPalette() {
+  const dark = useIsDark();
+  return useMemo(() => ({
+    border: dark ? "#374151" : "#e5e7eb",  // gray-700 / gray-200
+    muted:  dark ? "#9ca3af" : "#6b7280",  // gray-400 / gray-500
+    text:   dark ? "#f9fafb" : "#111827",  // gray-50  / gray-900
+    surf:   dark ? "#1f2937" : "#ffffff",  // gray-800 / white
+    accent: dark ? "#818cf8" : "#4f46e5",  // indigo-400 / indigo-600
+    fii:    dark ? "#a78bfa" : "#7c3aed",  // violet-400 / violet-600 (FII bars)
+    dii:    dark ? "#fb923c" : "#ea580c",  // orange-400 / orange-600 (DII bars)
+    line:   dark ? "#60a5fa" : "#2563eb",  // blue-400 / blue-600 (Nifty line)
+    pos:    dark ? "#4ade80" : "#16a34a",  // green-400 / green-600
+    neg:    dark ? "#f87171" : "#dc2626",  // red-400 / red-600
+  }), [dark]);
+}
+
 /* ──────────────────────────────────────────────────────────────────────────
  * Insights design language — uses the same Tailwind utilities as the rest
  * of the app (Dashboard, Sectors, Sentiment, etc.) so the section feels

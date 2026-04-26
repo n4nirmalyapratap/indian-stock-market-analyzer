@@ -1,26 +1,9 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
-import { PageHeader, PillTabs, Card, Loading, EmptyState, MenuDropdown, ErrorState } from "../_shared";
+import { PageHeader, PillTabs, Card, Loading, EmptyState, MenuDropdown, ErrorState, useChartPalette } from "../_shared";
 import { LineChart as LCIcon, X } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, Legend, CartesianGrid } from "recharts";
-
-// Detect dark mode reactively so recharts (which uses inline styles, not Tailwind
-// classes) can pick gray-* colors that match the rest of the app in either theme.
-function useIsDark() {
-  const [dark, setDark] = useState(() =>
-    typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
-  );
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const obs = new MutationObserver(() =>
-      setDark(document.documentElement.classList.contains("dark")),
-    );
-    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-    return () => obs.disconnect();
-  }, []);
-  return dark;
-}
 
 type Period = "1m" | "6m" | "1y" | "5y" | "10y";
 type Metric = "pe" | "pb" | "dy";
@@ -79,12 +62,12 @@ export default function MarketValuation() {
 
   const codes = selected.join(",");
 
-  const isDark = useIsDark();
-  const cBorder = isDark ? "#374151" : "#e5e7eb";   // gray-700 / gray-200
-  const cMuted  = isDark ? "#9ca3af" : "#6b7280";   // gray-400 / gray-500
-  const cText   = isDark ? "#f9fafb" : "#111827";   // gray-50  / gray-900
-  const cSurf   = isDark ? "#1f2937" : "#ffffff";   // gray-800 / white
-  const cAccent = isDark ? "#818cf8" : "#4f46e5";   // indigo-400 / indigo-600
+  const palette = useChartPalette();
+  const cBorder = palette.border;
+  const cMuted  = palette.muted;
+  const cText   = palette.text;
+  const cSurf   = palette.surf;
+  const cAccent = palette.accent;
 
   const { data, isLoading, error } = useQuery<ValuationResponse>({
     queryKey: ["insights/index-valuation", codes, period, metric],
