@@ -50,12 +50,31 @@ A full-stack Indian stock market analysis platform with:
 - **Python FastAPI backend** (`/api`) — All API endpoints on port 8090
 
 ### Insights module (added 2026-04)
-A new top-level `/insights` section in the user app replicates the ScanX "Insights" experience.
+A top-level `/insights` section replicates the ScanX "Insights" experience with 12 sub-tabs and a sticky inner sidebar.
 - Top nav: `Insights` entry in `MAIN_NAV` (`src/LayoutShell.tsx`)
 - Routes: `/insights` and `/insights/:tab*` → `src/pages/insights/InsightsLayout.tsx`
 - Tab pages: `src/pages/insights/tabs/` (Heatmap, FiiDii, CompanyFilings, MfHoldings, BulkBlockDeals, Signals, SlbmRental, MtfInsights, FoBan, TopDeliveries, MarketValuation, Ipo)
-- Backend: `app/routes/insights.py` registered in `main.py`. Endpoints: `/api/insights/{heatmap,fo-ban,top-deliveries,index-valuation,fii-dii,mf-holdings,slbm,mtf,ipos}`. Existing `/api/news/deals` and `/api/news/events` are reused for Bulk/Block Deals and Company Filings.
-- Data sources: yfinance for heatmap/index valuation/top deliveries (5 min cache); NSE service attempt for fo-ban; the rest return `{available:false, message}` when feeds aren't reachable from cloud IPs.
+- Backend: `app/routes/insights.py` registered in `main.py`. Endpoints: `/api/insights/{indices,heatmap,company-filings,mf-holdings,signals,index-valuation,market-valuation,fo-ban,top-deliveries,fii-dii,slbm,mtf,ipos}`.
+
+#### Real-data wiring (data sources, network reachability)
+This Replit container can reach **yfinance**, **api.bseindia.com**, and **portal.amfiindia.com** but is BLOCKED from `www.nseindia.com`, `www.moneycontrol.com`, and `www.chittorgarh.com`. Endpoints handle this honestly:
+- **Heatmap** (`/heatmap?index=…&performance=1d|1w|1m|1y`) — yfinance, parallelised across a 16-worker `ThreadPoolExecutor`. 27 curated indices in `INDEX_CONSTITUENTS` (Nifty 50/100/200/500, sectoral, midcap, PSU/Pvt bank, etc.). Server returns `color: {bg, fg}` hex per item — UI renders via inline `style` to bypass Tailwind v4 arbitrary-value scanning.
+- **Company Filings** (`/company-filings?category=…&page=…`) — direct call to `https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w` with `Referer: bseindia.com`. Returns BSE corporate disclosures with PDF links.
+- **MF Holdings** (`/mf-holdings?amc=&category=&search=&limit=`) — fetches `https://portal.amfiindia.com/spages/NAVAll.txt` (follow-redirects from amfiindia.com), parses the semicolon-separated NAV list (~14k schemes) with `_parse_amfi_text`, returns AMC + category facets for UI dropdowns.
+- **Signals** (`/signals?index=…&verdict=all|bullish|bearish|neutral`) — yfinance 6-month history, computes RSI(14) and MA20/MA50 cross with `_compute_signal`. Verdict logic: RSI ≥70 / ≤30 → Bearish/Bullish; price vs MAs → trend confirmation.
+- **Market / Index Valuation** (`/index-valuation`, `/market-valuation`) — yfinance multi-index time series normalised to a 22× PE proxy.
+- **F&O Ban** (`/fo-ban`) — attempts `NseService.fetch_nse(/api/liveMwpl)`; returns `{available:false, message: NSE_BLOCKED_MSG}` when blocked.
+- **FII/DII, SLBM, MTF, IPOs, Top Deliveries** — return `{available:false, message}` with the source restriction explained, since these feeds live behind NSE / Chittorgarh which are blocked from cloud IPs.
+
+#### Caching & resilience
+- In-process TTL cache: 5 min for yfinance (`DEFAULT_TTL`), 6 h for AMFI/BSE EOD (`LONG_TTL`).
+- All heavy yfinance work is parallelised; failures are silently skipped (we never break the response on a single delisted ticker).
+- `app/services/market_cache_service.py` is available for disk-backed EOD caching when needed.
+
+#### Tests
+- `tests/test_insights.py` — 19 unit tests using FastAPI `TestClient` with `DISABLE_AUTH=1` env bypass. Covers bucket palette, heatmap normalisation (mocked yfinance), BSE adapter, AMFI parser, RSI/MA signal math, indices catalogue, and unavailable-feed empty states.
+- Auth bypass is in `app/middleware/clerk_auth.py` — gated on `DISABLE_AUTH=1`. NEVER set this env var in production.
+- Run: `cd artifacts/python-backend && DISABLE_AUTH=1 python3.11 -m pytest tests/test_insights.py -v`
 
 ---
 
