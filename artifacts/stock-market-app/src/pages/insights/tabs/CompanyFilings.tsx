@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
-import { PageHeader, Card, Loading, EmptyState, MenuDropdown } from "../_shared";
+import { PageHeader, Card, Loading, EmptyState, MenuDropdown, ErrorState } from "../_shared";
 import { FileText, ExternalLink } from "lucide-react";
 
 type Category =
@@ -62,7 +62,7 @@ function categoryColor(cat: string) {
   if (c.includes("acquisition")) return "bg-rose-500/15 text-rose-700 dark:text-rose-300";
   if (c.includes("bonus") || c.includes("split")) return "bg-pink-500/15 text-pink-700 dark:text-pink-300";
   if (c.includes("investor")) return "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300";
-  return "bg-muted text-muted-foreground";
+  return "bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400";
 }
 
 export default function CompanyFilings() {
@@ -70,7 +70,7 @@ export default function CompanyFilings() {
   const [companyFilter, setCompanyFilter] = useState("");
   const [search, setSearch] = useState("");
 
-  const { data, isLoading } = useQuery<FilingsResponse>({
+  const { data, isLoading, error } = useQuery<FilingsResponse>({
     queryKey: ["insights/company-filings"],
     queryFn: () => fetchApi(`/insights/company-filings?category=-1&page=1`),
     staleTime: 5 * 60_000,
@@ -123,7 +123,7 @@ export default function CompanyFilings() {
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search company / symbol / purpose…"
-            className="text-xs bg-card border border-card-border text-foreground rounded-lg px-3 py-2 w-64 outline-none focus:border-primary placeholder:text-muted-foreground"
+            className="text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white rounded-lg px-3 py-2 w-64 outline-none focus:border-indigo-600 dark:border-indigo-500 placeholder:text-gray-500 dark:text-gray-400"
           />
         }
       />
@@ -139,8 +139,8 @@ export default function CompanyFilings() {
                 onClick={() => setCat(t.value)}
                 className={`text-xs px-3 py-1.5 rounded-lg border transition whitespace-nowrap font-medium
                   ${active
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-card text-muted-foreground border-card-border hover:bg-accent hover:text-accent-foreground"}`}
+                    ? "bg-indigo-600 dark:bg-indigo-500 text-white border-indigo-600 dark:border-indigo-500"
+                    : "bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-white"}`}
               >
                 {t.label}
               </button>
@@ -152,13 +152,14 @@ export default function CompanyFilings() {
       </div>
 
       {data?.source && (
-        <p className="text-[11px] text-muted-foreground mb-2">
-          Source: <span className="font-semibold text-foreground">{data.source}</span> · Showing {filtered.length} of {items.length} latest filings
+        <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-2">
+          Source: <span className="font-semibold text-gray-900 dark:text-white">{data.source}</span> · Showing {filtered.length} of {items.length} latest filings
         </p>
       )}
 
       {isLoading && <Loading />}
-      {!isLoading && data?.available === false && (
+      {error && !isLoading && <ErrorState message={(error as Error).message} />}
+      {!error && !isLoading && data?.available === false && (
         <EmptyState title="Feed unavailable" message={data.message || "BSE feed temporarily unavailable."}
           icon={<FileText className="w-10 h-10"/>}/>
       )}
@@ -170,7 +171,7 @@ export default function CompanyFilings() {
       {filtered.length > 0 && (
         <Card className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="text-xs uppercase text-muted-foreground bg-muted/40">
+            <thead className="text-xs uppercase text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/40">
               <tr>
                 <th className="px-4 py-3 text-left">Company</th>
                 <th className="px-4 py-3 text-left">Category</th>
@@ -181,22 +182,22 @@ export default function CompanyFilings() {
             </thead>
             <tbody>
               {filtered.slice(0, 200).map((e) => (
-                <tr key={e.id} className="border-t border-card-border hover:bg-accent/30 transition">
+                <tr key={e.id} className="border-t border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition">
                   <td className="px-4 py-2.5">
-                    <div className="font-medium text-foreground">{e.company || "—"}</div>
-                    {e.symbol && <div className="text-[11px] text-muted-foreground mt-0.5">{e.symbol}</div>}
+                    <div className="font-medium text-gray-900 dark:text-white">{e.company || "—"}</div>
+                    {e.symbol && <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">{e.symbol}</div>}
                   </td>
                   <td className="px-4 py-2.5">
                     <span className={`text-[11px] px-2 py-1 rounded-md whitespace-nowrap font-medium ${categoryColor(e.category || "")}`}>
                       {e.category || "Other"}
                     </span>
                   </td>
-                  <td className="px-4 py-2.5 text-muted-foreground max-w-md truncate" title={e.purpose}>{e.purpose || "—"}</td>
-                  <td className="px-4 py-2.5 text-muted-foreground text-xs whitespace-nowrap">{fmtRelative(e.date)}</td>
+                  <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 max-w-md truncate" title={e.purpose}>{e.purpose || "—"}</td>
+                  <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 text-xs whitespace-nowrap">{fmtRelative(e.date)}</td>
                   <td className="px-4 py-2.5 text-right">
                     {e.documentUrl ? (
                       <a href={e.documentUrl} target="_blank" rel="noreferrer"
-                         className="inline-flex items-center gap-1 text-xs text-primary hover:underline font-medium">
+                         className="inline-flex items-center gap-1 text-xs text-indigo-600 dark:text-indigo-400 hover:underline font-medium">
                         View <ExternalLink className="w-3 h-3"/>
                       </a>
                     ) : "—"}

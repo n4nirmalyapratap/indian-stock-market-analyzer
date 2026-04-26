@@ -2,7 +2,6 @@ import { useLocation } from "wouter";
 import {
   LayoutGrid, BarChart3, FileText, PieChart, Briefcase,
   Activity, Repeat, Users, Ban, Truck, LineChart, Rocket,
-  Search,
 } from "lucide-react";
 import HeatmapTab from "./tabs/Heatmap";
 import FiiDiiTab from "./tabs/FiiDii";
@@ -34,6 +33,20 @@ const TABS = [
 
 const DEFAULT_SLUG = "heatmap";
 
+/**
+ * InsightsLayout — uses the SAME visual language as the rest of the app
+ * (Dashboard, Sectors, Sentiment) so it feels integrated:
+ *   surface  : bg-white dark:bg-gray-800
+ *   page bg  : bg-gray-50 dark:bg-gray-950 (provided by LayoutShell <main>)
+ *   borders  : border-gray-100 dark:border-gray-700
+ *   active   : bg-indigo-50 dark:bg-indigo-500/20 + text-indigo-700/300
+ *   muted    : text-gray-500 dark:text-gray-400
+ *
+ * Layout details that prevent horizontal scroll:
+ *   - Outer flex wrapper has `min-w-0` so flex children can shrink.
+ *   - <main> has `flex-1 min-w-0 overflow-x-hidden` so wide tables/charts
+ *     stay clipped to the available width instead of pushing the page.
+ */
 export default function InsightsLayout() {
   const [loc, navigate] = useLocation();
   const rest = loc.replace(/^\/insights\/?/, "").split("/")[0];
@@ -42,16 +55,14 @@ export default function InsightsLayout() {
   const ActiveComponent = active.Component;
 
   return (
-    <div className="flex gap-4 md:gap-6 min-h-[calc(100vh-12rem)]">
-      {/* Inner left sidebar (desktop) — same Card vibe as the rest of the app */}
-      <aside className="hidden md:flex flex-col w-56 lg:w-60 rounded-xl border border-card-border bg-card text-card-foreground shadow-sm flex-shrink-0 sticky top-4 self-start max-h-[calc(100vh-2rem)]">
-        <div className="px-4 py-3 border-b border-card-border flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
-            <Search className="w-4 h-4 text-primary" />
-          </div>
-          <h2 className="font-bold text-foreground text-sm">Insights</h2>
+    <div className="flex gap-4 md:gap-6 min-w-0">
+      {/* Inner left sidebar (desktop) — same surface/spacing as the app's other cards */}
+      <aside className="hidden md:flex flex-col w-56 lg:w-60 rounded-xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm flex-shrink-0 sticky top-4 self-start max-h-[calc(100vh-2rem)]">
+        <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700">
+          <h2 className="font-bold text-gray-900 dark:text-white text-sm">Insights</h2>
+          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">Market intelligence</p>
         </div>
-        <nav className="flex-1 overflow-y-auto py-1.5">
+        <nav className="flex-1 overflow-y-auto py-2">
           {TABS.map(({ slug: s, label, icon: Icon }) => {
             const isActive = s === slug;
             return (
@@ -59,12 +70,12 @@ export default function InsightsLayout() {
                 key={s}
                 type="button"
                 onClick={() => navigate(`/insights/${s}`)}
-                className={`w-full text-left flex items-center gap-2.5 px-3 py-2 mx-1.5 my-0.5 rounded-md text-sm transition cursor-pointer
+                className={`w-full text-left flex items-center gap-2.5 px-3 py-2 mx-2 my-0.5 rounded-lg text-sm transition cursor-pointer
                   ${isActive
-                    ? "bg-primary/10 text-primary font-semibold"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"}`}
+                    ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 font-semibold"
+                    : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50 hover:text-gray-900 dark:hover:text-white"}`}
               >
-                <Icon className={`w-4 h-4 flex-shrink-0 ${isActive ? "text-primary" : ""}`} />
+                <Icon className={`w-4 h-4 flex-shrink-0 ${isActive ? "text-indigo-600 dark:text-indigo-400" : ""}`} />
                 <span className="flex-1 truncate">{label}</span>
               </button>
             );
@@ -72,23 +83,25 @@ export default function InsightsLayout() {
         </nav>
       </aside>
 
-      {/* Mobile tab pills (top of content) */}
-      <div className="md:hidden -mx-4 px-2 py-2 flex gap-1 overflow-x-auto sticky top-0 z-20 bg-background/80 backdrop-blur border-b border-card-border">
+      {/* Mobile horizontal pill scroller */}
+      <div className="md:hidden -mx-4 px-2 py-2 flex gap-1 overflow-x-auto sticky top-0 z-20 bg-gray-50/80 dark:bg-gray-950/80 backdrop-blur border-b border-gray-100 dark:border-gray-800">
         {TABS.map(({ slug: s, label }) => (
           <button
             key={s}
             type="button"
             onClick={() => navigate(`/insights/${s}`)}
             className={`px-3 py-1.5 text-xs whitespace-nowrap rounded-lg flex-shrink-0 transition
-              ${s === slug ? "bg-primary text-primary-foreground" : "text-muted-foreground bg-card border border-card-border hover:bg-accent"}`}
+              ${s === slug
+                ? "bg-indigo-600 text-white dark:bg-indigo-500"
+                : "text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700"}`}
           >
             {label}
           </button>
         ))}
       </div>
 
-      {/* Content area */}
-      <main className="flex-1 min-w-0">
+      {/* Content area — `min-w-0` lets it shrink instead of overflowing */}
+      <main className="flex-1 min-w-0 overflow-x-hidden">
         <ActiveComponent key={slug} />
       </main>
     </div>
