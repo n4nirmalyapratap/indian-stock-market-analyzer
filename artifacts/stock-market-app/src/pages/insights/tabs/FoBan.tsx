@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
-import { PageHeader, Card, Loading, EmptyState, fmtNum } from "../_shared";
-import { Ban, ArrowRight } from "lucide-react";
+import { PageHeader, Card, Loading, FeatureLocked, fmtNum } from "../_shared";
+import { Ban } from "lucide-react";
 
 interface FoBanItem {
   symbol: string;
@@ -20,6 +20,13 @@ interface FoBanResponse {
   items: FoBanItem[];
 }
 
+function statusBadge(s?: string) {
+  if (s === "Banned") return "bg-rose-500/15 text-rose-700 dark:text-rose-300";
+  if (s === "Possible Entrant") return "bg-amber-500/15 text-amber-700 dark:text-amber-300";
+  if (s === "Possible Exit") return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300";
+  return "bg-muted text-muted-foreground";
+}
+
 export default function FoBan() {
   const { data, isLoading } = useQuery<FoBanResponse>({
     queryKey: ["insights/fo-ban"],
@@ -27,70 +34,52 @@ export default function FoBan() {
     staleTime: 5 * 60_000,
   });
 
-  const items = data?.items || [];
-  const top5 = items.slice(0, 5);
-
   return (
     <div>
-      <PageHeader title="F&O Ban - MWPL" info="Stocks approaching or crossing 95% Market Wide Position Limit" />
-      <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">High Option Activity Stocks</h3>
-
-      {top5.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
-          {top5.map(it => (
-            <Card key={it.symbol} className="p-3">
-              <div className="flex items-center gap-1.5 mb-2">
-                <span className="text-sm font-bold text-gray-900 dark:text-white truncate">{it.name || it.symbol}</span>
-              </div>
-              <p className="text-[11px] text-gray-500">Current MWPL %</p>
-              <p className="text-base font-bold text-gray-900 dark:text-white">{fmtNum(it.currentMwplPct)}%</p>
-              <span className="inline-block mt-1 text-[10px] px-1.5 py-0.5 rounded bg-orange-100 dark:bg-orange-500/15 text-orange-600 dark:text-orange-300">
-                {it.status || "Possible Entrant"}
-              </span>
-            </Card>
-          ))}
-        </div>
-      )}
+      <PageHeader title="F&O Ban — MWPL Tracker"
+        info="Market Wide Position Limit usage — entering / exiting the F&O ban list" />
 
       {isLoading && <Loading />}
-      {!isLoading && items.length === 0 && (
-        <EmptyState
-          icon={<Ban className="w-10 h-10" />}
-          title="No F&O ban data"
-          message={data?.message || "Live F&O MWPL list is not currently available from this environment."}
+
+      {!isLoading && data?.available === false && (
+        <FeatureLocked
+          icon={<Ban className="w-6 h-6" />}
+          title="F&O Ban / MWPL data"
+          whatIsThis="When a stock's open interest crosses 95% of its Market Wide Position Limit (MWPL), NSE bans new F&O positions. Tracking 'possible entrants' (≥ 80%) and 'possible exits' lets you front-run the squeeze."
+          sourceName="NSE India"
+          sourceUrl="https://www.nseindia.com/market-data/securities-banned-period"
+          expectedColumns={["Symbol", "LTP", "% Change", "Prev MWPL %", "Current MWPL %", "Status"]}
         />
       )}
 
-      {items.length > 0 && (
+      {!isLoading && data?.available && (data.items?.length || 0) > 0 && (
         <Card className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="text-xs uppercase text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/40">
+            <thead className="text-xs uppercase text-muted-foreground bg-muted/40">
               <tr>
-                <th className="px-4 py-3 text-left">Stock</th>
-                <th className="px-4 py-3 text-left">Action</th>
+                <th className="px-4 py-3 text-left">Symbol</th>
                 <th className="px-4 py-3 text-right">LTP</th>
-                <th className="px-4 py-3 text-right">Change</th>
                 <th className="px-4 py-3 text-right">% Change</th>
-                <th className="px-4 py-3 text-right">Previous MWPL %</th>
+                <th className="px-4 py-3 text-right">Prev MWPL %</th>
                 <th className="px-4 py-3 text-right">Current MWPL %</th>
-                <th className="px-4 py-3 text-center">Status</th>
+                <th className="px-4 py-3 text-left">Status</th>
               </tr>
             </thead>
             <tbody>
-              {items.map(it => (
-                <tr key={it.symbol} className="border-t border-gray-100 dark:border-white/[0.05]">
-                  <td className="px-4 py-2.5 font-medium text-gray-900 dark:text-white">{it.name || it.symbol}</td>
+              {data.items.map(it => (
+                <tr key={it.symbol} className="border-t border-card-border hover:bg-accent/30">
+                  <td className="px-4 py-2.5 font-semibold text-foreground">{it.symbol}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{fmtNum(it.ltp)}</td>
+                  <td className={`px-4 py-2.5 text-right tabular-nums ${(it.changePct ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-500"}`}>
+                    {(it.changePct ?? 0) >= 0 ? "+" : ""}{it.changePct?.toFixed(2)}%
+                  </td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{it.prevMwplPct?.toFixed(1)}%</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums font-semibold">{it.currentMwplPct?.toFixed(1)}%</td>
                   <td className="px-4 py-2.5">
-                    <span className="text-[11px] px-1.5 py-0.5 rounded bg-orange-100 dark:bg-orange-500/15 text-orange-600 dark:text-orange-300">
-                      {it.status || "Possible Entrant"}
+                    <span className={`text-[11px] px-2 py-1 rounded-md font-medium ${statusBadge(it.status)}`}>
+                      {it.status || "—"}
                     </span>
                   </td>
-                  <td className="px-4 py-2.5 text-right">{fmtNum(it.ltp)}</td>
-                  <td className={`px-4 py-2.5 text-right font-semibold ${(it.change ?? 0) >= 0 ? "text-green-600" : "text-red-500"}`}>{fmtNum(it.change)}</td>
-                  <td className={`px-4 py-2.5 text-right font-semibold ${(it.changePct ?? 0) >= 0 ? "text-green-600" : "text-red-500"}`}>{fmtNum(it.changePct)}%</td>
-                  <td className="px-4 py-2.5 text-right">{fmtNum(it.prevMwplPct)}</td>
-                  <td className="px-4 py-2.5 text-right font-semibold">{fmtNum(it.currentMwplPct)}</td>
-                  <td className="px-4 py-2.5 text-center"><ArrowRight className="w-4 h-4 inline text-red-400" /></td>
                 </tr>
               ))}
             </tbody>

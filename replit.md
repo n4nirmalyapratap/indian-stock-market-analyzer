@@ -72,9 +72,17 @@ This Replit container can reach **yfinance**, **api.bseindia.com**, and **portal
 - `app/services/market_cache_service.py` is available for disk-backed EOD caching when needed.
 
 #### Tests
-- `tests/test_insights.py` — 19 unit tests using FastAPI `TestClient` with `DISABLE_AUTH=1` env bypass. Covers bucket palette, heatmap normalisation (mocked yfinance), BSE adapter, AMFI parser, RSI/MA signal math, indices catalogue, and unavailable-feed empty states.
-- Auth bypass is in `app/middleware/clerk_auth.py` — gated on `DISABLE_AUTH=1`. NEVER set this env var in production.
+- `tests/test_insights.py` — 21 unit tests using FastAPI `TestClient` with `DISABLE_AUTH=1` env bypass. Covers bucket palette, heatmap normalisation (mocked yfinance), BSE adapter, AMFI parser, RSI/MA signal math, indices catalogue, and unavailable-feed empty states.
+- Auth bypass is in `app/middleware/clerk_auth.py` — gated on `DISABLE_AUTH=1` AND `PYTEST_CURRENT_TEST` AND `ENV != production` (triple-locked). NEVER set DISABLE_AUTH in production.
 - Run: `cd artifacts/python-backend && DISABLE_AUTH=1 python3.11 -m pytest tests/test_insights.py -v`
+
+#### UI integration (rewrite, 2026-04)
+The Insights tabs use the host app's design tokens (`bg-card`, `bg-popover`, `text-foreground`, `text-muted-foreground`, `border-card-border`, `bg-primary`, etc.) instead of hardcoded `gray-*/white` classes — light and dark mode now match the rest of the app.
+- **`MenuDropdown`** (in `_shared.tsx`) is a portal-based combobox/listbox: `position:fixed`, viewport-clamped (8px margins, flips above when there's no room below), capped trigger width with truncation (so long labels never break the row), full keyboard support (Arrow keys, Home/End, Enter, Esc), ARIA combobox/listbox roles, and an automatic "Clear" row prepended when a placeholder is configured and a value is selected.
+- **`Heatmap`** uses a squarified treemap (Bruls/Huijsen/van Wijk) sized by market cap when `sortBy="marketCap"`; falls back to a uniform grid for other sort modes. Container height adapts to constituent count; ResizeObserver keeps the layout responsive.
+- **`MarketValuation`** lets the user pick up to 6 sectors from a 19-index pool via `+ Add` / `× Remove`. Recharts uses `hsl(var(--*))` tokens so the chart respects the active theme.
+- **`CompanyFilings`** has 9 sub-tabs, a company filter dropdown, colored category badges, and relative timestamps.
+- **`FeatureLocked`** component is used by tabs whose upstream feeds (NSE / Moneycontrol / Chittorgarh) are blocked from this hosting region. Each instance shows what the data is, why it's empty, the columns that will appear once unblocked, and a direct link to the upstream source. No fake/mock data is ever shown.
 
 ---
 
