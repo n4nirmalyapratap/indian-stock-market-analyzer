@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
-import { PageHeader, Card, PillTabs, Loading, EmptyState } from "../_shared";
+import { PageHeader, Card, PillTabs, Loading, EmptyState, MenuDropdown } from "../_shared";
 import { Activity } from "lucide-react";
 
 interface Signal {
@@ -32,10 +32,10 @@ const VERDICT_OPTIONS: { value: Verdict; label: string }[] = [
 
 function verdictBadge(v: string) {
   const cls = v === "Bullish"
-    ? "bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+    ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
     : v === "Bearish"
-    ? "bg-rose-50 dark:bg-rose-500/15 text-rose-700 dark:text-rose-300"
-    : "bg-slate-100 dark:bg-slate-700/40 text-slate-700 dark:text-slate-300";
+    ? "bg-rose-500/15 text-rose-700 dark:text-rose-300"
+    : "bg-muted text-muted-foreground";
   return `text-xs px-2 py-1 rounded-md font-semibold ${cls}`;
 }
 
@@ -63,18 +63,16 @@ export default function Signals() {
     return c;
   }, [data]);
 
+  const indexOptions = (idxList?.indices || [{ code: "NIFTY50", label: "Nifty 50" }])
+    .map(o => ({ value: o.code, label: o.label }));
+
   return (
     <div>
       <PageHeader title="Signals" subtitle="Technical signals (RSI + MA crossover) computed live across the index" />
 
-      <div className="flex flex-wrap items-center gap-3 mb-4">
-        <select value={index} onChange={e => setIndex(e.target.value)}
-          className="text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 outline-none">
-          {(idxList?.indices || [{code: "NIFTY50", label: "Nifty 50"}]).map(o => (
-            <option key={o.code} value={o.code}>{o.label}</option>
-          ))}
-        </select>
-        <PillTabs value={verdict} onChange={setVerdict} options={VERDICT_OPTIONS}/>
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <MenuDropdown label="Index" value={index} onChange={setIndex} options={indexOptions} maxButtonWidth={240}/>
+        <PillTabs value={verdict} onChange={(v) => setVerdict(v as Verdict)} options={VERDICT_OPTIONS}/>
 
         <div className="ml-auto flex gap-2 text-[11px]">
           <span className={verdictBadge("Bullish")}>{counts.Bullish} Bullish</span>
@@ -91,7 +89,7 @@ export default function Signals() {
       {data?.items && data.items.length > 0 && (
         <Card className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="text-xs uppercase text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/40">
+            <thead className="text-xs uppercase text-muted-foreground bg-muted/40">
               <tr>
                 <th className="px-4 py-3 text-left">Stock</th>
                 <th className="px-4 py-3 text-right">LTP</th>
@@ -104,14 +102,14 @@ export default function Signals() {
             </thead>
             <tbody>
               {data.items.map(s => (
-                <tr key={s.symbol} className="border-t border-gray-100 dark:border-white/[0.05]">
-                  <td className="px-4 py-2.5 font-medium text-gray-900 dark:text-white">{s.name}</td>
+                <tr key={s.symbol} className="border-t border-card-border hover:bg-accent/30 transition">
+                  <td className="px-4 py-2.5 font-medium text-foreground">{s.name}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums">{s.ltp.toFixed(2)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums">{s.rsi != null ? s.rsi.toFixed(1) : "—"}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-gray-500 dark:text-gray-400">{s.ma20.toFixed(2)}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-gray-500 dark:text-gray-400">{s.ma50.toFixed(2)}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{s.ma20.toFixed(2)}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{s.ma50.toFixed(2)}</td>
                   <td className="px-4 py-2.5"><span className={verdictBadge(s.verdict)}>{s.verdict}</span></td>
-                  <td className="px-4 py-2.5 text-xs text-gray-500 dark:text-gray-400">
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">
                     {s.reasons.length ? s.reasons.join(" · ") : "—"}
                   </td>
                 </tr>

@@ -1,8 +1,8 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
-import { PageHeader, Card, Loading, EmptyState } from "../_shared";
-import { PieChart, ChevronDown, Check } from "lucide-react";
+import { PageHeader, Card, Loading, EmptyState, MenuDropdown } from "../_shared";
+import { PieChart } from "lucide-react";
 
 interface Scheme {
   schemeCode: string;
@@ -25,49 +25,6 @@ interface MfResponse {
   categories?: string[];
 }
 
-function ComboBox({ label, value, options, onChange, placeholder = "All" }:
-  { label: string; value: string; options: string[]; onChange: (v: string) => void; placeholder?: string }) {
-  const [open, setOpen] = useState(false);
-  const [q, setQ] = useState("");
-  const filtered = useMemo(
-    () => (q ? options.filter(o => o.toLowerCase().includes(q.toLowerCase())) : options).slice(0, 200),
-    [options, q],
-  );
-  return (
-    <div className="relative">
-      <button type="button" onClick={() => setOpen(o => !o)} onBlur={() => setTimeout(() => setOpen(false), 150)}
-        className="inline-flex items-center gap-2 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/80 transition shadow-sm min-w-[180px]">
-        <span className="text-gray-500 dark:text-gray-400">{label}</span>
-        <span className="font-semibold text-indigo-600 dark:text-indigo-400 truncate max-w-[180px]">{value || placeholder}</span>
-        <ChevronDown className={`w-3.5 h-3.5 text-indigo-500 ml-auto transition-transform ${open ? "rotate-180" : ""}`}/>
-      </button>
-      {open && (
-        <div className="absolute z-30 left-0 mt-1.5 min-w-[260px] max-h-[360px] overflow-hidden rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 shadow-2xl">
-          <input autoFocus value={q} onChange={e => setQ(e.target.value)}
-            placeholder="Search…" className="w-full text-sm px-3 py-2 border-b border-gray-100 dark:border-white/[0.06] bg-transparent outline-none" />
-          <div className="max-h-[300px] overflow-y-auto py-1">
-            <button onMouseDown={(e) => { e.preventDefault(); onChange(""); setOpen(false); }}
-              className={`w-full text-left text-sm px-3.5 py-2 flex items-center justify-between
-                ${value === "" ? "bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 font-semibold" : "text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"}`}>
-              {placeholder}
-              {value === "" && <Check className="w-4 h-4 text-indigo-500"/>}
-            </button>
-            {filtered.map(o => (
-              <button key={o} onMouseDown={(e) => { e.preventDefault(); onChange(o); setOpen(false); }}
-                className={`w-full text-left text-sm px-3.5 py-2 flex items-center justify-between
-                  ${o === value ? "bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 font-semibold" : "text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"}`}>
-                <span className="truncate">{o}</span>
-                {o === value && <Check className="w-4 h-4 text-indigo-500 flex-shrink-0"/>}
-              </button>
-            ))}
-            {filtered.length === 0 && <div className="px-3 py-3 text-xs text-gray-500 dark:text-gray-400">No matches</div>}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function MfHoldings() {
   const [amc, setAmc] = useState("");
   const [category, setCategory] = useState("");
@@ -85,26 +42,31 @@ export default function MfHoldings() {
     staleTime: 30 * 60_000,
   });
 
+  const amcOptions = (data?.amcs || []).map(a => ({ value: a, label: a }));
+  const catOptions = (data?.categories || []).map(c => ({ value: c, label: c }));
+
   return (
     <div>
       <PageHeader
         title="Mutual Fund — Schemes & NAVs"
-        info="Live AMFI scheme list with daily Net Asset Values (all AMCs, all categories)"
+        info="Live AMFI scheme list with daily Net Asset Values"
         right={
           data?.available && (
-            <span className="text-[11px] text-gray-500 dark:text-gray-400">
-              Source: <span className="font-semibold">{data.source}</span> · {data.matched?.toLocaleString()} of {data.totalSchemes?.toLocaleString()} schemes
+            <span className="text-[11px] text-muted-foreground">
+              <span className="font-semibold text-foreground">{data.matched?.toLocaleString()}</span> of <span className="font-semibold text-foreground">{data.totalSchemes?.toLocaleString()}</span> schemes
             </span>
           )
         }
       />
 
-      <div className="flex flex-wrap items-center gap-2.5 mb-4">
-        <ComboBox label="AMC :" value={amc} onChange={setAmc} options={data?.amcs || []} placeholder="All AMCs" />
-        <ComboBox label="Category :" value={category} onChange={setCategory} options={data?.categories || []} placeholder="All categories"/>
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <MenuDropdown label="AMC" value={amc} onChange={setAmc} options={amcOptions}
+          placeholder="All AMCs" minButtonWidth={180} maxButtonWidth={260} />
+        <MenuDropdown label="Category" value={category} onChange={setCategory} options={catOptions}
+          placeholder="All categories" minButtonWidth={180} maxButtonWidth={260} />
         <input value={search} onChange={e => setSearch(e.target.value)}
           placeholder="Search scheme name…"
-          className="text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 w-72 outline-none focus:border-indigo-400 dark:focus:border-indigo-500" />
+          className="text-xs bg-card border border-card-border text-foreground rounded-lg px-3 py-2 w-72 outline-none focus:border-primary placeholder:text-muted-foreground" />
       </div>
 
       {isLoading && <Loading label="Fetching AMFI NAV feed…" />}
@@ -120,7 +82,7 @@ export default function MfHoldings() {
       {data?.items && data.items.length > 0 && (
         <Card className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="text-xs uppercase text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/40">
+            <thead className="text-xs uppercase text-muted-foreground bg-muted/40">
               <tr>
                 <th className="px-4 py-3 text-left">Scheme</th>
                 <th className="px-4 py-3 text-left">AMC</th>
@@ -131,14 +93,14 @@ export default function MfHoldings() {
             </thead>
             <tbody>
               {data.items.map(s => (
-                <tr key={s.schemeCode} className="border-t border-gray-100 dark:border-white/[0.05]">
-                  <td className="px-4 py-2.5 font-medium text-gray-900 dark:text-white max-w-md truncate" title={s.schemeName}>{s.schemeName}</td>
-                  <td className="px-4 py-2.5 text-gray-600 dark:text-gray-300 text-xs">{s.amc}</td>
-                  <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 text-xs">{s.category}</td>
-                  <td className="px-4 py-2.5 text-right font-semibold text-gray-900 dark:text-white tabular-nums">
+                <tr key={s.schemeCode} className="border-t border-card-border hover:bg-accent/30 transition">
+                  <td className="px-4 py-2.5 font-medium text-foreground max-w-md truncate" title={s.schemeName}>{s.schemeName}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground text-xs max-w-[200px] truncate" title={s.amc}>{s.amc}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground text-xs max-w-[180px] truncate" title={s.category}>{s.category}</td>
+                  <td className="px-4 py-2.5 text-right font-semibold text-foreground tabular-nums">
                     {s.nav != null ? s.nav.toFixed(4) : "—"}
                   </td>
-                  <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 text-xs">{s.date}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground text-xs whitespace-nowrap">{s.date}</td>
                 </tr>
               ))}
             </tbody>
