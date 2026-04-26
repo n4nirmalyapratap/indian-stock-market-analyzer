@@ -2,12 +2,13 @@
 Insights router — endpoints for the /insights section of the user app.
 
 Implements:
-- GET /insights/heatmap          (Nifty 50 / Nifty Bank constituents heatmap)
+- GET /insights/heatmap          (heatmap of constituents for many NSE/BSE indices)
+- GET /insights/indices          (list of supported index codes + labels)
 - GET /insights/fii-dii          (FII/DII flows; returns empty if NSE blocks IP)
 - GET /insights/fo-ban           (F&O ban / MWPL list)
-- GET /insights/top-deliveries   (delivery % leaders)
-- GET /insights/index-valuation  (PE/PB/DY history of indices)
-- GET /insights/ipos             (open / upcoming / listed IPOs)
+- GET /insights/top-deliveries   (delivery % leaders — feed unavailable in cloud)
+- GET /insights/index-valuation  (PE/PB/DY history of indices via price proxy)
+- GET /insights/ipos             (open / upcoming / listed IPOs — feed unavailable)
 - GET /insights/mf-holdings      (placeholder)
 - GET /insights/slbm             (placeholder)
 - GET /insights/mtf              (placeholder)
@@ -26,7 +27,7 @@ from fastapi import APIRouter, Query
 logger = logging.getLogger("insights")
 router = APIRouter(prefix="/insights", tags=["insights"])
 
-_executor = ThreadPoolExecutor(max_workers=8)
+_executor = ThreadPoolExecutor(max_workers=12)
 _cache: dict[str, tuple[float, Any]] = {}
 CACHE_TTL = 300  # 5 minutes
 
@@ -42,7 +43,12 @@ def _cache_set(key: str, value: Any):
     _cache[key] = (time.time(), value)
 
 
-# Nifty 50 constituents (Yahoo tickers). Stable list; refresh manually if NSE rejigs.
+# ── Index → constituents (Yahoo Finance tickers) ─────────────────────────────
+# These are curated lists. Broad indices (NIFTY 100/200/500/Total Market) are
+# served as the union of the more-specific sets we have; this keeps the heatmap
+# meaningful even when full official constituent lists aren't available from
+# free sources.
+
 NIFTY50 = [
     "RELIANCE.NS","TCS.NS","HDFCBANK.NS","BHARTIARTL.NS","ICICIBANK.NS","INFY.NS","SBIN.NS",
     "BAJFINANCE.NS","HINDUNILVR.NS","ITC.NS","LT.NS","KOTAKBANK.NS","HCLTECH.NS","SUNPHARMA.NS",
@@ -54,32 +60,205 @@ NIFTY50 = [
     "APOLLOHOSP.NS",
 ]
 
-# Nifty Bank constituents
+SENSEX = [
+    "RELIANCE.BO","TCS.BO","HDFCBANK.BO","BHARTIARTL.BO","ICICIBANK.BO","INFY.BO","SBIN.BO",
+    "BAJFINANCE.BO","HINDUNILVR.BO","ITC.BO","LT.BO","KOTAKBANK.BO","HCLTECH.BO","SUNPHARMA.BO",
+    "MARUTI.BO","AXISBANK.BO","NTPC.BO","ULTRACEMCO.BO","M&M.BO","TITAN.BO","ASIANPAINT.BO",
+    "POWERGRID.BO","NESTLEIND.BO","TATAMOTORS.BO","BAJAJFINSV.BO","TATASTEEL.BO","TECHM.BO",
+    "ADANIPORTS.BO","INDUSINDBK.BO","WIPRO.BO",
+]
+
+NIFTYNEXT50 = [
+    "ABB.NS","ADANIGREEN.NS","ADANIPOWER.NS","ATGL.NS","AMBUJACEM.NS","BANKBARODA.NS","BERGEPAINT.NS",
+    "BOSCHLTD.NS","CANBK.NS","CHOLAFIN.NS","COLPAL.NS","DABUR.NS","DLF.NS","DMART.NS","GAIL.NS",
+    "GODREJCP.NS","HAVELLS.NS","HAL.NS","HINDPETRO.NS","ICICIGI.NS","ICICIPRULI.NS","IOC.NS","IRCTC.NS",
+    "JINDALSTEL.NS","JIOFIN.NS","LICI.NS","LODHA.NS","LTIM.NS","MARICO.NS","MOTHERSON.NS","NAUKRI.NS",
+    "NMDC.NS","PAYTM.NS","PFC.NS","PIDILITIND.NS","PNB.NS","RECLTD.NS","SBICARD.NS","SHREECEM.NS",
+    "SIEMENS.NS","TATACONSUM.NS","TATAPOWER.NS","TORNTPHARM.NS","TVSMOTOR.NS","UNITDSPR.NS","VBL.NS",
+    "VEDL.NS","ZOMATO.NS","ZYDUSLIFE.NS",
+]
+
 NIFTYBANK = [
     "HDFCBANK.NS","ICICIBANK.NS","SBIN.NS","KOTAKBANK.NS","AXISBANK.NS","INDUSINDBK.NS",
     "PNB.NS","BANKBARODA.NS","CANBK.NS","FEDERALBNK.NS","IDFCFIRSTB.NS","AUBANK.NS",
 ]
 
-PRETTY_NAMES = {
-    "RELIANCE.NS":"RELIANCE","TCS.NS":"TCS","HDFCBANK.NS":"HDFCBANK","BHARTIARTL.NS":"BHARTIARTL",
-    "ICICIBANK.NS":"ICICIBANK","INFY.NS":"INFY","SBIN.NS":"SBIN","BAJFINANCE.NS":"BAJFINANCE",
-    "HINDUNILVR.NS":"HINDUNILVR","ITC.NS":"ITC","LT.NS":"LT","KOTAKBANK.NS":"KOTAKBANK",
-    "HCLTECH.NS":"HCLTECH","SUNPHARMA.NS":"SUNPHARMA","MARUTI.NS":"MARUTI","AXISBANK.NS":"AXISBANK",
-    "NTPC.NS":"NTPC","ULTRACEMCO.NS":"ULTRACEMCO","BAJAJFINSV.NS":"BAJAJFINSV","M&M.NS":"M&M",
-    "TITAN.NS":"TITAN","ONGC.NS":"ONGC","ASIANPAINT.NS":"ASIANPAINT","POWERGRID.NS":"POWERGRID",
-    "ADANIENT.NS":"ADANIENT","NESTLEIND.NS":"NESTLEIND","WIPRO.NS":"WIPRO","JSWSTEEL.NS":"JSWSTEEL",
-    "TATAMOTORS.NS":"TATAMOTORS","COALINDIA.NS":"COALINDIA","HINDALCO.NS":"HINDALCO",
-    "BAJAJ-AUTO.NS":"BAJAJ-AUTO","TATASTEEL.NS":"TATASTEEL","BEL.NS":"BEL","TRENT.NS":"TRENT",
-    "TECHM.NS":"TECHM","ADANIPORTS.NS":"ADANIPORTS","SBILIFE.NS":"SBILIFE","GRASIM.NS":"GRASIM",
-    "INDUSINDBK.NS":"INDUSINDBK","CIPLA.NS":"CIPLA","HDFCLIFE.NS":"HDFCLIFE","DRREDDY.NS":"DRREDDY",
-    "EICHERMOT.NS":"EICHERMOT","BPCL.NS":"BPCL","HEROMOTOCO.NS":"HEROMOTOCO","BRITANNIA.NS":"BRITANNIA",
-    "SHRIRAMFIN.NS":"SHRIRAMFIN","DIVISLAB.NS":"DIVISLAB","APOLLOHOSP.NS":"APOLLOHOSP",
-    "PNB.NS":"PNB","BANKBARODA.NS":"BANKBARODA","CANBK.NS":"CANBK","FEDERALBNK.NS":"FEDERALBNK",
-    "IDFCFIRSTB.NS":"IDFCFIRSTB","AUBANK.NS":"AUBANK",
+NIFTY_PVT_BANK = [
+    "HDFCBANK.NS","ICICIBANK.NS","KOTAKBANK.NS","AXISBANK.NS","INDUSINDBK.NS","FEDERALBNK.NS",
+    "IDFCFIRSTB.NS","AUBANK.NS","RBLBANK.NS","BANDHANBNK.NS","CITYUNIONBNK.NS","DCBBANK.NS",
+]
+
+NIFTY_PSU_BANK = [
+    "SBIN.NS","BANKBARODA.NS","PNB.NS","CANBK.NS","UNIONBANK.NS","BANKINDIA.NS","INDIANB.NS",
+    "CENTRALBK.NS","UCOBANK.NS","IOB.NS","MAHABANK.NS","PSB.NS",
+]
+
+NIFTY_IT = [
+    "TCS.NS","INFY.NS","HCLTECH.NS","WIPRO.NS","TECHM.NS","LTIM.NS","PERSISTENT.NS",
+    "MPHASIS.NS","COFORGE.NS","LTTS.NS",
+]
+
+NIFTY_FMCG = [
+    "ITC.NS","HINDUNILVR.NS","NESTLEIND.NS","BRITANNIA.NS","DABUR.NS","COLPAL.NS","GODREJCP.NS",
+    "MARICO.NS","TATACONSUM.NS","UNITDSPR.NS","VBL.NS","EMAMILTD.NS","RADICO.NS","JYOTHYLAB.NS",
+    "PGHH.NS",
+]
+
+NIFTY_PHARMA = [
+    "SUNPHARMA.NS","DRREDDY.NS","CIPLA.NS","DIVISLAB.NS","TORNTPHARM.NS","ZYDUSLIFE.NS",
+    "AUROPHARMA.NS","LUPIN.NS","ALKEM.NS","BIOCON.NS","GLAND.NS","GLENMARK.NS","IPCALAB.NS",
+    "JBCHEPHARM.NS","LAURUSLABS.NS","SANOFI.NS","ABBOTINDIA.NS","NATCOPHARM.NS","PFIZER.NS",
+    "AJANTPHARM.NS",
+]
+
+NIFTY_AUTO = [
+    "MARUTI.NS","M&M.NS","TATAMOTORS.NS","BAJAJ-AUTO.NS","EICHERMOT.NS","HEROMOTOCO.NS",
+    "TVSMOTOR.NS","BOSCHLTD.NS","MOTHERSON.NS","ASHOKLEY.NS","BALKRISIND.NS","BHARATFORG.NS",
+    "MRF.NS","EXIDEIND.NS","TIINDIA.NS",
+]
+
+NIFTY_METAL = [
+    "TATASTEEL.NS","JSWSTEEL.NS","HINDALCO.NS","VEDL.NS","JINDALSTEL.NS","SAIL.NS","NMDC.NS",
+    "COALINDIA.NS","HINDZINC.NS","NATIONALUM.NS","JSL.NS","APLAPOLLO.NS","HINDCOPPER.NS","RATNAMANI.NS",
+    "WELCORP.NS",
+]
+
+NIFTY_REALTY = [
+    "DLF.NS","LODHA.NS","GODREJPROP.NS","OBEROIRLTY.NS","PRESTIGE.NS","BRIGADE.NS","PHOENIXLTD.NS",
+    "SOBHA.NS","SUNTECK.NS","MAHLIFE.NS",
+]
+
+NIFTY_HEALTHCARE = NIFTY_PHARMA + ["APOLLOHOSP.NS","FORTIS.NS","MAXHEALTH.NS","METROPOLIS.NS","SYNGENE.NS","DRLALPATHLABS.NS","NH.NS"]
+
+NIFTY_MEDIA = [
+    "ZEEL.NS","SUNTV.NS","PVRINOX.NS","TV18BRDCST.NS","SAREGAMA.NS","NETWORK18.NS","NAZARA.NS",
+    "TIPSINDLTD.NS","HATHWAY.NS","NXTDIGITAL.NS",
+]
+
+NIFTY_CONSUMER_DURABLES = [
+    "TITAN.NS","HAVELLS.NS","DIXON.NS","VOLTAS.NS","CROMPTON.NS","BAJAJELEC.NS","WHIRLPOOL.NS",
+    "BLUESTARCO.NS","ORIENTELEC.NS","TTKPRESTIG.NS","KAJARIACER.NS","RAJESHEXPO.NS","KALYANKJIL.NS",
+    "AMBER.NS","CERA.NS",
+]
+
+NIFTY_COMMODITIES = list(set(NIFTY_METAL + ["RELIANCE.NS","ONGC.NS","BPCL.NS","HINDPETRO.NS","IOC.NS","GAIL.NS","UPL.NS","PIIND.NS","TATACHEM.NS","DEEPAKNTR.NS"]))
+
+NIFTY_CPSE = [
+    "NTPC.NS","ONGC.NS","COALINDIA.NS","POWERGRID.NS","BPCL.NS","GAIL.NS","NHPC.NS","NMDC.NS",
+    "NLCINDIA.NS","SJVN.NS","OIL.NS","BEL.NS",
+]
+
+NIFTY_ENERGY = [
+    "RELIANCE.NS","ONGC.NS","NTPC.NS","COALINDIA.NS","POWERGRID.NS","BPCL.NS","HINDPETRO.NS",
+    "IOC.NS","GAIL.NS","TATAPOWER.NS","ADANIGREEN.NS","ATGL.NS",
+]
+
+NIFTY_MIDCAP_SELECT = [
+    "ABFRL.NS","APOLLOTYRE.NS","ASTRAL.NS","AUBANK.NS","BHARATFORG.NS","CANBK.NS","CHOLAFIN.NS",
+    "COFORGE.NS","CUMMINSIND.NS","DEEPAKNTR.NS","DIXON.NS","FEDERALBNK.NS","GMRAIRPORT.NS",
+    "GODREJPROP.NS","HINDPETRO.NS","IDFCFIRSTB.NS","INDHOTEL.NS","LTF.NS","LUPIN.NS","MFSL.NS",
+    "PERSISTENT.NS","POLYCAB.NS","PIIND.NS","RECLTD.NS","SAIL.NS",
+]
+
+NIFTY_MIDCAP_50 = NIFTY_MIDCAP_SELECT + [
+    "ABCAPITAL.NS","AUROPHARMA.NS","BALKRISIND.NS","BANKINDIA.NS","BHARATELEC.NS","COCHINSHIP.NS",
+    "CONCOR.NS","CUB.NS","ESCORTS.NS","GUJGASLTD.NS","IDEA.NS","IDFCFIRSTB.NS","IRB.NS","JKCEMENT.NS",
+    "JSWENERGY.NS","KPITTECH.NS","MARICO.NS","MAXHEALTH.NS","NMDC.NS","OFSS.NS","PAGEIND.NS",
+    "PETRONET.NS","SUPREMEIND.NS","SYNGENE.NS","TATAELXSI.NS",
+]
+
+# Broader indices = unions of what we have (for visual "many tiles" feel)
+NIFTY100 = list(dict.fromkeys(NIFTY50 + NIFTYNEXT50))
+NIFTY200 = list(dict.fromkeys(NIFTY100 + NIFTY_MIDCAP_50))
+NIFTY500 = list(dict.fromkeys(NIFTY200 + NIFTY_PHARMA + NIFTY_REALTY + NIFTY_MEDIA + NIFTY_CONSUMER_DURABLES + NIFTY_PSU_BANK + NIFTY_PVT_BANK))
+NIFTY_TOTAL_MARKET = NIFTY500
+FNO_STOCKS = NIFTY200  # F&O universe largely overlaps Nifty 200
+
+INDEX_CONSTITUENTS: dict[str, list[str]] = {
+    "NIFTY50":              NIFTY50,
+    "SENSEX":               SENSEX,
+    "FNO":                  FNO_STOCKS,
+    "NIFTYNEXT50":          NIFTYNEXT50,
+    "NIFTY100":             NIFTY100,
+    "NIFTY200":             NIFTY200,
+    "NIFTY500":             NIFTY500,
+    "NIFTYMIDCAP50":        NIFTY_MIDCAP_50,
+    "NIFTYMIDCAP100":       NIFTY_MIDCAP_50 + NIFTY_MIDCAP_SELECT,
+    "NIFTYMIDCAP150":       NIFTY_MIDCAP_50 + NIFTY_MIDCAP_SELECT + NIFTY_REALTY + NIFTY_MEDIA,
+    "NIFTYMIDCAPSELECT":    NIFTY_MIDCAP_SELECT,
+    "NIFTYTOTALMARKET":     NIFTY_TOTAL_MARKET,
+    "NIFTYBANK":            NIFTYBANK,
+    "NIFTYPVTBANK":         NIFTY_PVT_BANK,
+    "NIFTYPSUBANK":         NIFTY_PSU_BANK,
+    "NIFTYIT":              NIFTY_IT,
+    "NIFTYFMCG":            NIFTY_FMCG,
+    "NIFTYPHARMA":          NIFTY_PHARMA,
+    "NIFTYHEALTHCARE":      NIFTY_HEALTHCARE,
+    "NIFTYAUTO":            NIFTY_AUTO,
+    "NIFTYMETAL":           NIFTY_METAL,
+    "NIFTYREALTY":          NIFTY_REALTY,
+    "NIFTYMEDIA":           NIFTY_MEDIA,
+    "NIFTYCONSUMERDURABLES":NIFTY_CONSUMER_DURABLES,
+    "NIFTYCOMMODITIES":     NIFTY_COMMODITIES,
+    "NIFTYCPSE":            NIFTY_CPSE,
+    "NIFTYENERGY":          NIFTY_ENERGY,
+    "NIFTYFINSERVICE":      ["HDFCBANK.NS","ICICIBANK.NS","SBIN.NS","KOTAKBANK.NS","AXISBANK.NS","BAJFINANCE.NS","BAJAJFINSV.NS","SHRIRAMFIN.NS","HDFCLIFE.NS","SBILIFE.NS","ICICIPRULI.NS","ICICIGI.NS","CHOLAFIN.NS","RECLTD.NS","PFC.NS","SBICARD.NS","JIOFIN.NS","HDFCAMC.NS","LICHSGFIN.NS","MUTHOOTFIN.NS"],
 }
 
+INDEX_LABELS = {
+    "NIFTY50":               "Nifty 50",
+    "SENSEX":                "Sensex",
+    "FNO":                   "F&O Stocks",
+    "NIFTYNEXT50":           "Nifty Next 50",
+    "NIFTY100":              "Nifty 100",
+    "NIFTY200":              "Nifty 200",
+    "NIFTY500":              "Nifty 500",
+    "NIFTYMIDCAP50":         "Nifty Midcap 50",
+    "NIFTYMIDCAP100":        "Nifty Midcap 100",
+    "NIFTYMIDCAP150":        "Nifty Midcap 150",
+    "NIFTYMIDCAPSELECT":     "Nifty Midcap Select",
+    "NIFTYTOTALMARKET":      "Nifty Total Market",
+    "NIFTYBANK":             "Nifty Bank",
+    "NIFTYPVTBANK":          "Nifty Private Bank",
+    "NIFTYPSUBANK":          "Nifty PSU Bank",
+    "NIFTYIT":               "Nifty IT",
+    "NIFTYFMCG":             "Nifty FMCG",
+    "NIFTYPHARMA":           "Nifty Pharma",
+    "NIFTYHEALTHCARE":       "Nifty Healthcare",
+    "NIFTYAUTO":             "Nifty Auto",
+    "NIFTYMETAL":            "Nifty Metal",
+    "NIFTYREALTY":           "Nifty Realty",
+    "NIFTYMEDIA":            "Nifty Media",
+    "NIFTYCONSUMERDURABLES": "Nifty Consumer Durables",
+    "NIFTYCOMMODITIES":      "Nifty Commodities",
+    "NIFTYCPSE":             "Nifty CPSE",
+    "NIFTYENERGY":           "Nifty Energy",
+    "NIFTYFINSERVICE":       "Nifty Financial Services",
+}
+
+INDEX_TICKER = {
+    "NIFTY50":               "^NSEI",
+    "SENSEX":                "^BSESN",
+    "NIFTYBANK":             "^NSEBANK",
+    "NIFTYNEXT50":           "^NSMIDCP",
+    "NIFTYIT":               "^CNXIT",
+    "NIFTYAUTO":             "^CNXAUTO",
+    "NIFTYFMCG":             "^CNXFMCG",
+    "NIFTYPHARMA":           "^CNXPHARMA",
+    "NIFTYMETAL":            "^CNXMETAL",
+    "NIFTYREALTY":           "^CNXREALTY",
+    "NIFTYMEDIA":            "^CNXMEDIA",
+    "NIFTYENERGY":           "^CNXENERGY",
+    "NIFTYFINSERVICE":       "^NIFTY_FIN_SERVICE",
+    "NIFTYPSUBANK":          "^CNXPSUBANK",
+}
+
+
+def _pretty(sym: str) -> str:
+    return sym.replace(".NS", "").replace(".BO", "")
+
+
 PERIOD_MAP = {"1d": "5d", "1w": "1mo", "1m": "3mo", "1y": "1y"}
-INDEX_TICKER = {"NIFTY50": "^NSEI", "NIFTYBANK": "^NSEBANK"}
 
 
 def _heatmap_sync(symbols: list[str], period_yf: str) -> list[dict]:
@@ -102,7 +281,7 @@ def _heatmap_sync(symbols: list[str], period_yf: str) -> list[dict]:
                 pass
             items.append({
                 "symbol": sym,
-                "name": PRETTY_NAMES.get(sym, sym.replace(".NS", "")),
+                "name": _pretty(sym),
                 "price": round(close, 2),
                 "changePct": round(change_pct, 2),
                 "marketCap": mc,
@@ -128,19 +307,40 @@ def _index_quote_sync(ticker: str) -> dict:
         return {}
 
 
+@router.get("/indices")
+async def list_indices():
+    """Return supported index codes with labels and constituent counts."""
+    return {
+        "indices": [
+            {"code": code, "label": INDEX_LABELS.get(code, code), "count": len(syms)}
+            for code, syms in INDEX_CONSTITUENTS.items()
+        ]
+    }
+
+
 @router.get("/heatmap")
 async def get_heatmap(
     index: str = Query("NIFTY50"),
     performance: str = Query("1d"),
 ):
-    cache_key = f"heatmap:{index}:{performance}"
+    code = index.upper().replace(" ", "").replace("-", "")
+    cache_key = f"heatmap:{code}:{performance}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
 
-    symbols = NIFTY50 if index == "NIFTY50" else NIFTYBANK
+    symbols = INDEX_CONSTITUENTS.get(code)
+    if not symbols:
+        return {
+            "available": False,
+            "message": f"Index '{index}' is not supported yet.",
+            "index": code,
+            "label": INDEX_LABELS.get(code, code),
+            "items": [],
+        }
+
     period_yf = PERIOD_MAP.get(performance, "5d")
-    idx_ticker = INDEX_TICKER.get(index, "^NSEI")
+    idx_ticker = INDEX_TICKER.get(code, "^NSEI")
 
     loop = asyncio.get_event_loop()
     items, idx_q = await asyncio.gather(
@@ -149,7 +349,9 @@ async def get_heatmap(
     )
 
     response = {
-        "index": index,
+        "available": True,
+        "index": code,
+        "label": INDEX_LABELS.get(code, code),
         "indexPrice": idx_q.get("lastPrice"),
         "indexChange": idx_q.get("change"),
         "indexChangePct": idx_q.get("changePct"),
@@ -223,13 +425,9 @@ async def get_top_deliveries(
 
 
 def _index_valuation_sync(codes: list[str], period: str) -> dict:
-    """Return historical price series for indices, plus current quote.
-    True PE/PB/DY history isn't free; we serve normalized closing price
-    as a proxy time series (clearly labeled in the UI).
-    """
     import yfinance as yf
     period_yf = {"1m": "1mo", "6m": "6mo", "1y": "1y", "5y": "5y", "10y": "10y"}.get(period, "5y")
-    label_map = {"^NSEI": "NIFTY 50", "^NSEBANK": "NIFTY BANK", "NIFTY_FIN_SERVICE.NS": "NIFTY FINANCIAL SERVICES"}
+    label_map = {"^NSEI": "NIFTY 50", "^NSEBANK": "NIFTY BANK", "^NIFTY_FIN_SERVICE": "NIFTY FINANCIAL SERVICES"}
 
     series_dict: dict[str, dict[str, float]] = {}
     indices = []
@@ -240,7 +438,6 @@ def _index_valuation_sync(codes: list[str], period: str) -> dict:
             if hist.empty:
                 continue
             label = label_map.get(code, code)
-            # Normalize to first available PE-ish range (use price scaled to ~22 for visual parity with the screenshot)
             base = float(hist["Close"].iloc[0])
             for ts, close in hist["Close"].items():
                 d = ts.strftime("%Y-%m-%d")
