@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
-import { PageHeader, Card, PillTabs, Loading, EmptyState, MenuDropdown } from "../_shared";
+import { PageHeader, Card, PillTabs, Loading, EmptyState, MenuDropdown, ErrorState } from "../_shared";
 import { Activity } from "lucide-react";
 
 interface Signal {
@@ -35,7 +35,7 @@ function verdictBadge(v: string) {
     ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
     : v === "Bearish"
     ? "bg-rose-500/15 text-rose-700 dark:text-rose-300"
-    : "bg-muted text-muted-foreground";
+    : "bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400";
   return `text-xs px-2 py-1 rounded-md font-semibold ${cls}`;
 }
 
@@ -49,7 +49,7 @@ export default function Signals() {
     staleTime: 60 * 60_000,
   });
 
-  const { data, isLoading } = useQuery<SignalsResponse>({
+  const { data, isLoading, error } = useQuery<SignalsResponse>({
     queryKey: ["insights/signals", index, verdict],
     queryFn: () => fetchApi(`/insights/signals?index=${index}&verdict=${verdict}`),
     staleTime: 5 * 60_000,
@@ -82,14 +82,15 @@ export default function Signals() {
       </div>
 
       {isLoading && <Loading label="Computing signals…" />}
-      {!isLoading && (data?.items || []).length === 0 && (
+      {error && !isLoading && <ErrorState message={(error as Error).message} />}
+      {!isLoading && !error && (data?.items || []).length === 0 && (
         <EmptyState title="No signals" message="No matching signals for this filter." icon={<Activity className="w-10 h-10"/>}/>
       )}
 
       {data?.items && data.items.length > 0 && (
         <Card className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="text-xs uppercase text-muted-foreground bg-muted/40">
+            <thead className="text-xs uppercase text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/40">
               <tr>
                 <th className="px-4 py-3 text-left">Stock</th>
                 <th className="px-4 py-3 text-right">LTP</th>
@@ -102,14 +103,14 @@ export default function Signals() {
             </thead>
             <tbody>
               {data.items.map(s => (
-                <tr key={s.symbol} className="border-t border-card-border hover:bg-accent/30 transition">
-                  <td className="px-4 py-2.5 font-medium text-foreground">{s.name}</td>
+                <tr key={s.symbol} className="border-t border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition">
+                  <td className="px-4 py-2.5 font-medium text-gray-900 dark:text-white">{s.name}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums">{s.ltp.toFixed(2)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums">{s.rsi != null ? s.rsi.toFixed(1) : "—"}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{s.ma20.toFixed(2)}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{s.ma50.toFixed(2)}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-gray-500 dark:text-gray-400">{s.ma20.toFixed(2)}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-gray-500 dark:text-gray-400">{s.ma50.toFixed(2)}</td>
                   <td className="px-4 py-2.5"><span className={verdictBadge(s.verdict)}>{s.verdict}</span></td>
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                  <td className="px-4 py-2.5 text-xs text-gray-500 dark:text-gray-400">
                     {s.reasons.length ? s.reasons.join(" · ") : "—"}
                   </td>
                 </tr>
