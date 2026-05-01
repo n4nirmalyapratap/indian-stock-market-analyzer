@@ -1,8 +1,10 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { fetchApi } from "@/lib/api";
-import { PageHeader, Loading, ErrorState, EmptyState, MenuDropdown, Card } from "../_shared";
-import { LayoutGrid } from "lucide-react";
+import { Loading, ErrorState, EmptyState, MenuDropdown } from "../_shared";
+import { LayoutGrid, Zap, ArrowLeft } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 
 type Performance = "1d" | "1w" | "1m" | "1y";
 type SortBy = "marketCap" | "name" | "change";
@@ -13,7 +15,7 @@ interface HeatmapItem {
   price: number;
   changePct: number;
   marketCap: number;
-  color?: { bg: string; fg: string };
+  color?: { bg: string; border: string; text: string; glow: string };
 }
 
 interface HeatmapResponse {
@@ -29,135 +31,92 @@ interface HeatmapResponse {
 
 interface IndexInfo { code: string; label: string; count: number; }
 
-function bucket(p: number | null | undefined): { bg: string; fg: string } {
-  if (p == null || isNaN(p)) return { bg: "#94a3b8", fg: "#0f172a" };
-  if (p <= -3)    return { bg: "#7f1d1d", fg: "#ffffff" };
-  if (p <= -2)    return { bg: "#b91c1c", fg: "#ffffff" };
-  if (p <= -1)    return { bg: "#dc2626", fg: "#ffffff" };
-  if (p < -0.001) return { bg: "#ef4444", fg: "#ffffff" };
-  if (p <  0.001) return { bg: "#64748b", fg: "#ffffff" };
-  if (p <  1)     return { bg: "#16a34a", fg: "#ffffff" };
-  if (p <  2)     return { bg: "#15803d", fg: "#ffffff" };
-  if (p <  3)     return { bg: "#166534", fg: "#ffffff" };
-  return            { bg: "#14532d", fg: "#ffffff" };
+/** High-end color palette for the heatmap */
+function bucket(p: number | null | undefined): { bg: string; border: string; text: string; glow: string } {
+  if (p == null || isNaN(p)) return { bg: "bg-slate-400", border: "border-slate-500", text: "text-slate-950", glow: "shadow-slate-500/20" };
+  
+  // Bearish (Red)
+  if (p <= -3)    return { bg: "bg-red-700", border: "border-red-900", text: "text-white", glow: "shadow-red-900/40" };
+  if (p <= -1.5)  return { bg: "bg-red-500", border: "border-red-700", text: "text-white", glow: "shadow-red-500/30" };
+  if (p < -0.05)  return { bg: "bg-red-400/80", border: "border-red-500", text: "text-white", glow: "shadow-red-400/20" };
+  
+  // Neutral
+  if (p <  0.05)  return { bg: "bg-slate-500/50", border: "border-slate-600", text: "text-white", glow: "shadow-slate-500/10" };
+  
+  // Bullish (Green)
+  if (p <  1.5)   return { bg: "bg-emerald-400/80", border: "border-emerald-500", text: "text-emerald-950", glow: "shadow-emerald-400/20" };
+  if (p <  3)     return { bg: "bg-emerald-500", border: "border-emerald-700", text: "text-white", glow: "shadow-emerald-500/30" };
+  return            { bg: "bg-emerald-700", border: "border-emerald-900", text: "text-white", glow: "shadow-emerald-900/40" };
 }
 
 const PERF_OPTIONS: { value: Performance; label: string }[] = [
-  { value: "1d", label: "1 Day" },
-  { value: "1w", label: "1 Week" },
-  { value: "1m", label: "1 Month" },
-  { value: "1y", label: "1 Year" },
+  { value: "1d", label: "1D" }, { value: "1w", label: "1W" }, { value: "1m", label: "1M" }, { value: "1y", label: "1Y" },
 ];
 const SORT_OPTIONS: { value: SortBy; label: string }[] = [
-  { value: "marketCap", label: "Market Cap" },
-  { value: "name",      label: "Name (A–Z)" },
-  { value: "change",    label: "% Change" },
+  { value: "marketCap", label: "Market Cap" }, { value: "change", label: "Volatility" }, { value: "name", label: "Alphabetical" },
 ];
 
-/** Squarified treemap layout (Bruls, Huijsen & van Wijk, 2000).
- *  Returns absolute-positioned rectangles inside a fixed-width container.
- *  Tile weight is supplied by the caller — see `weightFor()` below. */
+/** Treemap logic */
 type Rect = { x: number; y: number; w: number; h: number; item: HeatmapItem };
 
-function squarify(
-  items: HeatmapItem[],
-  width: number,
-  height: number,
-  weightFor: (it: HeatmapItem) => number,
-): Rect[] {
+function squarify(items: HeatmapItem[], width: number, height: number, weightFor: (it: HeatmapItem) => number): Rect[] {
   if (!items.length || width <= 0 || height <= 0) return [];
   const rawWeights = items.map(it => Math.max(weightFor(it) || 0, 0));
   const totalRaw = rawWeights.reduce((a, b) => a + b, 0);
-  // If every weight is zero (e.g. all 0% change), fall back to equal weights
-  // so the treemap still draws useful, equally-sized tiles.
   const weights = totalRaw > 0 ? rawWeights : items.map(() => 1);
   const totalW = weights.reduce((a, b) => a + b, 0) || 1;
-  const totalArea = width * height;
-  const areas = weights.map(w => (w / totalW) * totalArea);
-
-  // Pair (item, area) and sort largest first.
-  const queue = items.map((it, i) => ({ it, area: areas[i] }))
-                     .sort((a, b) => b.area - a.area);
-
+  const areas = weights.map(w => (w / totalW) * (width * height));
+  const queue = items.map((it, i) => ({ it, area: areas[i] })).sort((a, b) => b.area - a.area);
   const rects: Rect[] = [];
   let x = 0, y = 0, remW = width, remH = height;
 
   const worst = (row: number[], side: number) => {
     if (!row.length) return Infinity;
-    const sum = row.reduce((a, b) => a + b, 0);
-    const max = Math.max(...row);
-    const min = Math.min(...row);
-    const s2 = side * side;
-    const sum2 = sum * sum;
+    const sum = row.reduce((a, b) => a + b, 0), max = Math.max(...row), min = Math.min(...row), s2 = side * side, sum2 = sum * sum;
     return Math.max((s2 * max) / sum2, sum2 / (s2 * min));
   };
 
   const layoutRow = (row: { it: HeatmapItem; area: number }[], side: number, horizontal: boolean) => {
     const sum = row.reduce((a, b) => a + b.area, 0);
     if (horizontal) {
-      const rowH = sum / side;
-      let cx = x;
-      for (const r of row) {
-        const w = r.area / rowH;
-        rects.push({ x: cx, y: y, w, h: rowH, item: r.it });
-        cx += w;
-      }
+      const rowH = sum / side; let cx = x;
+      for (const r of row) { const w = r.area / rowH; rects.push({ x: cx, y, w, h: rowH, item: r.it }); cx += w; }
       y += rowH; remH -= rowH;
     } else {
-      const rowW = sum / side;
-      let cy = y;
-      for (const r of row) {
-        const h = r.area / rowW;
-        rects.push({ x: x, y: cy, w: rowW, h, item: r.it });
-        cy += h;
-      }
+      const rowW = sum / side; let cy = y;
+      for (const r of row) { const h = r.area / rowW; rects.push({ x, y: cy, w: rowW, h, item: r.it }); cy += h; }
       x += rowW; remW -= rowW;
     }
   };
 
-  let row: { it: HeatmapItem; area: number }[] = [];
-  let i = 0;
+  let row: { it: HeatmapItem; area: number }[] = []; let i = 0;
   while (i < queue.length) {
-    const horizontal = remW >= remH;
-    const side = horizontal ? remW : remH;
-    const next = queue[i];
-    const trial = [...row.map(r => r.area), next.area];
-    if (row.length === 0 || worst(row.map(r => r.area), side) >= worst(trial, side)) {
-      row.push(next);
-      i++;
-    } else {
-      layoutRow(row, side, horizontal);
-      row = [];
-    }
+    const side = remW >= remH ? remW : remH;
+    const trial = [...row.map(r => r.area), queue[i].area];
+    if (row.length === 0 || worst(row.map(r => r.area), side) >= worst(trial, side)) { row.push(queue[i]); i++; }
+    else { layoutRow(row, side, remW >= remH); row = []; }
   }
   if (row.length) layoutRow(row, (remW >= remH ? remW : remH), remW >= remH);
   return rects;
 }
 
-// Callback-ref version: the measure & ResizeObserver are wired up the moment
-// the DOM node mounts. This is necessary because the heatmap container only
-// renders AFTER data arrives — a regular `useRef` + `useLayoutEffect([])`
-// would run on the component's first render (during the loading state, when
-// the container isn't in the tree yet) and never measure once the data
-// arrives. With a callback ref, the function fires whenever React attaches
-// the node, so we always get a real width.
-function useElementWidth<T extends HTMLElement>() {
-  const [w, setW] = useState(0);
+function useElementSize<T extends HTMLElement>() {
+  const [size, setSize] = useState({ width: 0, height: 0 });
   const [node, setNode] = useState<T | null>(null);
   const setRef = useCallback((n: T | null) => setNode(n), []);
   useEffect(() => {
     if (!node) return;
-    setW(node.getBoundingClientRect().width);
     const ro = new ResizeObserver(entries => {
-      for (const e of entries) setW(e.contentRect.width);
+      for (const e of entries) setSize({ width: e.contentRect.width, height: e.contentRect.height });
     });
     ro.observe(node);
     return () => ro.disconnect();
   }, [node]);
-  return [setRef, w] as const;
+  return [setRef, size.width, size.height] as const;
 }
 
 export default function Heatmap() {
+  const [, navigate] = useLocation();
   const [index, setIndex] = useState<string>("NIFTY50");
   const [perf, setPerf] = useState<Performance>("1d");
   const [sortBy, setSortBy] = useState<SortBy>("marketCap");
@@ -167,10 +126,7 @@ export default function Heatmap() {
     queryFn: () => fetchApi(`/insights/indices`),
     staleTime: 60 * 60_000,
   });
-  const indexOptions = useMemo(
-    () => (idxList?.indices || []).map(i => ({ value: i.code, label: i.label })),
-    [idxList],
-  );
+  const indexOptions = useMemo(() => (idxList?.indices || []).map(i => ({ value: i.code, label: i.label })), [idxList]);
 
   const { data, isLoading, error } = useQuery<HeatmapResponse>({
     queryKey: ["insights/heatmap", index, perf],
@@ -181,129 +137,168 @@ export default function Heatmap() {
   const items = useMemo(() => {
     const arr = [...(data?.items || [])];
     if (sortBy === "marketCap") arr.sort((a, b) => (b.marketCap ?? 0) - (a.marketCap ?? 0));
-    else if (sortBy === "name") arr.sort((a, b) => a.name.localeCompare(b.name));
-    else arr.sort((a, b) => (b.changePct ?? 0) - (a.changePct ?? 0));
+    else if (sortBy === "name") arr.sort((a, b) => a.symbol.localeCompare(b.symbol));
+    else arr.sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct));
     return arr;
   }, [data, sortBy]);
 
-  const indexLabel = data?.label || indexOptions.find(o => o.value === index)?.label || "Nifty 50";
-
-  // Treemap layout — always rendered, but the tile-weight function changes
-  // with the sort mode so users see the size shift when they change "Sort":
-  //   marketCap → tile size proportional to market cap
-  //   change    → tile size proportional to |% change| (biggest movers loom large)
-  //   name      → uniform tiles, A→Z order preserved
-  const [containerRef, containerW] = useElementWidth<HTMLDivElement>();
-  // Choose container height: tighter for few items, taller for many.
-  const treemapH = useMemo(() => {
-    const n = items.length || 30;
-    if (n <= 10) return 360;
-    if (n <= 30) return 540;
-    if (n <= 60) return 680;
-    return 780;
-  }, [items.length]);
+  const [containerRef, containerW, containerH] = useElementSize<HTMLDivElement>();
 
   const rects = useMemo(() => {
-    if (!containerW || items.length === 0) return null;
-    const weightFor =
-      sortBy === "marketCap"
-        ? (it: HeatmapItem) => Math.max(it.marketCap || 0, 0)
-        : sortBy === "change"
-        ? (it: HeatmapItem) => Math.max(Math.abs(it.changePct ?? 0), 0.15)
-        : (_it: HeatmapItem) => 1;
-    return squarify(items, containerW, treemapH, weightFor);
-  }, [items, sortBy, containerW, treemapH]);
+    if (!containerW || !containerH || items.length === 0) return null;
+    
+    // Visibility Scaling for large indices
+    const isLarge = items.length > 100;
+    const weightFor = sortBy === "marketCap" 
+      ? (it: HeatmapItem) => isLarge ? Math.pow(it.marketCap, 0.45) : it.marketCap 
+      : sortBy === "change" 
+      ? (it: HeatmapItem) => Math.abs(it.changePct) + 0.5 
+      : () => 1;
+
+    let results = squarify(items, containerW, containerH, weightFor);
+
+    // Physical Floor to ensure tiles are at least 4x4
+    return results.map(r => ({
+      ...r,
+      w: Math.max(r.w, 4),
+      h: Math.max(r.h, 4)
+    }));
+  }, [items, sortBy, containerW, containerH]);
 
   return (
-    <div>
-      <PageHeader
-        title={`${indexLabel} Heatmap`}
-        info="Performance heatmap of index constituents. Tile size = market cap (sorted by market cap)."
-        right={
-          data?.indexPrice != null && (
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-gray-500 dark:text-gray-400 font-medium">{indexLabel}</span>
-              <span className="font-bold text-gray-900 dark:text-white">{data.indexPrice?.toFixed(2)}</span>
-              <span className={`font-semibold ${(data.indexChange ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-500"}`}>
-                {(data.indexChange ?? 0) >= 0 ? "+" : ""}{data.indexChange?.toFixed(2)} ({data.indexChangePct?.toFixed(2)}%)
-              </span>
+    <div className="h-full flex flex-col overflow-hidden relative bg-slate-950">
+      {/* Dynamic Background Glow */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-[10%] -left-[10%] w-[40%] h-[40%] bg-emerald-500/10 blur-[120px] rounded-full" />
+        <div className="absolute -bottom-[10%] -right-[10%] w-[40%] h-[40%] bg-red-500/10 blur-[120px] rounded-full" />
+      </div>
+
+      {/* Unified Aesthetic Command Center */}
+      <div className="absolute top-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 p-1 bg-black/40 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl transition-all hover:bg-black/60">
+        
+        {/* Integrated Back Button */}
+        <button
+          onClick={() => navigate("/insights")}
+          className="p-2 hover:bg-white/10 rounded-xl text-white/40 hover:text-white transition-all group/back"
+          title="Back to insights"
+        >
+          <ArrowLeft className="w-4 h-4 group-hover/back:-translate-x-0.5 transition-transform" />
+        </button>
+
+        <div className="w-[1px] h-6 bg-white/10 mx-1" />
+        
+        {/* Market Status Section */}
+        {data?.indexPrice != null && (
+          <div className="pl-4 pr-3 flex items-center gap-3">
+            <div className="flex flex-col">
+              <span className="text-[9px] uppercase tracking-tighter text-white/40 font-black leading-none">{data.label || "Market"}</span>
+              <span className="text-sm font-black text-white tracking-tighter">{data.indexPrice.toLocaleString()}</span>
             </div>
-          )
-        }
-      />
+            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-lg shadow-sm ${(data.indexChange ?? 0) >= 0 ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/20 text-red-400"}`}>
+              {(data.indexChangePct ?? 0).toFixed(2)}%
+            </span>
+          </div>
+        )}
 
-      <div className="flex flex-wrap items-center gap-2 mb-3">
-        <MenuDropdown label="Index" value={index} onChange={setIndex}
-          options={indexOptions.length ? indexOptions : [{ value: "NIFTY50", label: "Nifty 50" }]}
-          maxButtonWidth={260}
+        <div className="w-[1px] h-6 bg-white/10 mx-1" />
+
+        {/* Index Selector */}
+        <MenuDropdown label="" value={index} onChange={setIndex} options={indexOptions.length ? indexOptions : [{ value: "NIFTY50", label: "Nifty 50" }]} 
+          customButton={<button className="px-3 py-1.5 text-xs font-bold text-white/70 hover:text-white transition-colors flex items-center gap-2 group/btn">
+            <LayoutGrid className="w-3.5 h-3.5 text-indigo-400 group-hover/btn:scale-110 transition-transform" /> {indexOptions.find(o => o.value === index)?.label || "Select Index"}
+          </button>}
         />
-        <MenuDropdown label="Sort" value={sortBy} onChange={(v) => setSortBy(v as SortBy)} options={SORT_OPTIONS} maxButtonWidth={180} />
-        <MenuDropdown label="Perf" value={perf} onChange={(v) => setPerf(v as Performance)} options={PERF_OPTIONS} maxButtonWidth={140} />
 
-        <div className="ml-auto flex items-center gap-1.5 text-[11px] flex-wrap">
-          {[-3, -2, -1, 0, 1, 2, 3].map(v => {
-            const b = bucket(v + (v >= 0 ? 0.5 : -0.5));
-            return (
-              <span key={v} className="px-2 py-0.5 rounded-md font-bold"
-                    style={{ backgroundColor: b.bg, color: b.fg }}>
-                {v >= 0 ? `+${v}%` : `${v}%`}
-              </span>
-            );
-          })}
+        <div className="w-[1px] h-4 bg-white/5" />
+
+        {/* Timeframe Scroller */}
+        <div className="flex bg-white/5 rounded-xl p-0.5">
+          {PERF_OPTIONS.map(o => (
+            <button key={o.value} onClick={() => setPerf(o.value)} 
+              className={`px-3 py-1 text-[10px] font-black rounded-lg transition-all ${perf === o.value ? "bg-white/10 text-white shadow-lg" : "text-white/30 hover:text-white/50"}`}>
+              {o.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="w-[1px] h-4 bg-white/5" />
+
+        {/* Sort & Logic Tooltip */}
+        <div className="relative group/sort">
+          <MenuDropdown label="" value={sortBy} onChange={(v) => setSortBy(v as SortBy)} options={SORT_OPTIONS}
+            customButton={<button className="px-3 py-1.5 text-xs font-bold text-white/70 hover:text-white transition-colors flex items-center gap-2">
+              <Zap className="w-3.5 h-3.5 text-amber-400" /> {SORT_OPTIONS.find(o => o.value === sortBy)?.label}
+            </button>}
+          />
+          <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 px-2 py-1 bg-black/80 backdrop-blur-md rounded-lg text-[9px] text-white/40 whitespace-nowrap opacity-0 group-hover/sort:opacity-100 transition-opacity pointer-events-none border border-white/5">
+            Tile size: {sortBy === "marketCap" ? "Weighted Cap" : sortBy === "change" ? "Volatility" : "Uniform"}
+          </div>
         </div>
       </div>
 
-      {isLoading && <Loading label="Loading heatmap…" />}
+      {isLoading && <div className="flex-1 flex items-center justify-center"><Loading label="Generating aesthetic heatmap..." /></div>}
       {error && <ErrorState message={(error as Error).message} />}
-      {data?.available === false && (
-        <EmptyState title="Index not supported"
-          message={data.message || "Constituent list isn't available for this index yet."}
-          icon={<LayoutGrid className="w-10 h-10"/>} />
-      )}
-      {data?.available !== false && !isLoading && items.length === 0 && (
-        <EmptyState title="No data" message="No constituents returned for this index." icon={<LayoutGrid className="w-10 h-10"/>} />
-      )}
 
-      {/* Treemap (rendered for every sort; weights & tile sizes change per sort) */}
-      {items.length > 0 && (
-        <Card className="overflow-hidden p-1">
-          <div ref={containerRef} className="relative w-full" style={{ height: treemapH }}>
-            {rects?.map(({ x, y, w, h, item }) => {
-              const b = item.color ?? bucket(item.changePct);
-              const pct = item.changePct ?? 0;
-              // Decide what to show based on tile size.
-              const small = w < 60 || h < 40;
-              const tiny  = w < 36 || h < 28;
-              const symFontPx  = Math.max(9, Math.min(18, Math.floor(Math.min(w, h) / 5.2)));
-              const pctFontPx  = Math.max(8, Math.min(14, Math.floor(Math.min(w, h) / 7)));
-              return (
-                <div
-                  key={item.symbol}
-                  title={`${item.name} • ₹${item.price?.toFixed(2)} • ${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`}
-                  className="absolute overflow-hidden ring-1 ring-black/10 dark:ring-white/15 cursor-default transition-transform hover:z-10 hover:scale-[1.01]"
-                  style={{
-                    left: x, top: y, width: w, height: h,
-                    backgroundColor: b.bg, color: b.fg, padding: tiny ? 1 : 4,
-                  }}
-                >
-                  {!tiny && (
-                    <div className="h-full w-full flex flex-col items-center justify-center text-center leading-tight">
-                      <div className="font-extrabold tracking-tight uppercase truncate w-full px-1"
-                           style={{ fontSize: symFontPx }}>
-                        {item.symbol.replace(/\.NS$/, "")}
-                      </div>
-                      {!small && (
-                        <div className="font-semibold opacity-95" style={{ fontSize: pctFontPx, marginTop: 2 }}>
-                          {pct >= 0 ? "▲" : "▼"} {Math.abs(pct).toFixed(2)}%
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </Card>
+      {/* The Heatmap Canvas */}
+      <div ref={containerRef} className="flex-1 relative m-2 md:m-4 rounded-3xl overflow-hidden border border-white/5 shadow-2xl bg-black/20">
+        <AnimatePresence mode="popLayout">
+          {rects?.map(({ x, y, w, h, item }) => {
+            const style = bucket(item.changePct);
+            const isSmall = w < 70 || h < 50;
+            const isTiny = w < 40 || h < 30;
+            const isMicro = w < 20 || h < 15;
+            
+            return (
+              <motion.div
+                key={item.symbol}
+                initial={{ opacity: 0, scale: 0.9, filter: "blur(10px)" }}
+                animate={{ opacity: 1, scale: 1, filter: "blur(0px)", left: x, top: y, width: w - 1, height: h - 1 }}
+                exit={{ opacity: 0, scale: 1.1, filter: "blur(20px)" }}
+                transition={{ type: "spring", stiffness: 300, damping: 30, mass: 0.8 }}
+                className={`absolute overflow-hidden cursor-pointer group flex flex-col items-center justify-center transition-all duration-500
+                  ${style.bg} ${style.border} border shadow-inner ${style.glow}`}
+                whileHover={{ 
+                  scale: isMicro ? 2.5 : isSmall ? 1.2 : 1.05, 
+                  zIndex: 50, 
+                  boxShadow: "0 25px 50px rgba(0,0,0,0.6)",
+                  transition: { type: "spring", stiffness: 400, damping: 25 }
+                }}
+              >
+                <div className="absolute top-0 left-0 right-0 h-[1px] bg-white/20" />
+                
+                {!isTiny && (
+                  <div className="relative flex flex-col items-center justify-center px-1 text-center select-none">
+                    <motion.span 
+                      layout
+                      className={`font-black tracking-tighter uppercase leading-none mb-0.5 ${style.text}`}
+                      style={{ fontSize: Math.max(9, Math.min(24, Math.floor(Math.min(w, h) / 4))) }}
+                    >
+                      {item.symbol.split(".")[0]}
+                    </motion.span>
+                    {!isSmall && (
+                      <motion.div 
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 0.9 }}
+                        className={`font-bold flex items-center gap-1 ${style.text}`}
+                        style={{ fontSize: Math.max(8, Math.min(12, Math.floor(Math.min(w, h) / 8))) }}
+                      >
+                        {item.changePct >= 0 ? "+" : ""}{item.changePct.toFixed(2)}%
+                      </motion.div>
+                    )}
+                  </div>
+                )}
+                
+                <div className="absolute inset-0 opacity-0 group-hover:opacity-100 bg-gradient-to-br from-white/20 to-transparent transition-opacity pointer-events-none" />
+              </motion.div>
+            );
+          })}
+        </AnimatePresence>
+      </div>
+
+      {data?.available === false && (
+        <div className="absolute inset-0 flex items-center justify-center z-40 bg-slate-950/80 backdrop-blur-md">
+          <EmptyState title="Index unavailable" message={data.message || "This index doesn't support heatmap visualization yet."} icon={<LayoutGrid className="w-10 h-10 text-indigo-500/50"/>} />
+        </div>
       )}
     </div>
   );

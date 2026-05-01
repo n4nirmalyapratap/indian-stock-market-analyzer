@@ -62,11 +62,11 @@ function rangeLimit(r: Range): number {
 }
 
 /** Format a Cr-rupee value with sign, e.g. "+₹4,700.71 Cr" / "−₹8,827.87 Cr". */
-function fmtCr(v: number | null | undefined): string {
+function fmtCr(v: number | null | undefined, isContracts: boolean = false): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
   const sign = v > 0 ? "+" : v < 0 ? "−" : "";
-  const abs = Math.abs(v).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return `${sign}₹${abs} Cr`;
+  const abs = Math.abs(v).toLocaleString("en-IN", { minimumFractionDigits: isContracts ? 0 : 2, maximumFractionDigits: isContracts ? 0 : 2 });
+  return isContracts ? `${sign}${abs} Cont.` : `${sign}₹${abs} Cr`;
 }
 
 function netClass(v: number | null | undefined): string {
@@ -133,14 +133,15 @@ function Body({ data, view, setView, range, setRange }: {
 }) {
   const rows = useMemo(() => data.rows.slice(0, rangeLimit(range)), [data.rows, range]);
   const totalDays = data.rows.length;
+  const isContracts = data.segment !== "equity";
 
   return (
     <div className="space-y-5">
       {/* Summary cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <SummaryCard title="Daily"   cell={data.summary.daily}   sub="Provisional cash trades on the latest session" />
-        <SummaryCard title="Weekly"  cell={data.summary.weekly}  sub="Sum of net flows over the last 5 trading days" />
-        <SummaryCard title="Monthly" cell={data.summary.monthly} sub="Sum of net flows over the last 22 trading days" />
+        <SummaryCard title="Daily"   cell={data.summary.daily}   sub="Provisional cash trades on the latest session" isContracts={isContracts} />
+        <SummaryCard title="Weekly"  cell={data.summary.weekly}  sub="Sum of net flows over the last 5 trading days" isContracts={isContracts} />
+        <SummaryCard title="Monthly" cell={data.summary.monthly} sub="Sum of net flows over the last 22 trading days" isContracts={isContracts} />
       </div>
 
       {/* Toolbar */}
@@ -186,12 +187,12 @@ function Body({ data, view, setView, range, setRange }: {
       </Card>
 
       {/* Body */}
-      {view === "table" ? <FiiDiiTable rows={rows} /> : <FiiDiiChart rows={rows} />}
+      {view === "table" ? <FiiDiiTable rows={rows} segment={data.segment} /> : <FiiDiiChart rows={rows} segment={data.segment} />}
     </div>
   );
 }
 
-function SummaryCard({ title, cell, sub }: { title: string; cell: SummaryCell | undefined; sub: string }) {
+function SummaryCard({ title, cell, sub, isContracts }: { title: string; cell: SummaryCell | undefined; sub: string; isContracts?: boolean }) {
   // Defend against an empty `cell` (e.g. derivatives segments where the
   // service returns `summary: { daily: {}, weekly: {}, monthly: {} }`).
   const c: SummaryCell = cell ?? { fiiNet: null, diiNet: null, label: null };
@@ -217,11 +218,11 @@ function SummaryCard({ title, cell, sub }: { title: string; cell: SummaryCell | 
       <div className="grid grid-cols-2 gap-3">
         <div>
           <div className="text-[11px] uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">FII Net</div>
-          <div className={`text-lg font-bold ${netClass(c.fiiNet)}`}>{fmtCr(c.fiiNet)}</div>
+          <div className={`text-lg font-bold ${netClass(c.fiiNet)}`}>{fmtCr(c.fiiNet, isContracts)}</div>
         </div>
         <div>
           <div className="text-[11px] uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">DII Net</div>
-          <div className={`text-lg font-bold ${netClass(c.diiNet)}`}>{fmtCr(c.diiNet)}</div>
+          <div className={`text-lg font-bold ${netClass(c.diiNet)}`}>{fmtCr(c.diiNet, isContracts)}</div>
         </div>
       </div>
       <p className="mt-3 text-[11px] text-gray-500 dark:text-gray-400">{sub}</p>
@@ -229,7 +230,8 @@ function SummaryCard({ title, cell, sub }: { title: string; cell: SummaryCell | 
   );
 }
 
-function FiiDiiTable({ rows }: { rows: Row[] }) {
+function FiiDiiTable({ rows, segment }: { rows: Row[]; segment: string }) {
+  const isContracts = segment !== "equity";
   if (!rows.length) {
     return <EmptyState title="No rows in this range" message="Try a wider time range." icon={<TableIcon className="w-6 h-6" />} />;
   }
@@ -240,11 +242,11 @@ function FiiDiiTable({ rows }: { rows: Row[] }) {
           <thead>
             <tr className="bg-gray-50 dark:bg-gray-900/40 text-[11px] uppercase tracking-wide text-gray-500 dark:text-gray-400">
               <th className="text-left  font-semibold px-4 py-2.5">Date</th>
-              <th className="text-right font-semibold px-3 py-2.5">FII Buy</th>
-              <th className="text-right font-semibold px-3 py-2.5">FII Sell</th>
+              <th className="text-right font-semibold px-3 py-2.5">{isContracts ? "FII Long" : "FII Buy"}</th>
+              <th className="text-right font-semibold px-3 py-2.5">{isContracts ? "FII Short" : "FII Sell"}</th>
               <th className="text-right font-semibold px-3 py-2.5">FII Net</th>
-              <th className="text-right font-semibold px-3 py-2.5">DII Buy</th>
-              <th className="text-right font-semibold px-3 py-2.5">DII Sell</th>
+              <th className="text-right font-semibold px-3 py-2.5">{isContracts ? "DII Long" : "DII Buy"}</th>
+              <th className="text-right font-semibold px-3 py-2.5">{isContracts ? "DII Short" : "DII Sell"}</th>
               <th className="text-right font-semibold px-4 py-2.5">DII Net</th>
             </tr>
           </thead>
@@ -267,8 +269,9 @@ function FiiDiiTable({ rows }: { rows: Row[] }) {
   );
 }
 
-function FiiDiiChart({ rows }: { rows: Row[] }) {
+function FiiDiiChart({ rows, segment }: { rows: Row[]; segment: string }) {
   const palette = useChartPalette();
+  const isContracts = segment !== "equity";
   // Recharts wants ascending order so bars read left-to-right oldest → newest.
   const data = useMemo(() => [...rows].reverse().map(r => ({
     label: (r.displayDate || r.date).slice(0, 6),
@@ -295,7 +298,7 @@ function FiiDiiChart({ rows }: { rows: Row[] }) {
                 borderRadius: 8, color: palette.text, fontSize: 12,
               }}
               labelStyle={{ color: palette.muted, fontSize: 11, marginBottom: 4 }}
-              formatter={(value: number, name: string) => [fmtCr(value), name === "fii" ? "FII Net" : "DII Net"]}
+              formatter={(value: number, name: string) => [fmtCr(value, isContracts), name === "fii" ? "FII Net" : "DII Net"]}
             />
             <Legend wrapperStyle={{ fontSize: 12, color: palette.text }}
                     formatter={(v) => v === "fii" ? "FII Net" : "DII Net"} />
@@ -306,7 +309,7 @@ function FiiDiiChart({ rows }: { rows: Row[] }) {
         </ResponsiveContainer>
       </div>
       <p className="mt-2 text-[11px] text-gray-500 dark:text-gray-400">
-        Net flows in ₹ Cr. Positive bars indicate net buying, negative bars indicate net selling.
+        {isContracts ? "Net flows in contracts." : "Net flows in ₹ Cr."} Positive bars indicate net buying (or longs), negative bars indicate net selling (or shorts).
       </p>
     </Card>
   );
