@@ -6,13 +6,14 @@ import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
   Brain, TrendingUp, CandlestickChart,
   Settings, ChevronRight, ChevronLeft, ChevronDown, Sun, Moon,
-  Newspaper, Gauge,
+  Newspaper, Gauge, Sparkles,
 } from "lucide-react";
 
 export const MAIN_NAV = [
   { path: "/",           label: "Dashboard",      icon: LayoutDashboard },
   { path: "/trading",    label: "Chart Studio",   icon: CandlestickChart },
   { path: "/sectors",    label: "Market Sectors", icon: BarChart3 },
+  { path: "/insights",   label: "Insights",       icon: Sparkles },
   { path: "/sentiment",  label: "Sentiment",      icon: Gauge },
   { path: "/news",       label: "News Feed",      icon: Newspaper },
   { path: "/stocks",     label: "Stock Lookup",   icon: Search },
@@ -176,7 +177,7 @@ export function LayoutShell({
           })}
         </div>
 
-        <main className={`flex-1 overflow-auto bg-gray-50 dark:bg-gray-950 ${(loc.startsWith("/trading") || loc.startsWith("/chart")) ? "p-0 overflow-hidden" : "p-4 md:p-6"}`}>
+        <main className={`flex-1 overflow-auto bg-gray-50 dark:bg-gray-950 ${(loc.startsWith("/trading") || loc.startsWith("/chart") || loc.startsWith("/insights/heatmap")) ? "p-0 overflow-hidden" : "p-4 md:p-6"}`}>
           {children}
         </main>
       </div>

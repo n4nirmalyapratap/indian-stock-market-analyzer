@@ -31,6 +31,20 @@ class ClerkAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
+        # Test-only bypass: when DISABLE_AUTH=1 is set in env we grant a
+        # synthetic identity. Hardened against production misconfiguration:
+        # we refuse to bypass unless ENV is unset/dev/test AND a pytest
+        # session is active (PYTEST_CURRENT_TEST is exported by pytest for
+        # every running test). This prevents "left DISABLE_AUTH=1 in prod
+        # by accident" from disabling all API auth globally.
+        if os.getenv("DISABLE_AUTH") == "1":
+            env = os.getenv("ENV", "").lower()
+            in_pytest = "PYTEST_CURRENT_TEST" in os.environ or "PYTEST_VERSION" in os.environ
+            if env in ("", "development", "dev", "test", "testing") and in_pytest:
+                request.state.user_id = "test_user"
+                return await call_next(request)
+            logger.error("DISABLE_AUTH=1 ignored (env=%r, pytest=%s)", env, in_pytest)
+
         if path.startswith("/api/admin"):
             return await call_next(request)
 
