@@ -2,6 +2,7 @@ import { useLocation } from "wouter";
 import {
   LayoutGrid, BarChart3, FileText, PieChart, Briefcase,
   Activity, Repeat, Users, Ban, Truck, LineChart, Rocket,
+  ArrowLeft, ChevronRight,
 } from "lucide-react";
 import HeatmapTab from "./tabs/Heatmap";
 import FiiDiiTab from "./tabs/FiiDii";
@@ -17,93 +18,185 @@ import MarketValuationTab from "./tabs/MarketValuation";
 import IpoTab from "./tabs/Ipo";
 
 const TABS = [
-  { slug: "heatmap",          label: "Heatmap",               icon: LayoutGrid,  Component: HeatmapTab },
-  { slug: "fii-dii",          label: "FII/DII Data",          icon: BarChart3,   Component: FiiDiiTab },
-  { slug: "company-filings",  label: "Company Filings",       icon: FileText,    Component: CompanyFilingsTab },
-  { slug: "mf-holdings",      label: "MF Holdings",           icon: PieChart,    Component: MfHoldingsTab },
-  { slug: "bulk-block-deals", label: "Bulk/Block Deals",      icon: Briefcase,   Component: BulkBlockDealsTab },
-  { slug: "signals",          label: "Signals",               icon: Activity,    Component: SignalsTab },
-  { slug: "slbm-rental",      label: "Stock Rental via SLBM", icon: Repeat,      Component: SlbmRentalTab },
-  { slug: "mtf-insights",     label: "MTF Insights",          icon: Users,       Component: MtfInsightsTab },
-  { slug: "fo-ban",           label: "F&O Ban - MWPL",        icon: Ban,         Component: FoBanTab },
-  { slug: "top-deliveries",   label: "Top Deliveries",        icon: Truck,       Component: TopDeliveriesTab },
-  { slug: "market-valuation", label: "Market Valuation",      icon: LineChart,   Component: MarketValuationTab },
-  { slug: "ipo",              label: "IPO",                   icon: Rocket,      Component: IpoTab },
+  {
+    slug: "heatmap",
+    label: "Heatmap",
+    description: "Visual representation of market performance across sectors and indices.",
+    icon: LayoutGrid,
+    Component: HeatmapTab,
+    color: "text-orange-500",
+    bg: "bg-orange-50 dark:bg-orange-500/10"
+  },
+  {
+    slug: "fii-dii",
+    label: "FII/DII Data",
+    description: "Track institutional buying and selling activity in the Indian markets.",
+    icon: BarChart3,
+    Component: FiiDiiTab,
+    color: "text-blue-500",
+    bg: "bg-blue-50 dark:bg-blue-500/10"
+  },
+  {
+    slug: "company-filings",
+    label: "Company Filings",
+    description: "Stay updated with the latest corporate announcements and BSE filings.",
+    icon: FileText,
+    Component: CompanyFilingsTab,
+    color: "text-emerald-500",
+    bg: "bg-emerald-50 dark:bg-emerald-500/10"
+  },
+  {
+    slug: "mf-holdings",
+    label: "MF Holdings",
+    description: "Analyze mutual fund portfolios and their top stock holdings.",
+    icon: PieChart,
+    Component: MfHoldingsTab,
+    color: "text-purple-500",
+    bg: "bg-purple-50 dark:bg-purple-500/10"
+  },
+  {
+    slug: "bulk-block-deals",
+    label: "Bulk/Block Deals",
+    description: "Monitor large scale transactions by major market participants.",
+    icon: Briefcase,
+    Component: BulkBlockDealsTab,
+    color: "text-indigo-500",
+    bg: "bg-indigo-50 dark:bg-indigo-500/10"
+  },
+  {
+    slug: "signals",
+    label: "Signals",
+    description: "Technical signals including RSI, moving average crossovers, and momentum.",
+    icon: Activity,
+    Component: SignalsTab,
+    color: "text-rose-500",
+    bg: "bg-rose-50 dark:bg-rose-500/10"
+  },
+  {
+    slug: "slbm-rental",
+    label: "Stock Rental (SLBM)",
+    description: "Insights into Securities Lending and Borrowing Mechanism activity.",
+    icon: Repeat,
+    Component: SlbmRentalTab,
+    color: "text-amber-500",
+    bg: "bg-amber-50 dark:bg-amber-500/10"
+  },
+  {
+    slug: "mtf-insights",
+    label: "MTF Insights",
+    description: "Margin Trading Facility data and leveraged position trends.",
+    icon: Users,
+    Component: MtfInsightsTab,
+    color: "text-cyan-500",
+    bg: "bg-cyan-50 dark:bg-cyan-500/10"
+  },
+  {
+    slug: "fo-ban",
+    label: "F&O Ban - MWPL",
+    description: "Stocks currently in the F&O ban period based on market-wide position limits.",
+    icon: Ban,
+    Component: FoBanTab,
+    color: "text-red-500",
+    bg: "bg-red-50 dark:bg-red-500/10"
+  },
+  {
+    slug: "top-deliveries",
+    label: "Top Deliveries",
+    description: "Daily high-delivery stocks indicating long-term institutional interest.",
+    icon: Truck,
+    Component: TopDeliveriesTab,
+    color: "text-slate-500",
+    bg: "bg-slate-50 dark:bg-slate-500/10"
+  },
+  {
+    slug: "market-valuation",
+    label: "Market Valuation",
+    description: "Historical PE, PB, and Yield analysis for major market indices.",
+    icon: LineChart,
+    Component: MarketValuationTab,
+    color: "text-violet-500",
+    bg: "bg-violet-50 dark:bg-violet-500/10"
+  },
+  {
+    slug: "ipo",
+    label: "IPO Center",
+    description: "Upcoming and current Initial Public Offerings with key details.",
+    icon: Rocket,
+    Component: IpoTab,
+    color: "text-pink-500",
+    bg: "bg-pink-50 dark:bg-pink-500/10"
+  },
 ] as const;
 
-const DEFAULT_SLUG = "heatmap";
-
-/**
- * InsightsLayout — uses the SAME visual language as the rest of the app
- * (Dashboard, Sectors, Sentiment) so it feels integrated:
- *   surface  : bg-white dark:bg-gray-800
- *   page bg  : bg-gray-50 dark:bg-gray-950 (provided by LayoutShell <main>)
- *   borders  : border-gray-100 dark:border-gray-700
- *   active   : bg-indigo-50 dark:bg-indigo-500/20 + text-indigo-700/300
- *   muted    : text-gray-500 dark:text-gray-400
- *
- * Layout details that prevent horizontal scroll:
- *   - Outer flex wrapper has `min-w-0` so flex children can shrink.
- *   - <main> has `flex-1 min-w-0 overflow-x-hidden` so wide tables/charts
- *     stay clipped to the available width instead of pushing the page.
- */
 export default function InsightsLayout() {
   const [loc, navigate] = useLocation();
   const rest = loc.replace(/^\/insights\/?/, "").split("/")[0];
-  const slug = rest || DEFAULT_SLUG;
-  const active = TABS.find(t => t.slug === slug) || TABS[0];
-  const ActiveComponent = active.Component;
+  const activeSlug = rest || "";
+  const active = TABS.find(t => t.slug === activeSlug);
+  const isHeatmap = activeSlug === "heatmap";
 
-  return (
-    <div className="flex gap-4 md:gap-6 min-w-0">
-      {/* Inner left sidebar (desktop) — same surface/spacing as the app's other cards */}
-      <aside className="hidden md:flex flex-col w-56 lg:w-60 rounded-xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm flex-shrink-0 sticky top-4 self-start max-h-[calc(100vh-2rem)]">
-        <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700">
-          <h2 className="font-bold text-gray-900 dark:text-white text-sm">Insights</h2>
-          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">Market intelligence</p>
-        </div>
-        <nav className="flex-1 overflow-y-auto py-2">
-          {TABS.map(({ slug: s, label, icon: Icon }) => {
-            const isActive = s === slug;
+  if (!active) {
+    return (
+      <div className="max-w-7xl mx-auto">
+        <header className="mb-8">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Market Insights</h1>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">
+            Deep-dive analytics and institutional data for the Indian Stock Market.
+          </p>
+        </header>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-6">
+          {TABS.map((item) => {
+            const Icon = item.icon;
             return (
               <button
-                key={s}
-                type="button"
-                onClick={() => navigate(`/insights/${s}`)}
-                className={`w-full text-left flex items-center gap-2.5 px-3 py-2 mx-2 my-0.5 rounded-lg text-sm transition cursor-pointer
-                  ${isActive
-                    ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 font-semibold"
-                    : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50 hover:text-gray-900 dark:hover:text-white"}`}
+                key={item.slug}
+                onClick={() => navigate(`/insights/${item.slug}`)}
+                className="group flex flex-col p-5 bg-white dark:bg-gray-800 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm hover:shadow-md hover:-translate-y-1 transition-all text-left"
               >
-                <Icon className={`w-4 h-4 flex-shrink-0 ${isActive ? "text-indigo-600 dark:text-indigo-400" : ""}`} />
-                <span className="flex-1 truncate">{label}</span>
+                <div className={`w-12 h-12 rounded-xl ${item.bg} flex items-center justify-center mb-4 group-hover:scale-110 transition-transform`}>
+                  <Icon className={`w-6 h-6 ${item.color}`} />
+                </div>
+                <h3 className="font-bold text-gray-900 dark:text-white mb-1 flex items-center justify-between">
+                  {item.label}
+                  <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-indigo-500 transition-colors" />
+                </h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
+                  {item.description}
+                </p>
               </button>
             );
           })}
-        </nav>
-      </aside>
-
-      {/* Mobile horizontal pill scroller */}
-      <div className="md:hidden -mx-4 px-2 py-2 flex gap-1 overflow-x-auto sticky top-0 z-20 bg-gray-50/80 dark:bg-gray-950/80 backdrop-blur border-b border-gray-100 dark:border-gray-800">
-        {TABS.map(({ slug: s, label }) => (
-          <button
-            key={s}
-            type="button"
-            onClick={() => navigate(`/insights/${s}`)}
-            className={`px-3 py-1.5 text-xs whitespace-nowrap rounded-lg flex-shrink-0 transition
-              ${s === slug
-                ? "bg-indigo-600 text-white dark:bg-indigo-500"
-                : "text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700"}`}
-          >
-            {label}
-          </button>
-        ))}
+        </div>
       </div>
+    );
+  }
 
-      {/* Content area — `min-w-0` lets it shrink instead of overflowing */}
-      <main className="flex-1 min-w-0 overflow-x-hidden">
-        <ActiveComponent key={slug} />
+  const ActiveComponent = active.Component;
+  const ActiveIcon = active.icon;
+
+  return (
+    <div className={`flex flex-col min-w-0 ${isHeatmap ? "h-full relative" : "gap-4"}`}>
+      {/* Refined Navigation (Heatmap uses internal Command Center back button) */}
+      {!isHeatmap && (
+        <div className="flex items-center gap-3 py-2">
+          <button
+            onClick={() => navigate("/insights")}
+            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full text-gray-500 dark:text-gray-400 transition-colors"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <h2 className="font-bold text-gray-900 dark:text-white text-xl">
+            {active.label}
+          </h2>
+        </div>
+      )}
+
+      {/* Content area */}
+      <main className={`flex-1 min-w-0 ${isHeatmap ? "overflow-hidden flex flex-col" : "overflow-x-hidden"}`}>
+        <ActiveComponent key={active.slug} />
       </main>
     </div>
   );
 }
+
