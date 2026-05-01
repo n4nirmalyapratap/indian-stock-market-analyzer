@@ -764,13 +764,11 @@ async def get_top_deliveries(period: str = Query("daily"), index: str = Query("N
 @router.get("/fii-dii")
 async def get_fii_dii(segment: str = Query("equity")):
     """FII/DII activity. Equity is real NSE data with a rolling local history.
-    F&O segments fall back to a clear unavailable message (see service)."""
+    F&O segments fetch historical data using the NSE FNO participant endpoint."""
     from app.services.fii_dii_service import FiiDiiService
     svc = FiiDiiService()
     seg = (segment or "equity").lower().strip()
-    if seg == "equity":
-        return await svc.get_equity_flows()
-    return await svc.get_derivatives_flows(seg)
+    return await svc.get_flows(seg)
 
 
 @router.get("/slbm")

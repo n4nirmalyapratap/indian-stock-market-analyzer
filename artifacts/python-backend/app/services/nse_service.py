@@ -72,22 +72,32 @@ async def _ensure_cookies() -> None:
 
 
 class NseService:
-    async def fetch_nse(self, path: str, cache_key: str, ttl: int = 300) -> Optional[Any]:
+    async def fetch_nse(self, path: str, cache_key: str, ttl: int = 300, retries: int = 3) -> Optional[Any]:
         cached = _get_cache(cache_key)
         if cached is not None:
             return cached
 
-        await _ensure_cookies()
-        headers = {**HEADERS_API, "Cookie": _cookies}
-        try:
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-                resp = await client.get(f"https://www.nseindia.com{path}", headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    _set_cache(cache_key, data, ttl)
-                    return data
-        except Exception:
-            pass
+        for attempt in range(retries):
+            await _ensure_cookies()
+            headers = {**HEADERS_API, "Cookie": _cookies}
+            try:
+                async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                    resp = await client.get(f"https://www.nseindia.com{path}", headers=headers)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        _set_cache(cache_key, data, ttl)
+                        return data
+                    elif resp.status_code in (401, 403):
+                        # Force cookie refresh
+                        global _cookie_expiry
+                        _cookie_expiry = 0
+                        continue
+                    elif resp.status_code == 429:
+                        await asyncio.sleep(2 ** attempt)
+                        continue
+            except Exception:
+                await asyncio.sleep(1)
+                
         return None
 
     def get_sector_indices(self):
