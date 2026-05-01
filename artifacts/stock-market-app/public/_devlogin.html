@@ -1,0 +1,15 @@
+<!doctype html><html><head><meta charset="utf-8"><title>devlogin</title></head><body>
+<script>
+(async () => {
+  const goto = new URLSearchParams(location.search).get('goto') || '/insights/fii-dii';
+  const email = '_dev' + Date.now() + '@x.com';
+  const r = await fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password: 'DevPass123!', name: 'Dev' }) });
+  const j = await r.json();
+  if (j.token) {
+    localStorage.setItem('custom_auth_token', j.token);
+    if (j.user) localStorage.setItem('custom_auth_user', JSON.stringify(j.user));
+    location.replace(goto);
+  } else { document.body.textContent = 'Login failed: ' + JSON.stringify(j); }
+})();
+</script></body></html>

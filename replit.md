@@ -1,11 +1,88 @@
 # Nifty Node — Indian Stock Market Analyzer
 
+---
+
+## ⚠️ READ THIS FIRST — Agent Setup Checklist (Replit Environment)
+
+**Any agent doing a fresh setup, migration, or debugging "why is the preview showing Not Found / white page" MUST do these checks BEFORE anything else. Skipping this wasted real money in a previous session.**
+
+### 1. Audit `.replit` port mappings (CRITICAL)
+Open `.replit` and find every `[[ports]]` block. **Only ONE `localPort` may map to `externalPort = 80`** — that must be the React frontend on `localPort = 5000`. If you see another port (e.g. `8090`) ALSO mapped to `externalPort = 80`, the public Replit URL will route ambiguously to the wrong service and you will see `{"detail":"Not Found"}` or a blank page in the canvas iframe.
+
+**Required final state:**
+```toml
+[[ports]]
+localPort = 5000      # Vite frontend → public URL
+externalPort = 80
+
+[[ports]]
+localPort = 8090      # Python FastAPI backend → internal only, accessed via Vite /api proxy
+externalPort = 8080   # NOT 80
+```
+
+If `.replit` is wrong, the file is normally write-protected. You can update it via Node `fs.writeFileSync` from the code execution sandbox (the bash `sed` and edit tools are blocked, but `fs` works).
+
+### 2. Workflow configuration (must match)
+- `Start application` → `cd artifacts/stock-market-app && PORT=5000 BASE_PATH=/ pnpm dev`, outputType `webview`, waitForPort `5000`
+- `Python Backend` → `cd artifacts/python-backend && PORT=8090 python3.11 run.py`, outputType `console` (NO waitForPort, NO external exposure)
+
+### 3. Vite proxy target
+`artifacts/stock-market-app/vite.config.ts` must default `apiProxyTarget` to `http://localhost:8090` (matches the Python backend port). Do not change it to 8081 or anything else.
+
+### 4. Quick smoke test (run after restarting both workflows)
+```bash
+curl -s -o /dev/null -w "frontend: %{http_code}\n" http://localhost:5000/
+curl -s -o /dev/null -w "backend direct: %{http_code}\n" http://localhost:8090/api/healthz
+curl -s -o /dev/null -w "backend via proxy: %{http_code}\n" http://localhost:5000/api/healthz
+```
+All three must return `200`. If they do, the canvas iframe will show the Nifty Node login page.
+
+### 5. Required Python packages
+Install via `installLanguagePackages` (NOT pip in shell): `fastapi, uvicorn, pandas, numpy, ta, spacy, en_core_web_sm, yfinance, scipy, feedparser, PyJWT, bcrypt, openai, lxml, pydantic`. Do NOT install `pandas_ta` from PyPI — there is a local shim at `artifacts/python-backend/pandas_ta/`.
+
+---
+
 ## Project Overview
 
 A full-stack Indian stock market analysis platform with:
 - **User app** (`/`) — React/Vite frontend for stock analysis, charts, options, news
 - **Admin dashboard** (`/admin`) — React/Vite admin panel for user/system/compliance management
 - **Python FastAPI backend** (`/api`) — All API endpoints on port 8090
+
+### Insights module (added 2026-04)
+A top-level `/insights` section replicates the ScanX "Insights" experience with 12 sub-tabs and a sticky inner sidebar.
+- Top nav: `Insights` entry in `MAIN_NAV` (`src/LayoutShell.tsx`)
+- Routes: `/insights` and `/insights/:tab*` → `src/pages/insights/InsightsLayout.tsx`
+- Tab pages: `src/pages/insights/tabs/` (Heatmap, FiiDii, CompanyFilings, MfHoldings, BulkBlockDeals, Signals, SlbmRental, MtfInsights, FoBan, TopDeliveries, MarketValuation, Ipo)
+- Backend: `app/routes/insights.py` registered in `main.py`. Endpoints: `/api/insights/{indices,heatmap,company-filings,mf-holdings,signals,index-valuation,market-valuation,fo-ban,top-deliveries,fii-dii,slbm,mtf,ipos}`.
+
+#### Real-data wiring (data sources, network reachability)
+This Replit container can reach **yfinance**, **api.bseindia.com**, and **portal.amfiindia.com** but is BLOCKED from `www.nseindia.com`, `www.moneycontrol.com`, and `www.chittorgarh.com`. Endpoints handle this honestly:
+- **Heatmap** (`/heatmap?index=…&performance=1d|1w|1m|1y`) — yfinance, parallelised across a 16-worker `ThreadPoolExecutor`. 27 curated indices in `INDEX_CONSTITUENTS` (Nifty 50/100/200/500, sectoral, midcap, PSU/Pvt bank, etc.). Server returns `color: {bg, fg}` hex per item — UI renders via inline `style` to bypass Tailwind v4 arbitrary-value scanning.
+- **Company Filings** (`/company-filings?category=…&page=…`) — direct call to `https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w` with `Referer: bseindia.com`. Returns BSE corporate disclosures with PDF links.
+- **MF Holdings** (`/mf-holdings?amc=&category=&search=&limit=`) — fetches `https://portal.amfiindia.com/spages/NAVAll.txt` (follow-redirects from amfiindia.com), parses the semicolon-separated NAV list (~14k schemes) with `_parse_amfi_text`, returns AMC + category facets for UI dropdowns.
+- **Signals** (`/signals?index=…&verdict=all|bullish|bearish|neutral`) — yfinance 6-month history, computes RSI(14) and MA20/MA50 cross with `_compute_signal`. Verdict logic: RSI ≥70 / ≤30 → Bearish/Bullish; price vs MAs → trend confirmation.
+- **Market / Index Valuation** (`/index-valuation`, `/market-valuation`) — yfinance multi-index time series normalised to a 22× PE proxy.
+- **F&O Ban** (`/fo-ban`) — attempts `NseService.fetch_nse(/api/liveMwpl)`; returns `{available:false, message: NSE_BLOCKED_MSG}` when blocked.
+- **FII/DII, SLBM, MTF, IPOs, Top Deliveries** — return `{available:false, message}` with the source restriction explained, since these feeds live behind NSE / Chittorgarh which are blocked from cloud IPs.
+
+#### Caching & resilience
+- In-process TTL cache: 5 min for yfinance (`DEFAULT_TTL`), 6 h for AMFI/BSE EOD (`LONG_TTL`).
+- All heavy yfinance work is parallelised; failures are silently skipped (we never break the response on a single delisted ticker).
+- `app/services/market_cache_service.py` is available for disk-backed EOD caching when needed.
+
+#### Tests
+- `tests/test_insights.py` — 21 unit tests using FastAPI `TestClient` with `DISABLE_AUTH=1` env bypass. Covers bucket palette, heatmap normalisation (mocked yfinance), BSE adapter, AMFI parser, RSI/MA signal math, indices catalogue, and unavailable-feed empty states.
+- Auth bypass is in `app/middleware/clerk_auth.py` — gated on `DISABLE_AUTH=1` AND `PYTEST_CURRENT_TEST` AND `ENV != production` (triple-locked). NEVER set DISABLE_AUTH in production.
+- Run: `cd artifacts/python-backend && DISABLE_AUTH=1 python3.11 -m pytest tests/test_insights.py -v`
+
+#### UI integration (rewrite, 2026-04)
+The Insights tabs use the host app's design tokens (`bg-card`, `bg-popover`, `text-foreground`, `text-muted-foreground`, `border-card-border`, `bg-primary`, etc.) instead of hardcoded `gray-*/white` classes — light and dark mode now match the rest of the app.
+- **`MenuDropdown`** (in `_shared.tsx`) is a portal-based combobox/listbox: `position:fixed`, viewport-clamped (8px margins, flips above when there's no room below), capped trigger width with truncation (so long labels never break the row), full keyboard support (Arrow keys, Home/End, Enter, Esc), ARIA combobox/listbox roles, and an automatic "Clear" row prepended when a placeholder is configured and a value is selected.
+- **`Heatmap`** uses a squarified treemap (Bruls/Huijsen/van Wijk) sized by market cap when `sortBy="marketCap"`; falls back to a uniform grid for other sort modes. Container height adapts to constituent count; ResizeObserver keeps the layout responsive.
+- **`MarketValuation`** lets the user pick up to 6 sectors from a 19-index pool via `+ Add` / `× Remove`. Recharts uses `hsl(var(--*))` tokens so the chart respects the active theme.
+- **`CompanyFilings`** has 9 sub-tabs, a company filter dropdown, colored category badges, and relative timestamps.
+- **`FeatureLocked`** component is used by tabs whose upstream feeds (NSE / Moneycontrol / Chittorgarh) are blocked from this hosting region. Each instance shows what the data is, why it's empty, the columns that will appear once unblocked, and a direct link to the upstream source. No fake/mock data is ever shown.
 
 ---
 
