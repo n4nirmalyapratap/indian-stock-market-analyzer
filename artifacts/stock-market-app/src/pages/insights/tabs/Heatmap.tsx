@@ -361,7 +361,12 @@ export default function Heatmap() {
 
       {/* The Heatmap Canvas */}
       <div ref={containerRef} className="flex-1 min-h-0 relative m-2 md:m-4 rounded-3xl overflow-hidden border border-slate-200 dark:border-white/5 shadow-2xl bg-white/40 dark:bg-black/20">
-        <AnimatePresence mode="popLayout">
+        {/* Keying the AnimatePresence by index+perf forces every tile to
+            unmount/remount when the user switches index or timeframe, so
+            the wave-stagger entrance animation always replays — even when
+            data comes back instantly from cache. Sort changes keep the
+            same key so tiles re-flow smoothly without re-entering. */}
+        <AnimatePresence mode="popLayout" key={`${index}-${perf}`}>
           {rects?.map(({ x, y, w, h, item }, idx) => {
             const style = bucket(item.changePct);
             const isSmall = w < 70 || h < 50;
