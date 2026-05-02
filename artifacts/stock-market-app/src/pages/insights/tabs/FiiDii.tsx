@@ -281,8 +281,17 @@ function Body({
         </div>
         <p className="mt-2 text-[11px] text-gray-500 dark:text-gray-400 flex items-start gap-1.5">
           <Info className="w-3 h-3 flex-shrink-0 mt-0.5" />
-          Showing {Math.min(rows.length, limit)} of {totalDays} day(s) on file for {segMeta.label}.
-          {totalDays < 5 && " History is being built — this dashboard records each new trading day's snapshot."}
+          <span>
+            Showing {Math.min(rows.length, limit)} of {totalDays} day(s) on file for {segMeta.label}.
+            {data.segment === "equity" && totalDays < 60 && (
+              <>
+                {" "}NSE only publishes equity FII/DII as a daily snapshot, so this tab grows by
+                one row per trading session. The four F&amp;O tabs ship preloaded with ~13 months
+                of history.
+              </>
+            )}
+            {data.segment !== "equity" && totalDays < 5 && " History is being built — this dashboard records each new trading day's snapshot."}
+          </span>
         </p>
       </Card>
 
