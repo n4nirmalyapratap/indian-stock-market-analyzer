@@ -84,50 +84,25 @@ async def get_stock_history(
     if not use_range and period not in VALID_PERIODS:
         period = "1mo"
 
-    # Custom start/end range → Yahoo (PriceService doesn't model arbitrary windows yet)
+    # Custom start/end range → PriceService (single source of truth)
     if use_range:
-        import yfinance as yf
-
-        def _fetch():
-            for tk_sym in yahoo_candidates(symbol):
-                try:
-                    tk = yf.Ticker(tk_sym)
-                    hist = tk.history(start=start, end=end, interval=interval, auto_adjust=True)
-                    if not hist.empty:
-                        return tk.info, hist
-                except Exception:
-                    continue
-            return {}, None
-
-        info, hist = await asyncio.to_thread(_fetch)
-        if hist is None or hist.empty:
+        chart = await _price.get_range_history(symbol, start=start, end=end, interval=interval)
+        if not chart.get("candles"):
             return JSONResponse(status_code=404, content={"error": f"No history data found for {symbol}"})
-
-        candles = []
-        for dt_idx, row in hist.iterrows():
-            try:
-                candles.append({
-                    "time":   int(dt_idx.timestamp()),
-                    "open":   round(float(row["Open"]),  2),
-                    "high":   round(float(row["High"]),  2),
-                    "low":    round(float(row["Low"]),   2),
-                    "close":  round(float(row["Close"]), 2),
-                    "volume": int(row.get("Volume", 0)),
-                })
-            except Exception:
-                continue
         return {
             "symbol":      symbol,
             "period":      period,
             "interval":    interval,
-            "companyName": info.get("longName") or info.get("shortName") or symbol,
-            "currency":    info.get("currency", "INR"),
-            "candles":     candles,
+            "companyName": chart.get("companyName") or symbol,
+            "currency":    chart.get("currency", "INR"),
+            "candles":     chart["candles"],
             "meta": {
-                "source":      "YAHOO",
-                "asOf":        _disk._now_ist().isoformat(),
-                "marketState": _disk.current_market_state(),
-                "eodSealed":   not _disk.is_market_open(),
+                "source":       chart.get("source"),
+                "asOf":         chart.get("asOf"),
+                "marketState":  chart.get("marketState"),
+                "eodSealed":    chart.get("eodSealed"),
+                "eodDate":      chart.get("eodDate"),
+                "cacheVersion": _disk.cache_version(),
             },
         }
 
@@ -336,7 +311,6 @@ async def get_technical_summary(symbol: str, interval: str = "1d"):
     """
     import math
     import pandas as pd
-    import yfinance as yf
 
     symbol_upper = symbol.upper()
     market_state = _disk.current_market_state()
@@ -566,10 +540,11 @@ async def get_technical_summary(symbol: str, interval: str = "1d"):
                         "buy": tot_buy, "sell": tot_sell, "neutral": tot_neutral},
         }
 
-    # ── Fetch the price feed ─────────────────────────────────────────────────
+    # ── Fetch the price feed (always via PriceService) ───────────────────────
     df = None
     source = "NSE"
     eod_sealed = False
+    eod_date = None
     as_of = None
 
     if interval == "1d":
@@ -577,29 +552,30 @@ async def get_technical_summary(symbol: str, interval: str = "1d"):
         meta = _disk.load_with_meta(symbol_upper, 730) or _disk.load_with_meta(symbol_upper, 300) or {}
         source     = meta.get("source") or "NSE"
         eod_sealed = bool(meta.get("eodSealed"))
+        eod_date   = meta.get("eodDate")
         as_of      = meta.get("savedAt")
 
     if df is None or df.empty:
-        # Sub-daily, or NSE empty → Yahoo
-        def _yf_fetch():
-            for tk_sym in yahoo_candidates(symbol_upper):
-                try:
-                    h = yf.Ticker(tk_sym).history(period=period, interval=yf_interval)
-                    if not h.empty:
-                        return h
-                except Exception:
-                    continue
-            return None
-
-        hist = await asyncio.to_thread(_yf_fetch)
-        if hist is None or hist.empty:
+        # Sub-daily, or NSE empty → PriceService (Yahoo intraday under the hood)
+        chart = await _price.get_intraday_history(symbol_upper, period=period, interval=yf_interval)
+        if not chart.get("candles"):
             return JSONResponse(
                 status_code=404,
                 content={"error": f"No price data for {symbol_upper} (interval={interval})"},
             )
-        df = hist
-        source = "YAHOO"
-        as_of  = _disk._now_ist().isoformat()
+        # Reconstruct a DataFrame the indicator library can consume
+        rows = chart["candles"]
+        df = pd.DataFrame({
+            "Open":   [r["open"]   for r in rows],
+            "High":   [r["high"]   for r in rows],
+            "Low":    [r["low"]    for r in rows],
+            "Close":  [r["close"]  for r in rows],
+            "Volume": [r.get("volume", 0) for r in rows],
+        }, index=pd.to_datetime([r["time"] for r in rows], unit="s"))
+        source     = chart.get("source") or "YAHOO"
+        eod_sealed = bool(chart.get("eodSealed"))
+        eod_date   = chart.get("eodDate")
+        as_of      = chart.get("asOf") or _disk._now_ist().isoformat()
 
     try:
         result = await asyncio.to_thread(_compute, df)
@@ -611,10 +587,12 @@ async def get_technical_summary(symbol: str, interval: str = "1d"):
         "interval": interval,
         **result,
         "meta": {
-            "source":      source,
-            "asOf":        as_of,
-            "marketState": market_state,
-            "eodSealed":   eod_sealed,
+            "source":       source,
+            "asOf":         as_of,
+            "marketState":  market_state,
+            "eodSealed":    eod_sealed,
+            "eodDate":      eod_date,
+            "cacheVersion": _disk.cache_version(),
         },
     }
 

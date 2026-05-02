@@ -1,6 +1,10 @@
 import { useEffect, useRef, useCallback } from "react";
 import { useParams, useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ExternalLink } from "lucide-react";
+import { api } from "../lib/api";
+import { marketDataQueryOptions, pickMeta } from "../lib/marketData";
+import DataFreshness from "../components/DataFreshness";
 
 declare global {
   interface Window { TradingView: any; }
@@ -24,6 +28,13 @@ function toTVSymbol(raw: string): string {
 export default function ChartView() {
   const { symbol } = useParams<{ symbol: string }>();
   const [, navigate] = useLocation();
+
+  const sym = symbol ? symbol.toUpperCase() : "";
+  const quoteQuery = useQuery({
+    ...marketDataQueryOptions(["chart-quote", sym], () => api.getStockDetails(sym)),
+    enabled: !!sym,
+  });
+  const meta = pickMeta(quoteQuery.data);
   const containerRef = useRef<HTMLDivElement>(null);
   const widgetRef    = useRef<any>(null);
   const scriptRef    = useRef<HTMLScriptElement | null>(null);
@@ -113,16 +124,23 @@ export default function ChartView() {
             {toTVSymbol(symbol ?? "")}
           </span>
         </div>
-        <a
-          href={`https://www.tradingview.com/chart/?symbol=${toTVSymbol(symbol ?? "")}`}
-          target="_blank"
-          rel="noreferrer"
-          className="ml-auto text-gray-500 hover:text-gray-300 transition-colors flex items-center gap-1 text-xs"
-          title="Open in TradingView"
-        >
-          <ExternalLink size={13} />
-          TradingView
-        </a>
+        <div className="ml-auto flex items-center gap-3">
+          <DataFreshness
+            meta={meta}
+            refreshKeys={["chart-quote", sym]}
+            className="text-xs"
+          />
+          <a
+            href={`https://www.tradingview.com/chart/?symbol=${toTVSymbol(symbol ?? "")}`}
+            target="_blank"
+            rel="noreferrer"
+            className="text-gray-500 hover:text-gray-300 transition-colors flex items-center gap-1 text-xs"
+            title="Open in TradingView"
+          >
+            <ExternalLink size={13} />
+            TradingView
+          </a>
+        </div>
       </div>
 
       {/* TradingView Advanced Chart */}
