@@ -66,24 +66,38 @@ async def _telegram_polling_loop() -> None:
 
 
 async def _cache_warmup_task() -> None:
-    """On startup, warm up disk cache only when market is closed and cache is thin."""
+    """On startup, warm up disk cache only when market is closed and cache is thin.
+
+    Also runs `seal_eod_for_today_if_overdue()` so any snapshots that were
+    saved intraday get re-fetched and rewritten as official EOD closes.
+    """
     await asyncio.sleep(5)  # let the server fully start first
+    price_service = _PriceService(_NseService(), _YahooService())
+
     if is_market_open():
         logger.info("Cache warmup skipped — market is open.")
         return
+
     status = cache_status()
-    if not status.get("thin", True):
+    if status.get("thin", True):
+        logger.info("Warming up disk cache (market closed + cache thin)…")
+        try:
+            result = await _mcs.warmup_cache(price_service)
+            logger.info(
+                "Cache warmup complete: %d files saved, %d errors (date=%s)",
+                result["filesSaved"], result["errors"], result["cacheDate"],
+            )
+        except Exception as e:
+            logger.warning("Cache warmup failed: %s", e)
+    else:
         logger.info("Cache warmup skipped — cache is already populated (date=%s).", status.get("cacheDate"))
-        return
-    logger.info("Warming up disk cache (market closed + cache thin)…")
+
+    # Always seal any intraday snapshots into EOD closes when market is closed
     try:
-        result = await _mcs.warmup_cache(_PriceService(_NseService(), _YahooService()))
-        logger.info(
-            "Cache warmup complete: %d files saved, %d errors (date=%s)",
-            result["filesSaved"], result["errors"], result["cacheDate"],
-        )
+        seal_result = await _mcs.seal_eod_for_today_if_overdue(price_service)
+        logger.info("EOD seal complete: %s", seal_result)
     except Exception as e:
-        logger.warning("Cache warmup failed: %s", e)
+        logger.warning("EOD seal failed: %s", e)
 
 
 async def _bug_fixer_loop() -> None:

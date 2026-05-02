@@ -18,40 +18,16 @@ class StocksService:
         self.price = PriceService(nse, yahoo)
 
     async def get_stock_details(self, symbol: str) -> dict:
+        from . import market_cache_service as _disk
+
         upper = symbol.upper()
-        quote_data = None
         history = []
 
-        try:
-            nse_quote = await self.nse.get_stock_quote(upper)
-            if nse_quote and nse_quote.get("priceInfo"):
-                p = nse_quote["priceInfo"]
-                info = nse_quote.get("info") or nse_quote.get("metadata") or {}
-                week_high = p.get("weekHighLow", {}) or {}
-                quote_data = {
-                    "symbol": upper,
-                    "companyName": info.get("companyName", upper),
-                    "industry": info.get("industry"),
-                    "sector": info.get("sector"),
-                    "lastPrice": p.get("lastPrice"),
-                    "change": p.get("change"),
-                    "pChange": p.get("pChange"),
-                    "open": p.get("open"),
-                    "dayHigh": p.get("intraDayHighLow", {}).get("max") or p.get("dayHigh"),
-                    "dayLow": p.get("intraDayHighLow", {}).get("min") or p.get("dayLow"),
-                    "previousClose": p.get("previousClose"),
-                    "volume": p.get("totalTradedVolume"),
-                    "fiftyTwoWeekHigh": week_high.get("max"),
-                    "fiftyTwoWeekLow": week_high.get("min"),
-                    "source": "NSE",
-                }
-        except Exception as e:
-            logger.warning("NSE quote fetch failed for %s: %s", upper, e)
-
-        if not quote_data:
-            quote_data = await self.yahoo.get_quote(upper)
-        if not quote_data:
+        # Single source of truth for the quote (NSE primary, Yahoo fallback)
+        quote_meta = await self.price.get_quote_with_meta(upper)
+        if not quote_meta:
             return {"error": f"Stock {upper} not found", "symbol": upper}
+        quote_data = quote_meta["quote"]
 
         try:
             # PriceService: NSE primary → Yahoo fallback → disk cache when market closed
@@ -64,6 +40,9 @@ class StocksService:
         closes = [d["close"] for d in history if d.get("close")]
         analysis = self._analyze(history, closes) if len(closes) > 20 else None
 
+        # Pull provenance from disk for the historical block
+        hist_meta = _disk.load_with_meta(upper, 300) or {}
+
         return {
             **quote_data,
             "symbol": upper,
@@ -71,6 +50,18 @@ class StocksService:
             "insight": self._build_insight(quote_data, analysis) if analysis else "Insufficient historical data",
             "entryRecommendation": self._build_entry(quote_data, analysis) if analysis else None,
             "historicalData": history[-30:],
+            "meta": {
+                "source":           quote_meta.get("source"),
+                "asOf":             quote_meta.get("asOf"),
+                "marketState":      quote_meta.get("marketState"),
+                "eodSealed":        bool(quote_meta.get("eodSealed")),
+                "eodDate":          quote_meta.get("eodDate"),
+                "cacheVersion":     _disk.cache_version(),
+                "historySource":    hist_meta.get("source") or "LIVE",
+                "historyAsOf":      hist_meta.get("savedAt"),
+                "historyEodSealed": bool(hist_meta.get("eodSealed")),
+                "historyEodDate":   hist_meta.get("eodDate"),
+            },
         }
 
     def _analyze(self, ohlcv: list[dict], closes: list[float]) -> dict:
