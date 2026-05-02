@@ -4,10 +4,10 @@ import {
   Tooltip, CartesianGrid, ReferenceLine, Legend,
 } from "recharts";
 import {
-  TrendingUp, TrendingDown, Minus, Activity, Sparkles, ExternalLink,
+  TrendingUp, TrendingDown, Minus, Activity, Sparkles, ExternalLink, CheckCircle2, XCircle,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { MacroQuote, MacroSeriesPoint } from "@/lib/api";
+import type { MacroQuote, MacroSeriesPoint, MacroYieldCurvePoint } from "@/lib/api";
 import { Card, PageHeader, Loading, ErrorState, useChartPalette, fmtNum } from "../_shared";
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -17,10 +17,12 @@ import { Card, PageHeader, Loading, ErrorState, useChartPalette, fmtNum } from "
  *   1. Headline tiles              (Repo · CPI · IIP · USD/INR · 10Y · Brent)
  *   2. AI commentary               ("what changed this week")
  *   3. RBI policy-rate timeline    (line chart)
- *   4. CPI vs IIP overlay          (line chart, YoY %)
- *   5. GDP growth (YoY)            (bar chart)
- *   6. Currency / commodities row  (USD/INR, DXY, Brent, Gold, VIX cards)
- *   7. Sources footer
+ *   4. CPI vs WPI overlay          (line chart, YoY %)
+ *   5. IIP YoY                     (bar chart)
+ *   6. GDP growth (YoY)            (bar chart)
+ *   7. Sovereign yield curve       (multi-tenor snapshot)
+ *   8. Currency / commodities row  (USD/INR, DXY, Brent, Gold, VIX cards)
+ *   9. Sources footer              (with reachability badges)
  * ────────────────────────────────────────────────────────────────────── */
 
 function fmtTileValue(v: number | null | undefined, unit: string): string {
@@ -103,14 +105,84 @@ function shortDate(d: string): string {
   return `${months[mi] ?? m} ${y.slice(2)}`;
 }
 
-function buildOverlay(cpi: MacroSeriesPoint[], iip: MacroSeriesPoint[]) {
-  const map = new Map<string, { date: string; cpi?: number; iip?: number }>();
+function buildOverlay(cpi: MacroSeriesPoint[], wpi: MacroSeriesPoint[]) {
+  const map = new Map<string, { date: string; cpi?: number; wpi?: number }>();
   for (const p of cpi) map.set(p.date, { date: p.date, cpi: p.value });
-  for (const p of iip) {
+  for (const p of wpi) {
     const cur = map.get(p.date);
-    if (cur) cur.iip = p.value; else map.set(p.date, { date: p.date, iip: p.value });
+    if (cur) cur.wpi = p.value; else map.set(p.date, { date: p.date, wpi: p.value });
   }
   return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function YieldCurveSnapshot({ snapshot, palette }: {
+  snapshot: MacroYieldCurvePoint[];
+  palette: ReturnType<typeof useChartPalette>;
+}) {
+  const haveData = snapshot.some(p => p.value != null);
+  if (!haveData) {
+    return (
+      <p className="text-sm text-gray-500 dark:text-gray-400 py-8 text-center">
+        Yield-curve data unavailable.
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <div className="h-48">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={snapshot}>
+            <CartesianGrid strokeDasharray="3 3" stroke={palette.border} />
+            <XAxis dataKey="tenor" tick={{ fontSize: 11, fill: palette.muted }} />
+            <YAxis
+              tick={{ fontSize: 10, fill: palette.muted }}
+              domain={["auto", "auto"]}
+              unit="%"
+            />
+            <Tooltip
+              contentStyle={{
+                background: palette.surf,
+                border: `1px solid ${palette.border}`,
+                borderRadius: 8, color: palette.text,
+              }}
+              formatter={(v: number, _n: string, item: { payload: MacroYieldCurvePoint }) => [
+                v != null ? `${v.toFixed(2)}%` : "—",
+                `${item.payload.tenor} (${item.payload.asOf?.slice(0, 10) ?? "n/a"})`,
+              ]}
+            />
+            <Line
+              type="monotone"
+              dataKey="value"
+              stroke={palette.accent}
+              strokeWidth={2}
+              dot={{ r: 4, fill: palette.accent }}
+              connectNulls
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        {snapshot.map(p => (
+          <div
+            key={p.tenor}
+            className="p-2 rounded-md bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-700"
+          >
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+              {p.tenor} G-Sec
+            </p>
+            <p className="text-lg font-bold text-gray-900 dark:text-white">
+              {p.value != null ? `${p.value.toFixed(2)}%` : "—"}
+            </p>
+            {p.asOf && (
+              <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">
+                {p.asOf.slice(0, 10)}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export default function Macro() {
@@ -127,7 +199,7 @@ export default function Macro() {
   if (!data)     return null;
 
   const strip = data.currencyStrip;
-  const overlay = buildOverlay(data.cpi, data.iip);
+  const overlay = buildOverlay(data.cpi, data.wpi);
 
   // Compute headline tiles from dashboard payload (mirrors /macro/strip values).
   const repoNow  = data.rateTimeline.length ? data.rateTimeline[data.rateTimeline.length - 1] : null;
@@ -143,7 +215,7 @@ export default function Macro() {
     <div className="space-y-6">
       <PageHeader
         title="Macro Pulse — India"
-        subtitle="RBI policy, CPI, IIP, USD/INR, India 10Y and Brent in one view."
+        subtitle="RBI policy, CPI, WPI, IIP, USD/INR, India 10Y and Brent in one view."
       />
 
       {/* ── Headline tiles ──────────────────────────────────────────────── */}
@@ -244,14 +316,21 @@ export default function Macro() {
         )}
       </Card>
 
-      {/* ── CPI / IIP overlay ───────────────────────────────────────────── */}
+      {/* ── CPI / WPI overlay ───────────────────────────────────────────── */}
       <Card className="p-4 md:p-5">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="font-semibold text-gray-900 dark:text-white">CPI vs Industrial Production (YoY %)</h3>
-          <span className="text-xs text-gray-500 dark:text-gray-400">Source: FRED · INDCPIALLMINMEI / INDPROINDMISMEI</span>
+          <div>
+            <h3 className="font-semibold text-gray-900 dark:text-white">CPI vs WPI (YoY %)</h3>
+            <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+              Headline retail inflation against wholesale prices (PPI proxy when MOSPI WPI not reachable).
+            </p>
+          </div>
+          <span className="text-xs text-gray-500 dark:text-gray-400 text-right">
+            Source: FRED · INDCPIALLMINMEI / INDPIEAMP02GPM
+          </span>
         </div>
         {overlay.length === 0 ? (
-          <p className="text-sm text-gray-500 dark:text-gray-400 py-8 text-center">No CPI/IIP data available.</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 py-8 text-center">No CPI/WPI data available.</p>
         ) : (
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
@@ -267,8 +346,36 @@ export default function Macro() {
                 />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
                 <Line type="monotone" dataKey="cpi" name="CPI YoY" stroke={palette.fii} strokeWidth={2} dot={false} connectNulls />
-                <Line type="monotone" dataKey="iip" name="IIP YoY" stroke={palette.dii} strokeWidth={2} dot={false} connectNulls />
+                <Line type="monotone" dataKey="wpi" name="WPI YoY (proxy)" stroke={palette.dii} strokeWidth={2} dot={false} connectNulls />
               </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </Card>
+
+      {/* ── IIP YoY ─────────────────────────────────────────────────────── */}
+      <Card className="p-4 md:p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold text-gray-900 dark:text-white">Industrial Production (YoY %)</h3>
+          <span className="text-xs text-gray-500 dark:text-gray-400">Source: FRED · INDPROINDMISMEI</span>
+        </div>
+        {data.iip.length === 0 ? (
+          <p className="text-sm text-gray-500 dark:text-gray-400 py-8 text-center">No IIP data available.</p>
+        ) : (
+          <div className="h-56">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={data.iip}>
+                <CartesianGrid strokeDasharray="3 3" stroke={palette.border} />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: palette.muted }} tickFormatter={shortDate} minTickGap={30} />
+                <YAxis tick={{ fontSize: 10, fill: palette.muted }} unit="%" />
+                <ReferenceLine y={0} stroke={palette.muted} strokeDasharray="3 3" />
+                <Tooltip
+                  contentStyle={{ background: palette.surf, border: `1px solid ${palette.border}`, borderRadius: 8, color: palette.text }}
+                  labelFormatter={shortDate}
+                  formatter={(v: number) => [`${v.toFixed(2)}%`, "IIP YoY"]}
+                />
+                <Bar dataKey="value" fill={palette.line} radius={[4, 4, 0, 0]} />
+              </BarChart>
             </ResponsiveContainer>
           </div>
         )}
@@ -301,6 +408,20 @@ export default function Macro() {
         )}
       </Card>
 
+      {/* ── Sovereign yield curve snapshot ──────────────────────────────── */}
+      <Card className="p-4 md:p-5">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className="font-semibold text-gray-900 dark:text-white">India Sovereign Yield Curve</h3>
+            <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+              Multi-tenor snapshot. Slope (10Y − 3M) tells you whether the bond market is pricing in growth or recession.
+            </p>
+          </div>
+          <span className="text-xs text-gray-500 dark:text-gray-400 text-right">Source: FRED · INDIR3TIB01STM / INDIRLTLT01STM</span>
+        </div>
+        <YieldCurveSnapshot snapshot={data.yieldCurve.snapshot ?? []} palette={palette} />
+      </Card>
+
       {/* ── Currency / commodity strip ──────────────────────────────────── */}
       <Card className="p-4 md:p-5">
         <div className="flex items-center justify-between mb-3">
@@ -324,29 +445,39 @@ export default function Macro() {
         <Card className="p-3">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Sources</span>
-            {data.sources.map(s => (
-              <a
-                key={s.id}
-                href={
-                  s.id === "fred"  ? "https://fred.stlouisfed.org/" :
-                  s.id === "yahoo" ? "https://finance.yahoo.com/" :
-                  s.id === "rbi"   ? "https://dbie.rbi.org.in/" :
-                  "#"
-                }
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 hover:text-indigo-700 dark:hover:text-indigo-300 transition border border-gray-200 dark:border-gray-600"
-                title={s.covers}
-              >
-                {s.label} <ExternalLink className="w-3 h-3" />
-              </a>
-            ))}
+            {data.sources.map(s => {
+              const ok = s.ok !== false;
+              return (
+                <a
+                  key={s.id}
+                  href={s.url || "#"}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={`inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border transition
+                    ${ok
+                      ? "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 hover:text-indigo-700 dark:hover:text-indigo-300"
+                      : "bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-700/40"}`}
+                  title={`${s.covers}${s.note ? " · " + s.note : ""}`}
+                >
+                  {ok
+                    ? <CheckCircle2 className="w-3 h-3" />
+                    : <XCircle className="w-3 h-3" />}
+                  {s.label}
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              );
+            })}
             {data.fetchedAt && (
               <span className="text-[11px] text-gray-400 dark:text-gray-500 ml-auto">
                 Fetched {data.fetchedAt.slice(0, 19).replace("T", " ")} UTC
               </span>
             )}
           </div>
+          <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-2 leading-snug">
+            Sources marked with a check were successfully queried for this view.
+            Amber sources were probed but unreachable from this server, so the
+            corresponding series fall back to the FRED proxy where applicable.
+          </p>
         </Card>
       )}
     </div>

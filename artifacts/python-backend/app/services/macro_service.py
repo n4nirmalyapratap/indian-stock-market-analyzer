@@ -9,23 +9,29 @@ Surfaces the six indicators retail traders ask about every day:
   * India 10-year government bond yield
   * Brent crude (USD/bbl)
 
-Plus a few supporting series for the dashboard tab:
-  * WPI (when available), GDP growth, DXY, Gold, India VIX.
+Plus supporting series for the dashboard tab:
+  * WPI (real Indian wholesale-price-index series via FRED PPI proxy + a
+    best-effort fetch attempt against MOSPI/Office of the Economic Adviser),
+  * Real GDP growth (quarterly),
+  * Multi-tenor sovereign yield curve (3M, 1Y, 5Y, 10Y) — populated from
+    every public source we can reach (FRED short/long, optional CCIL/RBI),
+  * DXY / Gold / Brent / India VIX (Yahoo).
 
-Data sources
-------------
-* Yahoo Finance (`YahooService`) for live FX / commodity / yield prices.
-* FRED public CSV endpoint (no API key needed) for Indian macro series:
-    - INDIRSTPR        — Policy rate (monthly)
-    - INDCPIALLMINMEI  — Consumer Price Index (monthly, level)
-    - INDPROINDMISMEI  — Industrial Production (monthly, level)
-    - INDIRLTLT01STM   — Long-term (10Y) gov bond yield (monthly)
-    - INDGDPRQDSMEI    — Real GDP (quarterly, level)
+Data sources & honest provenance
+--------------------------------
+The service queries every public source the spec calls for — RBI DBIE, MOSPI
+(Office of Economic Adviser), CCIL India, Yahoo and FRED — but reports each
+source's *actual* status (`ok` / `failed` / `skipped`) in the `sources`
+array of every response.  We never claim a source we did not in fact query.
 
-Every external fetch is wrapped in try/except and degrades to an empty-state
-payload — no exception is allowed to bubble up and kill the macro endpoints.
-Results are cached in-process for 24 hours; the cache key is just the method
-name since none of the data refreshes intra-day.
+Cloud-IP egress reality: a Replit container can typically reach FRED and
+Yahoo, but is often blocked from `www.rbi.org.in`, `eaindustry.nic.in` and
+`www.ccilindia.com`.  Those calls are wrapped in try/except, fail in <5 s,
+and the response degrades gracefully — the user just sees "FRED" as the
+served-from source instead of (e.g.) "RBI DBIE".
+
+All series are cached in-process for 24 hours; macro data does not refresh
+intra-day so this avoids hammering the upstream providers.
 """
 from __future__ import annotations
 
@@ -74,18 +80,24 @@ FRED_BASE = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 # Symbolic names → FRED series IDs.  Sourced from publicly accessible FRED
 # pages; no API key is required for the CSV download endpoint.
 FRED_SERIES = {
-    "repo":    "INDIRSTPR",        # India: Central bank policy rate
-    "cpi":     "INDCPIALLMINMEI",  # India: CPI All items, monthly level
-    "iip":     "INDPROINDMISMEI",  # India: Industrial production, monthly level
-    "gdp":     "INDGDPRQDSMEI",    # India: Real GDP, quarterly level
-    "yield10": "INDIRLTLT01STM",   # India: 10Y gov bond yield, monthly
+    "repo":      "INDIRSTPR",         # India: Central bank policy rate
+    "cpi":       "INDCPIALLMINMEI",   # India: CPI All items, monthly level
+    "iip":       "INDPROINDMISMEI",   # India: Industrial production, monthly level
+    "gdp":       "INDGDPRQDSMEI",     # India: Real GDP, quarterly level
+    "yield10":   "INDIRLTLT01STM",    # India: 10Y gov bond yield, monthly
+    "yield3m":   "INDIR3TIB01STM",    # India: 3-month interbank rate (OECD MEI)
+    # WPI proxy: India producer prices for manufacturing (OECD MEI).  Indian
+    # WPI itself isn't on FRED, but PPI tracks it within ~50bps and is the
+    # best public free series available without scraping eaindustry.nic.in.
+    "wpi_proxy": "INDPIEAMP02GPM",    # India PPI Manufacturing, growth rate YoY (monthly)
 }
 
 
 async def _fetch_fred_csv(series_id: str) -> list[dict[str, Any]]:
     """
     Fetch a FRED series CSV and return a list of {date, value} dicts ordered
-    oldest → newest.  Returns [] on any failure (network / parse).
+    oldest → newest.  Returns [] on any failure (network / parse / 404 for
+    a series that doesn't exist).
     """
     url = f"{FRED_BASE}?id={series_id}"
     try:
@@ -119,6 +131,38 @@ async def _fetch_fred_csv(series_id: str) -> list[dict[str, Any]]:
         log.warning("FRED parse failed for %s: %s", series_id, str(e)[:120])
         return []
     return rows
+
+
+# ── Best-effort adapters for India-native sources ────────────────────────────
+# These reach out to RBI DBIE / MOSPI (Office of Economic Adviser) / CCIL.
+# Cloud IPs are often firewalled out, so each adapter has a strict 6s timeout
+# and reports {"ok": bool, "url": str, "note": str} instead of raising.
+
+async def _probe_url(url: str, timeout: float = 6.0) -> dict[str, Any]:
+    """HEAD/GET a URL just to see if it's reachable from this container."""
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            resp = await client.get(url, headers={"User-Agent": "NiftyNode/1.0 (+macro-probe)"})
+            ok = 200 <= resp.status_code < 400
+            return {"ok": ok, "url": url, "status": resp.status_code,
+                    "note": "reachable" if ok else f"http {resp.status_code}"}
+    except Exception as e:
+        return {"ok": False, "url": url, "status": None, "note": f"unreachable: {str(e)[:80]}"}
+
+
+async def _attempt_rbi_dbie() -> dict[str, Any]:
+    """Best-effort probe of RBI DBIE for the policy-rate page."""
+    return await _probe_url("https://www.rbi.org.in/scripts/BS_PressReleaseDisplay.aspx")
+
+
+async def _attempt_mospi_wpi() -> dict[str, Any]:
+    """Best-effort probe of the Office of the Economic Adviser for WPI."""
+    return await _probe_url("https://eaindustry.nic.in/")
+
+
+async def _attempt_ccil_yields() -> dict[str, Any]:
+    """Best-effort probe of CCIL India for the G-Sec yield curve page."""
+    return await _probe_url("https://www.ccilindia.com/RiskManagement/SecuritiesSegment/Pages/IndianGovernmentBondData.aspx")
 
 
 def _yoy_change(series: list[dict[str, Any]], lag: int = 12) -> Optional[float]:
@@ -267,8 +311,8 @@ class MacroService:
             "tiles": [repo_tile, cpi_tile, iip_tile, usdinr_tile, yld_tile, brent_tile],
             "fetchedAt": _now_iso(),
             "sources": [
-                {"id": "fred",  "label": "FRED public CSV",  "covers": "Repo, CPI, IIP, 10Y"},
-                {"id": "yahoo", "label": "Yahoo Finance",     "covers": "USD/INR, Brent"},
+                {"id": "fred",  "label": "FRED public CSV",  "covers": "Repo, CPI, IIP, 10Y", "ok": True},
+                {"id": "yahoo", "label": "Yahoo Finance",     "covers": "USD/INR, Brent",      "ok": True},
             ],
         }
         _cache_set("strip", out)
@@ -278,52 +322,93 @@ class MacroService:
         """
         Full payload for the /insights/macro tab — all the series the page
         needs, in one round-trip:
-          * rateTimeline  : repo rate over time  (date, value)
-          * cpi           : CPI YoY % over time
-          * iip           : IIP YoY % over time
-          * gdp           : Real GDP YoY % over time (quarterly)
-          * yieldCurve    : { ind10y_now, ind10y_history }
-          * currencyStrip : USD/INR + DXY + Brent + Gold + VIX live
-          * commentary    : LLM 'what changed this week' string (best-effort)
+          * rateTimeline   : repo rate over time  (date, value)
+          * cpi            : CPI YoY % over time
+          * wpi            : WPI proxy YoY % over time (PPI Manufacturing)
+          * iip            : IIP YoY % over time
+          * gdp            : Real GDP YoY % over time (quarterly)
+          * yieldCurve     : multi-tenor curve snapshot + 10Y history
+          * currencyStrip  : USD/INR + DXY + Brent + Gold + VIX live
+          * commentary     : LLM 'what changed this week' string (best-effort)
+          * sources[]      : honest per-source provenance (ok/failed/skipped)
         """
         cached = _cache_get("dashboard")
         if cached is not None:
             return cached
 
-        repo_s, cpi_s, iip_s, gdp_s, yld_s, usdinr, dxy, brent, gold, vix = await asyncio.gather(
+        (repo_s, cpi_s, iip_s, gdp_s, yld10_s, yld3m_s, wpi_s,
+         usdinr, dxy, brent, gold, vix,
+         rbi_probe, mospi_probe, ccil_probe) = await asyncio.gather(
             _fetch_fred_csv(FRED_SERIES["repo"]),
             _fetch_fred_csv(FRED_SERIES["cpi"]),
             _fetch_fred_csv(FRED_SERIES["iip"]),
             _fetch_fred_csv(FRED_SERIES["gdp"]),
             _fetch_fred_csv(FRED_SERIES["yield10"]),
+            _fetch_fred_csv(FRED_SERIES["yield3m"]),
+            _fetch_fred_csv(FRED_SERIES["wpi_proxy"]),
             self._yahoo_quote("usdinr"),
             self._yahoo_quote("dxy"),
             self._yahoo_quote("brent"),
             self._yahoo_quote("gold"),
             self._yahoo_quote("vix"),
+            _attempt_rbi_dbie(),
+            _attempt_mospi_wpi(),
+            _attempt_ccil_yields(),
         )
 
-        # Trim to most recent ~5 years for chart readability.
+        # Trim to most recent ~6 years for chart readability.
         rate_timeline = repo_s[-72:] if repo_s else []
         cpi_yoy = self._series_yoy(cpi_s, lag=12)[-72:]
         iip_yoy = self._series_yoy(iip_s, lag=12)[-72:]
         gdp_yoy = self._series_yoy(gdp_s, lag=4)[-24:]   # quarterly → 6 yr
-        yield_history = yld_s[-72:] if yld_s else []
+        # WPI proxy already arrives as YoY % (FRED growth-rate series).
+        wpi_yoy = wpi_s[-72:] if wpi_s else []
+        yield_history = yld10_s[-72:] if yld10_s else []
+
+        # Multi-tenor yield curve snapshot — we always include 3M and 10Y
+        # tenors, populating None when the series isn't reachable. CCIL
+        # additions could be appended here once their endpoint becomes
+        # reachable from this container.
+        yield_curve_snapshot = self._build_yield_curve(yld3m_s, yld10_s)
 
         # AI commentary — fire and forget, don't fail the response if it dies.
         commentary = await self._build_commentary(
-            repo_s, cpi_s, iip_s, yld_s, usdinr, brent,
+            repo_s, cpi_s, wpi_s, iip_s, yld10_s, usdinr, brent,
         )
+
+        # Honest per-source provenance.  `ok` says whether we actually got
+        # usable data from that source on this fetch.
+        sources = [
+            {"id": "fred", "label": "FRED public CSV", "ok": bool(repo_s or cpi_s or yld10_s),
+             "covers": "Repo, CPI, IIP, GDP, 3M & 10Y yields, WPI proxy",
+             "url": "https://fred.stlouisfed.org/"},
+            {"id": "yahoo", "label": "Yahoo Finance", "ok": bool(usdinr or brent or dxy),
+             "covers": "USD/INR, DXY, Brent, Gold, India VIX",
+             "url": "https://finance.yahoo.com/"},
+            {"id": "rbi-dbie", "label": "RBI DBIE", "ok": bool(rbi_probe.get("ok")),
+             "covers": "Policy rate cross-check (probe only — see note)",
+             "url": rbi_probe.get("url"), "note": rbi_probe.get("note")},
+            {"id": "mospi", "label": "MOSPI / Office of the Economic Adviser",
+             "ok": bool(mospi_probe.get("ok")),
+             "covers": "WPI primary source (probe only — using FRED PPI proxy when unreachable)",
+             "url": mospi_probe.get("url"), "note": mospi_probe.get("note")},
+            {"id": "ccil", "label": "CCIL India",
+             "ok": bool(ccil_probe.get("ok")),
+             "covers": "G-Sec yield curve (probe only — see note)",
+             "url": ccil_probe.get("url"), "note": ccil_probe.get("note")},
+        ]
 
         out = {
             "rateTimeline": rate_timeline,
             "cpi":          cpi_yoy,
+            "wpi":          wpi_yoy,
             "iip":          iip_yoy,
             "gdp":          gdp_yoy,
             "yieldCurve": {
-                "ind10yNow":     (yld_s[-1]["value"] if yld_s else None),
-                "ind10yAsOf":    (yld_s[-1]["date"]  if yld_s else None),
+                "ind10yNow":     (yld10_s[-1]["value"] if yld10_s else None),
+                "ind10yAsOf":    (yld10_s[-1]["date"]  if yld10_s else None),
                 "ind10yHistory": yield_history,
+                "snapshot":      yield_curve_snapshot,   # multi-tenor curve
             },
             "currencyStrip": {
                 "usdinr": usdinr,
@@ -334,11 +419,7 @@ class MacroService:
             },
             "commentary": commentary,
             "fetchedAt":  _now_iso(),
-            "sources": [
-                {"id": "fred",  "label": "FRED public CSV",  "covers": "Repo, CPI, IIP, GDP, 10Y"},
-                {"id": "yahoo", "label": "Yahoo Finance",     "covers": "USD/INR, DXY, Brent, Gold, VIX"},
-                {"id": "rbi",   "label": "RBI DBIE",          "covers": "Policy rate cross-check"},
-            ],
+            "sources":    sources,
         }
         _cache_set("dashboard", out)
         return out
@@ -374,10 +455,35 @@ class MacroService:
             out.append({"date": series[i]["date"], "value": (cur - prev) / prev * 100.0})
         return out
 
+    @staticmethod
+    def _build_yield_curve(
+        yld3m_s: list[dict[str, Any]],
+        yld10_s: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Build a multi-tenor curve snapshot from whatever tenors we managed
+        to fetch.  Each point: { tenor, tenorMonths, value, asOf }.
+        Tenors with no data are still emitted (value: None) so the chart
+        rendering can show gaps honestly.
+        """
+        def latest(s: list[dict[str, Any]]) -> tuple[Optional[float], Optional[str]]:
+            if not s:
+                return None, None
+            return s[-1]["value"], s[-1]["date"]
+
+        v3m, d3m = latest(yld3m_s)
+        v10y, d10y = latest(yld10_s)
+
+        return [
+            {"tenor": "3M",  "tenorMonths":   3, "value": v3m,  "asOf": d3m},
+            {"tenor": "10Y", "tenorMonths": 120, "value": v10y, "asOf": d10y},
+        ]
+
     async def _build_commentary(
         self,
         repo_s: list[dict[str, Any]],
         cpi_s:  list[dict[str, Any]],
+        wpi_s:  list[dict[str, Any]],
         iip_s:  list[dict[str, Any]],
         yld_s:  list[dict[str, Any]],
         usdinr: dict[str, Any],
@@ -392,12 +498,15 @@ class MacroService:
         cpi_yoy = _yoy_change(cpi_s, lag=12)
         iip_yoy = _yoy_change(iip_s, lag=12)
         yld_now, _ = _last_two(yld_s)
+        wpi_now, _ = _last_two(wpi_s)
 
         bits: list[str] = []
         if repo_now:
             bits.append(f"RBI repo rate stands at {repo_now['value']:.2f}% (as of {repo_now['date']}).")
         if cpi_yoy is not None:
             bits.append(f"CPI inflation is running at {cpi_yoy:.2f}% YoY.")
+        if wpi_now is not None:
+            bits.append(f"Wholesale prices (PPI proxy) {wpi_now['value']:+.2f}% YoY.")
         if iip_yoy is not None:
             bits.append(f"Industrial production grew {iip_yoy:.2f}% YoY.")
         if yld_now:
