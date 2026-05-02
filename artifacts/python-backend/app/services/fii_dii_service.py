@@ -231,7 +231,7 @@ class FiiDiiService:
             await loop.run_in_executor(None, save_to_db, df, table)
         return df
 
-    async def get_flows(self, segment: str, days: int = 180) -> dict:
+    async def get_flows(self, segment: str, days: int = 365) -> dict:
         end_date = datetime.today()
         start_date = end_date - timedelta(days=days)
         
@@ -291,6 +291,9 @@ class FiiDiiService:
                 "isPartial": len(sl) < n,
             }
 
+        # Group rows into calendar months (most recent first)
+        monthly = self._group_by_month(rows)
+
         return {
             "available": True,
             "segment": segment,
@@ -299,10 +302,87 @@ class FiiDiiService:
             "latest": latest,
             "rows": rows,
             "summary": {
-                "daily": _summary(1),
-                "weekly": _summary(5),
+                "daily":   _summary(1),
+                "weekly":  _summary(5),
                 "monthly": _summary(22),
+                "ytd":     _summary(min(252, len(rows))),
             },
+            "monthly": monthly,
+            "totalDays": len(rows),
+            "rangeDays": days,
+        }
+
+    @staticmethod
+    def _group_by_month(rows: list[dict]) -> list[dict]:
+        """Group descending-date rows into per-calendar-month buckets.
+        Each bucket: { key: 'YYYY-MM', label: 'April 2026', fiiNet, diiNet,
+        greenDays, redDays, days, rows: [...descending] }."""
+        buckets: dict[str, dict] = {}
+        order: list[str] = []
+        for r in rows:
+            d = r.get("date") or ""
+            if len(d) < 7:
+                continue
+            key = d[:7]  # YYYY-MM
+            if key not in buckets:
+                try:
+                    dt = datetime.strptime(d, "%Y-%m-%d")
+                    label = dt.strftime("%B %Y")
+                except Exception:
+                    label = key
+                buckets[key] = {
+                    "key": key,
+                    "label": label,
+                    "fiiNet": 0.0,
+                    "diiNet": 0.0,
+                    "greenDays": 0,
+                    "redDays": 0,
+                    "days": 0,
+                    "rows": [],
+                }
+                order.append(key)
+            b = buckets[key]
+            fii = r.get("fiiNet") or 0.0
+            dii = r.get("diiNet") or 0.0
+            b["fiiNet"] += fii
+            b["diiNet"] += dii
+            b["days"] += 1
+            # Use combined FII+DII flow direction for green/red day classification
+            net = fii + dii
+            if net > 0:
+                b["greenDays"] += 1
+            elif net < 0:
+                b["redDays"] += 1
+            b["rows"].append(r)
+        # Round to 2 decimals
+        for k in order:
+            buckets[k]["fiiNet"] = round(buckets[k]["fiiNet"], 2)
+            buckets[k]["diiNet"] = round(buckets[k]["diiNet"], 2)
+        return [buckets[k] for k in order]
+
+    async def backfill_all(self, days: int = 400) -> dict:
+        """One-shot backfill of every supported segment into the local SQLite cache.
+        Returns a summary dict with row counts per segment so the caller can
+        confirm the cache file is ready to commit."""
+        end_date = datetime.today()
+        start_date = end_date - timedelta(days=days)
+        results = {}
+        for seg in ("equity", "index_future", "index_option", "stock_future", "stock_option"):
+            try:
+                df = await self.get_historical(seg, start_date, end_date)
+                results[seg] = {
+                    "rows": int(0 if df is None or df.empty else len(df)),
+                    "ok": True,
+                }
+            except Exception as e:
+                results[seg] = {"rows": 0, "ok": False, "error": str(e)}
+        return {
+            "ok": True,
+            "days": days,
+            "from": start_date.strftime("%Y-%m-%d"),
+            "to":   end_date.strftime("%Y-%m-%d"),
+            "segments": results,
+            "cacheFile": str(_DB_FILE),
         }
 
     def _empty_response(self, segment: str, message: str) -> dict:
@@ -312,6 +392,9 @@ class FiiDiiService:
             "source": "NSE India",
             "sourceUrl": "https://www.nseindia.com/reports/fii-dii" if segment == "equity" else "https://www.nseindia.com/all-reports-derivatives",
             "rows": [],
-            "summary": {"daily": {}, "weekly": {}, "monthly": {}},
+            "summary": {"daily": {}, "weekly": {}, "monthly": {}, "ytd": {}},
+            "monthly": [],
+            "totalDays": 0,
+            "rangeDays": 0,
             "message": message
         }
