@@ -171,7 +171,7 @@ export default function SentimentDashboard() {
   const [refreshing, setRefreshing] = useState(false);
 
   const { data: sentiment, isLoading, error, refetch: refetchSentiment } = useQuery<Sentiment>(
-    marketDataQueryOptions<Sentiment>(
+    marketDataQueryOptions<Sentiment, { retry: number }>(
       ["sentiment-market", refreshKey],
       () => fetchApi<Sentiment>("/sentiment/market"),
       { retry: 1 },
@@ -179,7 +179,7 @@ export default function SentimentDashboard() {
   );
 
   const { data: sectorsData, refetch: refetchSectors } = useQuery<SectorsResp>(
-    marketDataQueryOptions<SectorsResp>(
+    marketDataQueryOptions<SectorsResp, { retry: number }>(
       ["sentiment-sectors", refreshKey],
       () => fetchApi<SectorsResp>("/sentiment/sectors"),
       { retry: 1 },
