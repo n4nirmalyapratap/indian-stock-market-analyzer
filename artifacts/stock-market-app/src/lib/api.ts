@@ -270,9 +270,19 @@ export interface MacroTile {
 }
 
 export interface MacroSource {
-  id:     string;
-  label:  string;
-  covers: string;
+  id:      string;
+  label:   string;
+  covers:  string;
+  ok?:     boolean;
+  url?:    string | null;
+  note?:   string | null;
+}
+
+export interface MacroYieldCurvePoint {
+  tenor:        string;
+  tenorMonths:  number;
+  value:        number | null;
+  asOf:         string | null;
 }
 
 export interface MacroStripResponse {
@@ -298,12 +308,14 @@ export interface MacroQuote {
 export interface MacroDashboardResponse {
   rateTimeline: MacroSeriesPoint[];
   cpi:          MacroSeriesPoint[];
+  wpi:          MacroSeriesPoint[];
   iip:          MacroSeriesPoint[];
   gdp:          MacroSeriesPoint[];
   yieldCurve: {
     ind10yNow:     number | null;
     ind10yAsOf:    string | null;
     ind10yHistory: MacroSeriesPoint[];
+    snapshot:      MacroYieldCurvePoint[];
   };
   currencyStrip: {
     usdinr: MacroQuote;
