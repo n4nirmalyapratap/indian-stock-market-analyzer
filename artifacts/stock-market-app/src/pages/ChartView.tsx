@@ -31,7 +31,7 @@ export default function ChartView() {
 
   const sym = symbol ? symbol.toUpperCase() : "";
   const quoteQuery = useQuery({
-    ...marketDataQueryOptions(["chart-quote", sym], () => api.getStockDetails(sym)),
+    ...marketDataQueryOptions(["chart-quote", sym], () => api.stockDetail(sym)),
     enabled: !!sym,
   });
   const meta = pickMeta(quoteQuery.data);

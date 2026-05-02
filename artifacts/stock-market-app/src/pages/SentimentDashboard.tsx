@@ -5,6 +5,8 @@ import {
   RefreshCw, AlertTriangle,
   BarChart2, Info, Gauge,
 } from "lucide-react";
+import DataFreshness from "@/components/DataFreshness";
+import { pickMeta } from "@/lib/marketData";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Component { name: string; score: number; weight: number; detail: string }
@@ -194,6 +196,7 @@ export default function SentimentDashboard() {
 
   const score    = sentiment?.composite ?? 0;
   const sectors  = sectorsData?.sectors ?? [];
+  const meta     = pickMeta(sentiment) ?? pickMeta(sectorsData);
 
   // ── Format timestamp ────────────────────────────────────────────────────────
   const updatedAt = sentiment?.timestamp
@@ -214,14 +217,17 @@ export default function SentimentDashboard() {
             {updatedAt && <span className="ml-2 text-xs">· Updated {updatedAt}</span>}
           </p>
         </div>
-        <button
-          onClick={handleRefresh}
-          disabled={refreshing || isLoading}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
-        >
-          <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
-          {refreshing ? "Refreshing…" : "Refresh"}
-        </button>
+        <div className="flex items-center gap-3 flex-wrap">
+          <DataFreshness meta={meta} hideRefresh />
+          <button
+            onClick={handleRefresh}
+            disabled={refreshing || isLoading}
+            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
       </div>
 
       {isLoading && (
