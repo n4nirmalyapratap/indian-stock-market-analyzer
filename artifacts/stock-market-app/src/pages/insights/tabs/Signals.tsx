@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
 import { PageHeader, Card, PillTabs, Loading, EmptyState, MenuDropdown, ErrorState } from "../_shared";
 import { Activity } from "lucide-react";
+import DataFreshness from "@/components/DataFreshness";
+import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 interface Signal {
   symbol: string;
@@ -49,11 +51,13 @@ export default function Signals() {
     staleTime: 60 * 60_000,
   });
 
-  const { data, isLoading, error } = useQuery<SignalsResponse>({
-    queryKey: ["insights/signals", index, verdict],
-    queryFn: () => fetchApi(`/insights/signals?index=${index}&verdict=${verdict}`),
-    staleTime: 5 * 60_000,
-  });
+  const { data, isLoading, error } = useQuery<SignalsResponse>(
+    marketDataQueryOptions<SignalsResponse>(
+      ["insights/signals", index, verdict],
+      () => fetchApi(`/insights/signals?index=${index}&verdict=${verdict}`),
+    ),
+  );
+  const signalsMeta = pickMeta(data);
 
   const counts = useMemo(() => {
     const c = { Bullish: 0, Bearish: 0, Neutral: 0 };
@@ -69,6 +73,10 @@ export default function Signals() {
   return (
     <div>
       <PageHeader title="Signals" subtitle="Technical signals (RSI + MA crossover) computed live across the index" />
+
+      <div className="mb-3">
+        <DataFreshness meta={signalsMeta} refreshKeys={[["insights/signals", index, verdict]]} />
+      </div>
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <MenuDropdown label="Index" value={index} onChange={setIndex} options={indexOptions} maxButtonWidth={240}/>
