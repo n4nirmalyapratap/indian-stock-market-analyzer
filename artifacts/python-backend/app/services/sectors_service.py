@@ -700,5 +700,19 @@ class SectorsService:
             "adRatio": round(advancing / declining, 2) if declining else advancing,
         }
 
+        # Canonical provenance contract — same shape as every other route's
+        # meta. Frontend (Dashboard, Sectors) reads this directly via
+        # pickMeta(rotation), no ad-hoc `timestamp` fallback needed.
+        state = _disk.current_market_state()
+        result["meta"] = {
+            "source":       "NSE",
+            "servedFrom":   "ROTATION_ENGINE",
+            "asOf":         _disk._now_ist().isoformat(),
+            "marketState":  state,
+            "eodSealed":    state in ("CLOSED", "WEEKEND"),
+            "eodDate":      _disk._eod_date_for(state),
+            "cacheVersion": _disk.cache_version(),
+        }
+
         _set_cache(result)
         return result
