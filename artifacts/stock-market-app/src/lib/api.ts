@@ -257,6 +257,67 @@ export interface AgentsListResponse {
   count:    number;
 }
 
+// ── Macro Pulse (India macro indicators) ─────────────────────────────────────
+
+export interface MacroTile {
+  id:        string;
+  label:     string;
+  unit:      string;
+  value:     number | null;
+  delta:     number | null;
+  deltaUnit: string;
+  asOf:      string | null;
+}
+
+export interface MacroSource {
+  id:     string;
+  label:  string;
+  covers: string;
+}
+
+export interface MacroStripResponse {
+  tiles:     MacroTile[];
+  fetchedAt: string;
+  sources:   MacroSource[];
+  meta?:     unknown;
+}
+
+export interface MacroSeriesPoint {
+  date:  string;
+  value: number;
+}
+
+export interface MacroQuote {
+  symbol?:  string;
+  price?:   number | null;
+  change?:  number;
+  pChange?: number;
+  name?:    string;
+}
+
+export interface MacroDashboardResponse {
+  rateTimeline: MacroSeriesPoint[];
+  cpi:          MacroSeriesPoint[];
+  iip:          MacroSeriesPoint[];
+  gdp:          MacroSeriesPoint[];
+  yieldCurve: {
+    ind10yNow:     number | null;
+    ind10yAsOf:    string | null;
+    ind10yHistory: MacroSeriesPoint[];
+  };
+  currencyStrip: {
+    usdinr: MacroQuote;
+    dxy:    MacroQuote;
+    brent:  MacroQuote;
+    gold:   MacroQuote;
+    vix:    MacroQuote;
+  };
+  commentary: string;
+  fetchedAt:  string;
+  sources:    MacroSource[];
+  meta?:      unknown;
+}
+
 export interface TechnicalAnalysis {
   trend?: string;
   rsi?: number;
@@ -431,6 +492,10 @@ export const api = {
     fetchApi<PersonaDeepDive>(
       `/agents/${encodeURIComponent(symbol)}/${encodeURIComponent(personaId)}`,
     ),
+
+  // ── Macro Pulse ──
+  macroStrip:     () => fetchApi<MacroStripResponse>("/insights/macro/strip"),
+  macroDashboard: () => fetchApi<MacroDashboardResponse>("/insights/macro"),
 
   patterns: (params?: { universe?: string; signal?: string; category?: string }) => {
     const filtered = Object.fromEntries(

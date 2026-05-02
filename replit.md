@@ -58,12 +58,20 @@ A `/agents` and `/agents/:symbol` page that runs eight legendary investor person
 - **Yahoo fundamental units gotcha**: `returnOnEquity` / `profitMargins` / `operatingMargins` / `grossMargins` are **fractions** (0.18 = 18%); `debtToEquity` is **percent** (50.0 = D/E 0.5). Persona thresholds in `agents_service.py` reflect this.
 - **External context enrichment**: `gather_external_context()` concurrently pulls (a) symbol-tagged recent news from `news_service`, (b) the broad-market mood snapshot from `market_sentiment_engine`, and (c) the latest NSE FII/DII equity flows summarised as a one-line flow label. These are passed into the LLM thesis prompt only — the deterministic checklist scores never depend on them, keeping verdicts fully reproducible. Every council response also includes a `sources[]` provenance array and a `fetchedAt` timestamp.
 
+### Macro Pulse (added 2026-05, Phase 3 of FinceptTerminal-inspired roadmap)
+A `/insights/macro` tab plus a persistent six-tile strip pinned to the dashboard surface India's macro pulse so retail traders no longer have to flip between Moneycontrol/RBI tabs to read the room.
+- **Backend**: `app/services/macro_service.py` (FRED CSV downloader + Yahoo quote wrapper + 24 h in-process cache + LLM commentary with deterministic fallback). Two routes added to `app/routes/insights.py`: `GET /api/insights/macro/strip` (six tiles: Repo, CPI YoY, IIP YoY, USD/INR, India 10Y, Brent) and `GET /api/insights/macro` (full payload — repo timeline, CPI/IIP YoY series, GDP YoY bars, yield curve snapshot, currency strip with DXY/Gold/VIX, AI commentary, sources).
+- **Data sources**: FRED public CSV endpoint (no API key needed) for `INDIRSTPR` (repo), `INDCPIALLMINMEI` (CPI), `INDPROINDMISMEI` (IIP), `INDGDPRQDSMEI` (GDP), `INDIRLTLT01STM` (10Y); Yahoo for `INR=X`, `DX-Y.NYB`, `BZ=F`, `GC=F`, `^INDIAVIX`. Every external fetch is wrapped in try/except — failures degrade to empty payloads, never crash the route.
+- **Frontend**: `src/pages/insights/tabs/Macro.tsx` (headline tiles + AI commentary card + RBI rate timeline line chart + CPI/IIP overlay + GDP bars + currency cards + sources footer). `src/components/macro/MacroStrip.tsx` is the compact six-tile ribbon mounted in `Dashboard.tsx`; each tile is a `wouter` Link to `/insights/macro`. New tab registered in `InsightsLayout.tsx` with a Globe icon.
+- **API client**: `MacroTile`, `MacroStripResponse`, `MacroDashboardResponse`, `MacroQuote`, `MacroSeriesPoint` interfaces in `lib/api.ts`; `api.macroStrip()` and `api.macroDashboard()` clients.
+- **Tests**: `tests/test_macro.py` (18 tests) — FRED CSV parser (well-formed, NA/dot/non-numeric, HTTP errors, network exceptions), `_yoy_change`/`_last_two`/`_series_yoy` math, strip aggregation always returns 6 tiles, dashboard shape is complete when data is empty, 24 h cache prevents re-fetch, deterministic commentary fallback when LLM is unavailable or returns the `[AI unavailable]` sentinel, route smoke tests via TestClient.
+
 ### Insights module (added 2026-04)
 A top-level `/insights` section replicates the ScanX "Insights" experience with 12 sub-tabs and a sticky inner sidebar.
 - Top nav: `Insights` entry in `MAIN_NAV` (`src/LayoutShell.tsx`)
 - Routes: `/insights` and `/insights/:tab*` → `src/pages/insights/InsightsLayout.tsx`
-- Tab pages: `src/pages/insights/tabs/` (Heatmap, FiiDii, CompanyFilings, MfHoldings, BulkBlockDeals, Signals, SlbmRental, MtfInsights, FoBan, TopDeliveries, MarketValuation, Ipo)
-- Backend: `app/routes/insights.py` registered in `main.py`. Endpoints: `/api/insights/{indices,heatmap,company-filings,mf-holdings,signals,index-valuation,market-valuation,fo-ban,top-deliveries,fii-dii,slbm,mtf,ipos}`.
+- Tab pages: `src/pages/insights/tabs/` (Macro, Heatmap, FiiDii, CompanyFilings, MfHoldings, BulkBlockDeals, Signals, SlbmRental, MtfInsights, FoBan, TopDeliveries, MarketValuation, Ipo)
+- Backend: `app/routes/insights.py` registered in `main.py`. Endpoints: `/api/insights/{macro,macro/strip,indices,heatmap,company-filings,mf-holdings,signals,index-valuation,market-valuation,fo-ban,top-deliveries,fii-dii,slbm,mtf,ipos}`.
 
 #### Real-data wiring (data sources, network reachability)
 This Replit container can reach **yfinance**, **api.bseindia.com**, and **portal.amfiindia.com** but is BLOCKED from `www.nseindia.com`, `www.moneycontrol.com`, and `www.chittorgarh.com`. Endpoints handle this honestly:
