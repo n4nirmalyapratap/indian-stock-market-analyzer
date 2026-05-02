@@ -133,6 +133,45 @@ class NseService:
             1800,
         )
 
+    async def fetch_nse_archive_text(
+        self,
+        url: str,
+        cache_key: str,
+        ttl: int = 86400,
+        retries: int = 2,
+    ) -> Optional[str]:
+        """Fetch a static-archive resource from nsearchives.nseindia.com (CSV /
+        text endpoints) using the same shared in-process cache and browser
+        headers as the JSON API path. Returns the raw text body on HTTP 200,
+        None otherwise (e.g. weekend/holiday 404s for daily reports).
+
+        Used by callers like fii_dii_service for the participant-OI archive
+        which only exists as a CSV — going through NseService keeps a single
+        place for header/UA/cache discipline."""
+        cached = _get_cache(cache_key)
+        if cached is not None:
+            return cached
+        headers = {
+            "User-Agent": HEADERS_BROWSER["User-Agent"],
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.nseindia.com/all-reports-derivatives",
+        }
+        for attempt in range(retries):
+            try:
+                async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                    resp = await client.get(url, headers=headers)
+                if resp.status_code == 200 and resp.text and len(resp.text) > 50:
+                    _set_cache(cache_key, resp.text, ttl)
+                    return resp.text
+                if resp.status_code in (429,):
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                return None  # 404 / 403 / etc — don't retry, holiday or unavailable
+            except Exception:
+                await asyncio.sleep(1)
+        return None
+
     async def get_historical_data(self, symbol: str, days: int = 90) -> list[dict]:
         """
         Fetch daily OHLCV from NSE India historical API (cookie method).
