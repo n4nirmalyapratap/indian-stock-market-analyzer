@@ -193,7 +193,7 @@ export default function InsightsLayout() {
       )}
 
       {/* Content area */}
-      <main className={`flex-1 min-w-0 ${isHeatmap ? "overflow-hidden flex flex-col" : "overflow-x-hidden"}`}>
+      <main className={`flex-1 min-w-0 ${isHeatmap ? "min-h-0 overflow-hidden flex flex-col" : "overflow-x-hidden"}`}>
         <ActiveComponent key={active.slug} />
       </main>
     </div>
