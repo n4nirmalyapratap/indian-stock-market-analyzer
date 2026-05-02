@@ -12,6 +12,8 @@ import {
 import { api, SectorDetailData, ConstituentStock } from "@/lib/api";
 import { useTheme } from "@/context/ThemeContext";
 import ChartButton from "@/components/ChartButton";
+import DataFreshness from "@/components/DataFreshness";
+import { marketDataQueryOptions, pickMeta } from "@/lib/marketData";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -702,10 +704,12 @@ export default function SectorDetail() {
   const [period, setPeriod] = useState<"3mo" | "6mo" | "1y" | "5y">("1y");
 
   const { data, isLoading, error } = useQuery({
-    queryKey:  ["sectorDetail", sectorId, period],
-    queryFn:   () => api.sectorDetail(sectorId ?? "", period),
-    staleTime: 15 * 60 * 1000,
-    enabled:   !!sectorId,
+    ...marketDataQueryOptions(
+      ["sectorDetail", sectorId, period],
+      () => api.sectorDetail(sectorId ?? "", period),
+      { staleTime: 15 * 60 * 1000, refetchInterval: false },
+    ),
+    enabled: !!sectorId,
   });
 
   const hdrTxt = isDark ? "#f1f5f9" : "#111827";
@@ -765,6 +769,17 @@ export default function SectorDetail() {
                 </div>
                 <div className="text-xs" style={{ color: muTxt }}>Approx. Market Cap</div>
               </div>
+            </div>
+            <div className="mt-3">
+              <DataFreshness
+                meta={
+                  pickMeta(data) ??
+                  ((data as any)?.asOf
+                    ? { source: "NSE", asOf: (data as any).asOf, marketState: (data as any).marketState }
+                    : null)
+                }
+                refreshKeys={["sectorDetail", sectorId, period]}
+              />
             </div>
           </div>
 
