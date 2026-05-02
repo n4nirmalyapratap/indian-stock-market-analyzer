@@ -61,11 +61,11 @@ export function isMarketOpenIST(now: Date = new Date()): boolean {
  * `refetchOnWindowFocus` is ALWAYS true: when the user comes back to the
  * tab we want to re-validate so close-boundary transitions converge.
  */
-export function marketDataQueryOptions<TData>(
+export function marketDataQueryOptions<TData, TOpts extends Record<string, unknown> = Record<string, never>>(
   queryKey: QueryKey,
   queryFn: () => Promise<TData>,
-  overrides: Partial<UseQueryOptions<TData>> = {},
-): UseQueryOptions<TData> {
+  overrides?: TOpts,
+): UseQueryOptions<TData> & TOpts {
   const open = isMarketOpenIST();
   return {
     queryKey,
@@ -74,8 +74,8 @@ export function marketDataQueryOptions<TData>(
     refetchInterval:      open ? 60_000     : 5 * 60_000,
     refetchOnWindowFocus: true,
     refetchOnReconnect:   true,
-    ...overrides,
-  } as UseQueryOptions<TData>;
+    ...(overrides ?? ({} as TOpts)),
+  } as UseQueryOptions<TData> & TOpts;
 }
 
 /**
