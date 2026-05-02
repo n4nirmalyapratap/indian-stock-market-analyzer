@@ -656,6 +656,14 @@ export interface TechnicalSummary {
     woodie:    PivotLevel;
     dm:        DmPivot;
   };
+  meta?: {
+    source?:       string;
+    asOf?:         string | null;
+    marketState?:  string;
+    eodSealed?:    boolean;
+    eodDate?:      string | null;
+    cacheVersion?: number;
+  };
 }
 
 // ── Stock Financials (TradingView-style) ────────────────────────────────────
