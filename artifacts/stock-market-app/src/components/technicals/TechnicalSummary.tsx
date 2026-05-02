@@ -3,6 +3,8 @@ import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useTheme } from "@/context/ThemeContext";
 import type { TechSignal, TechAction, TechSection, TechnicalSummary as TSummary } from "@/lib/api";
+import { marketDataQueryOptions, pickMeta } from "@/lib/marketData";
+import DataFreshness from "@/components/DataFreshness";
 
 // ── Theme palette ──────────────────────────────────────────────────────────────
 
@@ -447,15 +449,19 @@ export default function TechnicalSummary({ symbol }: { symbol: string }) {
   const p = usePalette();
   const [interval, setInterval] = useState<Interval>("1d");
 
-  const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: ["tech-summary", symbol, interval],
-    queryFn:  () => api.stockTechnicalSummary(symbol, interval),
-    enabled:  !!symbol,
-    staleTime: 5 * 60 * 1000,
-    retry: 1,
-    // Keep showing previous data while new interval loads — prevents page-reload flash
-    placeholderData: keepPreviousData,
-  });
+  const { data, isLoading, isFetching, error } = useQuery(
+    marketDataQueryOptions<TSummary, { enabled: boolean; retry: number; placeholderData: typeof keepPreviousData }>(
+      ["tech-summary", symbol, interval],
+      () => api.stockTechnicalSummary(symbol, interval),
+      {
+        enabled: !!symbol,
+        retry: 1,
+        // Keep showing previous data while new interval loads — prevents page-reload flash.
+        placeholderData: keepPreviousData,
+      },
+    ),
+  );
+  const techMeta = pickMeta(data);
 
   if (isLoading) {
     return (
@@ -480,6 +486,16 @@ export default function TechnicalSummary({ symbol }: { symbol: string }) {
   return (
     <div className="rounded-xl p-4 space-y-4" style={{ background: p.bgPage }}
          data-testid="technical-summary">
+
+      {/* Data freshness pill — same contract as Dashboard / Stock Lookup */}
+      {techMeta && (
+        <div className="flex justify-end">
+          <DataFreshness
+            meta={techMeta}
+            refreshKeys={["tech-summary", symbol, interval]}
+          />
+        </div>
+      )}
 
       {/* Timeframe selector */}
       <div className="flex flex-wrap gap-1">
