@@ -60,7 +60,7 @@ artifacts/python-backend/market_cache/*
 artifacts/python-backend/app/routes/__pycache__/*
 artifacts/python-backend/users.db
 artifacts/python-backend/__pycache__/*
-artifacts/python-backend/app/lib/*
+artifacts/python-backend/app/lib/__pycache__/*
 artifacts/python-backend/app/__pycache__/*
 artifacts/python-backend/app/middleware/__pycache__/*
 artifacts/python-backend/app/services/__pycache__/*
