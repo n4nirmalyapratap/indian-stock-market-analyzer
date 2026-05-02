@@ -341,6 +341,21 @@ export const api = {
   stockTechnicalSummary: (symbol: string, interval = "1d") =>
     fetchApi<TechnicalSummary>(`/stocks/${encodeURIComponent(symbol)}/technical-summary?interval=${interval}`),
 
+  // ── Famous-Investor AI Council ──
+  agentsList: () =>
+    fetchApi<{ personas: Array<Record<string, unknown>>; count: number }>("/agents"),
+
+  agentCouncil: (symbol: string) =>
+    fetchApi<Record<string, unknown>>(`/agents/${encodeURIComponent(symbol)}`),
+
+  agentCouncilFull: (symbol: string) =>
+    fetchApi<Record<string, unknown>>(`/agents/${encodeURIComponent(symbol)}/council`),
+
+  agentPersona: (symbol: string, personaId: string) =>
+    fetchApi<Record<string, unknown> & { thesis: string; verdict: string; score: number; checklist: unknown[]; name: string; firm: string; era: string; signature: string }>(
+      `/agents/${encodeURIComponent(symbol)}/${encodeURIComponent(personaId)}`,
+    ),
+
   patterns: (params?: { universe?: string; signal?: string; category?: string }) => {
     const filtered = Object.fromEntries(
       Object.entries(params ?? {}).filter(([, v]) => v != null && v !== ""),

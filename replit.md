@@ -49,6 +49,14 @@ A full-stack Indian stock market analysis platform with:
 - **Admin dashboard** (`/admin`) — React/Vite admin panel for user/system/compliance management
 - **Python FastAPI backend** (`/api`) — All API endpoints on port 8090
 
+### Famous-Investor AI Council (added 2026-05, Phase 1 of FinceptTerminal-inspired roadmap)
+A `/agents` and `/agents/:symbol` page that runs eight legendary investor personas (Buffett, Graham, Lynch, Munger, Klarman, Marks, Dalio, Burry) against any NSE stock, scores their documented checklists deterministically, aggregates a council verdict (`STRONG_BUY` / `BUY` / `HOLD` / `AVOID` / `STRONG_AVOID`), and writes a one-paragraph thesis in each investor's voice via `ai_client.ask()` (gracefully degrades when OpenRouter isn't connected).
+- **Backend**: `app/services/agents_service.py` (8 persona evaluators + `run_council`/`run_single_persona` + thesis writer), `app/routes/agents.py` (4 endpoints under `/api/agents`). Routes registered in `main.py`. Raw `yf.Ticker(...).info` fetched via `asyncio.to_thread + yahoo_candidates` and cached for 24 h (fundamentals don't move minute-by-minute). Deterministic scoring is fully offline — only the AI thesis touches the LLM.
+- **Endpoints**: `GET /api/agents` (persona list), `/api/agents/{symbol}` (fast checklist council, no AI), `/api/agents/{symbol}/council` (with AI theses for all 8), `/api/agents/{symbol}/{persona_id}` (single persona deep-dive with thesis).
+- **Frontend**: `src/pages/InvestorCouncil.tsx`. Search landing when no symbol; council header w/ verdict + buy/hold/avoid pill counts; 8 persona cards with score bars + checklist passes; modal AI thesis on click. Uses `wouter` `useRoute("/agents/:symbol")`.
+- **Wiring**: `api.ts` exposes `agentsList`, `agentCouncil`, `agentCouncilFull`, `agentPersona`. `LayoutShell.MAIN_NAV` includes `Investor Council` (Users icon). `StockLookup.tsx` shows an "Ask the Investor Council" CTA pill in the stock header.
+- **Yahoo fundamental units gotcha**: `returnOnEquity` / `profitMargins` / `operatingMargins` / `grossMargins` are **fractions** (0.18 = 18%); `debtToEquity` is **percent** (50.0 = D/E 0.5). Persona thresholds in `agents_service.py` reflect this.
+
 ### Insights module (added 2026-04)
 A top-level `/insights` section replicates the ScanX "Insights" experience with 12 sub-tabs and a sticky inner sidebar.
 - Top nav: `Insights` entry in `MAIN_NAV` (`src/LayoutShell.tsx`)
