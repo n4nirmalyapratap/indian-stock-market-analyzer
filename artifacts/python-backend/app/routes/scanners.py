@@ -18,7 +18,8 @@ _service = ScannersService(_price)
 def _meta() -> dict:
     state = _disk.current_market_state()
     return {
-        "source":       "PRICE_SERVICE",
+        "source":       "NSE",
+        "servedFrom":   "PRICE_SERVICE",
         "asOf":         _disk._now_ist().isoformat(),
         "marketState":  state,
         "eodSealed":    state in ("CLOSED", "WEEKEND"),

@@ -21,7 +21,8 @@ router = APIRouter(prefix="/sentiment", tags=["sentiment"])
 def _meta() -> dict:
     state = _disk.current_market_state()
     return {
-        "source":       "SENTIMENT_ENGINE",
+        "source":       "NSE",
+        "servedFrom":   "SENTIMENT_ENGINE",
         "asOf":         _disk._now_ist().isoformat(),
         "marketState":  state,
         "eodSealed":    state in ("CLOSED", "WEEKEND"),
