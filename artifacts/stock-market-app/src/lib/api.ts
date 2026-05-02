@@ -355,7 +355,11 @@ export const api = {
       { method: "POST" },
     ),
 
-  scanners:      () => fetchApi<Scanner[]>("/scanners"),
+  scanners:      async () => {
+    const res = await fetchApi<Scanner[] | { scanners: Scanner[]; meta?: unknown }>("/scanners");
+    return Array.isArray(res) ? res : (res?.scanners ?? []);
+  },
+  scannersWithMeta: () => fetchApi<{ scanners: Scanner[]; meta?: unknown }>("/scanners"),
   createScanner: (data: ScannerCreateInput) =>
     fetchApi<Scanner>("/scanners", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(data) }),
   updateScanner: (id: string, data: Partial<ScannerCreateInput>) =>

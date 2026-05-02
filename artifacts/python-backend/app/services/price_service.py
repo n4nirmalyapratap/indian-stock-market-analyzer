@@ -190,6 +190,37 @@ class PriceService:
                     snap["eodSealed"]  = True
                     snap["eodDate"]    = payload.get("eodDate")
 
+            # 4. NSE-vs-Yahoo divergence sanity check (closed-market only).
+            # Both providers should agree on the official close. If they don't,
+            # log a warning and surface the divergence in the response so the
+            # admin audit endpoint and the UI freshness pill can flag it.
+            try:
+                second_q = None
+                if snap["source"] != "YAHOO":
+                    yq = await self.yahoo.get_quote(sym)
+                    second_q = yq.get("lastPrice") if yq else None
+                if snap["source"] != "NSE" and second_q is None:
+                    nq = await self.nse.get_stock_quote(sym)
+                    if nq and nq.get("priceInfo"):
+                        second_q = nq["priceInfo"].get("lastPrice")
+                primary = snap["quote"].get("lastPrice")
+                if primary is not None and second_q is not None and primary > 0:
+                    diff     = round(abs(primary - second_q), 4)
+                    diff_pct = round(diff / primary * 100, 4)
+                    snap["divergence"] = {
+                        "otherClose": second_q,
+                        "diff":       diff,
+                        "diffPct":    diff_pct,
+                        "preferred":  "NSE",
+                    }
+                    if diff > 0.05 and diff_pct > 0.1:
+                        logger.warning(
+                            "Quote divergence for %s: primary=%s other=%s diff=%s%% (preferring NSE)",
+                            sym, primary, second_q, diff_pct,
+                        )
+            except Exception as _e:
+                logger.debug("Divergence check failed for %s: %s", sym, _e)
+
         return snap
 
     # ── Intraday / chart history (any interval) ───────────────────────────────
