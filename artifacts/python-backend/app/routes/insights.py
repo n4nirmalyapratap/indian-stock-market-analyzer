@@ -279,6 +279,61 @@ def _quote_from_closes(sym: str, closes: list[float], market_cap: float = 0.0) -
     }
 
 
+# Market-cap cache (24h TTL). marketCap is not a price field — it changes slowly
+# and only with corporate actions, so a long TTL is safe and removes the single
+# biggest bottleneck on the heatmap (yfinance.fast_info is ~0.8s per symbol).
+_MCAP_TTL = 24 * 60 * 60
+_mcap_cache: dict[str, tuple[float, float]] = {}
+
+
+def _market_cap_cached(sym: str) -> float:
+    ysym = sym if (sym.endswith(".NS") or sym.endswith(".BO")) else f"{sym}.NS"
+    hit = _mcap_cache.get(ysym)
+    now = time.time()
+    if hit and (now - hit[0]) < _MCAP_TTL:
+        return hit[1]
+    return 0.0
+
+
+async def _prefetch_market_caps(symbols: list[str]) -> None:
+    """Fill the market-cap cache in parallel for symbols whose entries are
+    missing or stale. Each yfinance.fast_info call is ~0.8s of blocking I/O,
+    so we offload to the default executor and run them concurrently.
+    """
+    now = time.time()
+    stale: list[str] = []
+    for s in symbols:
+        ysym = s if (s.endswith(".NS") or s.endswith(".BO")) else f"{s}.NS"
+        hit = _mcap_cache.get(ysym)
+        if not hit or (now - hit[0]) >= _MCAP_TTL:
+            stale.append(ysym)
+    if not stale:
+        return
+
+    import yfinance as yf
+    loop = asyncio.get_running_loop()
+
+    def _one(ysym: str) -> tuple[str, float]:
+        try:
+            mc = float(yf.Ticker(ysym).fast_info.get("marketCap") or 0.0)
+        except Exception:
+            mc = 0.0
+        return ysym, mc
+
+    sem = asyncio.Semaphore(32)
+
+    async def _bounded(ysym: str):
+        async with sem:
+            return await loop.run_in_executor(None, _one, ysym)
+
+    results = await asyncio.gather(*[_bounded(s) for s in stale], return_exceptions=True)
+    ts = time.time()
+    for r in results:
+        if isinstance(r, tuple):
+            ysym, mc = r
+            _mcap_cache[ysym] = (ts, mc)
+
+
 async def _fetch_one_quote_async(sym: str, period_yf: str) -> dict | None:
     """Single source of truth for the heatmap quote.
 
@@ -287,7 +342,8 @@ async def _fetch_one_quote_async(sym: str, period_yf: str) -> dict | None:
     PriceService itself enforces `eodSealed` on closed-market disk reads,
     so an intraday-only snapshot is never served as the close.
 
-    Market cap is best-effort from yfinance.fast_info (not a price field).
+    Market cap is read from the long-lived `_mcap_cache` (warmed once per
+    24h by `_prefetch_market_caps`) — never from a per-request fast_info call.
     """
     days = _PERIOD_DAYS.get(period_yf, 7)
     try:
@@ -299,20 +355,12 @@ async def _fetch_one_quote_async(sym: str, period_yf: str) -> dict | None:
     if len(closes) < 2:
         return None
 
-    # Market cap is non-price metadata — fast_info is fine and EOD-stable.
-    mc = 0.0
-    try:
-        import yfinance as yf
-        ysym = sym if sym.endswith(".NS") else f"{sym}.NS"
-        mc = float(yf.Ticker(ysym).fast_info.get("marketCap") or 0.0)
-    except Exception:
-        pass
-    return _quote_from_closes(sym, closes, mc)
+    return _quote_from_closes(sym, closes, _market_cap_cached(sym))
 
 
 async def _heatmap_async(symbols: list[str], period_yf: str) -> list[dict]:
     """Concurrently fetch heatmap quotes via PriceService."""
-    sem = asyncio.Semaphore(16)
+    sem = asyncio.Semaphore(48)
     async def _bounded(s: str):
         async with sem:
             return await _fetch_one_quote_async(s, period_yf)
@@ -375,7 +423,12 @@ async def get_heatmap(
 ):
     code = index.upper().replace(" ", "").replace("-", "")
     cache_key = f"heatmap:{code}:{performance}"
-    cached = _cache_get(cache_key)
+    # Heatmap data is daily-resolution. When the market is closed the close
+    # won't change until the next session, so we can hold the cache far
+    # longer. During market hours we still refresh frequently.
+    market_open = mcache.is_market_open()
+    ttl = 600 if market_open else LONG_TTL
+    cached = _cache_get(cache_key, ttl=ttl)
     if cached is not None:
         return cached
 
@@ -400,10 +453,20 @@ async def get_heatmap(
     except Exception:
         pass
 
-    items, idx_q = await asyncio.gather(
+    # Warm the long-lived market-cap cache in parallel with the price fetch.
+    # First-ever request per symbol still pays the fast_info cost (~0.8s),
+    # but it is parallelised and only happens once per 24h thereafter.
+    items, idx_q, _ = await asyncio.gather(
         _heatmap_async(symbols, period_yf),
         _index_quote_async(idx_ticker),
+        _prefetch_market_caps(list(symbols)),
     )
+
+    # If market caps were freshly populated above, fill them into items now
+    # (the heatmap_async path may have run before the prefetch finished).
+    for it in items:
+        if not it.get("marketCap"):
+            it["marketCap"] = _market_cap_cached(it["symbol"])
 
     response = {
         "available": True,
