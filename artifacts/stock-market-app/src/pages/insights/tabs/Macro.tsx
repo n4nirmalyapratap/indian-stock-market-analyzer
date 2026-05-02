@@ -293,7 +293,7 @@ export default function Macro() {
       <Card className="p-4 md:p-5">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold text-gray-900 dark:text-white">RBI Policy Rate Timeline</h3>
-          <span className="text-xs text-gray-500 dark:text-gray-400">Source: FRED · INDIRSTPR</span>
+          <span className="text-xs text-gray-500 dark:text-gray-400">Source: FRED · IRSTCB01INM156N</span>
         </div>
         {data.rateTimeline.length === 0 ? (
           <p className="text-sm text-gray-500 dark:text-gray-400 py-8 text-center">No rate data available.</p>
@@ -322,11 +322,11 @@ export default function Macro() {
           <div>
             <h3 className="font-semibold text-gray-900 dark:text-white">CPI vs WPI (YoY %)</h3>
             <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
-              Headline retail inflation against wholesale prices (PPI proxy when MOSPI WPI not reachable).
+              Headline retail inflation against wholesale-price growth (OECD MEI WPI series via FRED).
             </p>
           </div>
           <span className="text-xs text-gray-500 dark:text-gray-400 text-right">
-            Source: FRED · INDCPIALLMINMEI / INDPIEAMP02GPM
+            Source: FRED · INDCPIALLMINMEI / INDWPIATT01GPM
           </span>
         </div>
         {overlay.length === 0 ? (
@@ -346,7 +346,7 @@ export default function Macro() {
                 />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
                 <Line type="monotone" dataKey="cpi" name="CPI YoY" stroke={palette.fii} strokeWidth={2} dot={false} connectNulls />
-                <Line type="monotone" dataKey="wpi" name="WPI YoY (proxy)" stroke={palette.dii} strokeWidth={2} dot={false} connectNulls />
+                <Line type="monotone" dataKey="wpi" name="WPI growth" stroke={palette.dii} strokeWidth={2} dot={false} connectNulls />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -385,7 +385,7 @@ export default function Macro() {
       <Card className="p-4 md:p-5">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold text-gray-900 dark:text-white">Real GDP Growth (YoY %, Quarterly)</h3>
-          <span className="text-xs text-gray-500 dark:text-gray-400">Source: FRED · INDGDPRQDSMEI</span>
+          <span className="text-xs text-gray-500 dark:text-gray-400">Source: FRED · INDGDPRQPSMEI</span>
         </div>
         {data.gdp.length === 0 ? (
           <p className="text-sm text-gray-500 dark:text-gray-400 py-8 text-center">No GDP data available.</p>
@@ -417,7 +417,7 @@ export default function Macro() {
               Multi-tenor snapshot. Slope (10Y − 3M) tells you whether the bond market is pricing in growth or recession.
             </p>
           </div>
-          <span className="text-xs text-gray-500 dark:text-gray-400 text-right">Source: FRED · INDIR3TIB01STM / INDIRLTLT01STM</span>
+          <span className="text-xs text-gray-500 dark:text-gray-400 text-right">Source: FRED · IRSTCI01INM156N / INDIRLTLT01STM</span>
         </div>
         <YieldCurveSnapshot snapshot={data.yieldCurve.snapshot ?? []} palette={palette} />
       </Card>

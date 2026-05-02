@@ -60,78 +60,117 @@ def _run(coro):
 
 # ── FRED CSV parsing ────────────────────────────────────────────────────────
 
-def test_fred_csv_parses_well_formed_response():
-    from app.services.macro_service import _fetch_fred_csv
-
-    csv_body = "DATE,INDIRSTPR\n2025-01-01,6.50\n2025-02-01,6.50\n2025-03-01,6.25\n"
-
+def _fake_api_client(payload=None, status=200, text=""):
+    """Helper that builds a fake httpx.AsyncClient returning a JSON response."""
     class FakeResp:
-        status_code = 200
-        text = csv_body
-
+        status_code = status
+        def __init__(self): self._payload = payload
+        def json(self): return self._payload
+        @property
+        def text(self): return text or ""
     class FakeClient:
         async def __aenter__(self): return self
         async def __aexit__(self, *a): return False
         async def get(self, *a, **kw): return FakeResp()
+    return FakeClient
 
-    with patch("app.services.macro_service.httpx.AsyncClient", lambda *a, **kw: FakeClient()):
-        rows = _run(_fetch_fred_csv("INDIRSTPR"))
+
+def test_fred_api_parses_well_formed_response(monkeypatch):
+    monkeypatch.setenv("FRED_API_KEY", "test-key")
+    from app.services.macro_service import _fetch_fred_series
+
+    payload = {"observations": [
+        {"date": "2025-01-01", "value": "6.50"},
+        {"date": "2025-02-01", "value": "6.50"},
+        {"date": "2025-03-01", "value": "6.25"},
+    ]}
+    Fake = _fake_api_client(payload=payload)
+    with patch("app.services.macro_service.httpx.AsyncClient", lambda *a, **kw: Fake()):
+        rows = _run(_fetch_fred_series("IRSTCB01INM156N"))
 
     assert len(rows) == 3
     assert rows[0] == {"date": "2025-01-01", "value": 6.5}
     assert rows[-1]["value"] == 6.25
 
 
-def test_fred_csv_skips_dot_and_na_values():
-    from app.services.macro_service import _fetch_fred_csv
+def test_fred_api_skips_dot_and_na_values(monkeypatch):
+    monkeypatch.setenv("FRED_API_KEY", "test-key")
+    from app.services.macro_service import _fetch_fred_series
 
-    csv_body = "DATE,VAL\n2025-01-01,.\n2025-02-01,NA\n2025-03-01,4.5\n2025-04-01,abc\n"
-
-    class FakeResp:
-        status_code = 200
-        text = csv_body
-
-    class FakeClient:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return False
-        async def get(self, *a, **kw): return FakeResp()
-
-    with patch("app.services.macro_service.httpx.AsyncClient", lambda *a, **kw: FakeClient()):
-        rows = _run(_fetch_fred_csv("X"))
+    payload = {"observations": [
+        {"date": "2025-01-01", "value": "."},
+        {"date": "2025-02-01", "value": "NA"},
+        {"date": "2025-03-01", "value": "4.5"},
+        {"date": "2025-04-01", "value": "abc"},
+    ]}
+    Fake = _fake_api_client(payload=payload)
+    with patch("app.services.macro_service.httpx.AsyncClient", lambda *a, **kw: Fake()):
+        rows = _run(_fetch_fred_series("X"))
 
     assert len(rows) == 1
     assert rows[0]["value"] == 4.5
 
 
-def test_fred_csv_returns_empty_on_http_error():
-    from app.services.macro_service import _fetch_fred_csv
+def test_fred_api_returns_empty_on_http_error(monkeypatch):
+    monkeypatch.setenv("FRED_API_KEY", "test-key")
+    from app.services.macro_service import _fetch_fred_series
 
-    class FakeResp:
-        status_code = 500
-        text = ""
-
-    class FakeClient:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return False
-        async def get(self, *a, **kw): return FakeResp()
-
-    with patch("app.services.macro_service.httpx.AsyncClient", lambda *a, **kw: FakeClient()):
-        rows = _run(_fetch_fred_csv("X"))
+    Fake = _fake_api_client(payload=None, status=400, text="bad request")
+    with patch("app.services.macro_service.httpx.AsyncClient", lambda *a, **kw: Fake()):
+        rows = _run(_fetch_fred_series("X"))
 
     assert rows == []
 
 
-def test_fred_csv_returns_empty_on_network_exception():
-    from app.services.macro_service import _fetch_fred_csv
+def test_fred_api_returns_empty_on_network_exception(monkeypatch):
+    monkeypatch.setenv("FRED_API_KEY", "test-key")
+    from app.services.macro_service import _fetch_fred_series
 
     class BoomClient:
         async def __aenter__(self): raise RuntimeError("DNS fail")
         async def __aexit__(self, *a): return False
 
     with patch("app.services.macro_service.httpx.AsyncClient", lambda *a, **kw: BoomClient()):
-        rows = _run(_fetch_fred_csv("X"))
+        rows = _run(_fetch_fred_series("X"))
 
     assert rows == []
+
+
+def test_fred_api_returns_empty_on_malformed_payload(monkeypatch):
+    """A 200 response with a totally unexpected JSON shape must not raise."""
+    monkeypatch.setenv("FRED_API_KEY", "test-key")
+    from app.services.macro_service import _fetch_fred_series
+
+    for bad in (None, [], {"observations": "oops"},
+                {"observations": [None, 7, "x"]},
+                {"observations": [{"date": None, "value": None}]},
+                {"observations": [{"date": "2025-01-01", "value": {"nested": True}}]}):
+        Fake = _fake_api_client(payload=bad)
+        with patch("app.services.macro_service.httpx.AsyncClient", lambda *a, **kw: Fake()):
+            rows = _run(_fetch_fred_series("X"))
+        assert rows == [], f"expected [] for payload {bad!r}, got {rows!r}"
+
+
+def test_fred_falls_back_to_csv_when_api_key_missing(monkeypatch):
+    """Without FRED_API_KEY set, the fetcher must use the legacy CSV endpoint."""
+    monkeypatch.delenv("FRED_API_KEY", raising=False)
+    from app.services.macro_service import _fetch_fred_series
+
+    csv_body = "DATE,X\n2025-01-01,6.50\n2025-02-01,6.25\n"
+
+    class FakeResp:
+        status_code = 200
+        text = csv_body
+    class FakeClient:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, *a, **kw): return FakeResp()
+
+    with patch("app.services.macro_service.httpx.AsyncClient", lambda *a, **kw: FakeClient()):
+        rows = _run(_fetch_fred_series("X"))
+
+    assert len(rows) == 2
+    assert rows[-1]["value"] == 6.25
 
 
 # ── Probe helper ────────────────────────────────────────────────────────────
@@ -237,7 +276,7 @@ def test_get_strip_returns_six_tiles_even_when_everything_fails():
     from app.services.macro_service import MacroService
 
     svc = MacroService()
-    with patch("app.services.macro_service._fetch_fred_csv", AsyncMock(return_value=[])), \
+    with patch("app.services.macro_service._fetch_fred_series", AsyncMock(return_value=[])), \
          patch.object(svc, "_yahoo_quote", AsyncMock(return_value={})):
         out = _run(svc.get_strip())
 
@@ -258,11 +297,13 @@ def test_get_strip_populates_repo_from_fred():
         {"date": "2025-02-01", "value": 6.25},
     ]
 
+    from app.services.macro_service import FRED_SERIES
+
     async def fake_fetch(series_id: str):
-        return repo_data if series_id == "INDIRSTPR" else []
+        return repo_data if series_id == FRED_SERIES["repo"] else []
 
     svc = MacroService()
-    with patch("app.services.macro_service._fetch_fred_csv", side_effect=fake_fetch), \
+    with patch("app.services.macro_service._fetch_fred_series", side_effect=fake_fetch), \
          patch.object(svc, "_yahoo_quote", AsyncMock(return_value={})):
         out = _run(svc.get_strip())
 
@@ -276,7 +317,7 @@ def test_get_strip_populates_usdinr_from_yahoo():
     from app.services.macro_service import MacroService
 
     svc = MacroService()
-    with patch("app.services.macro_service._fetch_fred_csv", AsyncMock(return_value=[])), \
+    with patch("app.services.macro_service._fetch_fred_series", AsyncMock(return_value=[])), \
          patch.object(svc, "_yahoo_quote", new_callable=AsyncMock) as mock_y:
         mock_y.side_effect = lambda key: {
             "usdinr": {"price": 83.55, "pChange": 0.12},
@@ -295,7 +336,7 @@ def test_get_dashboard_shape_is_complete_when_data_is_empty():
     from app.services.macro_service import MacroService
 
     svc = MacroService()
-    with patch("app.services.macro_service._fetch_fred_csv", AsyncMock(return_value=[])), \
+    with patch("app.services.macro_service._fetch_fred_series", AsyncMock(return_value=[])), \
          patch.object(svc, "_yahoo_quote", AsyncMock(return_value={})), \
          patch("app.services.macro_service._probe_url",
                AsyncMock(return_value={"ok": False, "url": "x", "status": None, "note": "stub"})), \
@@ -322,12 +363,13 @@ def test_get_dashboard_includes_wpi_when_fred_returns_data():
         {"date": "2025-02-01", "value": 2.30},
     ]
 
+    from app.services.macro_service import FRED_SERIES
+
     async def fake_fred(sid: str):
-        # WPI proxy series ID configured in FRED_SERIES["wpi_proxy"]
-        return wpi_rows if sid == "INDPIEAMP02GPM" else []
+        return wpi_rows if sid == FRED_SERIES["wpi"] else []
 
     svc = MacroService()
-    with patch("app.services.macro_service._fetch_fred_csv", side_effect=fake_fred), \
+    with patch("app.services.macro_service._fetch_fred_series", side_effect=fake_fred), \
          patch.object(svc, "_yahoo_quote", AsyncMock(return_value={})), \
          patch("app.services.macro_service._probe_url",
                AsyncMock(return_value={"ok": False, "url": "x", "status": None, "note": "stub"})), \
@@ -348,7 +390,7 @@ def test_get_dashboard_yield_curve_snapshot_populated_when_3m_and_10y_present():
         return []
 
     svc = MacroService()
-    with patch("app.services.macro_service._fetch_fred_csv", side_effect=fake_fred), \
+    with patch("app.services.macro_service._fetch_fred_series", side_effect=fake_fred), \
          patch.object(svc, "_yahoo_quote", AsyncMock(return_value={})), \
          patch("app.services.macro_service._probe_url",
                AsyncMock(return_value={"ok": False, "url": "x", "status": None, "note": "stub"})), \
@@ -380,7 +422,7 @@ def test_get_dashboard_sources_report_probe_results_honestly():
         return probe_results.get(url, {"ok": False, "url": url, "status": None, "note": "stub"})
 
     svc = MacroService()
-    with patch("app.services.macro_service._fetch_fred_csv", AsyncMock(return_value=[])), \
+    with patch("app.services.macro_service._fetch_fred_series", AsyncMock(return_value=[])), \
          patch.object(svc, "_yahoo_quote", AsyncMock(return_value={})), \
          patch("app.services.macro_service._probe_url", side_effect=fake_probe), \
          patch("app.services.macro_service.ai_client.is_available", return_value=False):
@@ -401,7 +443,7 @@ def test_get_dashboard_caches_for_24h():
 
     svc = MacroService()
     fetch_mock = AsyncMock(return_value=[])
-    with patch("app.services.macro_service._fetch_fred_csv", fetch_mock), \
+    with patch("app.services.macro_service._fetch_fred_series", fetch_mock), \
          patch.object(svc, "_yahoo_quote", AsyncMock(return_value={})), \
          patch("app.services.macro_service._probe_url",
                AsyncMock(return_value={"ok": False, "url": "x", "status": None, "note": "stub"})), \
@@ -432,7 +474,7 @@ def test_commentary_falls_back_to_deterministic_when_ai_unavailable():
 
     assert "6.25%" in out                 # repo present
     assert "5.00% YoY" in out             # CPI YoY
-    assert "+2.40% YoY" in out            # WPI proxy
+    assert "+2.40%" in out                # WPI growth
     assert "₹83.50" in out                # USD/INR
     assert "Industrial production" not in out  # iip empty → not mentioned
 
@@ -454,7 +496,7 @@ def test_commentary_uses_deterministic_when_ai_returns_sentinel():
 # ── Route smoke tests ───────────────────────────────────────────────────────
 
 def test_macro_strip_route_returns_200_and_six_tiles(client):
-    with patch("app.services.macro_service._fetch_fred_csv", AsyncMock(return_value=[])), \
+    with patch("app.services.macro_service._fetch_fred_series", AsyncMock(return_value=[])), \
          patch("app.services.macro_service.YahooService.get_quote", AsyncMock(return_value=None)):
         r = client.get("/api/insights/macro/strip")
 
@@ -466,7 +508,7 @@ def test_macro_strip_route_returns_200_and_six_tiles(client):
 
 
 def test_macro_dashboard_route_returns_200_with_full_shape(client):
-    with patch("app.services.macro_service._fetch_fred_csv", AsyncMock(return_value=[])), \
+    with patch("app.services.macro_service._fetch_fred_series", AsyncMock(return_value=[])), \
          patch("app.services.macro_service.YahooService.get_quote", AsyncMock(return_value=None)), \
          patch("app.services.macro_service._probe_url",
                AsyncMock(return_value={"ok": False, "url": "x", "status": None, "note": "stub"})), \

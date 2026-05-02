@@ -10,7 +10,7 @@ Surfaces the six indicators retail traders ask about every day:
   * Brent crude (USD/bbl)
 
 Plus supporting series for the dashboard tab:
-  * WPI (real Indian wholesale-price-index series via FRED PPI proxy + a
+  * WPI (Indian wholesale-price growth via the OECD MEI series on FRED + a
     best-effort fetch attempt against MOSPI/Office of the Economic Adviser),
   * Real GDP growth (quarterly),
   * Multi-tenor sovereign yield curve (3M, 1Y, 5Y, 10Y) — populated from
@@ -39,6 +39,7 @@ import asyncio
 import csv
 import io
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -74,40 +75,111 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# ── FRED CSV fetcher ─────────────────────────────────────────────────────────
-FRED_BASE = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+# ── FRED JSON API fetcher ────────────────────────────────────────────────────
+# We use the official api.stlouisfed.org JSON endpoint with an API key. The
+# unauthenticated CSV endpoint at fred.stlouisfed.org/graph/fredgraph.csv is
+# routinely WAF-blocked from cloud IPs (Imperva bot challenge), so the API
+# is the only reliable channel.  A free API key is required; if FRED_API_KEY
+# is unset we degrade gracefully to empty payloads.
+FRED_API_BASE = "https://api.stlouisfed.org/fred/series/observations"
+FRED_CSV_BASE = "https://fred.stlouisfed.org/graph/fredgraph.csv"  # legacy fallback
 
-# Symbolic names → FRED series IDs.  Sourced from publicly accessible FRED
-# pages; no API key is required for the CSV download endpoint.
+# Symbolic names → FRED series IDs (verified against the FRED JSON API).
+# Some India series on FRED are mirrored from OECD/MEI on a delay; the
+# `asOf` field on every tile/chart point shows the upstream observation
+# date so the user can see exactly how fresh the data is.
 FRED_SERIES = {
-    "repo":      "INDIRSTPR",         # India: Central bank policy rate
-    "cpi":       "INDCPIALLMINMEI",   # India: CPI All items, monthly level
-    "iip":       "INDPROINDMISMEI",   # India: Industrial production, monthly level
-    "gdp":       "INDGDPRQDSMEI",     # India: Real GDP, quarterly level
-    "yield10":   "INDIRLTLT01STM",    # India: 10Y gov bond yield, monthly
-    "yield3m":   "INDIR3TIB01STM",    # India: 3-month interbank rate (OECD MEI)
-    # WPI proxy: India producer prices for manufacturing (OECD MEI).  Indian
-    # WPI itself isn't on FRED, but PPI tracks it within ~50bps and is the
-    # best public free series available without scraping eaindustry.nic.in.
-    "wpi_proxy": "INDPIEAMP02GPM",    # India PPI Manufacturing, growth rate YoY (monthly)
+    "repo":    "IRSTCB01INM156N",   # India Central Bank policy rate, monthly %
+    "cpi":     "INDCPIALLMINMEI",   # India CPI All items, monthly index level
+    "iip":     "INDPROINDMISMEI",   # India industrial production, monthly index level
+    "gdp":     "INDGDPRQPSMEI",     # India real GDP, quarterly YoY % (already growth)
+    "yield10": "INDIRLTLT01STM",    # India 10Y gov bond yield, monthly %
+    "yield3m": "IRSTCI01INM156N",   # India call money / interbank rate, monthly %
+    "wpi":     "INDWPIATT01GPM",    # India WPI, monthly growth (already pct change)
 }
 
+# Series that arrive already as period-on-period or YoY % growth rates and
+# therefore must NOT be passed through `_series_yoy()` again.
+FRED_PRECOMPUTED_GROWTH = {"gdp", "wpi"}
 
-async def _fetch_fred_csv(series_id: str) -> list[dict[str, Any]]:
+
+async def _fetch_fred_series(series_id: str) -> list[dict[str, Any]]:
     """
-    Fetch a FRED series CSV and return a list of {date, value} dicts ordered
-    oldest → newest.  Returns [] on any failure (network / parse / 404 for
-    a series that doesn't exist).
+    Fetch observations for a FRED series via the JSON API and return them
+    as a list of {date, value} dicts ordered oldest → newest.
+
+    Empty list on any failure (no API key, network, parse error, 400/404,
+    timeout). This function is the only data-pull primitive the service
+    uses; it must never raise so callers can degrade gracefully.
     """
-    url = f"{FRED_BASE}?id={series_id}"
+    api_key = os.environ.get("FRED_API_KEY", "").strip()
+    if api_key:
+        return await _fetch_fred_via_api(series_id, api_key)
+    # No key configured — fall back to the CSV endpoint, which is usually
+    # WAF-blocked from cloud IPs but kept for completeness / local dev.
+    log.info("FRED_API_KEY unset; trying public CSV endpoint for %s", series_id)
+    return await _fetch_fred_csv_fallback(series_id)
+
+
+async def _fetch_fred_via_api(series_id: str, api_key: str) -> list[dict[str, Any]]:
+    """Fetch observations via api.stlouisfed.org (requires API key)."""
+    params = {
+        "series_id":  series_id,
+        "api_key":    api_key,
+        "file_type":  "json",
+        "sort_order": "asc",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(
+                FRED_API_BASE,
+                params=params,
+                headers={"User-Agent": "NiftyNode/1.0 (+macro)"},
+            )
+            if resp.status_code != 200:
+                log.warning("FRED API non-200 for %s: %s %s",
+                            series_id, resp.status_code, resp.text[:120])
+                return []
+            payload = resp.json()
+    except Exception as e:
+        log.warning("FRED API fetch failed for %s: %s", series_id, str(e)[:120])
+        return []
+
+    out: list[dict[str, Any]] = []
+    try:
+        if not isinstance(payload, dict):
+            return []
+        observations = payload.get("observations") or []
+        if not isinstance(observations, list):
+            return []
+        for obs in observations:
+            if not isinstance(obs, dict):
+                continue
+            date_s = str(obs.get("date") or "").strip()
+            val_s  = str(obs.get("value") or "").strip()
+            if not date_s or val_s in ("", ".", "NA"):
+                continue
+            try:
+                out.append({"date": date_s, "value": float(val_s)})
+            except (TypeError, ValueError):
+                continue
+    except Exception as e:
+        log.warning("FRED API parse failed for %s: %s", series_id, str(e)[:120])
+        return []
+    return out
+
+
+async def _fetch_fred_csv_fallback(series_id: str) -> list[dict[str, Any]]:
+    """Legacy CSV fallback — used only when no API key is configured."""
+    url = f"{FRED_CSV_BASE}?id={series_id}"
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             resp = await client.get(url, headers={"User-Agent": "NiftyNode/1.0 (+macro)"})
             if resp.status_code != 200 or not resp.text:
                 return []
             text = resp.text
-    except Exception as e:  # network, DNS, timeout — all benign
-        log.warning("FRED fetch failed for %s: %s", series_id, str(e)[:120])
+    except Exception as e:
+        log.warning("FRED CSV fallback failed for %s: %s", series_id, str(e)[:120])
         return []
 
     rows: list[dict[str, Any]] = []
@@ -123,14 +195,17 @@ async def _fetch_fred_csv(series_id: str) -> list[dict[str, Any]]:
             if not date_s or val_s in ("", ".", "NA"):
                 continue
             try:
-                v = float(val_s)
+                rows.append({"date": date_s, "value": float(val_s)})
             except ValueError:
                 continue
-            rows.append({"date": date_s, "value": v})
     except Exception as e:
-        log.warning("FRED parse failed for %s: %s", series_id, str(e)[:120])
+        log.warning("FRED CSV parse failed for %s: %s", series_id, str(e)[:120])
         return []
     return rows
+
+
+# Backwards-compat alias for tests that still patch the old name.
+_fetch_fred_csv = _fetch_fred_series
 
 
 # ── Best-effort adapters for India-native sources ────────────────────────────
@@ -239,10 +314,10 @@ class MacroService:
 
         # Fetch everything concurrently — failures degrade to {}.
         repo_s, cpi_s, iip_s, yld_s, usdinr_q, brent_q = await asyncio.gather(
-            _fetch_fred_csv(FRED_SERIES["repo"]),
-            _fetch_fred_csv(FRED_SERIES["cpi"]),
-            _fetch_fred_csv(FRED_SERIES["iip"]),
-            _fetch_fred_csv(FRED_SERIES["yield10"]),
+            _fetch_fred_series(FRED_SERIES["repo"]),
+            _fetch_fred_series(FRED_SERIES["cpi"]),
+            _fetch_fred_series(FRED_SERIES["iip"]),
+            _fetch_fred_series(FRED_SERIES["yield10"]),
             self._yahoo_quote("usdinr"),
             self._yahoo_quote("brent"),
         )
@@ -311,8 +386,10 @@ class MacroService:
             "tiles": [repo_tile, cpi_tile, iip_tile, usdinr_tile, yld_tile, brent_tile],
             "fetchedAt": _now_iso(),
             "sources": [
-                {"id": "fred",  "label": "FRED public CSV",  "covers": "Repo, CPI, IIP, 10Y", "ok": True},
-                {"id": "yahoo", "label": "Yahoo Finance",     "covers": "USD/INR, Brent",      "ok": True},
+                {"id": "fred",  "label": "FRED API",      "covers": "Repo, CPI, IIP, 10Y",
+                 "ok": bool(repo_s or cpi_s or iip_s or yld_s)},
+                {"id": "yahoo", "label": "Yahoo Finance", "covers": "USD/INR, Brent",
+                 "ok": bool(usdinr_q or brent_q)},
             ],
         }
         _cache_set("strip", out)
@@ -324,7 +401,7 @@ class MacroService:
         needs, in one round-trip:
           * rateTimeline   : repo rate over time  (date, value)
           * cpi            : CPI YoY % over time
-          * wpi            : WPI proxy YoY % over time (PPI Manufacturing)
+          * wpi            : WPI growth % over time (FRED INDWPIATT01GPM)
           * iip            : IIP YoY % over time
           * gdp            : Real GDP YoY % over time (quarterly)
           * yieldCurve     : multi-tenor curve snapshot + 10Y history
@@ -339,13 +416,13 @@ class MacroService:
         (repo_s, cpi_s, iip_s, gdp_s, yld10_s, yld3m_s, wpi_s,
          usdinr, dxy, brent, gold, vix,
          rbi_probe, mospi_probe, ccil_probe) = await asyncio.gather(
-            _fetch_fred_csv(FRED_SERIES["repo"]),
-            _fetch_fred_csv(FRED_SERIES["cpi"]),
-            _fetch_fred_csv(FRED_SERIES["iip"]),
-            _fetch_fred_csv(FRED_SERIES["gdp"]),
-            _fetch_fred_csv(FRED_SERIES["yield10"]),
-            _fetch_fred_csv(FRED_SERIES["yield3m"]),
-            _fetch_fred_csv(FRED_SERIES["wpi_proxy"]),
+            _fetch_fred_series(FRED_SERIES["repo"]),
+            _fetch_fred_series(FRED_SERIES["cpi"]),
+            _fetch_fred_series(FRED_SERIES["iip"]),
+            _fetch_fred_series(FRED_SERIES["gdp"]),
+            _fetch_fred_series(FRED_SERIES["yield10"]),
+            _fetch_fred_series(FRED_SERIES["yield3m"]),
+            _fetch_fred_series(FRED_SERIES["wpi"]),
             self._yahoo_quote("usdinr"),
             self._yahoo_quote("dxy"),
             self._yahoo_quote("brent"),
@@ -360,8 +437,9 @@ class MacroService:
         rate_timeline = repo_s[-72:] if repo_s else []
         cpi_yoy = self._series_yoy(cpi_s, lag=12)[-72:]
         iip_yoy = self._series_yoy(iip_s, lag=12)[-72:]
-        gdp_yoy = self._series_yoy(gdp_s, lag=4)[-24:]   # quarterly → 6 yr
-        # WPI proxy already arrives as YoY % (FRED growth-rate series).
+        # GDP series (INDGDPRQPSMEI) is already a YoY % growth rate from FRED.
+        gdp_yoy = gdp_s[-24:] if gdp_s else []           # quarterly → 6 yr
+        # WPI series (INDWPIATT01GPM) is already a period-over-period growth rate.
         wpi_yoy = wpi_s[-72:] if wpi_s else []
         yield_history = yld10_s[-72:] if yld10_s else []
 
@@ -379,8 +457,8 @@ class MacroService:
         # Honest per-source provenance.  `ok` says whether we actually got
         # usable data from that source on this fetch.
         sources = [
-            {"id": "fred", "label": "FRED public CSV", "ok": bool(repo_s or cpi_s or yld10_s),
-             "covers": "Repo, CPI, IIP, GDP, 3M & 10Y yields, WPI proxy",
+            {"id": "fred", "label": "FRED API", "ok": bool(repo_s or cpi_s or yld10_s),
+             "covers": "Repo, CPI, IIP, GDP, Call Money & 10Y yields, WPI",
              "url": "https://fred.stlouisfed.org/"},
             {"id": "yahoo", "label": "Yahoo Finance", "ok": bool(usdinr or brent or dxy),
              "covers": "USD/INR, DXY, Brent, Gold, India VIX",
@@ -390,7 +468,7 @@ class MacroService:
              "url": rbi_probe.get("url"), "note": rbi_probe.get("note")},
             {"id": "mospi", "label": "MOSPI / Office of the Economic Adviser",
              "ok": bool(mospi_probe.get("ok")),
-             "covers": "WPI primary source (probe only — using FRED PPI proxy when unreachable)",
+             "covers": "WPI primary source (probe only — FRED OECD WPI used as fallback)",
              "url": mospi_probe.get("url"), "note": mospi_probe.get("note")},
             {"id": "ccil", "label": "CCIL India",
              "ok": bool(ccil_probe.get("ok")),
@@ -506,7 +584,7 @@ class MacroService:
         if cpi_yoy is not None:
             bits.append(f"CPI inflation is running at {cpi_yoy:.2f}% YoY.")
         if wpi_now is not None:
-            bits.append(f"Wholesale prices (PPI proxy) {wpi_now['value']:+.2f}% YoY.")
+            bits.append(f"Wholesale prices {wpi_now['value']:+.2f}%.")
         if iip_yoy is not None:
             bits.append(f"Industrial production grew {iip_yoy:.2f}% YoY.")
         if yld_now:

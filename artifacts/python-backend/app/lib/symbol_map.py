@@ -130,7 +130,12 @@ def to_yahoo_ticker(symbol: str) -> str:
     sym = symbol.strip().upper()
     if sym in SYMBOL_MAP:
         return SYMBOL_MAP[sym]
-    if sym.startswith("^") or "." in sym:
+    # Already a Yahoo-style ticker — leave it alone.
+    #   ^...   → index ticker (e.g. ^NSEI)
+    #   X.Y    → already suffixed (e.g. RELIANCE.NS, DX-Y.NYB)
+    #   =X     → FX pair (e.g. INR=X)
+    #   =F     → futures contract (e.g. BZ=F, GC=F)
+    if sym.startswith("^") or "." in sym or "=" in sym:
         return sym
     return f"{sym}.NS"
 
@@ -142,6 +147,6 @@ def yahoo_candidates(symbol: str) -> list[str]:
         return []
     if sym in SYMBOL_MAP:
         return [SYMBOL_MAP[sym]]
-    if sym.startswith("^"):
+    if sym.startswith("^") or "." in sym or "=" in sym:
         return [sym]
     return [f"{sym}.NS", sym]
