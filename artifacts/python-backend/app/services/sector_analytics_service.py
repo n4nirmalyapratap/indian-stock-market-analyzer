@@ -127,9 +127,21 @@ SECTOR_YAHOO_TICKER: dict[str, str] = {
 # ── Cache ─────────────────────────────────────────────────────────────────────
 
 _CACHE: dict[str, dict] = {}
+_CACHE_VERSION = 0  # tracks the market-state version of the entries above
+
+
+def _flush_if_state_changed() -> None:
+    """Drop in-memory entries when market state has just transitioned (open↔closed)."""
+    global _CACHE_VERSION, _CACHE
+    from . import market_cache_service as _disk
+    v = _disk.cache_version()
+    if v != _CACHE_VERSION:
+        _CACHE.clear()
+        _CACHE_VERSION = v
 
 
 def _cache_get(key: str) -> Optional[Any]:
+    _flush_if_state_changed()
     e = _CACHE.get(key)
     if e and time.time() < e["expiry"]:
         return e["data"]
@@ -137,6 +149,7 @@ def _cache_get(key: str) -> Optional[Any]:
 
 
 def _cache_set(key: str, data: Any, ttl: int) -> None:
+    _flush_if_state_changed()
     _CACHE[key] = {"data": data, "expiry": time.time() + ttl}
 
 

@@ -5,6 +5,8 @@ import { Search, TrendingUp, TrendingDown, AlertCircle, BarChart2, Activity } fr
 import ChartButton from "@/components/ChartButton";
 import StockFinancials from "@/components/financials/StockFinancials";
 import TechnicalSummary from "@/components/technicals/TechnicalSummary";
+import DataFreshness from "@/components/DataFreshness";
+import { marketDataQueryOptions, pickMeta } from "@/lib/marketData";
 
 const NIFTY100_QUICK = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","ITC","SBIN","BHARTIARTL","KOTAKBANK","BAJFINANCE","AXISBANK","MARUTI","HCLTECH","WIPRO","TITAN","SUNPHARMA"];
 
@@ -14,10 +16,8 @@ export default function StockLookup() {
   const [view, setView] = useState<"technicals" | "financials">("technicals");
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["stock", symbol],
-    queryFn: () => api.stockDetail(symbol),
+    ...marketDataQueryOptions(["stock", symbol], () => api.stockDetail(symbol)),
     enabled: !!symbol,
-    staleTime: 5 * 60 * 1000,
   });
 
   function handleSearch(sym?: string) {
@@ -99,6 +99,9 @@ export default function StockLookup() {
               </div>
             </div>
             <p className="mt-3 text-sm text-gray-600 leading-relaxed">{data.insight}</p>
+            <div className="mt-3">
+              <DataFreshness meta={pickMeta(data)} refreshKeys={["stock", symbol]} />
+            </div>
           </div>
 
           {/* View toggle: Technicals | Financials */}

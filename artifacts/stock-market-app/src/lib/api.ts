@@ -414,6 +414,31 @@ export const api = {
   newsStats: () => fetchApi<NewsStatsResponse>("/news/stats"),
 
   newsRefresh: () => fetchApi<{ ok: boolean }>("/news/refresh", { method: "POST" }),
+
+  dataConsistency: (symbols: string[] = []) => {
+    const q = symbols.length ? `?symbols=${encodeURIComponent(symbols.join(","))}` : "";
+    return fetchApi<{
+      marketState: string;
+      marketOpen:  boolean;
+      cacheVersion: number;
+      asOf:        string;
+      checked:     number;
+      driftCount:  number;
+      consistent:  boolean;
+      results: Array<{
+        symbol:        string;
+        quotePrice?:   number;
+        historyClose?: number;
+        historyDate?:  string;
+        sectorPrice?:  number | null;
+        drift?:        number | null;
+        driftPct?:     number | null;
+        consistent?:   boolean;
+        meta?:         Record<string, unknown>;
+        error?:        string;
+      }>;
+    }>(`/admin/data-consistency${q}`);
+  },
 };
 
 // ─── News types ────────────────────────────────────────────────────────────────

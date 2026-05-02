@@ -302,6 +302,100 @@ async def validate_secrets(request: Request):
     }
 
 
+# ── Data Consistency Audit ─────────────────────────────────────────────────────
+
+@router.get("/admin/data-consistency")
+async def data_consistency(request: Request, symbols: str = ""):
+    """
+    Cross-check that every page serves the same price for the same symbol.
+
+    For each symbol we compare:
+      - `/stocks/{sym}`              → quote.lastPrice  (StocksService)
+      - `/stocks/{sym}/history`      → last candle close (PriceService, daily)
+      - `/sectors`                   → only if symbol is a known index
+
+    Drift > 0.1% (or > ₹0.05 absolute) is flagged.
+
+    Open to admins only.
+    """
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+
+    syms = [s.strip().upper() for s in (symbols or "").split(",") if s.strip()]
+    if not syms:
+        syms = ["RELIANCE", "TCS", "HDFCBANK", "INFY"]
+
+    from app.services.nse_service import NseService              # noqa: PLC0415
+    from app.services.yahoo_service import YahooService          # noqa: PLC0415
+    from app.services.price_service import PriceService          # noqa: PLC0415
+    from app.services.stocks_service import StocksService        # noqa: PLC0415
+    from app.services.sectors_service import SectorsService      # noqa: PLC0415
+    from app.services import market_cache_service as _disk       # noqa: PLC0415
+
+    nse    = NseService()
+    yahoo  = YahooService()
+    price  = PriceService(nse, yahoo)
+    stocks = StocksService(nse, yahoo)
+    sectors_svc = SectorsService(nse, yahoo)
+
+    sectors_list = await sectors_svc.get_all_sectors()
+    sector_map = {s["symbol"].upper(): s for s in sectors_list}
+
+    results = []
+    drift_count = 0
+
+    for sym in syms:
+        try:
+            details = await stocks.get_stock_details(sym)
+            quote_price = details.get("lastPrice")
+
+            history = await price.get_historical_data(sym, 30)
+            hist_close = history[-1]["close"] if history else None
+            hist_date  = history[-1]["date"]  if history else None
+
+            sector_price = None
+            if sym in sector_map:
+                sector_price = sector_map[sym].get("lastPrice")
+
+            # Compare
+            references = [v for v in (quote_price, hist_close, sector_price) if v is not None]
+            drift = None
+            drift_pct = None
+            consistent = True
+            if len(references) >= 2:
+                lo, hi = min(references), max(references)
+                drift = round(hi - lo, 4)
+                drift_pct = round((drift / lo * 100), 4) if lo else 0
+                consistent = (drift <= 0.05) or (drift_pct <= 0.1)
+            if not consistent:
+                drift_count += 1
+
+            results.append({
+                "symbol":       sym,
+                "quotePrice":   quote_price,
+                "historyClose": hist_close,
+                "historyDate":  hist_date,
+                "sectorPrice":  sector_price,
+                "drift":        drift,
+                "driftPct":     drift_pct,
+                "consistent":   consistent,
+                "meta":         details.get("meta", {}),
+            })
+        except Exception as e:
+            results.append({"symbol": sym, "error": str(e)})
+
+    return {
+        "marketState":  _disk.current_market_state(),
+        "marketOpen":   _disk.is_market_open(),
+        "cacheVersion": _disk.cache_version(),
+        "asOf":         _disk._now_ist().isoformat(),
+        "checked":      len(results),
+        "driftCount":   drift_count,
+        "consistent":   drift_count == 0,
+        "results":      results,
+    }
+
+
 # ── Bug Fixer ─────────────────────────────────────────────────────────────────
 
 _fixer_running = False

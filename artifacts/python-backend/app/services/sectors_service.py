@@ -21,6 +21,7 @@ from typing import Optional
 
 from .nse_service import NseService
 from .yahoo_service import YahooService
+from . import market_cache_service as _disk
 
 logger = logging.getLogger(__name__)
 
@@ -166,16 +167,49 @@ class SectorsService:
     # ── Public endpoints ──────────────────────────────────────────────────────
 
     async def get_all_sectors(self) -> list[dict]:
+        as_of  = _disk._now_ist().isoformat()
+        state  = _disk.current_market_state()
+        sectors: list[dict] = []
         try:
             nse_data = await self.nse.get_sector_indices()
             if nse_data and nse_data.get("data"):
                 parsed = self._parse_nse_sectors(nse_data["data"])
                 if parsed:
-                    return parsed
+                    sectors = parsed
         except Exception:
             pass
-        # NSE unavailable — fall back to Yahoo Finance for live prices
-        return await self._get_sectors_from_yahoo()
+        if not sectors:
+            # NSE unavailable — fall back to Yahoo Finance for live prices
+            sectors = await self._get_sectors_from_yahoo()
+
+        # When market is closed, overlay the sealed EOD close from disk so
+        # this endpoint matches /stocks/{sym} and /stocks/{sym}/history.
+        if not _disk.is_market_open():
+            for s in sectors:
+                sym = (s.get("symbol") or "").upper()
+                if not sym:
+                    continue
+                payload = _disk.load_with_meta(sym, 30)
+                if payload and payload.get("eodSealed") and payload.get("data"):
+                    rows = payload["data"]
+                    last = rows[-1] if rows else None
+                    prev = rows[-2] if len(rows) >= 2 else None
+                    if last and last.get("close") is not None:
+                        eod_close = round(float(last["close"]), 2)
+                        s["lastPrice"] = eod_close
+                        if prev and prev.get("close") is not None:
+                            eod_prev = round(float(prev["close"]), 2)
+                            s["previousClose"] = eod_prev
+                            s["change"]   = round(eod_close - eod_prev, 2)
+                            s["pChange"]  = round((eod_close - eod_prev) / eod_prev * 100, 4) if eod_prev else 0
+                        s["source"]      = "DISK_EOD"
+                        s["eodSealed"]   = True
+                        s["eodDate"]     = payload.get("eodDate")
+
+        for s in sectors:
+            s.setdefault("asOf", as_of)
+            s.setdefault("marketState", state)
+        return sectors
 
     async def _get_sectors_from_yahoo(self) -> list[dict]:
         """Fetch sector index prices from Yahoo Finance when NSE is unavailable."""
