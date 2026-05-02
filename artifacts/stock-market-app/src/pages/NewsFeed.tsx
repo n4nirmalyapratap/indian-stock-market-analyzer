@@ -10,7 +10,7 @@ import {
 import { api, NewsArticle } from "@/lib/api";
 import { useTheme } from "@/context/ThemeContext";
 import DataFreshness from "@/components/DataFreshness";
-import { pickMeta } from "@/lib/marketData";
+import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -758,13 +758,16 @@ export default function NewsFeed() {
 
   const feedCategory = (activeTab === "deals" || activeTab === "events") ? "all" : activeTab;
 
-  const { data: feed, isLoading: feedLoading, isFetching: feedFetching } = useQuery({
-    queryKey: ["newsFeed", feedCategory, debouncedSearch],
-    queryFn:  () => api.newsFeed({ category: feedCategory, search: debouncedSearch, limit: 60 }),
-    staleTime: 8 * 60 * 1000,
-    placeholderData: keepPreviousData,
-    enabled: activeTab !== "deals" && activeTab !== "events",
-  });
+  const { data: feed, isLoading: feedLoading, isFetching: feedFetching } = useQuery(
+    marketDataQueryOptions(
+      ["newsFeed", feedCategory, debouncedSearch],
+      () => api.newsFeed({ category: feedCategory, search: debouncedSearch, limit: 60 }),
+      {
+        placeholderData: keepPreviousData,
+        enabled: activeTab !== "deals" && activeTab !== "events",
+      } as any,
+    ),
+  );
 
   const { data: stats, isFetching: statsFetching } = useQuery({
     queryKey: ["newsStats"],

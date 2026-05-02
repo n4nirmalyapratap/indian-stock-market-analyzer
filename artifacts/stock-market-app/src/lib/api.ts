@@ -582,6 +582,7 @@ export interface ConstituentStock {
   ps:           number | null;
   evEbitda:     number | null;
   roe:          number | null;
+  roa:          number | null;
   debtToEquity: number | null;
   dividendYield: number | null;
   beta:         number | null;
@@ -600,6 +601,11 @@ export interface SectorDetailData {
   constituents:    ConstituentStock[];
   topGainers:      ConstituentStock[];
   topLosers:       ConstituentStock[];
+  /** Provenance fields surfaced by the backend for DataFreshness. */
+  asOf?:           string;
+  marketState?:    string;
+  source?:         "NSE" | "YAHOO" | string;
+  servedFrom?:     string;
 }
 
 // ── Technical Summary (TradingView Indicators' Summary) ──────────────────────
