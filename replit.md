@@ -64,7 +64,8 @@ This Replit container can reach **yfinance**, **api.bseindia.com**, and **portal
 - **Signals** (`/signals?index=…&verdict=all|bullish|bearish|neutral`) — yfinance 6-month history, computes RSI(14) and MA20/MA50 cross with `_compute_signal`. Verdict logic: RSI ≥70 / ≤30 → Bearish/Bullish; price vs MAs → trend confirmation.
 - **Market / Index Valuation** (`/index-valuation`, `/market-valuation`) — yfinance multi-index time series normalised to a 22× PE proxy.
 - **F&O Ban** (`/fo-ban`) — attempts `NseService.fetch_nse(/api/liveMwpl)`; returns `{available:false, message: NSE_BLOCKED_MSG}` when blocked.
-- **FII/DII, SLBM, MTF, IPOs, Top Deliveries** — return `{available:false, message}` with the source restriction explained, since these feeds live behind NSE / Chittorgarh which are blocked from cloud IPs.
+- **FII/DII** — equity flows use NSE's working `/api/fiidiiTradeReact` snapshot endpoint and accumulate in a local SQLite cache at `artifacts/python-backend/market_cache/fii_dii_cache.db` (committed to git so the history grows over time). NSE does not expose its bulk historical or F&O participant endpoints publicly, so the four F&O segment tabs render a graceful empty-state explaining the limitation. Backend: `app/services/fii_dii_service.py`. Routes: `GET /api/insights/fii-dii?segment=&days=` and `POST /api/insights/fii-dii/backfill`.
+- **SLBM, MTF, IPOs, Top Deliveries** — return `{available:false, message}` with the source restriction explained, since these feeds live behind NSE / Chittorgarh which are blocked from cloud IPs.
 
 #### Caching & resilience
 - In-process TTL cache: 5 min for yfinance (`DEFAULT_TTL`), 6 h for AMFI/BSE EOD (`LONG_TTL`).
