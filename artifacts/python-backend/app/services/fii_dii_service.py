@@ -8,15 +8,43 @@ Supports all 5 F&O segments using historical data chunking.
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
+import logging
 import os
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+import httpx
 import pandas as pd
 from app.services.nse_service import NseService
 import threading
+
+logger = logging.getLogger("fii_dii_service")
+
+# nsearchives.nseindia.com publishes a daily participant-wise OI CSV for every
+# trading day. URL pattern: /content/nsccl/fao_participant_oi_DDMMYYYY.csv
+# This is the only public NSE source for historical F&O participant data.
+_FNO_ARCHIVE_URL = "https://nsearchives.nseindia.com/content/nsccl/fao_participant_oi_{date}.csv"
+_ARCHIVE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.nseindia.com/all-reports-derivatives",
+}
+
+# How "Long" and "Short" totals are constructed per segment from the CSV.
+# Each tuple is (long_columns, short_columns) where columns are summed.
+_FNO_SEGMENT_COLS = {
+    "index_future": (["Future Index Long"], ["Future Index Short"]),
+    "stock_future": (["Future Stock Long"], ["Future Stock Short"]),
+    "index_option": (["Option Index Call Long",  "Option Index Put Long"],
+                     ["Option Index Call Short", "Option Index Put Short"]),
+    "stock_option": (["Option Stock Call Long",  "Option Stock Put Long"],
+                     ["Option Stock Call Short", "Option Stock Put Short"]),
+}
 
 _CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "market_cache"
 _DB_FILE = _CACHE_DIR / "fii_dii_cache.db"
@@ -96,7 +124,10 @@ def load_from_db(table: str) -> pd.DataFrame | None:
         try:
             with sqlite3.connect(_DB_FILE) as conn:
                 df = pd.read_sql(f"SELECT * FROM {table}", conn)
-            df["date"] = pd.to_datetime(df["date"], format="mixed", dayfirst=True)
+            # SQLite stores datetimes as ISO strings (YYYY-MM-DD HH:MM:SS).
+            # Use ISO8601 strict parsing to avoid pandas' dayfirst heuristic
+            # mis-interpreting unambiguous ISO strings.
+            df["date"] = pd.to_datetime(df["date"], format="ISO8601")
             return df
         except Exception:
             return None
@@ -192,26 +223,136 @@ class FiiDiiService:
         return pd.DataFrame()
 
     async def fetch_fno_historical(self, segment: str, start: datetime, end: datetime) -> pd.DataFrame:
-        prefix = SEGMENT_MAP.get(segment)
-        if not prefix: return pd.DataFrame()
-        all_rows = []
-        for cs, ce in date_chunks(start, end):
-            s = cs.strftime("%d-%m-%Y")
-            e = ce.strftime("%d-%m-%Y")
-            url  = f"/api/historical/fnoparticipants?startDate={s}&endDate={e}"
-            cache_key = f"hist_fno_{s}_{e}"
-            data = await self.nse.fetch_nse(url, cache_key, ttl=300)
-            if data:
-                rows = data.get("data", data) if isinstance(data, dict) else data
-                if isinstance(rows, list):
-                    all_rows.extend([parse_fno_row(r, prefix) for r in rows if isinstance(r, dict)])
-            await asyncio.sleep(0.5)
-            
-        df = pd.DataFrame(all_rows)
+        """Fetch one historical row per trading day for the given F&O segment by
+        downloading NSE's daily participant-wise OI archive
+        (nsearchives.nseindia.com/content/nsccl/fao_participant_oi_DDMMYYYY.csv).
+
+        Weekends and holidays return 404 from the archive — we skip them
+        silently. Concurrency is capped to be polite to the static host."""
+        if segment not in _FNO_SEGMENT_COLS:
+            return pd.DataFrame()
+
+        days = []
+        cur = start.date()
+        end_d = end.date()
+        while cur <= end_d:
+            # Skip Sat (5) / Sun (6) — NSE never publishes on weekends.
+            if cur.weekday() < 5:
+                days.append(cur)
+            cur += timedelta(days=1)
+
+        sem = asyncio.Semaphore(4)
+        all_per_segment: dict[str, list[dict]] = {seg: [] for seg in _FNO_SEGMENT_COLS}
+
+        async def _one(d):
+            async with sem:
+                rows = await self._fetch_fno_archive_day(d)
+                for seg, row in rows.items():
+                    all_per_segment[seg].append(row)
+
+        # Run all days; failures are absorbed inside _fetch_fno_archive_day.
+        await asyncio.gather(*[_one(d) for d in days], return_exceptions=True)
+
+        # Persist EVERY segment we fetched (not just the requested one) so the
+        # cache fills up in a single pass instead of needing 4 separate runs.
+        loop = asyncio.get_event_loop()
+        for seg, rows in all_per_segment.items():
+            if not rows:
+                continue
+            seg_df = pd.DataFrame(rows)
+            # The rows have ISO YYYY-MM-DD date strings we built ourselves —
+            # parse strictly with format=ISO8601 to avoid pandas mis-applying
+            # dayfirst heuristics on ambiguous numerics like "2026-03-12".
+            seg_df["date"] = pd.to_datetime(seg_df["date"], format="ISO8601")
+            seg_df = seg_df.sort_values("date").drop_duplicates("date").reset_index(drop=True)
+
+            # Merge with existing cached rows so we don't overwrite older data.
+            existing = await loop.run_in_executor(None, load_from_db, f"fii_dii_{seg}")
+            if existing is not None and not existing.empty:
+                seg_df = pd.concat([existing, seg_df], ignore_index=True)
+                seg_df["date"] = pd.to_datetime(seg_df["date"])
+                seg_df = seg_df.sort_values("date").drop_duplicates("date").reset_index(drop=True)
+            await loop.run_in_executor(None, save_to_db, seg_df, f"fii_dii_{seg}")
+
+        # Return just the requested segment's frame.
+        rows = all_per_segment.get(segment, [])
+        df = pd.DataFrame(rows)
         if not df.empty:
-            df["date"] = pd.to_datetime(df["date"], format="mixed", dayfirst=True)
+            df["date"] = pd.to_datetime(df["date"], format="ISO8601")
             df = df.sort_values("date").drop_duplicates("date").reset_index(drop=True)
         return df
+
+    async def _fetch_fno_archive_day(self, day) -> dict[str, dict]:
+        """Download and parse one day's fao_participant_oi CSV. Returns
+        a dict {segment_name: row_dict} for all 4 F&O segments. Empty dict
+        on weekend/holiday/error."""
+        date_str = day.strftime("%d%m%Y")
+        url = _FNO_ARCHIVE_URL.format(date=date_str)
+        try:
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as c:
+                r = await c.get(url, headers=_ARCHIVE_HEADERS)
+            if r.status_code != 200 or len(r.text) < 50:
+                return {}
+            text = r.text.strip()
+            # Header line is wrapped in stray quotes; skip it and parse the rest.
+            lines = [ln for ln in text.splitlines() if ln.strip()]
+            if len(lines) < 3:
+                return {}
+            reader = csv.reader(io.StringIO("\n".join(lines[1:])))
+            rows = list(reader)
+            if not rows:
+                return {}
+            header = [h.strip() for h in rows[0]]
+            data_rows = {r[0].strip(): r for r in rows[1:] if r and r[0].strip()}
+            fii_row = data_rows.get("FII") or data_rows.get("FPI")
+            dii_row = data_rows.get("DII")
+            client_row = data_rows.get("Client") or data_rows.get("CLIENT")
+            pro_row = data_rows.get("Pro") or data_rows.get("PRO")
+            if not fii_row and not dii_row:
+                return {}
+
+            def _val(row, col):
+                if not row:
+                    return 0.0
+                try:
+                    idx = header.index(col)
+                except ValueError:
+                    return 0.0
+                if idx >= len(row):
+                    return 0.0
+                v = row[idx].strip().replace(",", "")
+                try:
+                    return float(v) if v else 0.0
+                except ValueError:
+                    return 0.0
+
+            def _sum(row, cols):
+                return sum(_val(row, c) for c in cols)
+
+            iso_date = day.strftime("%Y-%m-%d")
+            out: dict[str, dict] = {}
+            for seg, (long_cols, short_cols) in _FNO_SEGMENT_COLS.items():
+                fii_long  = _sum(fii_row, long_cols)
+                fii_short = _sum(fii_row, short_cols)
+                dii_long  = _sum(dii_row, long_cols)
+                dii_short = _sum(dii_row, short_cols)
+                out[seg] = {
+                    "date":         iso_date,
+                    "fii_long":     fii_long,
+                    "fii_short":    fii_short,
+                    "fii_net":      fii_long - fii_short,
+                    "dii_long":     dii_long,
+                    "dii_short":    dii_short,
+                    "dii_net":      dii_long - dii_short,
+                    "client_long":  _sum(client_row, long_cols),
+                    "client_short": _sum(client_row, short_cols),
+                    "pro_long":     _sum(pro_row, long_cols),
+                    "pro_short":    _sum(pro_row, short_cols),
+                }
+            return out
+        except Exception as e:
+            logger.debug("fao archive fetch failed for %s: %s", date_str, e)
+            return {}
 
     async def get_historical(self, segment: str, start: datetime, end: datetime) -> pd.DataFrame:
         table = f"fii_dii_{segment}"
