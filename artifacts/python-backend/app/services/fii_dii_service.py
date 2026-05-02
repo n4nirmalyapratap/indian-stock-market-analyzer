@@ -455,8 +455,9 @@ class FiiDiiService:
             rows.append(r)
 
         latest = rows[0] if rows else None
-        
+
         def _summary(n: int):
+            """Trailing-N-sessions aggregate (most recent first)."""
             if not rows:
                 return {"fiiNet": None, "diiNet": None, "label": None, "days": 0, "expectedDays": n, "isPartial": True}
             sl = rows[:n]
@@ -472,6 +473,26 @@ class FiiDiiService:
                 "isPartial": len(sl) < n,
             }
 
+        def _ytd_summary():
+            """True calendar YTD — all rows from Jan 1 of the current year onward."""
+            if not rows:
+                return {"fiiNet": None, "diiNet": None, "label": None, "days": 0, "expectedDays": 0, "isPartial": True, "yearStart": None}
+            year = datetime.today().year
+            jan1 = f"{year}-01-01"
+            ytd_rows = [r for r in rows if (r.get("date") or "") >= jan1]
+            fii = sum((r.get("fiiNet") or 0.0) for r in ytd_rows)
+            dii = sum((r.get("diiNet") or 0.0) for r in ytd_rows)
+            label = ytd_rows[-1].get("displayDate") if ytd_rows else None
+            return {
+                "fiiNet": round(fii, 2),
+                "diiNet": round(dii, 2),
+                "label": label,
+                "days": len(ytd_rows),
+                "expectedDays": len(ytd_rows),
+                "isPartial": False,
+                "yearStart": jan1,
+            }
+
         # Group rows into calendar months (most recent first)
         monthly = self._group_by_month(rows)
 
@@ -485,8 +506,10 @@ class FiiDiiService:
             "summary": {
                 "daily":   _summary(1),
                 "weekly":  _summary(5),
-                "monthly": _summary(22),
-                "ytd":     _summary(min(252, len(rows))),
+                # Hero card "Last 30 Sessions" — exact 30 trailing trading days.
+                "monthly": _summary(30),
+                # True calendar YTD aggregate (Jan 1 → today), not trailing 252.
+                "ytd":     _ytd_summary(),
             },
             "monthly": monthly,
             "totalDays": len(rows),
