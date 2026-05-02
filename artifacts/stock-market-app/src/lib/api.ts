@@ -181,6 +181,82 @@ export interface PatternsResponse {
   topPuts: ChartPattern[];
 }
 
+// ── Famous-Investor AI Council types ─────────────────────────────────────────
+
+export type AgentVerdict = "STRONG_BUY" | "BUY" | "HOLD" | "AVOID" | "STRONG_AVOID";
+
+export interface ChecklistItem {
+  label:     string;
+  passed:    boolean;
+  value:     number | null;
+  threshold: number | number[];
+  op:        string;
+  weight:    number;
+  detail:    string;
+}
+
+export interface PersonaResult {
+  id:         string;
+  name:       string;
+  firm:       string;
+  philosophy: string;
+  signature:  string;
+  score:      number;
+  verdict:    AgentVerdict;
+  checklist:  ChecklistItem[];
+  thesis?:    string;
+}
+
+export interface PersonaMeta {
+  id:         string;
+  name:       string;
+  firm:       string;
+  era:        string;
+  philosophy: string;
+  signature:  string;
+}
+
+export interface AgentSource {
+  id:     string;
+  label:  string;
+  covers: string;
+}
+
+export interface CouncilResponse {
+  symbol:    string;
+  name:      string | null;
+  sector:    string | null;
+  lastPrice: number | null;
+  context:   Record<string, unknown>;
+  personas:  PersonaResult[];
+  council: {
+    verdict:    AgentVerdict;
+    avgScore:   number;
+    buyCount:   number;
+    avoidCount: number;
+    holdCount:  number;
+  };
+  sources?:   AgentSource[];
+  fetchedAt?: string;
+}
+
+export interface PersonaDeepDive extends PersonaMeta {
+  symbol:     string;
+  name_stock: string | null;
+  sector:     string | null;
+  lastPrice:  number | null;
+  score:      number;
+  verdict:    AgentVerdict;
+  checklist:  ChecklistItem[];
+  thesis:     string;
+  context:    Record<string, unknown>;
+}
+
+export interface AgentsListResponse {
+  personas: PersonaMeta[];
+  count:    number;
+}
+
 export interface TechnicalAnalysis {
   trend?: string;
   rsi?: number;
@@ -343,16 +419,16 @@ export const api = {
 
   // ── Famous-Investor AI Council ──
   agentsList: () =>
-    fetchApi<{ personas: Array<Record<string, unknown>>; count: number }>("/agents"),
+    fetchApi<AgentsListResponse>("/agents"),
 
   agentCouncil: (symbol: string) =>
-    fetchApi<Record<string, unknown>>(`/agents/${encodeURIComponent(symbol)}`),
+    fetchApi<CouncilResponse>(`/agents/${encodeURIComponent(symbol)}`),
 
   agentCouncilFull: (symbol: string) =>
-    fetchApi<Record<string, unknown>>(`/agents/${encodeURIComponent(symbol)}/council`),
+    fetchApi<CouncilResponse>(`/agents/${encodeURIComponent(symbol)}/council`),
 
   agentPersona: (symbol: string, personaId: string) =>
-    fetchApi<Record<string, unknown> & { thesis: string; verdict: string; score: number; checklist: unknown[]; name: string; firm: string; era: string; signature: string }>(
+    fetchApi<PersonaDeepDive>(
       `/agents/${encodeURIComponent(symbol)}/${encodeURIComponent(personaId)}`,
     ),
 
