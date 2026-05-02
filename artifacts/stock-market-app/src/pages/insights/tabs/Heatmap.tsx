@@ -374,45 +374,54 @@ export default function Heatmap() {
             const cleanSymbol = item.symbol.split(".")[0];
             const isTopMover = topMovers.has(item.symbol);
             const isClicked = clicked === item.symbol;
-            // Wave-stagger: tiles flow in diagonally from top-left to bottom-right.
-            // Skipped entirely when reduced motion is preferred.
-            // Cap stagger window so the entrance never feels long, and so the
-            // last tile lands within ~350ms even on Nifty 500.
-            const diag = reduced ? 0 : (containerW && containerH)
-              ? Math.min((x / containerW + y / containerH) * 0.12, 0.18)
-              : Math.min(idx * 0.002, 0.18);
+            // SUPERNOVA entrance — every tile literally flies from the
+            // top-left corner of the canvas to its final spot. Stagger is
+            // ordered by Manhattan distance from the corner, so the grid
+            // unfurls outward like a shockwave. Tiles closer to the corner
+            // land first; the farthest tile is delayed by ~280ms.
+            const dist = (x + y);
+            const maxDist = (containerW + containerH) || 1;
+            const fanDelay = reduced ? 0 : (dist / maxDist) * 0.28;
 
             return (
               <motion.div
                 key={item.symbol}
-                // Position via inline style (paint-only) instead of animating
-                // left/top/width/height — those properties trigger layout on
-                // every frame for every tile, which is what made the entrance
-                // feel laggy on big indices.
+                // Position via inline style (paint-only) — animating
+                // left/top/width/height triggers per-frame layout on every
+                // tile and is what makes big grids feel laggy.
                 style={{ left: x, top: y, width: w - 1, height: h - 1, willChange: "transform, opacity" }}
-                // Tiles "shoot" in from above and settle into place. We
-                // animate transform (translateY + scale) and opacity only —
-                // both are compositor-only properties so even ~500 tiles
-                // stay at 60fps. No layout, no paint, no blur.
-                initial={reduced ? { opacity: 0 } : { opacity: 0, y: -56, scale: 0.96 }}
+                // The tile starts translated by -(x,y) — i.e. visually
+                // sitting in the top-left corner — slightly shrunk and
+                // rotated. Then it shoots out to its destination on a
+                // critically-damped spring (no wobble, single soft landing).
+                // Only `transform` + `opacity` animate, both compositor-only,
+                // so even Nifty 500 stays at 60fps.
+                initial={reduced
+                  ? { opacity: 0 }
+                  : { opacity: 0, x: -x, y: -y, scale: 0.45, rotate: -10 }}
                 animate={{
                   opacity: 1,
+                  x: 0,
                   y: 0,
+                  rotate: 0,
                   scale: isClicked && !reduced ? [1, 1.08, 1] : 1,
                 }}
-                exit={reduced ? { opacity: 0 } : { opacity: 0, y: -32, scale: 0.97 }}
+                exit={reduced
+                  ? { opacity: 0 }
+                  : { opacity: 0, scale: 0.6, x: -x * 0.5, y: -y * 0.5, rotate: -6 }}
                 transition={reduced
                   ? { duration: 0.12, delay: 0 }
                   : {
-                      // Critically-damped spring → no bounce, soft landing,
-                      // settles in one pass. Feels "elegant + shooting"
-                      // without the wobble of an under-damped spring.
                       type: "spring",
-                      stiffness: 320,
-                      damping: 34,
-                      mass: 0.55,
-                      delay: diag,
-                      opacity: { duration: 0.28, ease: [0.22, 1, 0.36, 1], delay: diag },
+                      stiffness: 240,
+                      damping: 30,
+                      mass: 0.7,
+                      delay: fanDelay,
+                      // Opacity races ahead of the spring so tiles become
+                      // visible the moment they leave the corner — that's
+                      // what gives the "shooting" feel.
+                      opacity: { duration: 0.22, ease: [0.22, 1, 0.36, 1], delay: fanDelay },
+                      rotate: { type: "spring", stiffness: 220, damping: 28, delay: fanDelay },
                       scale: isClicked ? { duration: 0.35, ease: "easeOut" } : undefined,
                     }
                 }
