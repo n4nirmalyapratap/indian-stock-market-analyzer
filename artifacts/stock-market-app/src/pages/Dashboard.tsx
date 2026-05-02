@@ -85,7 +85,7 @@ export default function Dashboard() {
       </div>
 
       <DataFreshness
-        meta={pickMeta(rotation) ?? (rotation ? { source: "NSE", asOf: (rotation as any).timestamp, marketState: undefined } : null)}
+        meta={pickMeta(rotation) ?? (rotation ? { source: "NSE", asOf: rotation.timestamp } : null)}
         refreshKeys={[["rotation"], ["patterns-overview"]]}
       />
 

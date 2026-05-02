@@ -40,20 +40,43 @@ logger = logging.getLogger("insights")
 router = APIRouter(prefix="/insights", tags=["insights"])
 
 _executor = ThreadPoolExecutor(max_workers=16)
-_cache: dict[str, tuple[float, Any]] = {}
+_cache: dict[str, tuple[float, Any, int]] = {}  # (timestamp, value, cacheVersion)
 DEFAULT_TTL = 300              # 5 min for yfinance / fast-changing data
 LONG_TTL    = 60 * 60 * 6      # 6 h for AMFI / BSE end-of-day data
 
 
+def _meta(served_from: str = "INSIGHTS_ENGINE") -> dict:
+    """Canonical provenance contract — same shape as every other route's meta."""
+    state = mcache.current_market_state()
+    return {
+        "source":       "NSE",
+        "servedFrom":   served_from,
+        "asOf":         mcache._now_ist().isoformat(),
+        "marketState":  state,
+        "eodSealed":    state in ("CLOSED", "WEEKEND"),
+        "eodDate":      mcache._eod_date_for(state),
+        "cacheVersion": mcache.cache_version(),
+    }
+
+
 def _cache_get(key: str, ttl: int = DEFAULT_TTL):
+    """TTL- AND cache-version-aware lookup. The version flush guarantees
+    insights surfaces snap to the freshly sealed EOD close at market close."""
     hit = _cache.get(key)
-    if hit and (time.time() - hit[0]) < ttl:
-        return hit[1]
-    return None
+    if not hit:
+        return None
+    ts, value, ver = hit
+    if ver != mcache.cache_version():
+        # Market state transitioned — force a re-fetch.
+        _cache.pop(key, None)
+        return None
+    if (time.time() - ts) >= ttl:
+        return None
+    return value
 
 
 def _cache_set(key: str, value: Any):
-    _cache[key] = (time.time(), value)
+    _cache[key] = (time.time(), value, mcache.cache_version())
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -357,6 +380,7 @@ async def get_heatmap(
         "indexChange": idx_q.get("change"),
         "indexChangePct": idx_q.get("changePct"),
         "items": items,
+        "meta": _meta("HEATMAP_ENGINE"),
     }
     _cache_set(cache_key, response)
     return response
@@ -652,7 +676,7 @@ async def get_signals(
     items = cached.get("items", [])
     if verdict and verdict != "all":
         items = [it for it in items if it["verdict"].lower() == verdict.lower()]
-    return {**cached, "items": items, "filterApplied": verdict}
+    return {**cached, "items": items, "filterApplied": verdict, "meta": _meta("SIGNALS_ENGINE")}
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -693,6 +717,10 @@ def _index_valuation_sync(codes: list[str], period: str) -> dict:
         "indices": indices,
     }
 
+# Note: market-valuation/index-valuation re-stamp meta below at request time so
+# cached payloads always reflect the *current* market state, not the stamp from
+# when the cache was filled.
+
 
 @router.get("/index-valuation")
 async def get_index_valuation(
@@ -704,11 +732,11 @@ async def get_index_valuation(
     cache_key = f"index-val:{','.join(codes)}:{period}:{metric}"
     cached = _cache_get(cache_key, ttl=LONG_TTL)
     if cached is not None:
-        return cached
+        return {**cached, "meta": _meta("VALUATION_ENGINE")}
     loop = asyncio.get_event_loop()
     res = await loop.run_in_executor(None, _index_valuation_sync, codes, period)
     _cache_set(cache_key, res)
-    return res
+    return {**res, "meta": _meta("VALUATION_ENGINE")}
 
 
 # Alias used by the frontend
