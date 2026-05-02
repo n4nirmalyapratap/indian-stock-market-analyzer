@@ -321,7 +321,16 @@ def test_heatmap_serves_from_disk_when_market_closed(client, tmp_path, monkeypat
     body = r.json()
     assert body["available"] is True
     assert len(body["items"]) >= 5
-    # Verify the changePct math came from our synthetic series (100 -> 104 = +4%)
+    # 1D performance compares the last close to the previous close, so
+    # 103 -> 104 ≈ +0.97% on the synthetic series.
     sample = body["items"][0]
-    assert abs(sample["changePct"] - 4.0) < 0.01
+    assert abs(sample["changePct"] - 0.97) < 0.01
     assert sample["color"]["bg"].startswith("#")
+
+    # 1Y performance falls back to the earliest close in the window —
+    # 100 -> 104 = +4.0% — proving the offset selection works end-to-end.
+    insights_mod._cache.clear()
+    r2 = client.get("/api/insights/heatmap?index=NIFTYIT&performance=1y")
+    body2 = r2.json()
+    sample2 = body2["items"][0]
+    assert abs(sample2["changePct"] - 4.0) < 0.01
