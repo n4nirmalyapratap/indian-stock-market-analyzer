@@ -35,9 +35,25 @@ import httpx
 from fastapi import APIRouter, Query
 
 from ..services import market_cache_service as mcache
+from ..services.nse_service    import NseService
+from ..services.yahoo_service  import YahooService
+from ..services.price_service  import PriceService
 
 logger = logging.getLogger("insights")
 router = APIRouter(prefix="/insights", tags=["insights"])
+
+# ── Single PriceService instance shared by every insights endpoint ───────────
+# Insights MUST read prices through PriceService so heatmap / signals /
+# market-valuation use the SAME provider/timepoint as /stocks and /sectors.
+_nse   = NseService()
+_yahoo = YahooService()
+_price = PriceService(_nse, _yahoo)
+
+
+def _closes_from_history(rows: list[dict]) -> list[float]:
+    """Extract a list of daily closes from PriceService.get_historical_data
+    rows ({date,open,high,low,close,volume})."""
+    return [float(r.get("close", 0.0)) for r in (rows or []) if isinstance(r, dict) and r.get("close") is not None]
 
 _executor = ThreadPoolExecutor(max_workers=16)
 _cache: dict[str, tuple[float, Any, int]] = {}  # (timestamp, value, cacheVersion)
@@ -260,76 +276,83 @@ def _quote_from_closes(sym: str, closes: list[float], market_cap: float = 0.0) -
     }
 
 
-def _fetch_one_quote(sym: str, period_yf: str) -> dict | None:
-    """Fetch a single quote. When the market is closed we first try the
-    on-disk EOD cache (artifacts/python-backend/market_cache/<date>/) so we
-    serve instantly without hitting yfinance. Successful live fetches are
-    written back to disk for the next call."""
+async def _fetch_one_quote_async(sym: str, period_yf: str) -> dict | None:
+    """Single source of truth for the heatmap quote.
+
+    Pulls daily OHLCV via PriceService — same code path used by /stocks and
+    /sectors — so provider and timepoint match across all surfaces.
+    PriceService itself enforces `eodSealed` on closed-market disk reads,
+    so an intraday-only snapshot is never served as the close.
+
+    Market cap is best-effort from yfinance.fast_info (not a price field).
+    """
     days = _PERIOD_DAYS.get(period_yf, 7)
-    market_open = mcache.is_market_open()
-
-    # Disk-first when market is closed.
-    if not market_open:
-        cached = mcache.load_from_disk(sym, days)
-        if cached:
-            closes = [float(r.get("close", 0)) for r in cached if isinstance(r, dict)]
-            mc = float(cached[0].get("marketCap", 0.0)) if cached and isinstance(cached[0], dict) else 0.0
-            res = _quote_from_closes(sym, closes, mc)
-            if res:
-                return res
-
-    import yfinance as yf
     try:
-        t = yf.Ticker(sym)
-        hist = t.history(period=period_yf, auto_adjust=False)
-        if hist.empty or len(hist) < 2:
-            return None
-        closes = [float(x) for x in hist["Close"].tolist()]
-        mc = 0.0
-        try:
-            mc = float(t.fast_info.get("marketCap") or 0.0)
-        except Exception:
-            pass
-        # Persist to disk so the next "market closed" call is free.
-        try:
-            rows = [{"date": ts.strftime("%Y-%m-%d"), "close": float(c), "marketCap": mc}
-                     for ts, c in hist["Close"].items()]
-            mcache.save_to_disk(sym, days, rows)
-        except Exception:
-            pass
-        return _quote_from_closes(sym, closes, mc)
+        rows = await _price.get_historical_data(sym, days)
     except Exception as e:
-        logger.debug("heatmap %s failed: %s", sym, e)
+        logger.debug("heatmap PriceService.get_historical_data %s failed: %s", sym, e)
+        return None
+    closes = _closes_from_history(rows)
+    if len(closes) < 2:
         return None
 
-
-def _heatmap_sync(symbols: list[str], period_yf: str) -> list[dict]:
-    items: list[dict] = []
-    futs = [_executor.submit(_fetch_one_quote, s, period_yf) for s in symbols]
-    for f in futs:
-        try:
-            r = f.result(timeout=20)
-            if r:
-                items.append(r)
-        except Exception:
-            pass
-    return items
-
-
-def _index_quote_sync(ticker: str) -> dict:
-    import yfinance as yf
+    # Market cap is non-price metadata — fast_info is fine and EOD-stable.
+    mc = 0.0
     try:
-        t = yf.Ticker(ticker)
-        hist = t.history(period="5d", auto_adjust=False)
-        if hist.empty:
-            return {}
-        last = float(hist["Close"].iloc[-1])
-        prev = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else last
-        change = last - prev
-        pct = (change / prev * 100) if prev else 0.0
-        return {"lastPrice": round(last, 2), "change": round(change, 2), "changePct": round(pct, 2)}
+        import yfinance as yf
+        ysym = sym if sym.endswith(".NS") else f"{sym}.NS"
+        mc = float(yf.Ticker(ysym).fast_info.get("marketCap") or 0.0)
     except Exception:
+        pass
+    return _quote_from_closes(sym, closes, mc)
+
+
+async def _heatmap_async(symbols: list[str], period_yf: str) -> list[dict]:
+    """Concurrently fetch heatmap quotes via PriceService."""
+    sem = asyncio.Semaphore(16)
+    async def _bounded(s: str):
+        async with sem:
+            return await _fetch_one_quote_async(s, period_yf)
+    results = await asyncio.gather(*[_bounded(s) for s in symbols], return_exceptions=True)
+    return [r for r in results if isinstance(r, dict) and r]
+
+
+# Map of curated index codes → the underlying constituent symbol whose
+# PriceService quote we use as the index proxy. This avoids a second
+# data-source path and keeps Insights consistent with /stocks.
+_INDEX_PROXY_SYMBOL = {
+    "^NSEI":   "NIFTY 50",
+    "^NSEBANK": "NIFTY BANK",
+    "^CNXIT":  "NIFTY IT",
+}
+
+
+async def _index_quote_async(ticker: str) -> dict:
+    """Index-level quote via PriceService daily history (same source as the
+    heatmap tiles), so the index header and the tiles always agree."""
+    try:
+        rows = await _price.get_historical_data(ticker, 7)
+    except Exception:
+        rows = []
+    closes = _closes_from_history(rows)
+    if len(closes) < 2:
+        # Last-resort fallback to yfinance — only when PriceService returns
+        # nothing (e.g. NSE indices that don't expose OHLCV historically).
+        try:
+            import yfinance as yf
+            hist = yf.Ticker(ticker).history(period="5d", auto_adjust=False)
+            if hist.empty:
+                return {}
+            closes = [float(x) for x in hist["Close"].tolist()]
+        except Exception:
+            return {}
+    if len(closes) < 2:
         return {}
+    last = closes[-1]
+    prev = closes[-2]
+    change = last - prev
+    pct = (change / prev * 100) if prev else 0.0
+    return {"lastPrice": round(last, 2), "change": round(change, 2), "changePct": round(pct, 2)}
 
 
 @router.get("/indices")
@@ -366,10 +389,17 @@ async def get_heatmap(
     period_yf = PERIOD_MAP.get(performance, "5d")
     idx_ticker = INDEX_TICKER.get(code, "^NSEI")
 
-    loop = asyncio.get_event_loop()
+    # When the market is closed, force-seal any intraday snapshots BEFORE we
+    # read disk. Guarantees the heatmap shows the same official close as
+    # /stocks and /sectors (no stale-intraday-as-close).
+    try:
+        await mcache.seal_eod_for_today_if_overdue(_price, symbols=list(symbols))
+    except Exception:
+        pass
+
     items, idx_q = await asyncio.gather(
-        loop.run_in_executor(None, _heatmap_sync, symbols, period_yf),
-        loop.run_in_executor(None, _index_quote_sync, idx_ticker),
+        _heatmap_async(symbols, period_yf),
+        _index_quote_async(idx_ticker),
     )
 
     response = {
@@ -620,43 +650,26 @@ def _compute_signal(symbol: str, closes: list[float]) -> dict:
     }
 
 
-def _signals_sync(symbols: list[str]) -> list[dict]:
-    """Compute per-symbol signals. Uses the EOD disk cache when the market is
-    closed (same key/path scheme as the heatmap), saving on yfinance calls
-    overnight and on weekends."""
-    import yfinance as yf
-    market_open = mcache.is_market_open()
-    out = []
-    def _one(sym):
-        try:
-            if not market_open:
-                cached = mcache.load_from_disk(sym, _PERIOD_DAYS["6mo"])
-                if cached:
-                    closes = [float(r.get("close", 0)) for r in cached if isinstance(r, dict)]
-                    if len(closes) >= 50:
-                        return _compute_signal(sym, closes)
-            h = yf.Ticker(sym).history(period="6mo", auto_adjust=False)
-            if h.empty:
-                return None
-            closes = [float(x) for x in h["Close"].tolist()]
+async def _signals_async(symbols: list[str]) -> list[dict]:
+    """Compute per-symbol signals. Pulls 6-month daily closes via
+    PriceService (same source as /stocks/{sym}/history), so signal verdicts
+    are based on the SAME closes the user sees on the chart."""
+    days = _PERIOD_DAYS["6mo"]
+    sem = asyncio.Semaphore(12)
+
+    async def _one(sym: str):
+        async with sem:
             try:
-                rows = [{"date": ts.strftime("%Y-%m-%d"), "close": float(c)}
-                         for ts, c in h["Close"].items()]
-                mcache.save_to_disk(sym, _PERIOD_DAYS["6mo"], rows)
+                rows = await _price.get_historical_data(sym, days)
             except Exception:
-                pass
+                return None
+            closes = _closes_from_history(rows)
+            if len(closes) < 50:
+                return None
             return _compute_signal(sym, closes)
-        except Exception:
-            return None
-    futs = [_executor.submit(_one, s) for s in symbols]
-    for f in futs:
-        try:
-            r = f.result(timeout=20)
-            if r:
-                out.append(r)
-        except Exception:
-            pass
-    return out
+
+    results = await asyncio.gather(*[_one(s) for s in symbols], return_exceptions=True)
+    return [r for r in results if isinstance(r, dict) and r]
 
 
 @router.get("/signals")
@@ -668,9 +681,13 @@ async def get_signals(
     cache_key = f"signals:{code}"
     cached = _cache_get(cache_key, ttl=900)
     if cached is None:
-        symbols = INDEX_CONSTITUENTS.get(code, NIFTY50)
-        loop = asyncio.get_event_loop()
-        items = await loop.run_in_executor(None, _signals_sync, symbols[:50])
+        symbols = INDEX_CONSTITUENTS.get(code, NIFTY50)[:50]
+        # Force-seal intraday snapshots before reading disk for closes.
+        try:
+            await mcache.seal_eod_for_today_if_overdue(_price, symbols=list(symbols))
+        except Exception:
+            pass
+        items = await _signals_async(symbols)
         cached = {"available": True, "items": items}
         _cache_set(cache_key, cached)
     items = cached.get("items", [])
@@ -680,17 +697,55 @@ async def get_signals(
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Market valuation (yfinance proxy)
+# Market valuation (PriceService → Yahoo fallback for index history)
 # ────────────────────────────────────────────────────────────────────────────
 def _index_valuation_sync(codes: list[str], period: str) -> dict:
+    """Indices proxy chart. Tries PriceService for each ticker first; if it
+    has no rows (NSE indices often lack daily OHLCV), falls back to yfinance.
+    Either way the result is the same daily-close series used elsewhere."""
     import yfinance as yf
-    period_yf = {"1m":"1mo","6m":"6mo","1y":"1y","5y":"5y","10y":"10y"}.get(period, "5y")
+    import asyncio as _aio
+    period_days = {"1m":30,"6m":180,"1y":365,"5y":365*5,"10y":365*10}.get(period, 365*5)
+    period_yf   = {"1m":"1mo","6m":"6mo","1y":"1y","5y":"5y","10y":"10y"}.get(period, "5y")
     label_map = {"^NSEI":"NIFTY 50","^NSEBANK":"NIFTY BANK","^NIFTY_FIN_SERVICE":"NIFTY FIN SERVICES"}
 
     series_dict: dict[str, dict[str, float]] = {}
     indices = []
     for code in codes:
         try:
+            # 1) PriceService first — same daily OHLCV path used everywhere.
+            ps_rows: list[dict] = []
+            try:
+                ps_rows = _aio.run(_price.get_historical_data(code, period_days))
+            except RuntimeError:
+                # Already inside an event loop — schedule on a fresh one.
+                loop = _aio.new_event_loop()
+                try:
+                    ps_rows = loop.run_until_complete(_price.get_historical_data(code, period_days))
+                finally:
+                    loop.close()
+            except Exception:
+                ps_rows = []
+
+            if ps_rows and len(ps_rows) >= 2:
+                label = label_map.get(code, code)
+                base = float(ps_rows[0].get("close", 0)) or 1.0
+                for r in ps_rows:
+                    d = str(r.get("date", ""))
+                    if not d:
+                        continue
+                    series_dict.setdefault(d, {"date": d})[label] = round(float(r.get("close", 0)) / base * 22.0, 2)
+                last = float(ps_rows[-1].get("close", 0))
+                prev = float(ps_rows[-2].get("close", last))
+                change = last - prev
+                pct = (change / prev * 100) if prev else 0.0
+                indices.append({"code": code, "label": label,
+                                "lastPrice": round(last, 2),
+                                "change":    round(change, 2),
+                                "changePct": round(pct, 2)})
+                continue
+
+            # 2) Yahoo fallback — only when PriceService returns nothing.
             t = yf.Ticker(code)
             hist = t.history(period=period_yf, auto_adjust=False)
             if hist.empty:
