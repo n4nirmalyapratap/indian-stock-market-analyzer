@@ -19,11 +19,97 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import re
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from . import ai_client
 
 logger = logging.getLogger(__name__)
+
+
+# ── External-context fetchers (news + market sentiment) ──────────────────────
+# These run alongside the deterministic checklist so personas (and the LLM
+# thesis) can be aware of recent news flow and the broad-market mood.
+# Failures degrade gracefully — agents must always work with whatever data
+# is available.
+
+async def _fetch_symbol_news(symbol: str, name: Optional[str], limit: int = 5) -> list[dict]:
+    """Pull recent symbol-relevant news from the cached RSS feed.
+
+    Matches on (a) the symbol token in extracted tickers or (b) the company's
+    short name (first 1-2 words) appearing in the article title/summary.
+    """
+    try:
+        from . import news_service
+        feed = await news_service.get_news_feed(category="all", limit=100, offset=0)
+    except Exception as exc:
+        logger.warning("agents: news fetch failed: %s", exc)
+        return []
+
+    sym_u = (symbol or "").upper()
+    # Build a name token (e.g. "Reliance Industries Ltd" → "reliance")
+    name_tok = ""
+    if name:
+        first = re.split(r"[\s\.,&]+", name.strip())[0]
+        if len(first) >= 4:
+            name_tok = first.lower()
+
+    matches: list[dict] = []
+    for art in feed.get("articles", []):
+        tickers = [t.upper() for t in (art.get("tickers") or [])]
+        title   = (art.get("title")   or "").lower()
+        summary = (art.get("summary") or "").lower()
+        if (
+            sym_u in tickers
+            or (name_tok and (name_tok in title or name_tok in summary))
+        ):
+            matches.append({
+                "title":     art.get("title"),
+                "source":    art.get("source"),
+                "published": art.get("published"),
+                "sentiment": art.get("sentiment"),
+                "url":       art.get("url"),
+            })
+            if len(matches) >= limit:
+                break
+    return matches
+
+
+async def _fetch_market_mood() -> dict:
+    """Get the broad-market sentiment snapshot (VIX + price action + news mood).
+
+    Returns a thin summary safe for inclusion in LLM prompts.
+    """
+    try:
+        from . import market_sentiment_engine
+        snap = await market_sentiment_engine.get_market_sentiment(force_refresh=False)
+    except Exception as exc:
+        logger.warning("agents: market sentiment fetch failed: %s", exc)
+        return {}
+
+    composite = snap.get("composite") or snap.get("compositeScore")
+    return {
+        "composite":   composite,
+        "label":       snap.get("label"),
+        "vix":         (snap.get("vix") or {}).get("current") if isinstance(snap.get("vix"), dict) else snap.get("vix"),
+        "newsScore":   (snap.get("breakdown") or {}).get("news"),
+        "priceAction": (snap.get("breakdown") or {}).get("priceAction"),
+    }
+
+
+async def gather_external_context(symbol: str, name: Optional[str]) -> dict:
+    """Fetch news + market mood concurrently. Always returns dict (never raises)."""
+    try:
+        news, mood = await asyncio.gather(
+            _fetch_symbol_news(symbol, name),
+            _fetch_market_mood(),
+            return_exceptions=False,
+        )
+    except Exception as exc:
+        logger.warning("agents: external context gather failed: %s", exc)
+        news, mood = [], {}
+    return {"recentNews": news, "marketMood": mood}
 
 
 # ── Verdict thresholds ────────────────────────────────────────────────────────
@@ -425,10 +511,18 @@ def list_personas() -> list[dict]:
 
 # ── Council runner ────────────────────────────────────────────────────────────
 
-def run_council(stock_detail: dict) -> dict:
+def run_council(stock_detail: dict, external: Optional[dict] = None) -> dict:
     """Run all eight personas against the given stock_detail blob.  Pure
-    deterministic — no LLM, fast (< 50 ms)."""
+    deterministic — no LLM, fast (< 50 ms).
+
+    `external` may carry recent news + market mood from `gather_external_context()`
+    — these are passed through so the LLM thesis writer can cite them, but they
+    do NOT affect the checklist scores (we keep verdicts fully reproducible).
+    """
     ctx = build_context(stock_detail)
+    if external:
+        ctx["recentNews"]  = external.get("recentNews") or []
+        ctx["marketMood"]  = external.get("marketMood") or {}
 
     results = []
     for p in PERSONAS:
@@ -473,6 +567,19 @@ def run_council(stock_detail: dict) -> dict:
             "avoidCount":avoids,
             "holdCount": len(results) - buys - avoids,
         },
+        # Provenance / citations — every metric the council looked at can be
+        # traced back to one of these public sources.
+        "sources": [
+            {"id": "yahoo_info",     "label": "Yahoo Finance fundamentals (yfinance .info)",
+             "covers": "P/E, P/B, ROE, margins, debt/equity, FCF, growth, beta, ownership"},
+            {"id": "technical",      "label": "Internal technical-analysis pipeline",
+             "covers": "RSI, EMA50/EMA200, trend label"},
+            {"id": "news_service",   "label": "RSS feed (Economic Times, Livemint, Moneycontrol)",
+             "covers": "Symbol-tagged headlines + per-article sentiment"},
+            {"id": "market_mood",    "label": "Market sentiment engine (VIX + Nifty PA + news NLP)",
+             "covers": "Composite mood score and risk-on/risk-off label"},
+        ],
+        "fetchedAt": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -509,6 +616,24 @@ def _persona_user_prompt(persona: dict, evaluation: dict, ctx: dict) -> str:
     fcf_y  = ctx.get("fcfYield")
     pct_off= ctx.get("pctOffHigh")
 
+    # ── External context (news + market mood). Fully optional — block omitted
+    # from the prompt when both are empty so the model isn't distracted.
+    news = ctx.get("recentNews") or []
+    mood = ctx.get("marketMood") or {}
+    news_block = ""
+    if news:
+        lines = []
+        for n in news[:4]:
+            sent = n.get("sentiment") or "neutral"
+            lines.append(f"  • [{sent}] {n.get('title')} — {n.get('source')}")
+        news_block = "Recent symbol news (RSS, last 24-48 h):\n" + "\n".join(lines) + "\n\n"
+    mood_block = ""
+    if mood and mood.get("label"):
+        mood_block = (
+            f"Broad-market mood: {mood.get('label')} "
+            f"(composite {mood.get('composite')}, VIX {mood.get('vix')}).\n\n"
+        )
+
     return (
         f"Indian stock: {ctx.get('name')} ({ctx.get('symbol')})\n"
         f"Sector: {sector}\n"
@@ -516,13 +641,15 @@ def _persona_user_prompt(persona: dict, evaluation: dict, ctx: dict) -> str:
         f"Key fundamentals available:\n"
         f"  P/E={pe}, P/B={pb}, ROE={roe}, D/E={de}, FCF yield={fcf_y}%, "
         f"% off 52w high={pct_off}\n\n"
+        f"{news_block}{mood_block}"
         f"Your verdict from the deterministic checklist: "
         f"{evaluation['verdict']} (score {evaluation['score']*100:.0f}%).\n\n"
         f"Checks PASSED:\n" + ("\n".join(_line(c) for c in passed) or "  (none)") + "\n\n"
         f"Checks FAILED:\n" + ("\n".join(_line(c) for c in failed) or "  (none)") + "\n\n"
         f"Write a SHORT 4-6 sentence thesis in your voice explaining WHY you arrive "
-        f"at the verdict, citing the most important 2-3 numbers above. End with the "
-        f"required educational disclaimer."
+        f"at the verdict, citing the most important 2-3 numbers above. If recent "
+        f"news or market mood is provided, weave in ONE brief reference to it. "
+        f"End with the required educational disclaimer."
     )
 
 
@@ -554,9 +681,17 @@ async def _thesis_for(persona: dict, evaluation: dict, ctx: dict) -> str:
 
 async def run_council_with_theses(stock_detail: dict) -> dict:
     """Run the council and additionally generate an AI-written thesis per persona.
-    Theses are produced concurrently (one LLM call per persona)."""
-    council = run_council(stock_detail)
-    ctx     = council["context"]
+    Theses are produced concurrently (one LLM call per persona).
+
+    Also enriches the context with recent symbol news and broad-market mood so
+    each persona's thesis can cite real-time signals — without affecting the
+    deterministic checklist scores.
+    """
+    sym  = (stock_detail.get("symbol") or "").upper()
+    name = (stock_detail.get("info") or {}).get("longName") or stock_detail.get("companyName")
+    external = await gather_external_context(sym, name)
+    council  = run_council(stock_detail, external=external)
+    ctx      = council["context"]
 
     coros = []
     for persona_result in council["personas"]:
@@ -576,6 +711,12 @@ async def run_single_persona(persona_id: str, stock_detail: dict) -> dict:
         return {"error": f"Unknown persona: {persona_id}"}
 
     ctx = build_context(stock_detail)
+    sym  = ctx.get("symbol") or ""
+    name = ctx.get("name")
+    external = await gather_external_context(sym, name)
+    ctx["recentNews"] = external.get("recentNews") or []
+    ctx["marketMood"] = external.get("marketMood") or {}
+
     evaluation = persona["evaluate"](ctx)
     thesis = await _thesis_for(persona, evaluation, ctx)
 
