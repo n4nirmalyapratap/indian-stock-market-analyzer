@@ -39,6 +39,7 @@ from ..services import market_cache_service as mcache
 from ..services.nse_service    import NseService
 from ..services.yahoo_service  import YahooService
 from ..services.price_service  import PriceService
+from ..services.macro_service  import MacroService
 
 logger = logging.getLogger("insights")
 router = APIRouter(prefix="/insights", tags=["insights"])
@@ -49,6 +50,7 @@ router = APIRouter(prefix="/insights", tags=["insights"])
 _nse   = NseService()
 _yahoo = YahooService()
 _price = PriceService(_nse, _yahoo)
+_macro = MacroService(_yahoo)
 
 
 def _closes_from_history(rows: list[dict]) -> list[float]:
@@ -891,3 +893,37 @@ async def get_ipos(status: str = Query("open")):
             "message": ("Live IPO calendar requires the BSE/NSE IPO endpoint which is rate-limited "
                         "from cloud IPs. We're integrating Chittorgarh as a follow-up."),
             "items": []}
+
+
+# ── Macro Pulse (Phase 3) ────────────────────────────────────────────────────
+# Two endpoints back the new Macro tab and the persistent dashboard top-bar
+# strip. Both delegate to MacroService which wraps FRED CSV downloads + Yahoo
+# quotes and caches the result for 24h. Failures degrade to empty payloads —
+# the route itself never raises.
+
+@router.get("/macro/strip")
+async def get_macro_strip():
+    """Six tile-sized macro readings for the dashboard ribbon."""
+    try:
+        data = await _macro.get_strip()
+    except Exception as e:
+        logger.warning("macro/strip failed: %s", str(e)[:160])
+        data = {"tiles": [], "fetchedAt": "", "sources": []}
+    return {**data, "meta": _meta(served_from="MACRO_STRIP")}
+
+
+@router.get("/macro")
+async def get_macro_dashboard():
+    """Full payload for the /insights/macro tab."""
+    try:
+        data = await _macro.get_dashboard()
+    except Exception as e:
+        logger.warning("macro dashboard failed: %s", str(e)[:160])
+        data = {
+            "rateTimeline": [], "cpi": [], "iip": [], "gdp": [],
+            "yieldCurve": {"ind10yNow": None, "ind10yAsOf": None, "ind10yHistory": []},
+            "currencyStrip": {"usdinr": {}, "dxy": {}, "brent": {}, "gold": {}, "vix": {}},
+            "commentary": "Macro data is currently unavailable.",
+            "fetchedAt": "", "sources": [],
+        }
+    return {**data, "meta": _meta(served_from="MACRO_DASHBOARD")}
