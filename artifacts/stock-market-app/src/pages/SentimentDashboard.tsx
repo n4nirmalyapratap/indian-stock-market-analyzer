@@ -6,7 +6,7 @@ import {
   BarChart2, Info, Gauge,
 } from "lucide-react";
 import DataFreshness from "@/components/DataFreshness";
-import { pickMeta } from "@/lib/marketData";
+import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Component { name: string; score: number; weight: number; detail: string }
@@ -170,19 +170,21 @@ export default function SentimentDashboard() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
 
-  const { data: sentiment, isLoading, error, refetch: refetchSentiment } = useQuery<Sentiment>({
-    queryKey: ["sentiment-market", refreshKey],
-    queryFn:  () => fetchApi<Sentiment>("/sentiment/market"),
-    staleTime: 900_000,
-    retry: 1,
-  });
+  const { data: sentiment, isLoading, error, refetch: refetchSentiment } = useQuery<Sentiment>(
+    marketDataQueryOptions<Sentiment>(
+      ["sentiment-market", refreshKey],
+      () => fetchApi<Sentiment>("/sentiment/market"),
+      { retry: 1 },
+    ),
+  );
 
-  const { data: sectorsData, refetch: refetchSectors } = useQuery<SectorsResp>({
-    queryKey: ["sentiment-sectors", refreshKey],
-    queryFn:  () => fetchApi<SectorsResp>("/sentiment/sectors"),
-    staleTime: 900_000,
-    retry: 1,
-  });
+  const { data: sectorsData, refetch: refetchSectors } = useQuery<SectorsResp>(
+    marketDataQueryOptions<SectorsResp>(
+      ["sentiment-sectors", refreshKey],
+      () => fetchApi<SectorsResp>("/sentiment/sectors"),
+      { retry: 1 },
+    ),
+  );
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);

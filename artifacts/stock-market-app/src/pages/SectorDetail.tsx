@@ -480,8 +480,8 @@ function FinancialHealthTab({ data, isDark }: { data: SectorDetailData; isDark: 
     .sort((a, b) => b.de - a.de) ?? [];
 
   // For banking sectors: show ROA per constituent
-  const roaData = data.constituents?.filter(c => (c as any).roa != null)
-    .map(c => ({ name: c.symbol.replace(".NS", ""), roa: +((c as any).roa * 100).toFixed(2) }))
+  const roaData = data.constituents?.filter(c => c.roa != null)
+    .map(c => ({ name: c.symbol.replace(".NS", ""), roa: +(c.roa! * 100).toFixed(2) }))
     .sort((a, b) => b.roa - a.roa) ?? [];
 
   const isBanking = h?.isBanking ?? false;
@@ -774,8 +774,8 @@ export default function SectorDetail() {
               <DataFreshness
                 meta={
                   pickMeta(data) ??
-                  ((data as any)?.asOf
-                    ? { source: "NSE", asOf: (data as any).asOf, marketState: (data as any).marketState }
+                  (data?.asOf
+                    ? { source: data.source ?? "NSE", asOf: data.asOf, marketState: data.marketState }
                     : null)
                 }
                 refreshKeys={["sectorDetail", sectorId, period]}

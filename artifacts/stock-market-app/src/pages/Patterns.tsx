@@ -4,7 +4,7 @@ import { api } from "@/lib/api";
 import { Scan, TrendingUp, TrendingDown, Filter, Activity } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
 import DataFreshness from "@/components/DataFreshness";
-import { pickMeta } from "@/lib/marketData";
+import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 const UNIVERSES  = ["ALL", "NIFTY100", "MIDCAP", "SMALLCAP"];
 const SIGNALS    = ["ALL", "CALL", "PUT", "WAIT"];
@@ -36,15 +36,16 @@ export default function Patterns() {
   const [category, setCategory]   = useState("ALL");
   const qc = useQueryClient();
 
-  const { data, isLoading } = useQuery({
-    queryKey: ["patterns", universe, signal, category],
-    queryFn: () => api.patterns({
-      universe: universe !== "ALL" ? universe : undefined,
-      signal:   signal   !== "ALL" ? signal   : undefined,
-      category: category !== "ALL" ? category : undefined,
-    }),
-    staleTime: 10 * 60 * 1000,
-  });
+  const { data, isLoading } = useQuery(
+    marketDataQueryOptions(
+      ["patterns", universe, signal, category],
+      () => api.patterns({
+        universe: universe !== "ALL" ? universe : undefined,
+        signal:   signal   !== "ALL" ? signal   : undefined,
+        category: category !== "ALL" ? category : undefined,
+      }),
+    ),
+  );
 
   const scanMut = useMutation({
     mutationFn: api.triggerScan,
