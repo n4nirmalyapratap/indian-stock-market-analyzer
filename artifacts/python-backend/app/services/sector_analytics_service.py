@@ -199,6 +199,37 @@ async def _yf_history(ticker: str, period: str = "1y") -> list[dict]:
     if cached is not None:
         return cached
 
+    # SINGLE-SOURCE OF TRUTH: try the sealed EOD snapshot from disk first
+    # (PriceService writes here for every NSE symbol). If present, every
+    # consumer of this analytic gets the SAME closes as the quote/history/
+    # sectors endpoints. Only fall back to a direct yfinance pull when the
+    # disk snapshot is missing (e.g. an index ticker not in our universe).
+    from . import market_cache_service as _disk
+    period_to_days = {
+        "1mo": 35, "3mo": 95, "6mo": 185, "1y": 370, "2y": 740, "5y": 1830,
+    }
+    days_needed = period_to_days.get(period, 370)
+    bare_sym = ticker.replace(".NS", "").replace(".BO", "").upper()
+    payload = _disk.load_with_meta(bare_sym, days_needed)
+    if payload and payload.get("data"):
+        rows = [
+            {
+                "date":   r.get("date"),
+                "open":   r.get("open"),
+                "high":   r.get("high"),
+                "low":    r.get("low"),
+                "close":  r.get("close"),
+                "volume": r.get("volume", 0),
+            }
+            for r in payload["data"]
+            if r.get("close") is not None
+        ]
+        if rows:
+            # Cache version is consulted by _cache_set's _flush_if_state_changed
+            # so the next market-state transition flushes this entry.
+            _cache_set(f"yfh:{ticker}:{period}", rows, 4 * 3600)
+            return rows
+
     def _fetch():
         try:
             # Use Ticker.history() to avoid thread-safety issues with yf.download()
