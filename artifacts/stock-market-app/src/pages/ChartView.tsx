@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback } from "react";
-import { useParams, useLocation } from "wouter";
+import { useParams, useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ExternalLink } from "lucide-react";
+import { ArrowLeft, ExternalLink, Users } from "lucide-react";
 import { api } from "../lib/api";
 import { marketDataQueryOptions, pickMeta } from "../lib/marketData";
 import DataFreshness from "../components/DataFreshness";
@@ -130,6 +130,16 @@ export default function ChartView() {
             refreshKeys={["chart-quote", sym]}
             className="text-xs"
           />
+          {sym && (
+            <Link
+              href={`/agents/${encodeURIComponent(sym)}`}
+              className="px-2 py-1 rounded bg-gradient-to-r from-indigo-500 to-violet-500 text-white text-xs font-medium hover:from-indigo-600 hover:to-violet-600 transition flex items-center gap-1"
+              title="Ask the Investor Council about this stock"
+            >
+              <Users size={12} />
+              Ask the Council
+            </Link>
+          )}
           <a
             href={`https://www.tradingview.com/chart/?symbol=${toTVSymbol(symbol ?? "")}`}
             target="_blank"
