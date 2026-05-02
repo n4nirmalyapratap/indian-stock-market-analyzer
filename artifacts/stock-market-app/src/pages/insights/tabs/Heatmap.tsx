@@ -250,7 +250,7 @@ export default function Heatmap() {
   }, [items, sortBy, containerW, containerH]);
 
   return (
-    <div className="h-full min-h-0 flex flex-col overflow-hidden relative bg-slate-950">
+    <div className="h-full min-h-0 flex flex-col overflow-hidden relative bg-slate-100 dark:bg-slate-950">
       {/* Dynamic Background Glow — drifts slowly + tints with market mood.
           Continuous motion is disabled when the user prefers reduced motion. */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
@@ -294,63 +294,63 @@ export default function Heatmap() {
       </div>
 
       {/* Unified Aesthetic Command Center */}
-      <div className="absolute top-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 p-1 bg-black/40 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl transition-all hover:bg-black/60">
+      <div className="absolute top-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 p-1 bg-white/80 dark:bg-black/40 backdrop-blur-2xl border border-slate-200 dark:border-white/10 rounded-2xl shadow-2xl transition-all hover:bg-white dark:hover:bg-black/60">
         
         {/* Integrated Back Button */}
         <button
           onClick={() => navigate("/insights")}
-          className="p-2 hover:bg-white/10 rounded-xl text-white/40 hover:text-white transition-all group/back"
+          className="p-2 hover:bg-slate-100 dark:hover:bg-white/10 rounded-xl text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white transition-all group/back"
           title="Back to insights"
         >
           <ArrowLeft className="w-4 h-4 group-hover/back:-translate-x-0.5 transition-transform" />
         </button>
 
-        <div className="w-[1px] h-6 bg-white/10 mx-1" />
+        <div className="w-[1px] h-6 bg-slate-200 dark:bg-white/10 mx-1" />
         
         {/* Market Status Section */}
         {data?.indexPrice != null && (
           <div className="pl-4 pr-3 flex items-center gap-3">
             <div className="flex flex-col">
-              <span className="text-[9px] uppercase tracking-tighter text-white/40 font-black leading-none">{data.label || "Market"}</span>
-              <span className="text-sm font-black text-white tracking-tighter">{data.indexPrice.toLocaleString()}</span>
+              <span className="text-[9px] uppercase tracking-tighter text-slate-500 dark:text-white/40 font-black leading-none">{data.label || "Market"}</span>
+              <span className="text-sm font-black text-slate-900 dark:text-white tracking-tighter">{data.indexPrice.toLocaleString()}</span>
             </div>
-            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-lg shadow-sm ${(data.indexChange ?? 0) >= 0 ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/20 text-red-400"}`}>
+            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-lg shadow-sm ${(data.indexChange ?? 0) >= 0 ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-400" : "bg-red-500/20 text-red-700 dark:text-red-400"}`}>
               {(data.indexChangePct ?? 0).toFixed(2)}%
             </span>
           </div>
         )}
 
-        <div className="w-[1px] h-6 bg-white/10 mx-1" />
+        <div className="w-[1px] h-6 bg-slate-200 dark:bg-white/10 mx-1" />
 
         {/* Index Selector */}
         <MenuDropdown label="" value={index} onChange={setIndex} options={indexOptions.length ? indexOptions : [{ value: "NIFTY50", label: "Nifty 50" }]} 
-          customButton={<button className="px-3 py-1.5 text-xs font-bold text-white/70 hover:text-white transition-colors flex items-center gap-2 group/btn">
-            <LayoutGrid className="w-3.5 h-3.5 text-indigo-400 group-hover/btn:scale-110 transition-transform" /> {indexOptions.find(o => o.value === index)?.label || "Select Index"}
+          customButton={<button className="px-3 py-1.5 text-xs font-bold text-slate-700 dark:text-white/70 hover:text-slate-900 dark:hover:text-white transition-colors flex items-center gap-2 group/btn">
+            <LayoutGrid className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400 group-hover/btn:scale-110 transition-transform" /> {indexOptions.find(o => o.value === index)?.label || "Select Index"}
           </button>}
         />
 
-        <div className="w-[1px] h-4 bg-white/5" />
+        <div className="w-[1px] h-4 bg-slate-200 dark:bg-white/5" />
 
         {/* Timeframe Scroller */}
-        <div className="flex bg-white/5 rounded-xl p-0.5">
+        <div className="flex bg-slate-100 dark:bg-white/5 rounded-xl p-0.5">
           {PERF_OPTIONS.map(o => (
             <button key={o.value} onClick={() => setPerf(o.value)} 
-              className={`px-3 py-1 text-[10px] font-black rounded-lg transition-all ${perf === o.value ? "bg-white/10 text-white shadow-lg" : "text-white/30 hover:text-white/50"}`}>
+              className={`px-3 py-1 text-[10px] font-black rounded-lg transition-all ${perf === o.value ? "bg-white dark:bg-white/10 text-slate-900 dark:text-white shadow-lg" : "text-slate-500 dark:text-white/30 hover:text-slate-700 dark:hover:text-white/50"}`}>
               {o.label}
             </button>
           ))}
         </div>
 
-        <div className="w-[1px] h-4 bg-white/5" />
+        <div className="w-[1px] h-4 bg-slate-200 dark:bg-white/5" />
 
         {/* Sort & Logic Tooltip */}
         <div className="relative group/sort">
           <MenuDropdown label="" value={sortBy} onChange={(v) => setSortBy(v as SortBy)} options={SORT_OPTIONS}
-            customButton={<button className="px-3 py-1.5 text-xs font-bold text-white/70 hover:text-white transition-colors flex items-center gap-2">
-              <Zap className="w-3.5 h-3.5 text-amber-400" /> {SORT_OPTIONS.find(o => o.value === sortBy)?.label}
+            customButton={<button className="px-3 py-1.5 text-xs font-bold text-slate-700 dark:text-white/70 hover:text-slate-900 dark:hover:text-white transition-colors flex items-center gap-2">
+              <Zap className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400" /> {SORT_OPTIONS.find(o => o.value === sortBy)?.label}
             </button>}
           />
-          <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 px-2 py-1 bg-black/80 backdrop-blur-md rounded-lg text-[9px] text-white/40 whitespace-nowrap opacity-0 group-hover/sort:opacity-100 transition-opacity pointer-events-none border border-white/5">
+          <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 px-2 py-1 bg-slate-900/90 dark:bg-black/80 backdrop-blur-md rounded-lg text-[9px] text-white/70 dark:text-white/40 whitespace-nowrap opacity-0 group-hover/sort:opacity-100 transition-opacity pointer-events-none border border-white/10 dark:border-white/5">
             Tile size: {sortBy === "marketCap" ? "Weighted Cap" : sortBy === "change" ? "Volatility" : "Uniform"}
           </div>
         </div>
@@ -360,7 +360,7 @@ export default function Heatmap() {
       {error && <ErrorState message={(error as Error).message} />}
 
       {/* The Heatmap Canvas */}
-      <div ref={containerRef} className="flex-1 min-h-0 relative m-2 md:m-4 rounded-3xl overflow-hidden border border-white/5 shadow-2xl bg-black/20">
+      <div ref={containerRef} className="flex-1 min-h-0 relative m-2 md:m-4 rounded-3xl overflow-hidden border border-slate-200 dark:border-white/5 shadow-2xl bg-white/40 dark:bg-black/20">
         <AnimatePresence mode="popLayout">
           {rects?.map(({ x, y, w, h, item }, idx) => {
             const style = bucket(item.changePct);
@@ -517,7 +517,7 @@ export default function Heatmap() {
               animate={reduced ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
               exit={reduced ? { opacity: 0, transition: { duration: 0.1 } } : { opacity: 0, scale: 0.95, y: 2, transition: { duration: 0.12 } }}
               transition={reduced ? { duration: 0.12 } : { type: "spring", stiffness: 500, damping: 32, mass: 0.6 }}
-              className="fixed z-[100] pointer-events-none bg-black/90 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl px-3 py-2.5 text-white origin-top-left"
+              className="fixed z-[100] pointer-events-none bg-slate-900/95 dark:bg-black/90 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl px-3 py-2.5 text-white origin-top-left"
               style={{ width: TOOLTIP_W, left: tipLeft, top: tipTop }}
             >
               {/* Glowing top accent that matches the tile's mood */}
@@ -559,7 +559,7 @@ export default function Heatmap() {
       </AnimatePresence>
 
       {data?.available === false && (
-        <div className="absolute inset-0 flex items-center justify-center z-40 bg-slate-950/80 backdrop-blur-md">
+        <div className="absolute inset-0 flex items-center justify-center z-40 bg-slate-100/80 dark:bg-slate-950/80 backdrop-blur-md">
           <EmptyState title="Index unavailable" message={data.message || "This index doesn't support heatmap visualization yet."} icon={<LayoutGrid className="w-10 h-10 text-indigo-500/50"/>} />
         </div>
       )}
