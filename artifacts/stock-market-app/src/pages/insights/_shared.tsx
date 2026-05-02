@@ -1,4 +1,4 @@
-import { ReactNode, useState, useRef, useEffect, useMemo } from "react";
+import { ReactNode, ReactElement, cloneElement, isValidElement, useState, useRef, useEffect, useMemo } from "react";
 import { Info, Loader2, Lock, ExternalLink, ChevronDown, Check } from "lucide-react";
 import { createPortal } from "react-dom";
 
@@ -142,7 +142,7 @@ export function Dropdown({ label, value, onChange, options }: {
  */
 export function MenuDropdown({
   label, value, options, onChange, placeholder = "Select…", clearable = false,
-  minButtonWidth = 0, maxButtonWidth = 280,
+  minButtonWidth = 0, maxButtonWidth = 280, customButton,
 }: {
   label?: string;
   value: string;
@@ -152,6 +152,14 @@ export function MenuDropdown({
   clearable?: boolean;
   minButtonWidth?: number;
   maxButtonWidth?: number;
+  /**
+   * Optional custom trigger element. When provided, this element fully
+   * replaces the default styled button. The component clones it to inject
+   * the click/keyboard handlers, ref, and ARIA combobox attributes — so the
+   * caller only needs to render visual content (icon + label), not wire up
+   * dropdown behaviour.
+   */
+  customButton?: ReactElement;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -245,27 +253,37 @@ export function MenuDropdown({
   const display = current?.label || placeholder;
   const showSearch = options.length > 8;
 
+  // Shared trigger props injected into either the default button or a
+  // caller-provided customButton via cloneElement.
+  const triggerProps = {
+    ref: btnRef,
+    id,
+    type: "button" as const,
+    onClick: () => setOpen(o => !o),
+    onKeyDown,
+    title: display,
+    role: "combobox" as const,
+    "aria-haspopup": "listbox" as const,
+    "aria-expanded": open,
+    "aria-controls": open ? `${id}-list` : undefined,
+    "aria-activedescendant": open ? `${id}-opt-${active}` : undefined,
+  };
+
   return (
     <>
-      <button
-        ref={btnRef}
-        id={id}
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        onKeyDown={onKeyDown}
-        style={{ minWidth: minButtonWidth, maxWidth: maxButtonWidth }}
-        className="inline-flex items-center gap-2 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-        title={display}
-        role="combobox"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-controls={open ? `${id}-list` : undefined}
-        aria-activedescendant={open ? `${id}-opt-${active}` : undefined}
-      >
-        {label && <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">{label}</span>}
-        <span className={`font-semibold truncate text-left flex-1 min-w-0 ${current ? "text-indigo-600 dark:text-indigo-400" : "text-gray-500 dark:text-gray-400"}`}>{display}</span>
-        <ChevronDown className={`w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
-      </button>
+      {customButton && isValidElement(customButton) ? (
+        cloneElement(customButton as ReactElement<Record<string, unknown>>, triggerProps as Record<string, unknown>)
+      ) : (
+        <button
+          {...triggerProps}
+          style={{ minWidth: minButtonWidth, maxWidth: maxButtonWidth }}
+          className="inline-flex items-center gap-2 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+        >
+          {label && <span className="text-gray-500 dark:text-gray-400 flex-shrink-0">{label}</span>}
+          <span className={`font-semibold truncate text-left flex-1 min-w-0 ${current ? "text-indigo-600 dark:text-indigo-400" : "text-gray-500 dark:text-gray-400"}`}>{display}</span>
+          <ChevronDown className={`w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+        </button>
+      )}
       {open && createPortal(
         <div
           ref={menuRef}
