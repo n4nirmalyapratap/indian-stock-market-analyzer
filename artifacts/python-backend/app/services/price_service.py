@@ -184,8 +184,16 @@ class PriceService:
                         q["previousClose"] = eod_prev
                         q["change"]        = round(eod_close - eod_prev, 2)
                         q["pChange"]       = round((eod_close - eod_prev) / eod_prev * 100, 4) if eod_prev else 0
-                    q["source"]        = "DISK_EOD"
-                    snap["source"]     = "DISK_EOD"
+                    # Provenance contract:
+                    #   `source`     = the original provider that produced the
+                    #                  number (NSE preferred for EOD).
+                    #   `servedFrom` = the layer that returned it on this call
+                    #                  (DISK_EOD when overlay applied, else
+                    #                  PRICE_SERVICE for live).
+                    q["source"]        = "NSE"
+                    q["servedFrom"]    = "DISK_EOD"
+                    snap["source"]     = "NSE"
+                    snap["servedFrom"] = "DISK_EOD"
                     snap["asOf"]       = payload.get("savedAt") or snap["asOf"]
                     snap["eodSealed"]  = True
                     snap["eodDate"]    = payload.get("eodDate")
@@ -196,10 +204,13 @@ class PriceService:
             # admin audit endpoint and the UI freshness pill can flag it.
             try:
                 second_q = None
-                if snap["source"] != "YAHOO":
+                # NSE-vs-Yahoo cross-check: pull the OTHER provider's number.
+                # `source` is now always the originating provider (NSE/YAHOO),
+                # never the cache layer, so this comparison is well-defined.
+                if snap["source"] == "NSE":
                     yq = await self.yahoo.get_quote(sym)
                     second_q = yq.get("lastPrice") if yq else None
-                if snap["source"] != "NSE" and second_q is None:
+                else:
                     nq = await self.nse.get_stock_quote(sym)
                     if nq and nq.get("priceInfo"):
                         second_q = nq["priceInfo"].get("lastPrice")

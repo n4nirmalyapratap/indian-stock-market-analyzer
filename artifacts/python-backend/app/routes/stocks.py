@@ -21,7 +21,8 @@ VALID_INTERVALS = {"1m","2m","5m","15m","30m","60m","90m","1h","1d","5d","1wk","
 
 def _provenance() -> dict:
     return {
-        "source":       "MIXED",
+        "source":       "NSE",
+        "servedFrom":   "MIXED",
         "asOf":         _disk._now_ist().isoformat(),
         "marketState":  _disk.current_market_state(),
         "cacheVersion": _disk.cache_version(),
