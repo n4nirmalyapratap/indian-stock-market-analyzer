@@ -74,11 +74,12 @@ const RANGE_OPTIONS: { value: Range; label: string }[] = [
   { value: "90d",  label: "Last 90 days" },
   { value: "180d", label: "Last 180 days" },
   { value: "1y",   label: "Last 1 year" },
-  { value: "all",  label: "All available" },
+  { value: "all",  label: "All on file" },
 ];
 
 function rangeLimit(r: Range): number {
-  return r === "30d" ? 30 : r === "90d" ? 90 : r === "180d" ? 180 : r === "1y" ? 365 : 99999;
+  // 1500 is the backend's hard upper bound (validated by Query(le=1500)).
+  return r === "30d" ? 30 : r === "90d" ? 90 : r === "180d" ? 180 : r === "1y" ? 365 : 1500;
 }
 
 function fmtCr(v: number | null | undefined, isContracts: boolean = false): string {
