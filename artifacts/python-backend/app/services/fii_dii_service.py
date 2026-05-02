@@ -17,7 +17,6 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-import httpx
 import pandas as pd
 from app.services.nse_service import NseService
 import threading
@@ -26,14 +25,9 @@ logger = logging.getLogger("fii_dii_service")
 
 # nsearchives.nseindia.com publishes a daily participant-wise OI CSV for every
 # trading day. URL pattern: /content/nsccl/fao_participant_oi_DDMMYYYY.csv
-# This is the only public NSE source for historical F&O participant data.
+# This is the only public NSE source for historical F&O participant data;
+# we fetch it via NseService so headers, UA and cache rules stay centralised.
 _FNO_ARCHIVE_URL = "https://nsearchives.nseindia.com/content/nsccl/fao_participant_oi_{date}.csv"
-_ARCHIVE_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "*/*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.nseindia.com/all-reports-derivatives",
-}
 
 # How "Long" and "Short" totals are constructed per segment from the CSV.
 # Each tuple is (long_columns, short_columns) where columns are summed.
@@ -285,15 +279,19 @@ class FiiDiiService:
     async def _fetch_fno_archive_day(self, day) -> dict[str, dict]:
         """Download and parse one day's fao_participant_oi CSV. Returns
         a dict {segment_name: row_dict} for all 4 F&O segments. Empty dict
-        on weekend/holiday/error."""
+        on weekend/holiday/error.
+
+        Routed through NseService.fetch_nse_archive_text so we share its
+        in-process cache and header discipline rather than spinning up an
+        ad-hoc httpx client here."""
         date_str = day.strftime("%d%m%Y")
         url = _FNO_ARCHIVE_URL.format(date=date_str)
+        cache_key = f"fno_oi_{date_str}"
         try:
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as c:
-                r = await c.get(url, headers=_ARCHIVE_HEADERS)
-            if r.status_code != 200 or len(r.text) < 50:
+            text = await self.nse.fetch_nse_archive_text(url, cache_key, ttl=86400)
+            if not text or len(text) < 50:
                 return {}
-            text = r.text.strip()
+            text = text.strip()
             # Header line is wrapped in stray quotes; skip it and parse the rest.
             lines = [ln for ln in text.splitlines() if ln.strip()]
             if len(lines) < 3:
