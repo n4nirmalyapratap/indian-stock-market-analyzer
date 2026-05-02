@@ -329,7 +329,7 @@ async def data_consistency(request: Request, symbols: str = ""):
     from app.services.yahoo_service import YahooService          # noqa: PLC0415
     from app.services.price_service import PriceService          # noqa: PLC0415
     from app.services.stocks_service import StocksService        # noqa: PLC0415
-    from app.services.sectors_service import SectorsService      # noqa: PLC0415
+    from app.services.sectors_service import SectorsService, SECTOR_INDICES  # noqa: PLC0415
     from app.services import market_cache_service as _disk       # noqa: PLC0415
 
     nse    = NseService()
@@ -417,6 +417,70 @@ async def data_consistency(request: Request, symbols: str = ""):
         except Exception as e:
             results.append({"symbol": sym, "error": str(e)})
 
+    # ── Sector index audit ────────────────────────────────────────────────
+    # Cross-check the sector page's lastPrice against the sealed disk close
+    # for every NIFTY index (NIFTY IT, NIFTY BANK, NIFTY 50, …) so ops can
+    # spot drift between /sectors and the canonical EOD snapshot.
+    index_results: list[dict] = []
+    index_drift_count = 0
+    expected_eod_date = _disk._eod_date_for(_disk.current_market_state())
+    for idx in SECTOR_INDICES:
+        sym = idx["symbol"]
+        sector_entry = sector_map.get(sym.upper()) or {}
+        sector_price = sector_entry.get("lastPrice")
+
+        # Only treat the disk row as a valid sealed close when the snapshot
+        # matches the sealed-snapshot contract: eodSealed + source==NSE +
+        # eodDate==today's expected EOD date. Otherwise we'd compare against
+        # a stale or non-canonical row and emit noisy false drift.
+        payload = _disk.load_with_meta(sym, 30)
+        is_sealed_nse = bool(
+            payload
+            and payload.get("eodSealed")
+            and (payload.get("source") or "").upper() == "NSE"
+            and payload.get("eodDate") == expected_eod_date
+            and payload.get("data")
+        )
+        disk_close = None
+        disk_date  = None
+        if is_sealed_nse:
+            rows = payload["data"]
+            if rows and rows[-1].get("close") is not None:
+                disk_close = round(float(rows[-1]["close"]), 2)
+                disk_date  = rows[-1].get("date")
+
+        refs = [v for v in (sector_price, disk_close) if v is not None]
+        comparable = len(refs) >= 2
+        idx_drift = idx_drift_pct = None
+        idx_consistent = True
+        if comparable:
+            lo, hi = min(refs), max(refs)
+            idx_drift     = round(hi - lo, 4)
+            idx_drift_pct = round(idx_drift / lo * 100, 4) if lo else 0
+            idx_consistent = idx_drift <= 0.05 or idx_drift_pct <= 0.1
+        if comparable and not idx_consistent:
+            index_drift_count += 1
+
+        index_results.append({
+            "name":         idx["name"],
+            "symbol":       sym,
+            "category":     idx["category"],
+            "sectorPrice":  sector_price,
+            "diskClose":    disk_close,
+            "diskDate":     disk_date,
+            "eodSealed":    is_sealed_nse,
+            "servedFrom":   sector_entry.get("servedFrom"),
+            "drift":        idx_drift,
+            "driftPct":     idx_drift_pct,
+            # `comparable=false` means we couldn't run the audit (sector
+            # price or sealed disk close was absent). Such rows do NOT
+            # count toward `indexDriftCount` and `consistent` is null —
+            # this prevents silently passing audits that weren't actually
+            # checked.
+            "comparable":   comparable,
+            "consistent":   idx_consistent if comparable else None,
+        })
+
     return {
         "marketState":      _disk.current_market_state(),
         "marketOpen":       _disk.is_market_open(),
@@ -425,9 +489,25 @@ async def data_consistency(request: Request, symbols: str = ""):
         "checked":          len(results),
         "driftCount":       drift_count,
         "nseYahooDivergent": nse_yahoo_div,
-        "consistent":       drift_count == 0 and nse_yahoo_div == 0,
+        "indexChecked":     len(index_results),
+        "indexComparableCount": (index_comparable_count := sum(1 for ir in index_results if ir.get("comparable"))),
+        "indexDriftCount":  index_drift_count,
+        # On closed-market runs we expect at least some indices to be
+        # comparable (sealed disk + sector price both present). If NONE
+        # are comparable we cannot honestly claim consistency for the
+        # sector audit, so degrade `consistent` to false and surface why.
+        "indexAuditUnavailable": (
+            not _disk.is_market_open() and index_comparable_count == 0
+        ),
+        "consistent":       (
+            drift_count == 0
+            and nse_yahoo_div == 0
+            and index_drift_count == 0
+            and not (not _disk.is_market_open() and index_comparable_count == 0)
+        ),
         "preferredSource":  "NSE",
         "results":          results,
+        "indexResults":     index_results,
     }
 
 
