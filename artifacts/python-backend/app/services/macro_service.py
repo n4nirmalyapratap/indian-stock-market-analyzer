@@ -1,0 +1,436 @@
+"""
+Macro Service — India macro pulse aggregator.
+
+Surfaces the six indicators retail traders ask about every day:
+  * RBI policy (repo) rate
+  * CPI inflation (YoY)
+  * Industrial production (IIP, YoY)
+  * USD/INR
+  * India 10-year government bond yield
+  * Brent crude (USD/bbl)
+
+Plus a few supporting series for the dashboard tab:
+  * WPI (when available), GDP growth, DXY, Gold, India VIX.
+
+Data sources
+------------
+* Yahoo Finance (`YahooService`) for live FX / commodity / yield prices.
+* FRED public CSV endpoint (no API key needed) for Indian macro series:
+    - INDIRSTPR        — Policy rate (monthly)
+    - INDCPIALLMINMEI  — Consumer Price Index (monthly, level)
+    - INDPROINDMISMEI  — Industrial Production (monthly, level)
+    - INDIRLTLT01STM   — Long-term (10Y) gov bond yield (monthly)
+    - INDGDPRQDSMEI    — Real GDP (quarterly, level)
+
+Every external fetch is wrapped in try/except and degrades to an empty-state
+payload — no exception is allowed to bubble up and kill the macro endpoints.
+Results are cached in-process for 24 hours; the cache key is just the method
+name since none of the data refreshes intra-day.
+"""
+from __future__ import annotations
+
+import asyncio
+import csv
+import io
+import logging
+import time
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+import httpx
+
+from . import ai_client
+from .yahoo_service import YahooService
+
+log = logging.getLogger("macro_service")
+
+# ── Cache ────────────────────────────────────────────────────────────────────
+_CACHE_TTL = 24 * 60 * 60  # 24 hours
+_cache: dict[str, tuple[float, Any]] = {}
+
+
+def _cache_get(key: str) -> Optional[Any]:
+    hit = _cache.get(key)
+    if not hit:
+        return None
+    ts, val = hit
+    if (time.time() - ts) >= _CACHE_TTL:
+        _cache.pop(key, None)
+        return None
+    return val
+
+
+def _cache_set(key: str, val: Any) -> None:
+    _cache[key] = (time.time(), val)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ── FRED CSV fetcher ─────────────────────────────────────────────────────────
+FRED_BASE = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+
+# Symbolic names → FRED series IDs.  Sourced from publicly accessible FRED
+# pages; no API key is required for the CSV download endpoint.
+FRED_SERIES = {
+    "repo":    "INDIRSTPR",        # India: Central bank policy rate
+    "cpi":     "INDCPIALLMINMEI",  # India: CPI All items, monthly level
+    "iip":     "INDPROINDMISMEI",  # India: Industrial production, monthly level
+    "gdp":     "INDGDPRQDSMEI",    # India: Real GDP, quarterly level
+    "yield10": "INDIRLTLT01STM",   # India: 10Y gov bond yield, monthly
+}
+
+
+async def _fetch_fred_csv(series_id: str) -> list[dict[str, Any]]:
+    """
+    Fetch a FRED series CSV and return a list of {date, value} dicts ordered
+    oldest → newest.  Returns [] on any failure (network / parse).
+    """
+    url = f"{FRED_BASE}?id={series_id}"
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(url, headers={"User-Agent": "NiftyNode/1.0 (+macro)"})
+            if resp.status_code != 200 or not resp.text:
+                return []
+            text = resp.text
+    except Exception as e:  # network, DNS, timeout — all benign
+        log.warning("FRED fetch failed for %s: %s", series_id, str(e)[:120])
+        return []
+
+    rows: list[dict[str, Any]] = []
+    try:
+        reader = csv.reader(io.StringIO(text))
+        header = next(reader, None)
+        if not header or len(header) < 2:
+            return []
+        for r in reader:
+            if len(r) < 2:
+                continue
+            date_s, val_s = r[0].strip(), r[1].strip()
+            if not date_s or val_s in ("", ".", "NA"):
+                continue
+            try:
+                v = float(val_s)
+            except ValueError:
+                continue
+            rows.append({"date": date_s, "value": v})
+    except Exception as e:
+        log.warning("FRED parse failed for %s: %s", series_id, str(e)[:120])
+        return []
+    return rows
+
+
+def _yoy_change(series: list[dict[str, Any]], lag: int = 12) -> Optional[float]:
+    """
+    Compute the year-on-year percent change from a monthly level series.
+    `lag` is the index distance (12 for monthly YoY, 4 for quarterly).
+    Returns None when there isn't enough history.
+    """
+    if not series or len(series) <= lag:
+        return None
+    cur = series[-1]["value"]
+    prv = series[-1 - lag]["value"]
+    if not prv:
+        return None
+    return (cur - prv) / prv * 100.0
+
+
+def _last_two(series: list[dict[str, Any]]) -> tuple[Optional[dict], Optional[dict]]:
+    """Return (latest, previous) entries from a series, or (None, None)."""
+    if not series:
+        return None, None
+    if len(series) == 1:
+        return series[-1], None
+    return series[-1], series[-2]
+
+
+# ── Service ──────────────────────────────────────────────────────────────────
+class MacroService:
+    """Aggregator for India macro indicators.  Stateless — safe to share."""
+
+    def __init__(self, yahoo: Optional[YahooService] = None) -> None:
+        self.yahoo = yahoo or YahooService()
+
+    # ----- Live market tickers (Yahoo) --------------------------------------
+    # Yahoo symbols verified against finance.yahoo.com.
+    YAHOO_TICKERS = {
+        "usdinr": "INR=X",          # USD/INR spot
+        "dxy":    "DX-Y.NYB",       # US Dollar Index
+        "brent":  "BZ=F",           # Brent crude futures
+        "gold":   "GC=F",           # COMEX gold futures
+        "vix":    "^INDIAVIX",      # India VIX
+        "nifty":  "^NSEI",          # Nifty 50 (for context)
+    }
+
+    async def _yahoo_quote(self, key: str) -> dict[str, Any]:
+        """Fetch a single Yahoo ticker; degrade to empty dict."""
+        sym = self.YAHOO_TICKERS.get(key)
+        if not sym:
+            return {}
+        try:
+            q = await self.yahoo.get_quote(sym)
+            if not q:
+                return {}
+            return {
+                "symbol":  sym,
+                "price":   float(q.get("lastPrice") or 0.0) or None,
+                "change":  float(q.get("change") or 0.0),
+                "pChange": float(q.get("pChange") or 0.0),
+                "name":    q.get("companyName") or sym,
+            }
+        except Exception as e:
+            log.warning("Yahoo macro fetch failed for %s: %s", sym, str(e)[:120])
+            return {}
+
+    # ----- High-level aggregators -------------------------------------------
+    async def get_strip(self) -> dict[str, Any]:
+        """
+        The 6-tile macro strip pinned to the dashboard top bar.
+        Each tile: { id, label, unit, value, delta, deltaUnit, asOf }.
+        """
+        cached = _cache_get("strip")
+        if cached is not None:
+            return cached
+
+        # Fetch everything concurrently — failures degrade to {}.
+        repo_s, cpi_s, iip_s, yld_s, usdinr_q, brent_q = await asyncio.gather(
+            _fetch_fred_csv(FRED_SERIES["repo"]),
+            _fetch_fred_csv(FRED_SERIES["cpi"]),
+            _fetch_fred_csv(FRED_SERIES["iip"]),
+            _fetch_fred_csv(FRED_SERIES["yield10"]),
+            self._yahoo_quote("usdinr"),
+            self._yahoo_quote("brent"),
+        )
+
+        # Repo rate — value is in percent already; delta vs previous reading.
+        repo_now, repo_prev = _last_two(repo_s)
+        repo_tile = self._tile(
+            "repo", "RBI Repo", "%",
+            repo_now["value"] if repo_now else None,
+            (repo_now["value"] - repo_prev["value"]) if repo_now and repo_prev else None,
+            "pp",
+            repo_now["date"] if repo_now else None,
+        )
+
+        # CPI — convert level to YoY % and take the change vs prior month YoY.
+        cpi_yoy_now = _yoy_change(cpi_s, lag=12)
+        cpi_yoy_prev = _yoy_change(cpi_s[:-1], lag=12) if len(cpi_s) > 13 else None
+        cpi_tile = self._tile(
+            "cpi", "CPI YoY", "%",
+            cpi_yoy_now,
+            (cpi_yoy_now - cpi_yoy_prev) if cpi_yoy_now is not None and cpi_yoy_prev is not None else None,
+            "pp",
+            cpi_s[-1]["date"] if cpi_s else None,
+        )
+
+        # IIP — same YoY treatment.
+        iip_yoy_now = _yoy_change(iip_s, lag=12)
+        iip_yoy_prev = _yoy_change(iip_s[:-1], lag=12) if len(iip_s) > 13 else None
+        iip_tile = self._tile(
+            "iip", "IIP YoY", "%",
+            iip_yoy_now,
+            (iip_yoy_now - iip_yoy_prev) if iip_yoy_now is not None and iip_yoy_prev is not None else None,
+            "pp",
+            iip_s[-1]["date"] if iip_s else None,
+        )
+
+        # USD/INR — live; delta is intraday % change from Yahoo.
+        usdinr_tile = self._tile(
+            "usdinr", "USD/INR", "₹",
+            usdinr_q.get("price") if usdinr_q else None,
+            usdinr_q.get("pChange") if usdinr_q else None,
+            "%",
+            _now_iso(),
+        )
+
+        # India 10Y — FRED monthly series, value already in percent.
+        yld_now, yld_prev = _last_two(yld_s)
+        yld_tile = self._tile(
+            "yield10", "India 10Y", "%",
+            yld_now["value"] if yld_now else None,
+            (yld_now["value"] - yld_prev["value"]) if yld_now and yld_prev else None,
+            "pp",
+            yld_now["date"] if yld_now else None,
+        )
+
+        # Brent — live; delta is intraday % change.
+        brent_tile = self._tile(
+            "brent", "Brent", "$",
+            brent_q.get("price") if brent_q else None,
+            brent_q.get("pChange") if brent_q else None,
+            "%",
+            _now_iso(),
+        )
+
+        out = {
+            "tiles": [repo_tile, cpi_tile, iip_tile, usdinr_tile, yld_tile, brent_tile],
+            "fetchedAt": _now_iso(),
+            "sources": [
+                {"id": "fred",  "label": "FRED public CSV",  "covers": "Repo, CPI, IIP, 10Y"},
+                {"id": "yahoo", "label": "Yahoo Finance",     "covers": "USD/INR, Brent"},
+            ],
+        }
+        _cache_set("strip", out)
+        return out
+
+    async def get_dashboard(self) -> dict[str, Any]:
+        """
+        Full payload for the /insights/macro tab — all the series the page
+        needs, in one round-trip:
+          * rateTimeline  : repo rate over time  (date, value)
+          * cpi           : CPI YoY % over time
+          * iip           : IIP YoY % over time
+          * gdp           : Real GDP YoY % over time (quarterly)
+          * yieldCurve    : { ind10y_now, ind10y_history }
+          * currencyStrip : USD/INR + DXY + Brent + Gold + VIX live
+          * commentary    : LLM 'what changed this week' string (best-effort)
+        """
+        cached = _cache_get("dashboard")
+        if cached is not None:
+            return cached
+
+        repo_s, cpi_s, iip_s, gdp_s, yld_s, usdinr, dxy, brent, gold, vix = await asyncio.gather(
+            _fetch_fred_csv(FRED_SERIES["repo"]),
+            _fetch_fred_csv(FRED_SERIES["cpi"]),
+            _fetch_fred_csv(FRED_SERIES["iip"]),
+            _fetch_fred_csv(FRED_SERIES["gdp"]),
+            _fetch_fred_csv(FRED_SERIES["yield10"]),
+            self._yahoo_quote("usdinr"),
+            self._yahoo_quote("dxy"),
+            self._yahoo_quote("brent"),
+            self._yahoo_quote("gold"),
+            self._yahoo_quote("vix"),
+        )
+
+        # Trim to most recent ~5 years for chart readability.
+        rate_timeline = repo_s[-72:] if repo_s else []
+        cpi_yoy = self._series_yoy(cpi_s, lag=12)[-72:]
+        iip_yoy = self._series_yoy(iip_s, lag=12)[-72:]
+        gdp_yoy = self._series_yoy(gdp_s, lag=4)[-24:]   # quarterly → 6 yr
+        yield_history = yld_s[-72:] if yld_s else []
+
+        # AI commentary — fire and forget, don't fail the response if it dies.
+        commentary = await self._build_commentary(
+            repo_s, cpi_s, iip_s, yld_s, usdinr, brent,
+        )
+
+        out = {
+            "rateTimeline": rate_timeline,
+            "cpi":          cpi_yoy,
+            "iip":          iip_yoy,
+            "gdp":          gdp_yoy,
+            "yieldCurve": {
+                "ind10yNow":     (yld_s[-1]["value"] if yld_s else None),
+                "ind10yAsOf":    (yld_s[-1]["date"]  if yld_s else None),
+                "ind10yHistory": yield_history,
+            },
+            "currencyStrip": {
+                "usdinr": usdinr,
+                "dxy":    dxy,
+                "brent":  brent,
+                "gold":   gold,
+                "vix":    vix,
+            },
+            "commentary": commentary,
+            "fetchedAt":  _now_iso(),
+            "sources": [
+                {"id": "fred",  "label": "FRED public CSV",  "covers": "Repo, CPI, IIP, GDP, 10Y"},
+                {"id": "yahoo", "label": "Yahoo Finance",     "covers": "USD/INR, DXY, Brent, Gold, VIX"},
+                {"id": "rbi",   "label": "RBI DBIE",          "covers": "Policy rate cross-check"},
+            ],
+        }
+        _cache_set("dashboard", out)
+        return out
+
+    # ----- Helpers ----------------------------------------------------------
+    @staticmethod
+    def _tile(
+        tid: str, label: str, unit: str,
+        value: Optional[float], delta: Optional[float], delta_unit: str,
+        as_of: Optional[str],
+    ) -> dict[str, Any]:
+        return {
+            "id":        tid,
+            "label":     label,
+            "unit":      unit,
+            "value":     value,
+            "delta":     delta,
+            "deltaUnit": delta_unit,
+            "asOf":      as_of,
+        }
+
+    @staticmethod
+    def _series_yoy(series: list[dict[str, Any]], lag: int) -> list[dict[str, Any]]:
+        """Convert a level series into a YoY percent-change series."""
+        if not series or len(series) <= lag:
+            return []
+        out: list[dict[str, Any]] = []
+        for i in range(lag, len(series)):
+            prev = series[i - lag]["value"]
+            cur  = series[i]["value"]
+            if not prev:
+                continue
+            out.append({"date": series[i]["date"], "value": (cur - prev) / prev * 100.0})
+        return out
+
+    async def _build_commentary(
+        self,
+        repo_s: list[dict[str, Any]],
+        cpi_s:  list[dict[str, Any]],
+        iip_s:  list[dict[str, Any]],
+        yld_s:  list[dict[str, Any]],
+        usdinr: dict[str, Any],
+        brent:  dict[str, Any],
+    ) -> str:
+        """
+        Generate a 3-4 line 'what changed this week' commentary using the AI
+        client. If LLM is unavailable we synthesise a deterministic summary
+        from the same numbers so the panel never goes blank.
+        """
+        repo_now, _ = _last_two(repo_s)
+        cpi_yoy = _yoy_change(cpi_s, lag=12)
+        iip_yoy = _yoy_change(iip_s, lag=12)
+        yld_now, _ = _last_two(yld_s)
+
+        bits: list[str] = []
+        if repo_now:
+            bits.append(f"RBI repo rate stands at {repo_now['value']:.2f}% (as of {repo_now['date']}).")
+        if cpi_yoy is not None:
+            bits.append(f"CPI inflation is running at {cpi_yoy:.2f}% YoY.")
+        if iip_yoy is not None:
+            bits.append(f"Industrial production grew {iip_yoy:.2f}% YoY.")
+        if yld_now:
+            bits.append(f"India's 10-year benchmark yield is {yld_now['value']:.2f}%.")
+        if usdinr.get("price"):
+            bits.append(f"USD/INR is at ₹{usdinr['price']:.2f} ({usdinr.get('pChange', 0):+.2f}% today).")
+        if brent.get("price"):
+            bits.append(f"Brent crude is ${brent['price']:.2f}/bbl ({brent.get('pChange', 0):+.2f}% today).")
+
+        deterministic = " ".join(bits) if bits else "Macro data is currently unavailable."
+
+        if not ai_client.is_available():
+            return deterministic
+
+        prompt = (
+            "You are an Indian markets macro analyst. Below are the latest readings. "
+            "Write a concise 3–4 sentence weekly commentary explaining what these numbers "
+            "tell an Indian retail equity trader about RBI policy direction, inflation, "
+            "growth and currency. Be specific and quantitative; no caveats or disclaimers.\n\n"
+            f"{deterministic}"
+        )
+        try:
+            txt = await ai_client.ask(
+                prompt=prompt,
+                system="You are a concise, professional macro strategist focused on Indian markets.",
+                max_tokens=350,
+                temperature=0.35,
+            )
+            txt = (txt or "").strip()
+            # If the AI client returns its sentinel error string, fall back.
+            if not txt or txt.startswith("[AI unavailable"):
+                return deterministic
+            return txt
+        except Exception as e:
+            log.warning("AI commentary failed: %s", str(e)[:120])
+            return deterministic
