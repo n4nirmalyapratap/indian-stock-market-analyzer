@@ -4,6 +4,8 @@ import { fetchApi } from "@/lib/api";
 import { PageHeader, PillTabs, Card, Loading, EmptyState, MenuDropdown, ErrorState, useChartPalette } from "../_shared";
 import { LineChart as LCIcon, X } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, Legend, CartesianGrid } from "recharts";
+import DataFreshness from "@/components/DataFreshness";
+import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 type Period = "1m" | "6m" | "1y" | "5y" | "10y";
 type Metric = "pe" | "pb" | "dy";
@@ -69,12 +71,14 @@ export default function MarketValuation() {
   const cSurf   = palette.surf;
   const cAccent = palette.accent;
 
-  const { data, isLoading, error } = useQuery<ValuationResponse>({
-    queryKey: ["insights/index-valuation", codes, period, metric],
-    queryFn: () => fetchApi(`/insights/index-valuation?indices=${encodeURIComponent(codes)}&period=${period}&metric=${metric}`),
-    enabled: codes.length > 0,
-    staleTime: 30 * 60_000,
-  });
+  const { data, isLoading, error } = useQuery<ValuationResponse>(
+    marketDataQueryOptions<ValuationResponse, { enabled: boolean }>(
+      ["insights/index-valuation", codes, period, metric],
+      () => fetchApi(`/insights/index-valuation?indices=${encodeURIComponent(codes)}&period=${period}&metric=${metric}`),
+      { enabled: codes.length > 0 },
+    ),
+  );
+  const valuationMeta = pickMeta(data);
 
   const addable = useMemo(
     () => ALL_INDEX_OPTIONS.filter(o => !selected.includes(o.code)),
@@ -95,6 +99,10 @@ export default function MarketValuation() {
     <div>
       <PageHeader title="Market Valuation"
         info="Historical price levels of selected indices. Add or remove sectors to compare."/>
+
+      <div className="mb-3">
+        <DataFreshness meta={valuationMeta} refreshKeys={[["insights/index-valuation", codes, period, metric]]} />
+      </div>
 
       {/* Selected sector cards */}
       <div className="flex flex-wrap items-center gap-2 mb-3">

@@ -3,8 +3,11 @@ import time
 from typing import Any, Optional
 import httpx
 
+from . import market_cache_service as _mcs
+
 MAX_ENTRIES = 200
 _CACHE: dict[str, dict] = {}
+_CACHE_VERSION = 0   # tracks the market-state version of the entries above
 
 _cookies = ""
 _cookie_expiry = 0.0
@@ -25,7 +28,17 @@ HEADERS_API = {
 }
 
 
+def _flush_if_state_changed() -> None:
+    """Drop in-memory cache entries when market state has just transitioned."""
+    global _CACHE_VERSION, _CACHE
+    v = _mcs.cache_version()
+    if v != _CACHE_VERSION:
+        _CACHE.clear()
+        _CACHE_VERSION = v
+
+
 def _get_cache(key: str) -> Optional[Any]:
+    _flush_if_state_changed()
     entry = _CACHE.get(key)
     if entry and time.time() < entry["expiry"]:
         return entry["data"]
@@ -36,6 +49,7 @@ def _get_cache(key: str) -> Optional[Any]:
 
 def _set_cache(key: str, data: Any, ttl: int) -> None:
     global _CACHE
+    _flush_if_state_changed()
     if len(_CACHE) >= MAX_ENTRIES:
         now = time.time()
         expired = [k for k, v in _CACHE.items() if now > v["expiry"]]
@@ -71,8 +85,16 @@ async def _ensure_cookies() -> None:
         await _refresh_cookies()
 
 
+def _ttl_for(default_ttl: int) -> int:
+    """Shorten TTLs when market is open (data changes), keep long when closed."""
+    if _mcs.is_market_open():
+        return min(default_ttl, 60)
+    return default_ttl
+
+
 class NseService:
     async def fetch_nse(self, path: str, cache_key: str, ttl: int = 300, retries: int = 3) -> Optional[Any]:
+        ttl = _ttl_for(ttl)
         cached = _get_cache(cache_key)
         if cached is not None:
             return cached

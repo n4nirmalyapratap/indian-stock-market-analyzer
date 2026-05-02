@@ -5,6 +5,8 @@ import { fetchApi } from "@/lib/api";
 import { Loading, ErrorState, EmptyState, MenuDropdown } from "../_shared";
 import { LayoutGrid, Zap, ArrowLeft } from "lucide-react";
 import { motion, AnimatePresence, useMotionValue, useTransform, useReducedMotion } from "framer-motion";
+import DataFreshness from "@/components/DataFreshness";
+import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 type Performance = "1d" | "1w" | "1m" | "1y";
 type SortBy = "marketCap" | "name" | "change";
@@ -183,11 +185,13 @@ export default function Heatmap() {
   });
   const indexOptions = useMemo(() => (idxList?.indices || []).map(i => ({ value: i.code, label: i.label })), [idxList]);
 
-  const { data, isLoading, error } = useQuery<HeatmapResponse>({
-    queryKey: ["insights/heatmap", index, perf],
-    queryFn: () => fetchApi(`/insights/heatmap?index=${index}&performance=${perf}`),
-    staleTime: 60_000,
-  });
+  const { data, isLoading, error } = useQuery<HeatmapResponse>(
+    marketDataQueryOptions<HeatmapResponse>(
+      ["insights/heatmap", index, perf],
+      () => fetchApi(`/insights/heatmap?index=${index}&performance=${perf}`),
+    ),
+  );
+  const heatmapMeta = pickMeta(data);
 
   // Clear hover/click state whenever the underlying tiles change so transient
   // animations never play on stale or vanished tiles.
@@ -282,6 +286,11 @@ export default function Heatmap() {
             backgroundColor: mood >= 0 ? "rgba(99,102,241,0.22)" : "rgba(220,38,38,0.22)",
           }}
         />
+      </div>
+
+      {/* Data freshness pill — top-left, non-intrusive */}
+      <div className="absolute top-6 left-6 z-30">
+        <DataFreshness meta={heatmapMeta} refreshKeys={[["insights/heatmap", index, perf]]} />
       </div>
 
       {/* Unified Aesthetic Command Center */}

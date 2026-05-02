@@ -5,6 +5,8 @@ import {
   RefreshCw, AlertTriangle,
   BarChart2, Info, Gauge,
 } from "lucide-react";
+import DataFreshness from "@/components/DataFreshness";
+import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Component { name: string; score: number; weight: number; detail: string }
@@ -168,19 +170,21 @@ export default function SentimentDashboard() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
 
-  const { data: sentiment, isLoading, error, refetch: refetchSentiment } = useQuery<Sentiment>({
-    queryKey: ["sentiment-market", refreshKey],
-    queryFn:  () => fetchApi<Sentiment>("/sentiment/market"),
-    staleTime: 900_000,
-    retry: 1,
-  });
+  const { data: sentiment, isLoading, error, refetch: refetchSentiment } = useQuery<Sentiment>(
+    marketDataQueryOptions<Sentiment, { retry: number }>(
+      ["sentiment-market", refreshKey],
+      () => fetchApi<Sentiment>("/sentiment/market"),
+      { retry: 1 },
+    ),
+  );
 
-  const { data: sectorsData, refetch: refetchSectors } = useQuery<SectorsResp>({
-    queryKey: ["sentiment-sectors", refreshKey],
-    queryFn:  () => fetchApi<SectorsResp>("/sentiment/sectors"),
-    staleTime: 900_000,
-    retry: 1,
-  });
+  const { data: sectorsData, refetch: refetchSectors } = useQuery<SectorsResp>(
+    marketDataQueryOptions<SectorsResp, { retry: number }>(
+      ["sentiment-sectors", refreshKey],
+      () => fetchApi<SectorsResp>("/sentiment/sectors"),
+      { retry: 1 },
+    ),
+  );
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -194,6 +198,7 @@ export default function SentimentDashboard() {
 
   const score    = sentiment?.composite ?? 0;
   const sectors  = sectorsData?.sectors ?? [];
+  const meta     = pickMeta(sentiment) ?? pickMeta(sectorsData);
 
   // ── Format timestamp ────────────────────────────────────────────────────────
   const updatedAt = sentiment?.timestamp
@@ -214,14 +219,17 @@ export default function SentimentDashboard() {
             {updatedAt && <span className="ml-2 text-xs">· Updated {updatedAt}</span>}
           </p>
         </div>
-        <button
-          onClick={handleRefresh}
-          disabled={refreshing || isLoading}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
-        >
-          <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
-          {refreshing ? "Refreshing…" : "Refresh"}
-        </button>
+        <div className="flex items-center gap-3 flex-wrap">
+          <DataFreshness meta={meta} hideRefresh />
+          <button
+            onClick={handleRefresh}
+            disabled={refreshing || isLoading}
+            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
       </div>
 
       {isLoading && (
