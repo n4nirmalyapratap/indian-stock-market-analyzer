@@ -100,6 +100,61 @@ async def _cache_warmup_task() -> None:
         logger.warning("EOD seal failed: %s", e)
 
 
+async def _market_state_transition_loop() -> None:
+    """
+    Watch for NSE market-state transitions every 60s. When the state changes
+    (e.g. OPEN → CLOSED at 15:30 IST, CLOSED → OPEN at 09:15 IST, weekend
+    rollovers), bump the cache version. For transitions *into* a closed state
+    (OPEN → CLOSED, OPEN → WEEKEND, PRE_OPEN → CLOSED, etc.), wait briefly
+    for any in-flight intraday quotes to settle then run
+    `seal_eod_for_today_if_overdue()` so on-disk snapshots get re-fetched and
+    rewritten as the official EOD close — without needing a restart.
+    """
+    await asyncio.sleep(10)  # let the server settle before the first read
+    price_service = _PriceService(_NseService(), _YahooService())
+
+    last_state = _mcs.current_market_state()
+    initial_version = _mcs.cache_version()
+    logger.info(
+        "Market-state watcher started (state=%s, cacheVersion=%d).",
+        last_state, initial_version,
+    )
+
+    closed_states = {"CLOSED", "WEEKEND"}
+    while True:
+        try:
+            await asyncio.sleep(60)
+            state = _mcs.current_market_state()
+            if state == last_state:
+                continue
+
+            # Transition — `cache_version()` (which calls bump_if_needed)
+            # automatically increments on state change.
+            new_version = _mcs.cache_version()
+            logger.info(
+                "Market state transition: %s → %s (cacheVersion=%d).",
+                last_state, state, new_version,
+            )
+
+            # When entering a closed state, give the upstream feeds ~30s to
+            # publish their final official numbers, then seal.
+            if state in closed_states and last_state not in closed_states:
+                await asyncio.sleep(30)
+                try:
+                    result = await _mcs.seal_eod_for_today_if_overdue(price_service)
+                    logger.info("EOD seal after transition: %s", result)
+                except Exception as e:
+                    logger.warning("Post-transition EOD seal failed: %s", e)
+
+            last_state = state
+        except asyncio.CancelledError:
+            logger.info("Market-state watcher stopped.")
+            break
+        except Exception as e:
+            logger.warning("Market-state watcher error: %s — retrying in 60s.", e)
+            await asyncio.sleep(60)
+
+
 async def _bug_fixer_loop() -> None:
     """
     Run the AI bug analyser every 10 minutes.
@@ -133,14 +188,15 @@ async def lifespan(app: FastAPI):
         if rb not in _l.handlers:
             _l.addHandler(rb)
 
-    poll_task    = asyncio.create_task(_telegram_polling_loop())
-    universe_task = asyncio.create_task(_universe_scheduler())
-    warmup_task  = asyncio.create_task(_cache_warmup_task())
-    fixer_task   = asyncio.create_task(_bug_fixer_loop())
+    poll_task       = asyncio.create_task(_telegram_polling_loop())
+    universe_task   = asyncio.create_task(_universe_scheduler())
+    warmup_task     = asyncio.create_task(_cache_warmup_task())
+    transition_task = asyncio.create_task(_market_state_transition_loop())
+    fixer_task      = asyncio.create_task(_bug_fixer_loop())
     try:
         yield
     finally:
-        for t in (poll_task, universe_task, warmup_task, fixer_task):
+        for t in (poll_task, universe_task, warmup_task, transition_task, fixer_task):
             t.cancel()
             try:
                 await t
