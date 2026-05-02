@@ -5,6 +5,8 @@ import { fetchApi } from "@/lib/api";
 import { Loading, ErrorState, EmptyState, MenuDropdown } from "../_shared";
 import { LayoutGrid, Zap, ArrowLeft } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import DataFreshness from "@/components/DataFreshness";
+import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 type Performance = "1d" | "1w" | "1m" | "1y";
 type SortBy = "marketCap" | "name" | "change";
@@ -128,11 +130,13 @@ export default function Heatmap() {
   });
   const indexOptions = useMemo(() => (idxList?.indices || []).map(i => ({ value: i.code, label: i.label })), [idxList]);
 
-  const { data, isLoading, error } = useQuery<HeatmapResponse>({
-    queryKey: ["insights/heatmap", index, perf],
-    queryFn: () => fetchApi(`/insights/heatmap?index=${index}&performance=${perf}`),
-    staleTime: 60_000,
-  });
+  const { data, isLoading, error } = useQuery<HeatmapResponse>(
+    marketDataQueryOptions<HeatmapResponse>(
+      ["insights/heatmap", index, perf],
+      () => fetchApi(`/insights/heatmap?index=${index}&performance=${perf}`),
+    ),
+  );
+  const heatmapMeta = pickMeta(data);
 
   const items = useMemo(() => {
     const arr = [...(data?.items || [])];
@@ -171,6 +175,11 @@ export default function Heatmap() {
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-[10%] -left-[10%] w-[40%] h-[40%] bg-emerald-500/10 blur-[120px] rounded-full" />
         <div className="absolute -bottom-[10%] -right-[10%] w-[40%] h-[40%] bg-red-500/10 blur-[120px] rounded-full" />
+      </div>
+
+      {/* Data freshness pill — top-left, non-intrusive */}
+      <div className="absolute top-6 left-6 z-30">
+        <DataFreshness meta={heatmapMeta} refreshKeys={[["insights/heatmap", index, perf]]} />
       </div>
 
       {/* Unified Aesthetic Command Center */}
