@@ -9,9 +9,13 @@ Covers:
 - Strip aggregation degrades gracefully when FRED + Yahoo both return nothing
 - Strip aggregation produces 6 tiles regardless of source availability
 - Dashboard payload shape is correct (always returns required keys)
+- Dashboard fetches WPI proxy and includes it in the response
+- Dashboard yield curve snapshot includes both 3M and 10Y tenors
+- Dashboard sources honestly report which probes succeeded/failed
 - Cache TTL — second call hits the cache without re-invoking the fetcher
 - Deterministic commentary fallback fires when LLM is unavailable
 - Route smoke tests via TestClient
+- _probe_url succeeds and fails cleanly
 
 The codebase doesn't use pytest-asyncio; tests follow the existing
 test_agents.py pattern of wrapping async helpers with asyncio.run().
@@ -51,8 +55,7 @@ def clear_macro_cache():
 
 def _run(coro):
     """Run an async coroutine to completion in the test thread."""
-    return asyncio.get_event_loop().run_until_complete(coro) \
-        if False else asyncio.new_event_loop().run_until_complete(coro)
+    return asyncio.new_event_loop().run_until_complete(coro)
 
 
 # ── FRED CSV parsing ────────────────────────────────────────────────────────
@@ -131,6 +134,42 @@ def test_fred_csv_returns_empty_on_network_exception():
     assert rows == []
 
 
+# ── Probe helper ────────────────────────────────────────────────────────────
+
+def test_probe_url_reports_ok_on_success():
+    from app.services.macro_service import _probe_url
+
+    class FakeResp:
+        status_code = 200
+
+    class FakeClient:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, *a, **kw): return FakeResp()
+
+    with patch("app.services.macro_service.httpx.AsyncClient", lambda *a, **kw: FakeClient()):
+        out = _run(_probe_url("https://example.com/foo"))
+
+    assert out["ok"] is True
+    assert out["status"] == 200
+    assert out["url"] == "https://example.com/foo"
+
+
+def test_probe_url_reports_failure_on_network_error():
+    from app.services.macro_service import _probe_url
+
+    class BoomClient:
+        async def __aenter__(self): raise RuntimeError("blocked")
+        async def __aexit__(self, *a): return False
+
+    with patch("app.services.macro_service.httpx.AsyncClient", lambda *a, **kw: BoomClient()):
+        out = _run(_probe_url("https://blocked.example.com"))
+
+    assert out["ok"] is False
+    assert out["status"] is None
+    assert "blocked" in out["note"]
+
+
 # ── Math helpers ────────────────────────────────────────────────────────────
 
 def test_yoy_change_basic():
@@ -170,6 +209,26 @@ def test_series_yoy_produces_correct_length():
     # 24 inputs - 12 lag = 12 output points
     assert len(out) == 12
     assert all("date" in p and "value" in p for p in out)
+
+
+def test_build_yield_curve_handles_missing_tenors():
+    from app.services.macro_service import MacroService
+
+    # Both empty → both points still emitted with value=None
+    snap = MacroService._build_yield_curve([], [])
+    assert len(snap) == 2
+    assert {p["tenor"] for p in snap} == {"3M", "10Y"}
+    assert all(p["value"] is None for p in snap)
+
+    # 10Y populated, 3M missing
+    snap = MacroService._build_yield_curve(
+        [], [{"date": "2025-03-01", "value": 7.10}],
+    )
+    p10 = next(p for p in snap if p["tenor"] == "10Y")
+    p3m = next(p for p in snap if p["tenor"] == "3M")
+    assert p10["value"] == 7.10
+    assert p10["asOf"] == "2025-03-01"
+    assert p3m["value"] is None
 
 
 # ── Strip & dashboard aggregation ───────────────────────────────────────────
@@ -238,16 +297,102 @@ def test_get_dashboard_shape_is_complete_when_data_is_empty():
     svc = MacroService()
     with patch("app.services.macro_service._fetch_fred_csv", AsyncMock(return_value=[])), \
          patch.object(svc, "_yahoo_quote", AsyncMock(return_value={})), \
+         patch("app.services.macro_service._probe_url",
+               AsyncMock(return_value={"ok": False, "url": "x", "status": None, "note": "stub"})), \
          patch("app.services.macro_service.ai_client.is_available", return_value=False):
         out = _run(svc.get_dashboard())
 
-    assert {"rateTimeline", "cpi", "iip", "gdp", "yieldCurve",
+    assert {"rateTimeline", "cpi", "wpi", "iip", "gdp", "yieldCurve",
             "currencyStrip", "commentary", "fetchedAt", "sources"} <= set(out)
     assert out["rateTimeline"] == []
+    assert out["wpi"] == []
     assert isinstance(out["yieldCurve"], dict)
-    assert {"ind10yNow", "ind10yAsOf", "ind10yHistory"} <= set(out["yieldCurve"])
+    assert {"ind10yNow", "ind10yAsOf", "ind10yHistory", "snapshot"} <= set(out["yieldCurve"])
+    # Curve snapshot always carries both tenors even when empty.
+    assert len(out["yieldCurve"]["snapshot"]) == 2
     assert {"usdinr", "dxy", "brent", "gold", "vix"} <= set(out["currencyStrip"])
     assert isinstance(out["commentary"], str) and len(out["commentary"]) > 0
+
+
+def test_get_dashboard_includes_wpi_when_fred_returns_data():
+    from app.services.macro_service import MacroService
+
+    wpi_rows = [
+        {"date": "2025-01-01", "value": 2.10},
+        {"date": "2025-02-01", "value": 2.30},
+    ]
+
+    async def fake_fred(sid: str):
+        # WPI proxy series ID configured in FRED_SERIES["wpi_proxy"]
+        return wpi_rows if sid == "INDPIEAMP02GPM" else []
+
+    svc = MacroService()
+    with patch("app.services.macro_service._fetch_fred_csv", side_effect=fake_fred), \
+         patch.object(svc, "_yahoo_quote", AsyncMock(return_value={})), \
+         patch("app.services.macro_service._probe_url",
+               AsyncMock(return_value={"ok": False, "url": "x", "status": None, "note": "stub"})), \
+         patch("app.services.macro_service.ai_client.is_available", return_value=False):
+        out = _run(svc.get_dashboard())
+
+    assert out["wpi"] == wpi_rows
+
+
+def test_get_dashboard_yield_curve_snapshot_populated_when_3m_and_10y_present():
+    from app.services.macro_service import MacroService, FRED_SERIES
+
+    async def fake_fred(sid: str):
+        if sid == FRED_SERIES["yield3m"]:
+            return [{"date": "2025-03-01", "value": 6.80}]
+        if sid == FRED_SERIES["yield10"]:
+            return [{"date": "2025-03-01", "value": 7.10}]
+        return []
+
+    svc = MacroService()
+    with patch("app.services.macro_service._fetch_fred_csv", side_effect=fake_fred), \
+         patch.object(svc, "_yahoo_quote", AsyncMock(return_value={})), \
+         patch("app.services.macro_service._probe_url",
+               AsyncMock(return_value={"ok": False, "url": "x", "status": None, "note": "stub"})), \
+         patch("app.services.macro_service.ai_client.is_available", return_value=False):
+        out = _run(svc.get_dashboard())
+
+    snap = out["yieldCurve"]["snapshot"]
+    p3m = next(p for p in snap if p["tenor"] == "3M")
+    p10y = next(p for p in snap if p["tenor"] == "10Y")
+    assert p3m["value"] == 6.80
+    assert p10y["value"] == 7.10
+    assert p10y["tenorMonths"] == 120
+
+
+def test_get_dashboard_sources_report_probe_results_honestly():
+    """RBI/MOSPI/CCIL probe results must propagate into the sources array."""
+    from app.services.macro_service import MacroService
+
+    probe_results = {
+        "https://www.rbi.org.in/scripts/BS_PressReleaseDisplay.aspx":
+            {"ok": True,  "url": "https://www.rbi.org.in/scripts/BS_PressReleaseDisplay.aspx", "status": 200, "note": "reachable"},
+        "https://eaindustry.nic.in/":
+            {"ok": False, "url": "https://eaindustry.nic.in/", "status": None, "note": "unreachable: blocked"},
+        "https://www.ccilindia.com/RiskManagement/SecuritiesSegment/Pages/IndianGovernmentBondData.aspx":
+            {"ok": False, "url": "https://www.ccilindia.com/RiskManagement/SecuritiesSegment/Pages/IndianGovernmentBondData.aspx", "status": None, "note": "unreachable: blocked"},
+    }
+
+    async def fake_probe(url: str, timeout: float = 6.0):
+        return probe_results.get(url, {"ok": False, "url": url, "status": None, "note": "stub"})
+
+    svc = MacroService()
+    with patch("app.services.macro_service._fetch_fred_csv", AsyncMock(return_value=[])), \
+         patch.object(svc, "_yahoo_quote", AsyncMock(return_value={})), \
+         patch("app.services.macro_service._probe_url", side_effect=fake_probe), \
+         patch("app.services.macro_service.ai_client.is_available", return_value=False):
+        out = _run(svc.get_dashboard())
+
+    by_id = {s["id"]: s for s in out["sources"]}
+    assert by_id["rbi-dbie"]["ok"] is True
+    assert by_id["mospi"]["ok"] is False
+    assert by_id["ccil"]["ok"] is False
+    # Every source carries an id, label, covers, ok, and a url field.
+    for src in out["sources"]:
+        assert {"id", "label", "covers", "ok"} <= set(src)
 
 
 def test_get_dashboard_caches_for_24h():
@@ -258,6 +403,8 @@ def test_get_dashboard_caches_for_24h():
     fetch_mock = AsyncMock(return_value=[])
     with patch("app.services.macro_service._fetch_fred_csv", fetch_mock), \
          patch.object(svc, "_yahoo_quote", AsyncMock(return_value={})), \
+         patch("app.services.macro_service._probe_url",
+               AsyncMock(return_value={"ok": False, "url": "x", "status": None, "note": "stub"})), \
          patch("app.services.macro_service.ai_client.is_available", return_value=False):
         _run(svc.get_dashboard())
         first_calls = fetch_mock.call_count
@@ -274,16 +421,18 @@ def test_commentary_falls_back_to_deterministic_when_ai_unavailable():
     repo_s = [{"date": "2025-03-01", "value": 6.25}]
     cpi_s  = [{"date": f"2024-{m:02d}-01", "value": 100.0} for m in range(1, 13)] + \
              [{"date": "2025-01-01", "value": 105.0}]   # 5% YoY
+    wpi_s  = [{"date": "2025-03-01", "value": 2.40}]
     iip_s  = []
     yld_s  = [{"date": "2025-03-01", "value": 7.10}]
     usdinr = {"price": 83.5, "pChange": 0.1}
     brent  = {}
 
     with patch("app.services.macro_service.ai_client.is_available", return_value=False):
-        out = _run(svc._build_commentary(repo_s, cpi_s, iip_s, yld_s, usdinr, brent))
+        out = _run(svc._build_commentary(repo_s, cpi_s, wpi_s, iip_s, yld_s, usdinr, brent))
 
     assert "6.25%" in out                 # repo present
     assert "5.00% YoY" in out             # CPI YoY
+    assert "+2.40% YoY" in out            # WPI proxy
     assert "₹83.50" in out                # USD/INR
     assert "Industrial production" not in out  # iip empty → not mentioned
 
@@ -296,7 +445,7 @@ def test_commentary_uses_deterministic_when_ai_returns_sentinel():
     with patch("app.services.macro_service.ai_client.is_available", return_value=True), \
          patch("app.services.macro_service.ai_client.ask",
                AsyncMock(return_value="[AI unavailable: rate-limited]")):
-        out = _run(svc._build_commentary(repo_s, [], [], [], {}, {}))
+        out = _run(svc._build_commentary(repo_s, [], [], [], [], {}, {}))
 
     assert "6.25%" in out
     assert "AI unavailable" not in out
@@ -319,11 +468,14 @@ def test_macro_strip_route_returns_200_and_six_tiles(client):
 def test_macro_dashboard_route_returns_200_with_full_shape(client):
     with patch("app.services.macro_service._fetch_fred_csv", AsyncMock(return_value=[])), \
          patch("app.services.macro_service.YahooService.get_quote", AsyncMock(return_value=None)), \
+         patch("app.services.macro_service._probe_url",
+               AsyncMock(return_value={"ok": False, "url": "x", "status": None, "note": "stub"})), \
          patch("app.services.macro_service.ai_client.is_available", return_value=False):
         r = client.get("/api/insights/macro")
 
     assert r.status_code == 200
     body = r.json()
-    assert {"rateTimeline", "cpi", "iip", "gdp", "yieldCurve",
+    assert {"rateTimeline", "cpi", "wpi", "iip", "gdp", "yieldCurve",
             "currencyStrip", "commentary", "fetchedAt", "sources", "meta"} <= set(body)
     assert body["meta"]["servedFrom"] == "MACRO_DASHBOARD"
+    assert len(body["yieldCurve"]["snapshot"]) == 2
