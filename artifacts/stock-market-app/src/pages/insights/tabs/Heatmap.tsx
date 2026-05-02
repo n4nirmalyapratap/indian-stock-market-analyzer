@@ -31,6 +31,16 @@ interface HeatmapResponse {
 
 interface IndexInfo { code: string; label: string; count: number; }
 
+/** Format a market cap (in raw INR) into a compact Indian-style label. */
+function formatMarketCap(v: number | null | undefined): string {
+  if (v == null || isNaN(v) || v <= 0) return "—";
+  const cr = v / 1e7; // 1 crore = 10,000,000
+  if (cr >= 1e5) return `₹${(cr / 1e5).toFixed(2)} L Cr`;
+  if (cr >= 1e3) return `₹${(cr / 1e3).toFixed(2)} K Cr`;
+  if (cr >= 1)   return `₹${cr.toFixed(0)} Cr`;
+  return `₹${(v / 1e5).toFixed(2)} L`;
+}
+
 /** High-end color palette for the heatmap */
 function bucket(p: number | null | undefined): { bg: string; border: string; text: string; glow: string } {
   if (p == null || isNaN(p)) return { bg: "bg-slate-400", border: "border-slate-500", text: "text-slate-950", glow: "shadow-slate-500/20" };
@@ -120,6 +130,7 @@ export default function Heatmap() {
   const [index, setIndex] = useState<string>("NIFTY50");
   const [perf, setPerf] = useState<Performance>("1d");
   const [sortBy, setSortBy] = useState<SortBy>("marketCap");
+  const [hover, setHover] = useState<{ item: HeatmapItem; x: number; y: number } | null>(null);
 
   const { data: idxList } = useQuery<{ indices: IndexInfo[] }>({
     queryKey: ["insights/indices"],
@@ -133,6 +144,10 @@ export default function Heatmap() {
     queryFn: () => fetchApi(`/insights/heatmap?index=${index}&performance=${perf}`),
     staleTime: 60_000,
   });
+
+  // Clear hover state whenever the underlying tiles change so the tooltip
+  // never shows stale info for a removed item.
+  useEffect(() => { setHover(null); }, [index, perf, data?.items]);
 
   const items = useMemo(() => {
     const arr = [...(data?.items || [])];
@@ -246,8 +261,8 @@ export default function Heatmap() {
             const style = bucket(item.changePct);
             const isSmall = w < 70 || h < 50;
             const isTiny = w < 40 || h < 30;
-            const isMicro = w < 20 || h < 15;
-            
+            const cleanSymbol = item.symbol.split(".")[0];
+
             return (
               <motion.div
                 key={item.symbol}
@@ -255,28 +270,40 @@ export default function Heatmap() {
                 animate={{ opacity: 1, scale: 1, filter: "blur(0px)", left: x, top: y, width: w - 1, height: h - 1 }}
                 exit={{ opacity: 0, scale: 1.1, filter: "blur(20px)" }}
                 transition={{ type: "spring", stiffness: 300, damping: 30, mass: 0.8 }}
-                className={`absolute overflow-hidden cursor-pointer group flex flex-col items-center justify-center transition-all duration-500
-                  ${style.bg} ${style.border} border shadow-inner ${style.glow}`}
-                whileHover={{ 
-                  scale: isMicro ? 2.5 : isSmall ? 1.2 : 1.05, 
-                  zIndex: 50, 
-                  boxShadow: "0 25px 50px rgba(0,0,0,0.6)",
-                  transition: { type: "spring", stiffness: 400, damping: 25 }
+                role="button"
+                tabIndex={0}
+                aria-label={`${item.name || cleanSymbol}, ${item.changePct >= 0 ? "up" : "down"} ${Math.abs(item.changePct).toFixed(2)} percent. Press Enter to open analysis.`}
+                onClick={() => navigate(`/stocks?symbol=${encodeURIComponent(cleanSymbol)}`)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    navigate(`/stocks?symbol=${encodeURIComponent(cleanSymbol)}`);
+                  }
                 }}
+                onMouseEnter={(e) => setHover({ item, x: e.clientX, y: e.clientY })}
+                onMouseMove={(e) => setHover({ item, x: e.clientX, y: e.clientY })}
+                onMouseLeave={() => setHover(null)}
+                onFocus={(e) => {
+                  const r = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+                  setHover({ item, x: r.left + r.width / 2, y: r.top + r.height / 2 });
+                }}
+                onBlur={() => setHover(null)}
+                className={`absolute overflow-hidden cursor-pointer group flex flex-col items-center justify-center outline-none focus-visible:ring-2 focus-visible:ring-white/80
+                  ${style.bg} ${style.border} border shadow-inner ${style.glow} hover:brightness-110 hover:ring-1 hover:ring-white/40 transition-[filter,box-shadow] duration-150`}
               >
                 <div className="absolute top-0 left-0 right-0 h-[1px] bg-white/20" />
-                
+
                 {!isTiny && (
-                  <div className="relative flex flex-col items-center justify-center px-1 text-center select-none">
-                    <motion.span 
+                  <div className="relative flex flex-col items-center justify-center px-1 text-center select-none pointer-events-none">
+                    <motion.span
                       layout
                       className={`font-black tracking-tighter uppercase leading-none mb-0.5 ${style.text}`}
                       style={{ fontSize: Math.max(9, Math.min(24, Math.floor(Math.min(w, h) / 4))) }}
                     >
-                      {item.symbol.split(".")[0]}
+                      {cleanSymbol}
                     </motion.span>
                     {!isSmall && (
-                      <motion.div 
+                      <motion.div
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 0.9 }}
                         className={`font-bold flex items-center gap-1 ${style.text}`}
@@ -287,13 +314,46 @@ export default function Heatmap() {
                     )}
                   </div>
                 )}
-                
-                <div className="absolute inset-0 opacity-0 group-hover:opacity-100 bg-gradient-to-br from-white/20 to-transparent transition-opacity pointer-events-none" />
               </motion.div>
             );
           })}
         </AnimatePresence>
       </div>
+
+      {/* Floating tooltip — follows cursor on tile hover */}
+      {hover && (() => {
+        const cleanSymbol = hover.item.symbol.split(".")[0];
+        const positive = (hover.item.changePct ?? 0) >= 0;
+        // Clamp tooltip inside viewport with a small offset from the cursor
+        const TOOLTIP_W = 240, TOOLTIP_H = 96, OFFSET = 14;
+        let left = hover.x + OFFSET;
+        let top  = hover.y + OFFSET;
+        if (typeof window !== "undefined") {
+          if (left + TOOLTIP_W > window.innerWidth - 8)  left = hover.x - TOOLTIP_W - OFFSET;
+          if (top  + TOOLTIP_H > window.innerHeight - 8) top  = hover.y - TOOLTIP_H - OFFSET;
+          left = Math.max(8, left);
+          top  = Math.max(8, top);
+        }
+        return (
+          <div
+            className="fixed z-[100] pointer-events-none bg-black/90 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl px-3 py-2.5 text-white"
+            style={{ left, top, width: TOOLTIP_W }}
+          >
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <span className="text-xs font-black tracking-tight text-white/95 truncate">{cleanSymbol}</span>
+              <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-md ${positive ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"}`}>
+                {positive ? "+" : ""}{(hover.item.changePct ?? 0).toFixed(2)}%
+              </span>
+            </div>
+            <div className="text-[10px] text-white/60 truncate mb-1.5">{hover.item.name || cleanSymbol}</div>
+            <div className="flex items-center justify-between text-[10px]">
+              <span className="text-white/40 uppercase tracking-wider">Mkt Cap</span>
+              <span className="text-white/90 font-bold">{formatMarketCap(hover.item.marketCap)}</span>
+            </div>
+            <div className="mt-1 text-[9px] text-white/30 text-center">Click to open analysis →</div>
+          </div>
+        );
+      })()}
 
       {data?.available === false && (
         <div className="absolute inset-0 flex items-center justify-center z-40 bg-slate-950/80 backdrop-blur-md">
