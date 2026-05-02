@@ -181,7 +181,7 @@ export default function Heatmap() {
   }, [items, sortBy, containerW, containerH]);
 
   return (
-    <div className="h-full flex flex-col overflow-hidden relative bg-slate-950">
+    <div className="h-full min-h-0 flex flex-col overflow-hidden relative bg-slate-950">
       {/* Dynamic Background Glow */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-[10%] -left-[10%] w-[40%] h-[40%] bg-emerald-500/10 blur-[120px] rounded-full" />
@@ -255,7 +255,7 @@ export default function Heatmap() {
       {error && <ErrorState message={(error as Error).message} />}
 
       {/* The Heatmap Canvas */}
-      <div ref={containerRef} className="flex-1 relative m-2 md:m-4 rounded-3xl overflow-hidden border border-white/5 shadow-2xl bg-black/20">
+      <div ref={containerRef} className="flex-1 min-h-0 relative m-2 md:m-4 rounded-3xl overflow-hidden border border-white/5 shadow-2xl bg-black/20">
         <AnimatePresence mode="popLayout">
           {rects?.map(({ x, y, w, h, item }) => {
             const style = bucket(item.changePct);
