@@ -4,7 +4,7 @@ import { useRoute, useLocation } from "wouter";
 import { api } from "@/lib/api";
 import {
   Search, ArrowLeft, CheckCircle2, XCircle, MinusCircle, Sparkles,
-  TrendingUp, TrendingDown, Loader2, Quote,
+  TrendingUp, TrendingDown, Loader2, Quote, LayoutGrid, Grid3x3,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -316,6 +316,7 @@ export default function InvestorCouncil() {
   const symbol = params?.symbol?.toUpperCase() || "";
 
   const [openPersona, setOpenPersona] = useState<string | null>(null);
+  const [view, setView] = useState<"cards" | "matrix">("cards");
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["agent-council", symbol],
@@ -362,7 +363,13 @@ export default function InvestorCouncil() {
       )}
 
       {data && (
-        <CouncilContent data={data as unknown as CouncilResponse} symbol={symbol} onOpenPersona={setOpenPersona} />
+        <CouncilContent
+          data={data as unknown as CouncilResponse}
+          symbol={symbol}
+          view={view}
+          onChangeView={setView}
+          onOpenPersona={setOpenPersona}
+        />
       )}
 
       {openPersona && symbol && (
@@ -376,8 +383,12 @@ export default function InvestorCouncil() {
   );
 }
 
-function CouncilContent({ data, symbol, onOpenPersona }: {
-  data: CouncilResponse; symbol: string; onOpenPersona: (id: string) => void;
+function CouncilContent({ data, symbol, view, onChangeView, onOpenPersona }: {
+  data: CouncilResponse;
+  symbol: string;
+  view: "cards" | "matrix";
+  onChangeView: (v: "cards" | "matrix") => void;
+  onOpenPersona: (id: string) => void;
 }) {
   const verdictStyle = VERDICT_STYLE[data.council.verdict];
 
@@ -420,11 +431,32 @@ function CouncilContent({ data, symbol, onOpenPersona }: {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        {data.personas.map((p) => (
-          <PersonaCard key={p.id} persona={p} onOpen={onOpenPersona} />
-        ))}
+      <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1 w-fit">
+        <button
+          onClick={() => onChangeView("cards")}
+          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-medium transition ${view === "cards" ? "bg-white dark:bg-gray-900 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"}`}
+        >
+          <LayoutGrid className="w-3.5 h-3.5" /> Persona Cards
+        </button>
+        <button
+          onClick={() => onChangeView("matrix")}
+          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-medium transition ${view === "matrix" ? "bg-white dark:bg-gray-900 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"}`}
+        >
+          <Grid3x3 className="w-3.5 h-3.5" /> Council View
+        </button>
       </div>
+
+      {view === "cards" && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {data.personas.map((p) => (
+            <PersonaCard key={p.id} persona={p} onOpen={onOpenPersona} />
+          ))}
+        </div>
+      )}
+
+      {view === "matrix" && (
+        <CouncilMatrix personas={data.personas} onOpen={onOpenPersona} />
+      )}
 
       <div className="text-xs text-gray-400 dark:text-gray-600 text-center max-w-2xl mx-auto pt-2">
         Each persona's verdict is computed deterministically from public investor checklists; the AI
@@ -432,5 +464,112 @@ function CouncilContent({ data, symbol, onOpenPersona }: {
         personalised investment advice.
       </div>
     </>
+  );
+}
+
+// ─── Council View — verdict heatmap matrix (consensus vs disagreement at a glance) ─
+
+const VERDICT_HEAT: Record<Verdict, string> = {
+  STRONG_BUY:   "bg-emerald-500 text-white",
+  BUY:          "bg-emerald-300 text-emerald-950 dark:bg-emerald-500/70 dark:text-white",
+  HOLD:         "bg-amber-200 text-amber-900 dark:bg-amber-500/40 dark:text-amber-100",
+  AVOID:        "bg-orange-300 text-orange-950 dark:bg-orange-500/70 dark:text-white",
+  STRONG_AVOID: "bg-red-500 text-white",
+};
+
+function CouncilMatrix({ personas, onOpen }: {
+  personas: PersonaResult[]; onOpen: (id: string) => void;
+}) {
+  // Group all checklist labels into one union, ordered by frequency, so we can
+  // build a persona × check matrix.
+  const allChecks: string[] = [];
+  const seen = new Set<string>();
+  personas.forEach(p => p.checklist.forEach(c => {
+    if (!seen.has(c.label)) { seen.add(c.label); allChecks.push(c.label); }
+  }));
+
+  return (
+    <div className="space-y-4">
+      {/* Verdict consensus row */}
+      <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-white/10 rounded-xl overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-100 dark:border-white/10 flex items-center justify-between">
+          <div>
+            <h3 className="font-bold text-sm text-gray-900 dark:text-white">Council View — verdict consensus</h3>
+            <p className="text-[11px] text-gray-500 dark:text-gray-400">All 8 personas side-by-side. Click any cell for the AI thesis.</p>
+          </div>
+          <div className="hidden md:flex items-center gap-2 text-[10px] text-gray-500">
+            {(["STRONG_BUY","BUY","HOLD","AVOID","STRONG_AVOID"] as Verdict[]).map(v => (
+              <span key={v} className={`inline-block w-3 h-3 rounded ${VERDICT_HEAT[v]}`} title={VERDICT_STYLE[v].label} />
+            ))}
+            <span>Strong Buy → Strong Avoid</span>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-px bg-gray-100 dark:bg-white/10">
+          {personas.map((p) => {
+            const heat = VERDICT_HEAT[p.verdict];
+            const tint = PERSONA_TINT[p.id] || "from-gray-500 to-gray-700";
+            return (
+              <button
+                key={p.id}
+                onClick={() => onOpen(p.id)}
+                className="bg-white dark:bg-gray-900 p-3 text-left hover:ring-2 hover:ring-indigo-400 transition flex flex-col gap-2"
+                title={`${p.name} — ${VERDICT_STYLE[p.verdict].label} (${Math.round(p.score * 100)}%)`}
+              >
+                <div className={`h-1 rounded bg-gradient-to-r ${tint}`} />
+                <div className="text-[11px] font-bold text-gray-900 dark:text-white truncate">{p.name.split(" ").slice(-1)[0]}</div>
+                <div className={`text-[10px] font-bold rounded px-1.5 py-1 text-center ${heat}`}>
+                  {VERDICT_STYLE[p.verdict].label}
+                </div>
+                <div className="text-[10px] text-gray-500 dark:text-gray-400 text-center">{Math.round(p.score * 100)}%</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Checklist matrix — persona × check */}
+      <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-white/10 rounded-xl overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-100 dark:border-white/10">
+          <h3 className="font-bold text-sm text-gray-900 dark:text-white">Checklist matrix</h3>
+          <p className="text-[11px] text-gray-500 dark:text-gray-400">Green = passed • red = failed • blank = not in this persona's checklist</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[11px]">
+            <thead className="bg-gray-50 dark:bg-gray-800/50">
+              <tr>
+                <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400 sticky left-0 bg-gray-50 dark:bg-gray-800/50 z-10 min-w-[180px]">Check</th>
+                {personas.map(p => (
+                  <th key={p.id} className="px-2 py-2 font-medium text-gray-500 dark:text-gray-400 text-center min-w-[64px]">
+                    {p.name.split(" ").slice(-1)[0]}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {allChecks.map((label) => (
+                <tr key={label} className="border-t border-gray-100 dark:border-white/5">
+                  <td className="px-3 py-1.5 text-gray-700 dark:text-gray-300 sticky left-0 bg-white dark:bg-gray-900 z-10">
+                    {label}
+                  </td>
+                  {personas.map(p => {
+                    const c = p.checklist.find(x => x.label === label);
+                    if (!c) {
+                      return <td key={p.id} className="px-2 py-1.5 text-center text-gray-300 dark:text-gray-700">·</td>;
+                    }
+                    return (
+                      <td key={p.id} className="px-2 py-1.5 text-center" title={`${p.name}: ${label} ${c.passed ? "✓" : "✗"} (value ${c.value ?? "n/a"})`}>
+                        {c.passed
+                          ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 inline" />
+                          : <XCircle      className="w-3.5 h-3.5 text-red-400      inline" />}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   );
 }
