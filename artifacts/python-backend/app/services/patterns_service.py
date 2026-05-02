@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Optional
 from .yahoo_service import YahooService
 from .nse_service import NseService
+from .price_service import PriceService
 from .indicators import (
     calculate_ema, calculate_sma, calculate_rsi,
     calculate_macd, calculate_bollinger_bands, calculate_atr,
@@ -51,9 +52,10 @@ def _mk(symbol, universe, pattern, pattern_type, signal, confidence, price, desc
 
 
 class PatternsService:
-    def __init__(self, yahoo: YahooService, nse: NseService):
+    def __init__(self, yahoo: YahooService, nse: NseService, price: Optional[PriceService] = None):
         self.yahoo = yahoo
         self.nse = nse
+        self.price = price or PriceService(nse, yahoo)
 
     async def get_patterns(self, universe: Optional[str] = None, signal: Optional[str] = None, category: Optional[str] = None) -> dict:
         global _cached_patterns
@@ -103,7 +105,9 @@ class PatternsService:
         for syms, u in universe_map:
             for sym in syms:
                 try:
-                    h = await self.yahoo.get_historical_data(sym, 90)
+                    # Single-source: PriceService (NSE-first daily, EOD-aware
+                    # disk overlay when market is closed).
+                    h = await self.price.get_historical_data(sym, 90)
                     if len(h) < 30:
                         continue
                     all_patterns.extend(self._detect(sym, h, u))

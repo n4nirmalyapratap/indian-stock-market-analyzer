@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import { api, NewsArticle } from "@/lib/api";
 import { useTheme } from "@/context/ThemeContext";
+import DataFreshness from "@/components/DataFreshness";
+import { pickMeta } from "@/lib/marketData";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -807,6 +809,7 @@ export default function NewsFeed() {
   }, [search]);
 
   const articles = feed?.articles ?? [];
+  const feedMeta = pickMeta(feed);
 
   const sourceStats = useMemo(() => {
     const s = stats?.sources ?? {};
@@ -860,6 +863,7 @@ export default function NewsFeed() {
               {reelsMode ? "List View" : "Reels"}
             </button>
           )}
+          <DataFreshness meta={feedMeta} hideRefresh />
           <RefreshCountdown seconds={countdown} onRefresh={handleRefresh} isDark={isDark} isRefreshing={refreshMutation.isPending} />
         </div>
       </div>

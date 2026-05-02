@@ -3,13 +3,15 @@ from typing import Optional
 from ..services.patterns_service import PatternsService
 from ..services.yahoo_service import YahooService
 from ..services.nse_service import NseService
+from ..services.price_service import PriceService
 from ..services import market_cache_service as _disk
 
 router = APIRouter(prefix="/patterns", tags=["patterns"])
 
 _yahoo = YahooService()
 _nse = NseService()
-_service = PatternsService(_yahoo, _nse)
+_price = PriceService(_nse, _yahoo)
+_service = PatternsService(_yahoo, _nse, _price)
 
 
 def _meta() -> dict:
