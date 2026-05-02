@@ -42,6 +42,15 @@ wheels = [
 ]
 
 [[package]]
+name = "artifacts"
+version = "20260421"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/97/58/b40e53e4b8b2cfe39a10870579a190deb28c7db488eafc8392beeedb598b/artifacts-20260421.tar.gz", hash = "sha256:9c27d668ce270b08e2591e67f789a578356f5f69c7347d81e0f6e4c121b3c9f1", size = 95425, upload-time = "2026-04-21T05:23:10.343Z" }
+
+[[package]]
 name = "bcrypt"
 version = "5.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1535,6 +1544,7 @@ name = "repl-nix-workspace"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "artifacts" },
     { name = "bcrypt" },
     { name = "cryptography" },
     { name = "fastapi" },
@@ -1557,6 +1567,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "artifacts", specifier = ">=20260421" },
     { name = "bcrypt", specifier = ">=4.0.0" },
     { name = "cryptography", specifier = ">=41.0.0" },
     { name = "fastapi", specifier = ">=0.110.0" },
