@@ -206,6 +206,12 @@ function Body({
   const isContracts = data.segment !== "equity";
   const totalDays = data.totalDays ?? data.rows.length;
   const monthly = data.monthly ?? [];
+  // YTD sparkline rows = every cached row whose ISO date is in the current year.
+  const ytdRows = useMemo(() => {
+    const yr = new Date().getFullYear();
+    const cutoff = `${yr}-01-01`;
+    return data.rows.filter((r) => (r.date ?? "") >= cutoff);
+  }, [data.rows]);
 
   return (
     <div className="space-y-5">
@@ -244,10 +250,10 @@ function Body({
         <HeroCard
           title="Year to Date"
           icon={<TrendingUp className="w-3.5 h-3.5" />}
-          cell={data.summary.ytd ?? data.summary.monthly}
+          cell={data.summary.ytd}
           isContracts={isContracts}
-          rowsForSpark={rows.slice(0, 252)}
-          subtitle={daysWindowLabel(rows)}
+          rowsForSpark={ytdRows}
+          subtitle={ytdRows.length ? daysWindowLabel(ytdRows) : "—"}
           delay={0.15}
           reduced={reduced}
         />
