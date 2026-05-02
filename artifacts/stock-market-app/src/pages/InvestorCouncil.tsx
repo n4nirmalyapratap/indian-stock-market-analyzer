@@ -7,47 +7,10 @@ import {
   TrendingUp, TrendingDown, Loader2, Quote, LayoutGrid, Grid3x3,
 } from "lucide-react";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Types — re-exported from shared api types so they stay in sync ──────────
 
-type Verdict = "STRONG_BUY" | "BUY" | "HOLD" | "AVOID" | "STRONG_AVOID";
-
-interface ChecklistItem {
-  label:     string;
-  passed:    boolean;
-  value:     number | null;
-  threshold: number | number[];
-  op:        string;
-  weight:    number;
-  detail:    string;
-}
-
-interface PersonaResult {
-  id:         string;
-  name:       string;
-  firm:       string;
-  philosophy: string;
-  signature:  string;
-  score:      number;
-  verdict:    Verdict;
-  checklist:  ChecklistItem[];
-  thesis?:    string;
-}
-
-interface CouncilResponse {
-  symbol:    string;
-  name:      string | null;
-  sector:    string | null;
-  lastPrice: number | null;
-  context:   Record<string, number | string | null>;
-  personas:  PersonaResult[];
-  council: {
-    verdict:    Verdict;
-    avgScore:   number;
-    buyCount:   number;
-    avoidCount: number;
-    holdCount:  number;
-  };
-}
+import type { AgentVerdict as Verdict, ChecklistItem, PersonaResult, CouncilResponse } from "@/lib/api";
+export type { Verdict, ChecklistItem, PersonaResult, CouncilResponse };
 
 // ─── Visual helpers ───────────────────────────────────────────────────────────
 
@@ -364,7 +327,7 @@ export default function InvestorCouncil() {
 
       {data && (
         <CouncilContent
-          data={data as unknown as CouncilResponse}
+          data={data}
           symbol={symbol}
           view={view}
           onChangeView={setView}
