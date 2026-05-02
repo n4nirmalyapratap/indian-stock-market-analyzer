@@ -28,7 +28,10 @@ import { LayoutShell } from "@/LayoutShell";
 import { LogOut } from "lucide-react";
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
+  // refetchOnWindowFocus defaults to true so any market-data query (even
+  // ones not yet migrated to marketDataQueryOptions) re-validates against
+  // the official close when the user returns to the tab.
+  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: true } },
 });
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
