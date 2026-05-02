@@ -306,22 +306,42 @@ async def seal_eod_for_today_if_overdue(price_service, symbols: Optional[list[st
 
     candidates: list[tuple[str, int]] = []
     promoted = 0  # count of sealed per-days files promoted to canonical
-    files_to_check = [date_dir / f"{s}_90.json" for s in symbols] if symbols else list(date_dir.glob("*.json"))
+
+    if symbols:
+        # For each requested symbol gather BOTH the canonical file and any
+        # per-days buckets that exist (e.g. <SYM>.json, <SYM>_30.json,
+        # <SYM>_90.json, <SYM>_180.json). Previously we only checked _90 which
+        # silently skipped sealing when the only on-disk artefact was the
+        # canonical snapshot or a different bucket.
+        files_to_check: list[Path] = []
+        for s in symbols:
+            files_to_check.append(date_dir / f"{s}.json")
+            files_to_check.extend(date_dir.glob(f"{s}_*.json"))
+    else:
+        files_to_check = list(date_dir.glob("*.json"))
+
+    seen_syms: set[str] = set()
     for f in files_to_check:
         try:
-            stem = f.stem  # e.g. "RELIANCE_90" or "RELIANCE" (canonical)
-            if "_" not in stem:
-                continue
-            sym, days_str = stem.rsplit("_", 1)
-            try:
-                days = int(days_str)
-            except ValueError:
-                continue
+            stem = f.stem  # "RELIANCE_90" (per-days bucket) or "RELIANCE" (canonical)
+            if "_" in stem:
+                sym, days_str = stem.rsplit("_", 1)
+                try:
+                    days = int(days_str)
+                except ValueError:
+                    # Symbol legitimately contains an underscore (e.g.
+                    # NIFTY_FIN_SERVICE) and the suffix isn't a day count —
+                    # treat the whole stem as canonical for that symbol.
+                    sym, days = stem, 90
+            else:
+                sym, days = stem, 90  # canonical file → use a sane default
             payload = _read_payload(f)
             if payload is None:
                 continue
             if not payload.get("eodSealed"):
-                candidates.append((sym, days))
+                if sym not in seen_syms:
+                    candidates.append((sym, days))
+                    seen_syms.add(sym)
                 continue
             # Already sealed — make sure the canonical snapshot exists so
             # quote/history/sectors all read the same close.
