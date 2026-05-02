@@ -2,7 +2,7 @@ import { useLocation } from "wouter";
 import {
   LayoutGrid, BarChart3, FileText, PieChart, Briefcase,
   Activity, Repeat, Users, Ban, Truck, LineChart, Rocket,
-  ArrowLeft, ChevronRight,
+  Globe, ArrowLeft, ChevronRight,
 } from "lucide-react";
 import HeatmapTab from "./tabs/Heatmap";
 import FiiDiiTab from "./tabs/FiiDii";
@@ -16,8 +16,18 @@ import FoBanTab from "./tabs/FoBan";
 import TopDeliveriesTab from "./tabs/TopDeliveries";
 import MarketValuationTab from "./tabs/MarketValuation";
 import IpoTab from "./tabs/Ipo";
+import MacroTab from "./tabs/Macro";
 
 const TABS = [
+  {
+    slug: "macro",
+    label: "Macro Pulse",
+    description: "RBI repo rate, CPI, IIP, USD/INR, India 10Y and Brent — all in one place.",
+    icon: Globe,
+    Component: MacroTab,
+    color: "text-teal-500",
+    bg: "bg-teal-50 dark:bg-teal-500/10"
+  },
   {
     slug: "heatmap",
     label: "Heatmap",
