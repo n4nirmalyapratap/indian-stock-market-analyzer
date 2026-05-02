@@ -587,6 +587,62 @@ export const api = {
 
   newsRefresh: () => fetchApi<{ ok: boolean }>("/news/refresh", { method: "POST" }),
 
+  // ── Portfolio Manager ──
+  portfolios: () =>
+    fetchApi<{ portfolios: Portfolio[] }>("/portfolio"),
+
+  createPortfolio: (data: { name: string; cash?: number; baseCurrency?: string }) =>
+    fetchApi<Portfolio>("/portfolio", {
+      method: "POST", headers: JSON_HEADERS, body: JSON.stringify(data),
+    }),
+
+  updatePortfolio: (pid: string, data: { name?: string; cash?: number }) =>
+    fetchApi<Portfolio>(`/portfolio/${encodeURIComponent(pid)}`, {
+      method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(data),
+    }),
+
+  deletePortfolio: (pid: string) =>
+    fetchApi<{ success: boolean; id: string }>(`/portfolio/${encodeURIComponent(pid)}`, {
+      method: "DELETE",
+    }),
+
+  portfolioValuation: (pid: string) =>
+    fetchApi<PortfolioValuation>(`/portfolio/${encodeURIComponent(pid)}/valuation`),
+
+  portfolioTransactions: (pid: string) =>
+    fetchApi<{ transactions: PortfolioTx[] }>(`/portfolio/${encodeURIComponent(pid)}/transactions`),
+
+  addPortfolioTx: (pid: string, tx: PortfolioTxInput) =>
+    fetchApi<PortfolioTx>(`/portfolio/${encodeURIComponent(pid)}/transactions`, {
+      method: "POST", headers: JSON_HEADERS, body: JSON.stringify(tx),
+    }),
+
+  deletePortfolioTx: (pid: string, txId: string) =>
+    fetchApi<{ success: boolean; id: string }>(
+      `/portfolio/${encodeURIComponent(pid)}/transactions/${encodeURIComponent(txId)}`,
+      { method: "DELETE" },
+    ),
+
+  importPortfolioCsv: (pid: string, csv: string) =>
+    fetchApi<PortfolioImportResult>(`/portfolio/${encodeURIComponent(pid)}/import`, {
+      method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ csv }),
+    }),
+
+  portfolioRisk: (pid: string, params: PortfolioRiskParams = {}) =>
+    fetchApi<PortfolioRiskResult>(`/portfolio/${encodeURIComponent(pid)}/risk`, {
+      method: "POST", headers: JSON_HEADERS, body: JSON.stringify(params),
+    }),
+
+  portfolioPerformance: (pid: string, benchmark = "NIFTY 50", days = 365) =>
+    fetchApi<PortfolioPerformance>(
+      `/portfolio/${encodeURIComponent(pid)}/performance?benchmark=${encodeURIComponent(benchmark)}&days=${days}`,
+    ),
+
+  portfolioOptimize: (pid: string, params: PortfolioOptimizeParams) =>
+    fetchApi<PortfolioOptimizeResult>(`/portfolio/${encodeURIComponent(pid)}/optimize`, {
+      method: "POST", headers: JSON_HEADERS, body: JSON.stringify(params),
+    }),
+
   dataConsistency: (symbols: string[] = []) => {
     const q = symbols.length ? `?symbols=${encodeURIComponent(symbols.join(","))}` : "";
     return fetchApi<{
@@ -906,4 +962,194 @@ export interface StockFinancials {
   cashFlow:        { annual: CashFlowRow[] };
   dividends:       DividendRow[];
   eps:             { annual: EpsRow[]; quarterly: EpsRow[] };
+}
+
+// ─── Portfolio Manager types ─────────────────────────────────────────────────
+
+export interface Portfolio {
+  id:           string;
+  userId:       string;
+  name:         string;
+  baseCurrency: string;
+  cash:         number;
+  createdAt:    string;
+  updatedAt:    string;
+}
+
+export interface PortfolioTx {
+  id:          string;
+  portfolioId: string;
+  symbol:      string;
+  side:        "BUY" | "SELL" | "DIVIDEND";
+  qty:         number;
+  price:       number;
+  fees:        number;
+  tradedAt:    string;
+  source:      string;
+  note?:       string | null;
+}
+
+export interface PortfolioTxInput {
+  symbol:    string;
+  side:      "BUY" | "SELL" | "DIVIDEND";
+  qty:       number;
+  price:     number;
+  fees?:     number;
+  tradedAt?: string;
+  note?:     string;
+}
+
+export interface PortfolioHolding {
+  symbol:           string;
+  companyName?:     string;
+  qty:              number;
+  avgCost:          number;
+  invested:         number;
+  realised:         number;
+  dividends:        number;
+  fees:             number;
+  buys:             number;
+  sells:            number;
+  firstTradedAt:    string;
+  lastTradedAt:     string;
+  lastPrice:        number;
+  previousClose:    number;
+  marketValue:      number;
+  unrealisedPnl:    number;
+  unrealisedPnlPct: number;
+  dayPnl:           number;
+  dayPnlPct:        number;
+  sector:           string;
+  marketCap:        number | null;
+  marketCapBucket:  string;
+  weight:           number;
+}
+
+export interface PortfolioTotals {
+  cash:             number;
+  marketValue:      number;
+  investedValue:    number;
+  dayPnl:           number;
+  dayPnlPct:        number;
+  unrealisedPnl:    number;
+  unrealisedPnlPct: number;
+  realisedPnl:      number;
+  dividendsRcvd:    number;
+  totalEquity:      number;
+}
+
+export interface AllocationSlice { label: string; value: number; weight: number; }
+
+export interface PortfolioValuation {
+  portfolio:      Portfolio;
+  holdings:       PortfolioHolding[];
+  closedHoldings: Array<Omit<PortfolioHolding, "marketValue" | "lastPrice" | "previousClose" | "unrealisedPnl" | "unrealisedPnlPct" | "dayPnl" | "dayPnlPct" | "sector" | "marketCap" | "marketCapBucket" | "weight" | "companyName">>;
+  allocation?:    { sector: AllocationSlice[]; marketCap: AllocationSlice[]; };
+  totals:         PortfolioTotals;
+  concentration:  Array<{ symbol: string; weight: number; marketValue: number }>;
+  fetchedAt:      string;
+}
+
+export interface PortfolioImportResult {
+  format:       string;
+  rowsParsed:   number;
+  rowsInserted: number;
+  errors:       string[];
+}
+
+export interface PortfolioRiskParams {
+  confidence?:    number;
+  horizonDays?:   number;
+  riskFreeRate?:  number;
+  lookbackDays?:  number;
+}
+
+export interface PortfolioRiskResult {
+  portfolioId:  string;
+  totals:       PortfolioTotals;
+  var: {
+    valueAtRisk?:    number;
+    varPct?:         number;
+    cvarPct?:        number;
+    confidence?:     number;
+    horizonDays?:    number;
+    method?:         string;
+    [key: string]:   unknown;
+  };
+  perPosition: Array<{
+    symbol:            string;
+    weight:            number;
+    sharpe:            number | null;
+    sortino:           number | null;
+    annualReturn:      number | null;
+    annualVolatility:  number | null;
+    maxDrawdownPct:    number | null;
+  }>;
+  portfolio: {
+    sharpe:            number | null;
+    sortino:           number | null;
+    annualReturn:      number | null;
+    annualVolatility:  number | null;
+    maxDrawdownPct:    number | null;
+  };
+  fetchedAt:    string;
+}
+
+export interface PortfolioPerformancePoint {
+  date:        string;
+  equity:      number;
+  marketValue: number;
+}
+
+export interface PortfolioPerformance {
+  portfolioId:      string;
+  series:           PortfolioPerformancePoint[];
+  benchmark:        string;
+  benchmarkSeries:  Array<{ date: string; value: number }>;
+  fetchedAt:        string;
+}
+
+export interface PortfolioOptimizeParams {
+  method?:        "markowitz" | "cvar" | "min_vol";
+  confidence?:    number;
+  riskFreeRate?:  number;
+  universe?:      string[];
+  points?:        number;
+  targetWeights?: Record<string, number>;
+}
+
+export interface FrontierPoint {
+  expectedReturn: number;
+  volatility:     number;
+  sharpe:         number;
+  weights:        number[];
+}
+
+export interface PortfolioOptimizeResult {
+  portfolioId:     string;
+  method:          string;
+  result:          (FrontierPoint & { cvarPct?: number; varPct?: number; annualCvarPct?: number; confidence?: number }) | null;
+  frontier?:       {
+    symbols:           string[];
+    frontier:          FrontierPoint[];
+    maxSharpe:         FrontierPoint | null;
+    minVol:            FrontierPoint | null;
+    riskFreeRateAnnual: number;
+    lookbackDays:      number;
+  } | null;
+  currentWeights:  Record<string, number>;
+  targetWeights:   Record<string, number>;
+  trades: Array<{
+    symbol:        string;
+    side:          "BUY" | "SELL";
+    qty:           number;
+    price:         number;
+    notional:      number;
+    currentQty:    number;
+    currentWeight: number;
+    targetWeight:  number;
+  }>;
+  equity:    number;
+  universe:  string[];
+  fetchedAt: string;
 }

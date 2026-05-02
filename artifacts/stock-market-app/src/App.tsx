@@ -13,6 +13,7 @@ import HydraAlpha from "@/pages/HydraAlpha";
 import InvestorCouncil from "@/pages/InvestorCouncil";
 import OptionsStrategyTester from "@/pages/OptionsStrategyTester";
 import SettingsPage from "@/pages/SettingsPage";
+import Portfolio from "@/pages/Portfolio";
 import NotFound from "@/pages/not-found";
 import TradingPlatform from "@/pages/TradingPlatform";
 import SectorDetail from "@/pages/SectorDetail";
@@ -110,6 +111,7 @@ function AppRoutes() {
         <Route path="/agents/:symbol"  component={InvestorCouncil} />
         <Route path="/agents"          component={InvestorCouncil} />
         <Route path="/options"         component={OptionsStrategyTester} />
+        <Route path="/portfolio"       component={Portfolio} />
         <Route path="/settings"        component={SettingsPage} />
         <Route path="/chart/:symbol"   component={ChartView} />
         <Route component={NotFound} />
