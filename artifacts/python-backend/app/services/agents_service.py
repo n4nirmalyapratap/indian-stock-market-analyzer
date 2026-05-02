@@ -76,6 +76,41 @@ async def _fetch_symbol_news(symbol: str, name: Optional[str], limit: int = 5) -
     return matches
 
 
+async def _fetch_fii_dii_pulse() -> dict:
+    """Latest FII / DII equity flows (₹ crore, net) from NSE.
+
+    Returned shape is intentionally tiny so it slots cleanly into the LLM
+    prompt. Empty dict on any failure — pulse is informational only.
+    """
+    try:
+        from .fii_dii_service import FiiDiiService
+        snap = await FiiDiiService().fetch_equity_snapshot()
+    except Exception as exc:
+        logger.warning("agents: FII/DII pulse fetch failed: %s", exc)
+        return {}
+    if snap is None or snap.empty:
+        return {}
+    row = snap.iloc[0]
+    fii_net = float(row.get("fii_net") or 0.0)
+    dii_net = float(row.get("dii_net") or 0.0)
+    if fii_net > 0 and dii_net > 0:
+        flow = "Both FIIs and DIIs net buyers"
+    elif fii_net < 0 and dii_net < 0:
+        flow = "Both FIIs and DIIs net sellers"
+    elif fii_net < 0 and dii_net > 0:
+        flow = "FIIs selling, DIIs absorbing"
+    elif fii_net > 0 and dii_net < 0:
+        flow = "FIIs buying, DIIs selling"
+    else:
+        flow = "Flat institutional flows"
+    return {
+        "date":   str(row.get("date"))[:10],
+        "fiiNet": round(fii_net, 1),  # ₹ crore
+        "diiNet": round(dii_net, 1),
+        "flow":   flow,
+    }
+
+
 async def _fetch_market_mood() -> dict:
     """Get the broad-market sentiment snapshot (VIX + price action + news mood).
 
@@ -99,17 +134,15 @@ async def _fetch_market_mood() -> dict:
 
 
 async def gather_external_context(symbol: str, name: Optional[str]) -> dict:
-    """Fetch news + market mood concurrently. Always returns dict (never raises)."""
-    try:
-        news, mood = await asyncio.gather(
-            _fetch_symbol_news(symbol, name),
-            _fetch_market_mood(),
-            return_exceptions=False,
-        )
-    except Exception as exc:
-        logger.warning("agents: external context gather failed: %s", exc)
-        news, mood = [], {}
-    return {"recentNews": news, "marketMood": mood}
+    """Fetch news + market mood + FII/DII pulse concurrently. Always returns
+    dict (never raises) — every fetcher already swallows its own errors."""
+    news, mood, fii_dii = await asyncio.gather(
+        _fetch_symbol_news(symbol, name),
+        _fetch_market_mood(),
+        _fetch_fii_dii_pulse(),
+        return_exceptions=False,
+    )
+    return {"recentNews": news, "marketMood": mood, "fiiDii": fii_dii}
 
 
 # ── Verdict thresholds ────────────────────────────────────────────────────────
@@ -523,6 +556,7 @@ def run_council(stock_detail: dict, external: Optional[dict] = None) -> dict:
     if external:
         ctx["recentNews"]  = external.get("recentNews") or []
         ctx["marketMood"]  = external.get("marketMood") or {}
+        ctx["fiiDii"]      = external.get("fiiDii") or {}
 
     results = []
     for p in PERSONAS:
@@ -578,6 +612,8 @@ def run_council(stock_detail: dict, external: Optional[dict] = None) -> dict:
              "covers": "Symbol-tagged headlines + per-article sentiment"},
             {"id": "market_mood",    "label": "Market sentiment engine (VIX + Nifty PA + news NLP)",
              "covers": "Composite mood score and risk-on/risk-off label"},
+            {"id": "fii_dii",        "label": "NSE FII/DII daily equity flows",
+             "covers": "Net institutional buying/selling pressure (₹ crore)"},
         ],
         "fetchedAt": datetime.now(timezone.utc).isoformat(),
     }
@@ -633,6 +669,14 @@ def _persona_user_prompt(persona: dict, evaluation: dict, ctx: dict) -> str:
             f"Broad-market mood: {mood.get('label')} "
             f"(composite {mood.get('composite')}, VIX {mood.get('vix')}).\n\n"
         )
+    fii_dii = ctx.get("fiiDii") or {}
+    fii_block = ""
+    if fii_dii and fii_dii.get("flow"):
+        fii_block = (
+            f"FII/DII flows ({fii_dii.get('date')}): {fii_dii.get('flow')} "
+            f"— FII net ₹{fii_dii.get('fiiNet')} cr, "
+            f"DII net ₹{fii_dii.get('diiNet')} cr.\n\n"
+        )
 
     return (
         f"Indian stock: {ctx.get('name')} ({ctx.get('symbol')})\n"
@@ -641,7 +685,7 @@ def _persona_user_prompt(persona: dict, evaluation: dict, ctx: dict) -> str:
         f"Key fundamentals available:\n"
         f"  P/E={pe}, P/B={pb}, ROE={roe}, D/E={de}, FCF yield={fcf_y}%, "
         f"% off 52w high={pct_off}\n\n"
-        f"{news_block}{mood_block}"
+        f"{news_block}{mood_block}{fii_block}"
         f"Your verdict from the deterministic checklist: "
         f"{evaluation['verdict']} (score {evaluation['score']*100:.0f}%).\n\n"
         f"Checks PASSED:\n" + ("\n".join(_line(c) for c in passed) or "  (none)") + "\n\n"
@@ -716,6 +760,7 @@ async def run_single_persona(persona_id: str, stock_detail: dict) -> dict:
     external = await gather_external_context(sym, name)
     ctx["recentNews"] = external.get("recentNews") or []
     ctx["marketMood"] = external.get("marketMood") or {}
+    ctx["fiiDii"]     = external.get("fiiDii") or {}
 
     evaluation = persona["evaluate"](ctx)
     thesis = await _thesis_for(persona, evaluation, ctx)
