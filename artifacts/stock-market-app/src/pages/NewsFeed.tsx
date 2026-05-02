@@ -765,7 +765,7 @@ export default function NewsFeed() {
       {
         placeholderData: keepPreviousData,
         enabled: activeTab !== "deals" && activeTab !== "events",
-      } as any,
+      },
     ),
   );
 
