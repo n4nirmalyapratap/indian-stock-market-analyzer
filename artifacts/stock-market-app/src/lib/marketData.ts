@@ -1,25 +1,33 @@
 // Shared React-Query options for all market-data fetches.
 //
-// Goal: every page that displays prices uses the same staleTime / refetchInterval
-// so they all share the same snapshot. When market is open, refresh more often;
-// when closed, prices won't change so we can be lazy.
+// Every page that displays prices uses the same staleTime / refetchInterval
+// so they all share the same snapshot. Window focus always re-validates so
+// when the user returns to the tab after a market-state transition (open →
+// closed) the page snaps to the freshly sealed EOD close instead of serving
+// the last intraday number.
 
 import type { QueryKey, UseQueryOptions } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 /**
  * Provenance metadata returned by every market-data endpoint.
- * Used by DataFreshness to render the "NSE • 5 min ago • Closed" pill.
+ *
+ *  source     = original provider that produced the price
+ *               ("NSE" | "YAHOO")
+ *  servedFrom = layer / engine that returned it on this call
+ *               ("PRICE_SERVICE" | "DISK_EOD" | "MIXED" | "PATTERNS_ENGINE"
+ *               | "SENTIMENT_ENGINE" | "NEWS_FEED")
  */
 export interface MarketDataMeta {
-  source?:        string;       // "NSE" | "YAHOO" | "DISK" | "LIVE"
+  source?:        "NSE" | "YAHOO" | string;
+  servedFrom?:    string;
   asOf?:          string | null;
   marketState?:   string;       // "OPEN" | "PRE_OPEN" | "CLOSED" | "WEEKEND"
-  cacheVersion?: number;
-  eodSealed?:    boolean;
-  eodDate?:      string | null;
-  [key: string]: unknown;
+  cacheVersion?:  number;
+  eodSealed?:     boolean;
+  eodDate?:       string | null;
+  [key: string]:  unknown;
 }
 
 /** Extract `meta` from any payload that might carry it. */
@@ -35,7 +43,6 @@ export function pickMeta(payload: unknown): MarketDataMeta | null {
  * the cadence to use.
  */
 export function isMarketOpenIST(now: Date = new Date()): boolean {
-  // Convert local time to IST
   const utc = now.getTime() + now.getTimezoneOffset() * 60_000;
   const ist = new Date(utc + 5.5 * 60 * 60_000);
   const day = ist.getDay();              // 0=Sun, 6=Sat
@@ -46,8 +53,13 @@ export function isMarketOpenIST(now: Date = new Date()): boolean {
 
 /**
  * Build React-Query options for a market-data query.
- * Open  market → 60s stale, 60s background refresh.
- * Closed market → 5min stale, no auto-refresh (prices won't change).
+ *
+ *   Open   market → 60s stale, 60s background refresh
+ *   Closed market → 5min stale, 5min background refresh (so a freshly
+ *                   sealed EOD overlay propagates to all pages quickly)
+ *
+ * `refetchOnWindowFocus` is ALWAYS true: when the user comes back to the
+ * tab we want to re-validate so close-boundary transitions converge.
  */
 export function marketDataQueryOptions<TData>(
   queryKey: QueryKey,
@@ -58,11 +70,39 @@ export function marketDataQueryOptions<TData>(
   return {
     queryKey,
     queryFn,
-    staleTime:        open ?  60_000 : 5 * 60_000,
-    refetchInterval:  open ?  60_000 : false,
-    refetchOnWindowFocus: open,
+    staleTime:            open ? 60_000     : 5 * 60_000,
+    refetchInterval:      open ? 60_000     : 5 * 60_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect:   true,
     ...overrides,
   } as UseQueryOptions<TData>;
+}
+
+/**
+ * Hook that watches IST market open/closed state and invalidates ALL
+ * market-data queries (`marketData` namespace) the moment the market
+ * transitions. This is the deterministic close-boundary invalidation:
+ * within 30s of close, every page re-fetches and snaps to the sealed
+ * official close instead of holding the last intraday number.
+ *
+ * Mount once at the app root.
+ */
+export function useMarketStateBoundary() {
+  const qc = useQueryClient();
+  const wasOpenRef = useRef<boolean>(isMarketOpenIST());
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const open = isMarketOpenIST();
+      if (open !== wasOpenRef.current) {
+        wasOpenRef.current = open;
+        // Invalidate every cached query — cheap because most are inactive,
+        // and the active ones will re-fetch under the new cadence.
+        void qc.invalidateQueries();
+      }
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [qc]);
 }
 
 /**

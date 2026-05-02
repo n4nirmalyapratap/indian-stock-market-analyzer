@@ -17,7 +17,8 @@ _service = PatternsService(_yahoo, _nse, _price)
 def _meta() -> dict:
     state = _disk.current_market_state()
     return {
-        "source":       "PATTERNS_ENGINE",
+        "source":       "NSE",
+        "servedFrom":   "PATTERNS_ENGINE",
         "asOf":         _disk._now_ist().isoformat(),
         "marketState":  state,
         "eodSealed":    state in ("CLOSED", "WEEKEND"),
