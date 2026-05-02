@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearch } from "wouter";
 import { api } from "@/lib/api";
 import { Search, TrendingUp, TrendingDown, AlertCircle, BarChart2, Activity } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
@@ -9,9 +10,22 @@ import TechnicalSummary from "@/components/technicals/TechnicalSummary";
 const NIFTY100_QUICK = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","ITC","SBIN","BHARTIARTL","KOTAKBANK","BAJFINANCE","AXISBANK","MARUTI","HCLTECH","WIPRO","TITAN","SUNPHARMA"];
 
 export default function StockLookup() {
+  const search = useSearch();
   const [input, setInput] = useState("");
   const [symbol, setSymbol] = useState("");
   const [view, setView] = useState<"technicals" | "financials">("technicals");
+
+  // Auto-search when ?symbol=XYZ is present in the URL (e.g. from Heatmap click)
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    const sym = (params.get("symbol") || "").toUpperCase().trim();
+    if (sym && sym !== symbol) {
+      setInput(sym);
+      setSymbol(sym);
+      setView("technicals");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["stock", symbol],
