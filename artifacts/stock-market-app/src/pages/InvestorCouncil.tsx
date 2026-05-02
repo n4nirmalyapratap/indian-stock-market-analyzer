@@ -1,0 +1,436 @@
+import { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useRoute, useLocation } from "wouter";
+import { api } from "@/lib/api";
+import {
+  Search, ArrowLeft, CheckCircle2, XCircle, MinusCircle, Sparkles,
+  TrendingUp, TrendingDown, Loader2, Quote,
+} from "lucide-react";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type Verdict = "STRONG_BUY" | "BUY" | "HOLD" | "AVOID" | "STRONG_AVOID";
+
+interface ChecklistItem {
+  label:     string;
+  passed:    boolean;
+  value:     number | null;
+  threshold: number | number[];
+  op:        string;
+  weight:    number;
+  detail:    string;
+}
+
+interface PersonaResult {
+  id:         string;
+  name:       string;
+  firm:       string;
+  philosophy: string;
+  signature:  string;
+  score:      number;
+  verdict:    Verdict;
+  checklist:  ChecklistItem[];
+  thesis?:    string;
+}
+
+interface CouncilResponse {
+  symbol:    string;
+  name:      string | null;
+  sector:    string | null;
+  lastPrice: number | null;
+  context:   Record<string, number | string | null>;
+  personas:  PersonaResult[];
+  council: {
+    verdict:    Verdict;
+    avgScore:   number;
+    buyCount:   number;
+    avoidCount: number;
+    holdCount:  number;
+  };
+}
+
+// ─── Visual helpers ───────────────────────────────────────────────────────────
+
+const VERDICT_STYLE: Record<Verdict, { bg: string; text: string; label: string }> = {
+  STRONG_BUY:   { bg: "bg-emerald-100 dark:bg-emerald-500/20", text: "text-emerald-700 dark:text-emerald-300", label: "Strong Buy" },
+  BUY:          { bg: "bg-green-100 dark:bg-green-500/20",     text: "text-green-700 dark:text-green-300",     label: "Buy" },
+  HOLD:         { bg: "bg-amber-100 dark:bg-amber-500/20",     text: "text-amber-700 dark:text-amber-300",     label: "Hold" },
+  AVOID:        { bg: "bg-orange-100 dark:bg-orange-500/20",   text: "text-orange-700 dark:text-orange-300",   label: "Avoid" },
+  STRONG_AVOID: { bg: "bg-red-100 dark:bg-red-500/20",         text: "text-red-700 dark:text-red-300",         label: "Strong Avoid" },
+};
+
+const PERSONA_TINT: Record<string, string> = {
+  buffett: "from-amber-500 to-orange-500",
+  graham:  "from-slate-500 to-gray-700",
+  lynch:   "from-emerald-500 to-teal-600",
+  munger:  "from-yellow-500 to-amber-600",
+  klarman: "from-blue-500 to-indigo-600",
+  marks:   "from-purple-500 to-violet-600",
+  dalio:   "from-cyan-500 to-blue-600",
+  burry:   "from-rose-500 to-red-600",
+};
+
+function VerdictBadge({ verdict }: { verdict: Verdict }) {
+  const s = VERDICT_STYLE[verdict];
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold ${s.bg} ${s.text}`}>
+      {(verdict === "BUY" || verdict === "STRONG_BUY") && <TrendingUp className="w-3 h-3" />}
+      {(verdict === "AVOID" || verdict === "STRONG_AVOID") && <TrendingDown className="w-3 h-3" />}
+      {verdict === "HOLD" && <MinusCircle className="w-3 h-3" />}
+      {s.label}
+    </span>
+  );
+}
+
+function ScoreBar({ score }: { score: number }) {
+  const pct = Math.round(score * 100);
+  const color =
+    pct >= 65 ? "bg-emerald-500" :
+    pct >= 45 ? "bg-amber-500" :
+                "bg-red-500";
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-800 rounded overflow-hidden">
+        <div className={`h-full ${color} transition-all duration-300`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-xs font-bold text-gray-700 dark:text-gray-300 w-8 text-right">{pct}%</span>
+    </div>
+  );
+}
+
+function fmtThreshold(op: string, threshold: number | number[]): string {
+  if (op === "between" && Array.isArray(threshold)) {
+    return `${threshold[0]} – ${threshold[1]}`;
+  }
+  return `${op} ${threshold}`;
+}
+
+// ─── Persona card ─────────────────────────────────────────────────────────────
+
+function PersonaCard({ persona, onOpen }: { persona: PersonaResult; onOpen: (id: string) => void }) {
+  const tint = PERSONA_TINT[persona.id] || "from-gray-500 to-gray-700";
+  const passed = persona.checklist.filter(c => c.passed).length;
+  const total  = persona.checklist.length;
+
+  return (
+    <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-white/10 rounded-xl overflow-hidden hover:shadow-md transition">
+      <div className={`h-1.5 bg-gradient-to-r ${tint}`} />
+      <div className="p-4 space-y-3">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <h3 className="font-bold text-gray-900 dark:text-white text-sm">{persona.name}</h3>
+            <p className="text-[11px] text-gray-500 dark:text-gray-400">{persona.firm}</p>
+          </div>
+          <VerdictBadge verdict={persona.verdict} />
+        </div>
+
+        <p className="text-xs text-gray-600 dark:text-gray-400 italic line-clamp-2">
+          {persona.philosophy}
+        </p>
+
+        <div>
+          <div className="flex items-center justify-between text-[11px] text-gray-500 dark:text-gray-400 mb-1">
+            <span>{passed}/{total} checks passed</span>
+          </div>
+          <ScoreBar score={persona.score} />
+        </div>
+
+        <ul className="space-y-1 max-h-40 overflow-y-auto pr-1">
+          {persona.checklist.map((c, i) => (
+            <li key={i} className="flex items-start gap-1.5 text-[11px] leading-tight">
+              {c.passed
+                ? <CheckCircle2 className="w-3 h-3 text-emerald-500 mt-0.5 flex-shrink-0" />
+                : <XCircle      className="w-3 h-3 text-red-400      mt-0.5 flex-shrink-0" />}
+              <span className={c.passed ? "text-gray-700 dark:text-gray-300" : "text-gray-500 dark:text-gray-500 line-through decoration-1"}>
+                {c.label}
+                <span className="text-gray-400 dark:text-gray-600 ml-1">
+                  {c.value !== null ? `(${c.value})` : "(n/a)"}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+
+        <button
+          onClick={() => onOpen(persona.id)}
+          className="w-full text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 py-1.5 border-t border-gray-100 dark:border-white/10 mt-2 -mb-1 flex items-center justify-center gap-1"
+        >
+          <Sparkles className="w-3 h-3" />
+          Read AI thesis
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Persona detail modal ─────────────────────────────────────────────────────
+
+function PersonaThesisModal({ symbol, personaId, onClose }: {
+  symbol: string; personaId: string; onClose: () => void;
+}) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["agent-thesis", symbol, personaId],
+    queryFn:  () => api.agentPersona(symbol, personaId),
+    enabled:  !!symbol && !!personaId,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className={`h-2 bg-gradient-to-r ${PERSONA_TINT[personaId] || "from-gray-500 to-gray-700"}`} />
+        <div className="p-6 space-y-4">
+          {isLoading && (
+            <div className="flex items-center justify-center py-12 text-gray-500">
+              <Loader2 className="w-5 h-5 animate-spin mr-2" />
+              Asking {personaId}…
+            </div>
+          )}
+
+          {error && (
+            <p className="text-sm text-red-500">Failed to load thesis: {(error as Error).message}</p>
+          )}
+
+          {data && (
+            <>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900 dark:text-white">{data.name}</h2>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">{data.firm} • {data.era}</p>
+                </div>
+                <VerdictBadge verdict={data.verdict as Verdict} />
+              </div>
+
+              <blockquote className="border-l-4 border-indigo-400 pl-3 py-1 text-sm italic text-gray-600 dark:text-gray-400">
+                <Quote className="inline w-3 h-3 mr-1 text-indigo-400" />
+                {data.signature}
+              </blockquote>
+
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1">Score</h3>
+                <ScoreBar score={data.score} />
+              </div>
+
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">Verdict thesis</h3>
+                <div className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-line leading-relaxed">
+                  {data.thesis}
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">Checklist detail</h3>
+                <ul className="space-y-1.5">
+                  {data.checklist.map((c: ChecklistItem, i: number) => (
+                    <li key={i} className="flex items-start gap-2 text-xs">
+                      {c.passed
+                        ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 mt-0.5 flex-shrink-0" />
+                        : <XCircle      className="w-3.5 h-3.5 text-red-400      mt-0.5 flex-shrink-0" />}
+                      <div className="flex-1">
+                        <p className="text-gray-800 dark:text-gray-200 font-medium">
+                          {c.label}{" "}
+                          <span className="text-gray-400">— target {fmtThreshold(c.op, c.threshold)}, got {c.value !== null ? c.value : "n/a"}</span>
+                        </p>
+                        {c.detail && <p className="text-gray-500 dark:text-gray-500 italic mt-0.5">{c.detail}</p>}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </>
+          )}
+
+          <button onClick={onClose} className="w-full mt-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-white/10 rounded hover:bg-gray-50 dark:hover:bg-gray-800">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Search landing (when no symbol) ──────────────────────────────────────────
+
+function SearchLanding({ onSelect }: { onSelect: (sym: string) => void }) {
+  const [input, setInput] = useState("");
+  const popular = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","ITC","SBIN","BAJFINANCE","HINDUNILVR","MARUTI","WIPRO","ASIANPAINT"];
+
+  return (
+    <div className="max-w-2xl mx-auto space-y-6 py-6">
+      <div className="text-center space-y-2">
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 text-xs font-medium">
+          <Sparkles className="w-3.5 h-3.5" /> AI Investor Council
+        </div>
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+          Ask the legends about any Indian stock
+        </h1>
+        <p className="text-sm text-gray-500 dark:text-gray-400 max-w-lg mx-auto">
+          Eight famous investors — Buffett, Graham, Lynch, Munger, Klarman, Marks, Dalio, Burry —
+          run their documented checklists on any NSE stock and write a short AI thesis in their own voice.
+        </p>
+      </div>
+
+      <form
+        onSubmit={(e) => { e.preventDefault(); if (input.trim()) onSelect(input.trim().toUpperCase()); }}
+        className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-white/10 rounded-xl p-4 flex gap-2"
+      >
+        <Search className="w-5 h-5 text-gray-400 self-center" />
+        <input
+          autoFocus
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Enter NSE symbol (e.g. RELIANCE, TCS, HDFCBANK)…"
+          className="flex-1 bg-transparent outline-none text-sm text-gray-900 dark:text-white"
+        />
+        <button type="submit" className="px-4 py-1.5 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700">
+          Ask the Council
+        </button>
+      </form>
+
+      <div>
+        <p className="text-xs text-gray-400 uppercase tracking-wider mb-2">Popular stocks</p>
+        <div className="flex flex-wrap gap-2">
+          {popular.map((s) => (
+            <button
+              key={s}
+              onClick={() => onSelect(s)}
+              className="px-3 py-1 text-xs font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-full hover:border-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition"
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
+
+export default function InvestorCouncil() {
+  const [, params]  = useRoute("/agents/:symbol");
+  const [, navigate] = useLocation();
+  const symbol = params?.symbol?.toUpperCase() || "";
+
+  const [openPersona, setOpenPersona] = useState<string | null>(null);
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["agent-council", symbol],
+    queryFn:  () => api.agentCouncil(symbol),
+    enabled:  !!symbol,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // Reset modal when symbol changes
+  useEffect(() => { setOpenPersona(null); }, [symbol]);
+
+  if (!symbol) {
+    return <SearchLanding onSelect={(s) => navigate(`/agents/${encodeURIComponent(s)}`)} />;
+  }
+
+  return (
+    <div className="space-y-6 max-w-7xl mx-auto">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <button
+          onClick={() => navigate("/agents")}
+          className="text-xs text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-1"
+        >
+          <ArrowLeft className="w-3 h-3" /> Different stock
+        </button>
+        <button
+          onClick={() => navigate(`/stocks?symbol=${encodeURIComponent(symbol)}`)}
+          className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
+        >
+          See full stock analysis →
+        </button>
+      </div>
+
+      {isLoading && (
+        <div className="flex items-center justify-center py-20 text-gray-500">
+          <Loader2 className="w-5 h-5 animate-spin mr-2" />
+          Convening the council for {symbol}…
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-xl p-4 text-sm text-red-700 dark:text-red-300">
+          Could not load council for <strong>{symbol}</strong>: {(error as Error).message}
+        </div>
+      )}
+
+      {data && (
+        <CouncilContent data={data as unknown as CouncilResponse} symbol={symbol} onOpenPersona={setOpenPersona} />
+      )}
+
+      {openPersona && symbol && (
+        <PersonaThesisModal
+          symbol={symbol}
+          personaId={openPersona}
+          onClose={() => setOpenPersona(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function CouncilContent({ data, symbol, onOpenPersona }: {
+  data: CouncilResponse; symbol: string; onOpenPersona: (id: string) => void;
+}) {
+  const verdictStyle = VERDICT_STYLE[data.council.verdict];
+
+  return (
+    <>
+      <div className="bg-gradient-to-br from-indigo-50 to-violet-50 dark:from-indigo-500/10 dark:to-violet-500/10 border border-indigo-100 dark:border-indigo-500/20 rounded-2xl p-6">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <p className="text-xs uppercase tracking-wider text-indigo-600 dark:text-indigo-400 font-bold mb-1">
+              Investor Council Verdict
+            </p>
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+              {data.name || symbol}{" "}
+              <span className="text-base font-normal text-gray-400">({symbol})</span>
+            </h1>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+              {data.sector || "—"} {data.lastPrice ? ` • ₹${data.lastPrice.toLocaleString()}` : ""}
+            </p>
+          </div>
+          <div className="text-right space-y-1">
+            <div className={`inline-block px-4 py-1.5 rounded-full text-base font-bold ${verdictStyle.bg} ${verdictStyle.text}`}>
+              {verdictStyle.label}
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Avg score {Math.round(data.council.avgScore * 100)}% across 8 personas
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 flex gap-3 text-xs">
+          <span className="px-2 py-1 rounded bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 font-medium">
+            {data.council.buyCount} buy
+          </span>
+          <span className="px-2 py-1 rounded bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 font-medium">
+            {data.council.holdCount} hold
+          </span>
+          <span className="px-2 py-1 rounded bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-300 font-medium">
+            {data.council.avoidCount} avoid
+          </span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        {data.personas.map((p) => (
+          <PersonaCard key={p.id} persona={p} onOpen={onOpenPersona} />
+        ))}
+      </div>
+
+      <div className="text-xs text-gray-400 dark:text-gray-600 text-center max-w-2xl mx-auto pt-2">
+        Each persona's verdict is computed deterministically from public investor checklists; the AI
+        thesis is generated by a free language model and is for educational purposes only — not
+        personalised investment advice.
+      </div>
+    </>
+  );
+}

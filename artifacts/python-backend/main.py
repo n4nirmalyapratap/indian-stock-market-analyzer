@@ -30,6 +30,7 @@ from app.routes.auth import router as auth_router
 from app.routes.sentiment import router as sentiment_router
 from app.routes.jobs import router as jobs_router
 from app.routes.insights import router as insights_router
+from app.routes.agents import router as agents_router
 from app.services.log_buffer import setup_ring_buffer
 from app.services.market_cache_service import is_market_open, cache_status
 from app.services import market_cache_service as _mcs
@@ -308,3 +309,4 @@ app.include_router(auth_router,             prefix="/api")
 app.include_router(sentiment_router,        prefix="/api")
 app.include_router(jobs_router,             prefix="/api")
 app.include_router(insights_router,         prefix="/api")
+app.include_router(agents_router,            prefix="/api")
