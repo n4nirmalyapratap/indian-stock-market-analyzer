@@ -762,13 +762,23 @@ async def get_top_deliveries(period: str = Query("daily"), index: str = Query("N
 
 
 @router.get("/fii-dii")
-async def get_fii_dii(segment: str = Query("equity")):
+async def get_fii_dii(segment: str = Query("equity"), days: int = Query(365, ge=7, le=1500)):
     """FII/DII activity. Equity is real NSE data with a rolling local history.
     F&O segments fetch historical data using the NSE FNO participant endpoint."""
     from app.services.fii_dii_service import FiiDiiService
     svc = FiiDiiService()
     seg = (segment or "equity").lower().strip()
-    return await svc.get_flows(seg)
+    return await svc.get_flows(seg, days=days)
+
+
+@router.post("/fii-dii/backfill")
+async def backfill_fii_dii(days: int = Query(400, ge=30, le=1500)):
+    """One-shot backfill of all 5 FII/DII segments into the local SQLite cache.
+    Safe to call repeatedly — only missing date ranges are fetched. Persists to
+    market_cache/fii_dii_cache.db so the file can be committed to git."""
+    from app.services.fii_dii_service import FiiDiiService
+    svc = FiiDiiService()
+    return await svc.backfill_all(days=days)
 
 
 @router.get("/slbm")
