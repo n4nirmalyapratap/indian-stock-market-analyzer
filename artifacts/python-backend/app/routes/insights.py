@@ -262,11 +262,45 @@ _PERIOD_DAYS = {"5d": 7, "1mo": 31, "3mo": 95, "6mo": 190, "1y": 370,
                  "2y": 740, "5y": 1830, "10y": 3650}
 
 
-def _quote_from_closes(sym: str, closes: list[float], market_cap: float = 0.0) -> dict | None:
+# Trading-day offset for the heatmap timeframe. The window we fetch from
+# yfinance is wider than the comparison window so we always have at least
+# one valid base candle even after holidays/non-trading days. The base
+# close is then picked at the right offset from the *latest* candle.
+#   1D → previous close                  (≈ -2)
+#   1W → 5 trading days back             (≈ -6)
+#   1M → 22 trading days back            (≈ -23)
+#   1Y → first available close in window (≈  0)
+_PERF_OFFSET = {"1d": -2, "1w": -6, "1m": -23, "1y": None}
+
+
+def _base_close_for(closes: list[float], performance: str) -> float | None:
+    """Return the base close to compare against `closes[-1]` for the
+    given user-facing timeframe label. None when unknown.
+    """
+    if not closes or len(closes) < 2:
+        return None
+    off = _PERF_OFFSET.get(performance)
+    if off is None:
+        return float(closes[0])
+    if -off > len(closes):
+        # Not enough history — fall back to the oldest candle we do have
+        # so the tile still renders something meaningful.
+        return float(closes[0])
+    return float(closes[off])
+
+
+def _quote_from_closes(
+    sym: str,
+    closes: list[float],
+    market_cap: float = 0.0,
+    performance: str = "1d",
+) -> dict | None:
     if not closes or len(closes) < 2:
         return None
     close = float(closes[-1])
-    base  = float(closes[0])
+    base  = _base_close_for(closes, performance)
+    if base is None:
+        return None
     change_pct = ((close / base) - 1.0) * 100 if base else 0.0
     bg, fg = _bucket_color(change_pct)
     return {
@@ -334,7 +368,7 @@ async def _prefetch_market_caps(symbols: list[str]) -> None:
             _mcap_cache[ysym] = (ts, mc)
 
 
-async def _fetch_one_quote_async(sym: str, period_yf: str) -> dict | None:
+async def _fetch_one_quote_async(sym: str, period_yf: str, performance: str) -> dict | None:
     """Single source of truth for the heatmap quote.
 
     Pulls daily OHLCV via PriceService — same code path used by /stocks and
@@ -344,6 +378,10 @@ async def _fetch_one_quote_async(sym: str, period_yf: str) -> dict | None:
 
     Market cap is read from the long-lived `_mcap_cache` (warmed once per
     24h by `_prefetch_market_caps`) — never from a per-request fast_info call.
+
+    `performance` selects the comparison-base offset (1d=prev close, 1w=5d
+    back, 1m=22d back, 1y=earliest in window) so the % change actually
+    matches the timeframe label the user picked.
     """
     days = _PERIOD_DAYS.get(period_yf, 7)
     try:
@@ -355,15 +393,15 @@ async def _fetch_one_quote_async(sym: str, period_yf: str) -> dict | None:
     if len(closes) < 2:
         return None
 
-    return _quote_from_closes(sym, closes, _market_cap_cached(sym))
+    return _quote_from_closes(sym, closes, _market_cap_cached(sym), performance)
 
 
-async def _heatmap_async(symbols: list[str], period_yf: str) -> list[dict]:
+async def _heatmap_async(symbols: list[str], period_yf: str, performance: str) -> list[dict]:
     """Concurrently fetch heatmap quotes via PriceService."""
     sem = asyncio.Semaphore(48)
     async def _bounded(s: str):
         async with sem:
-            return await _fetch_one_quote_async(s, period_yf)
+            return await _fetch_one_quote_async(s, period_yf, performance)
     results = await asyncio.gather(*[_bounded(s) for s in symbols], return_exceptions=True)
     return [r for r in results if isinstance(r, dict) and r]
 
@@ -378,11 +416,18 @@ _INDEX_PROXY_SYMBOL = {
 }
 
 
-async def _index_quote_async(ticker: str) -> dict:
+async def _index_quote_async(ticker: str, performance: str = "1d") -> dict:
     """Index-level quote via PriceService daily history (same source as the
-    heatmap tiles), so the index header and the tiles always agree."""
+    heatmap tiles), so the index header and the tiles always agree.
+
+    `performance` selects the same comparison offset used for the tiles
+    (1d/1w/1m/1y) so the header % matches what the grid shows.
+    """
+    # Pull a window wide enough to cover the chosen timeframe. We want at
+    # least ~25 calendar days for 1m and ~370 for 1y.
+    days_needed = {"1d": 7, "1w": 14, "1m": 45, "1y": 380}.get(performance, 7)
     try:
-        rows = await _price.get_historical_data(ticker, 7)
+        rows = await _price.get_historical_data(ticker, days_needed)
     except Exception:
         rows = []
     closes = _closes_from_history(rows)
@@ -391,7 +436,8 @@ async def _index_quote_async(ticker: str) -> dict:
         # nothing (e.g. NSE indices that don't expose OHLCV historically).
         try:
             import yfinance as yf
-            hist = yf.Ticker(ticker).history(period="5d", auto_adjust=False)
+            yf_period = {"1d": "5d", "1w": "1mo", "1m": "3mo", "1y": "1y"}.get(performance, "5d")
+            hist = yf.Ticker(ticker).history(period=yf_period, auto_adjust=False)
             if hist.empty:
                 return {}
             closes = [float(x) for x in hist["Close"].tolist()]
@@ -400,9 +446,9 @@ async def _index_quote_async(ticker: str) -> dict:
     if len(closes) < 2:
         return {}
     last = closes[-1]
-    prev = closes[-2]
-    change = last - prev
-    pct = (change / prev * 100) if prev else 0.0
+    base = _base_close_for(closes, performance) or closes[0]
+    change = last - base
+    pct = (change / base * 100) if base else 0.0
     return {"lastPrice": round(last, 2), "change": round(change, 2), "changePct": round(pct, 2)}
 
 
@@ -457,8 +503,8 @@ async def get_heatmap(
     # First-ever request per symbol still pays the fast_info cost (~0.8s),
     # but it is parallelised and only happens once per 24h thereafter.
     items, idx_q, _ = await asyncio.gather(
-        _heatmap_async(symbols, period_yf),
-        _index_quote_async(idx_ticker),
+        _heatmap_async(symbols, period_yf, performance),
+        _index_quote_async(idx_ticker, performance),
         _prefetch_market_caps(list(symbols)),
     )
 
