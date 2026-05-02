@@ -29,6 +29,8 @@ def _meta() -> dict:
 
 async def _get_scanners():
     res = _service.get_all_scanners()
+    if isinstance(res, list):
+        return {"scanners": res, "meta": _meta()}
     if isinstance(res, dict):
         res.setdefault("meta", _meta())
     return res
