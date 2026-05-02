@@ -390,22 +390,29 @@ export default function Heatmap() {
                 // every frame for every tile, which is what made the entrance
                 // feel laggy on big indices.
                 style={{ left: x, top: y, width: w - 1, height: h - 1, willChange: "transform, opacity" }}
-                // Animate only opacity + scale (compositor-only properties).
-                // Dropped the blur filter entirely — it's the single most
-                // expensive CSS property to animate and on ~150 tiles it
-                // dominates the frame budget.
-                initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.92 }}
+                // Tiles "shoot" in from above and settle into place. We
+                // animate transform (translateY + scale) and opacity only —
+                // both are compositor-only properties so even ~500 tiles
+                // stay at 60fps. No layout, no paint, no blur.
+                initial={reduced ? { opacity: 0 } : { opacity: 0, y: -56, scale: 0.96 }}
                 animate={{
                   opacity: 1,
+                  y: 0,
                   scale: isClicked && !reduced ? [1, 1.08, 1] : 1,
                 }}
-                exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.96 }}
+                exit={reduced ? { opacity: 0 } : { opacity: 0, y: -32, scale: 0.97 }}
                 transition={reduced
                   ? { duration: 0.12, delay: 0 }
                   : {
-                      duration: 0.32,
-                      ease: [0.22, 1, 0.36, 1], // easeOutQuint — snappy + soft landing
+                      // Critically-damped spring → no bounce, soft landing,
+                      // settles in one pass. Feels "elegant + shooting"
+                      // without the wobble of an under-damped spring.
+                      type: "spring",
+                      stiffness: 320,
+                      damping: 34,
+                      mass: 0.55,
                       delay: diag,
+                      opacity: { duration: 0.28, ease: [0.22, 1, 0.36, 1], delay: diag },
                       scale: isClicked ? { duration: 0.35, ease: "easeOut" } : undefined,
                     }
                 }
