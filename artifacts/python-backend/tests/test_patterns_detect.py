@@ -1522,8 +1522,17 @@ class TestIndicatorPatterns:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _run(coro):
-    """Run an async coroutine synchronously in tests."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Run an async coroutine synchronously in tests.
+
+    Uses a fresh event loop per call so this works even when an earlier test
+    in the same pytest run has already closed the default loop (the deprecated
+    `asyncio.get_event_loop()` then raises 'no current event loop').
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 def _make_mock_patterns():
