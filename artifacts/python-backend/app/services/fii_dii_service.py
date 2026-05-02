@@ -136,6 +136,30 @@ class FiiDiiService:
     def __init__(self):
         self.nse = NseService()
 
+    async def fetch_equity_snapshot(self) -> pd.DataFrame:
+        """Fetch the latest day's snapshot from NSE's working public endpoint.
+        Returns a one-row DataFrame (FII + DII merged) or empty if unavailable."""
+        data = await self.nse.fetch_nse("/api/fiidiiTradeReact", "fii_dii_eq_snapshot", ttl=120)
+        if not data or not isinstance(data, list):
+            return pd.DataFrame()
+        fii = next((r for r in data if isinstance(r, dict) and "FII" in (r.get("category") or "").upper()), {})
+        dii = next((r for r in data if isinstance(r, dict) and "DII" in (r.get("category") or "").upper()), {})
+        date_str = fii.get("date") or dii.get("date")
+        if not date_str:
+            return pd.DataFrame()
+        row = {
+            "date":     date_str,
+            "fii_buy":  _f(fii, "buyValue"),
+            "fii_sell": _f(fii, "sellValue"),
+            "fii_net":  _f(fii, "netValue"),
+            "dii_buy":  _f(dii, "buyValue"),
+            "dii_sell": _f(dii, "sellValue"),
+            "dii_net":  _f(dii, "netValue"),
+        }
+        df = pd.DataFrame([row])
+        df["date"] = pd.to_datetime(df["date"], format="mixed", dayfirst=True)
+        return df
+
     async def fetch_equity_historical(self, start: datetime, end: datetime) -> pd.DataFrame:
         all_rows = []
         for cs, ce in date_chunks(start, end):
@@ -150,12 +174,22 @@ class FiiDiiService:
                     all_rows.extend([parse_equity_row(r) for r in rows if isinstance(r, dict)])
             # Politeness delay inside async loop
             await asyncio.sleep(0.5)
-            
+
         df = pd.DataFrame(all_rows)
         if not df.empty:
             df["date"] = pd.to_datetime(df["date"], format="mixed", dayfirst=True)
             df = df.sort_values("date").drop_duplicates("date").reset_index(drop=True)
-        return df
+            return df
+
+        # NSE's bulk historical endpoint is not publicly exposed — fall back
+        # to the daily snapshot which always works. The cache then accumulates
+        # one new row per trading day over time (and is committed to GitHub).
+        snap = await self.fetch_equity_snapshot()
+        if not snap.empty:
+            snap_date = snap["date"].iloc[0]
+            if pd.Timestamp(start) <= snap_date <= pd.Timestamp(end):
+                return snap
+        return pd.DataFrame()
 
     async def fetch_fno_historical(self, segment: str, start: datetime, end: datetime) -> pd.DataFrame:
         prefix = SEGMENT_MAP.get(segment)
@@ -241,7 +275,13 @@ class FiiDiiService:
             return self._empty_response(segment, f"Failed to fetch data: {e}")
 
         if df is None or df.empty:
-            return self._empty_response(segment, "No data available for this segment.")
+            if segment == "equity":
+                msg = "NSE returned no FII/DII activity for this range. Please try again after the next session close."
+            else:
+                msg = ("NSE does not currently expose its F&O participant history through "
+                       "its public API. The dashboard will record one row per trading day "
+                       "as it becomes available; equity flows are tracked in full.")
+            return self._empty_response(segment, msg)
 
         df = df.sort_values("date", ascending=False)
         rows = []
