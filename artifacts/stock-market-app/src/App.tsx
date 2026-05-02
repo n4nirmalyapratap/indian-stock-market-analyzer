@@ -10,6 +10,7 @@ import StockLookup from "@/pages/StockLookup";
 import Patterns from "@/pages/Patterns";
 import Scanners from "@/pages/Scanners";
 import HydraAlpha from "@/pages/HydraAlpha";
+import InvestorCouncil from "@/pages/InvestorCouncil";
 import OptionsStrategyTester from "@/pages/OptionsStrategyTester";
 import SettingsPage from "@/pages/SettingsPage";
 import NotFound from "@/pages/not-found";
@@ -106,6 +107,8 @@ function AppRoutes() {
         <Route path="/patterns"        component={Patterns} />
         <Route path="/scanners"        component={Scanners} />
         <Route path="/hydra"           component={HydraAlpha} />
+        <Route path="/agents/:symbol"  component={InvestorCouncil} />
+        <Route path="/agents"          component={InvestorCouncil} />
         <Route path="/options"         component={OptionsStrategyTester} />
         <Route path="/settings"        component={SettingsPage} />
         <Route path="/chart/:symbol"   component={ChartView} />
