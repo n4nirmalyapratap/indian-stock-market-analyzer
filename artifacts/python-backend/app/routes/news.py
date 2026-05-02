@@ -8,7 +8,8 @@ router = APIRouter(prefix="/news", tags=["news"])
 def _meta() -> dict:
     state = _disk.current_market_state()
     return {
-        "source":       "NEWS_FEED",
+        "source":       "NSE",
+        "servedFrom":   "NEWS_FEED",
         "asOf":         _disk._now_ist().isoformat(),
         "marketState":  state,
         "eodSealed":    state in ("CLOSED", "WEEKEND"),
