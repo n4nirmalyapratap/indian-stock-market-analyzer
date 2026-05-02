@@ -23,12 +23,11 @@ class StocksService:
         upper = symbol.upper()
         history = []
 
-        # Single source of truth for the quote (NSE primary, Yahoo fallback)
-        quote_meta = await self.price.get_quote_with_meta(upper)
-        if not quote_meta:
-            return {"error": f"Stock {upper} not found", "symbol": upper}
-        quote_data = quote_meta["quote"]
-
+        # CLOSE-TRANSITION CONSISTENCY: fetch & seal HISTORY first so that the
+        # subsequent quote call sees an EOD-sealed snapshot and overlays the
+        # official close. This guarantees `quote.lastPrice` equals
+        # `historicalData[-1].close` in the same response, even on the very
+        # first request after market close.
         try:
             # PriceService: NSE primary → Yahoo fallback → disk cache when market closed
             h = await self.price.get_historical_data(upper, 300)  # 300 days ≈ 210 trading days — enough for EMA 200
@@ -36,6 +35,12 @@ class StocksService:
                 history = h
         except Exception as e:
             logger.warning("Historical data fetch failed for %s: %s", upper, e)
+
+        # Single source of truth for the quote (NSE primary, Yahoo fallback)
+        quote_meta = await self.price.get_quote_with_meta(upper)
+        if not quote_meta:
+            return {"error": f"Stock {upper} not found", "symbol": upper}
+        quote_data = quote_meta["quote"]
 
         closes = [d["close"] for d in history if d.get("close")]
         analysis = self._analyze(history, closes) if len(closes) > 20 else None

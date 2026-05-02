@@ -169,7 +169,18 @@ class PriceService:
         # snapshot on disk, replace the live `lastPrice` with the last sealed
         # candle's close. This guarantees the quote endpoint, the history
         # endpoint, and the sector endpoint all return the same number.
+        #
+        # CRITICAL: at the close-transition window the on-disk snapshot may
+        # still be intraday (eodSealed=False). We force a seal here so the
+        # quote /history /sectors path all converge to the SAME official
+        # close on the very first post-close request.
         if not _disk.is_market_open():
+            try:
+                payload = _disk.load_with_meta(sym, 30)
+                if not (payload and payload.get("eodSealed")):
+                    await _disk.seal_eod_for_today_if_overdue(self, symbols=[sym])
+            except Exception as _se:
+                logger.debug("EOD seal-before-quote failed for %s: %s", sym, _se)
             payload = _disk.load_with_meta(sym, 30)
             if payload and payload.get("eodSealed") and payload.get("data"):
                 rows = payload["data"]
@@ -186,13 +197,16 @@ class PriceService:
                         q["pChange"]       = round((eod_close - eod_prev) / eod_prev * 100, 4) if eod_prev else 0
                     # Provenance contract:
                     #   `source`     = the original provider that produced the
-                    #                  number (NSE preferred for EOD).
+                    #                  number (preserved from the cached
+                    #                  payload — NSE if NSE sealed it, YAHOO
+                    #                  if Yahoo did).
                     #   `servedFrom` = the layer that returned it on this call
                     #                  (DISK_EOD when overlay applied, else
                     #                  PRICE_SERVICE for live).
-                    q["source"]        = "NSE"
+                    overlay_source     = payload.get("source") or snap["source"]
+                    q["source"]        = overlay_source
                     q["servedFrom"]    = "DISK_EOD"
-                    snap["source"]     = "NSE"
+                    snap["source"]     = overlay_source
                     snap["servedFrom"] = "DISK_EOD"
                     snap["asOf"]       = payload.get("savedAt") or snap["asOf"]
                     snap["eodSealed"]  = True
