@@ -229,7 +229,9 @@ def test_compute_signal_for_downtrend_is_bearish():
 # ── Unavailable-feed endpoints ──────────────────────────────────────────────
 
 @pytest.mark.parametrize("path", [
-    "/api/insights/fii-dii",
+    # NOTE: /api/insights/fii-dii used to live here when NSE was blocked from
+    # this IP — it is now backed by a committed SQLite cache (FiiDiiService)
+    # and serves real flow data, so it has its own assertion below.
     "/api/insights/slbm",
     "/api/insights/mtf",
     "/api/insights/ipos",
@@ -241,6 +243,18 @@ def test_unavailable_endpoints_return_clean_empty_state(client, path):
     body = r.json()
     assert body.get("available") is False
     assert "message" in body and len(body["message"]) > 10
+
+
+def test_fii_dii_serves_data_from_local_cache(client):
+    """FII/DII equity now reads from the committed market_cache SQLite snapshot,
+    so it should report available=True with a populated `latest` entry even
+    when the live NSE endpoint is unreachable from this IP."""
+    r = client.get("/api/insights/fii-dii?segment=equity&days=365")
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("available") is True
+    latest = body.get("latest") or {}
+    assert "fiiNet" in latest and "diiNet" in latest
 
 
 # ── Indices count ────────────────────────────────────────────────────────────
@@ -269,29 +283,39 @@ def test_disable_auth_refused_in_production(monkeypatch):
 # ── EOD market cache integration ─────────────────────────────────────────────
 
 def test_heatmap_serves_from_disk_when_market_closed(client, tmp_path, monkeypatch):
-    """When market is closed and disk cache has data, yfinance must NOT be hit."""
+    """When market is closed and PriceService can return cached EOD bars,
+    the heatmap must build entirely from those bars (no live yfinance)."""
     from app.routes import insights as insights_mod
     # Force market closed
     monkeypatch.setattr(insights_mod.mcache, "is_market_open", lambda: False)
 
-    # Stub the disk-cache loader so it returns synthetic close prices for any symbol
-    def fake_load(symbol: str, days: int):
-        return [
-            {"date": "2026-04-21", "close": 100.0, "marketCap": 1e12},
-            {"date": "2026-04-22", "close": 101.0, "marketCap": 1e12},
-            {"date": "2026-04-23", "close": 102.0, "marketCap": 1e12},
-            {"date": "2026-04-24", "close": 103.0, "marketCap": 1e12},
-            {"date": "2026-04-25", "close": 104.0, "marketCap": 1e12},
-        ]
-    monkeypatch.setattr(insights_mod.mcache, "load_from_disk", fake_load)
+    # Stub PriceService.get_historical_data — the actual data source the
+    # heatmap route calls (via _fetch_one_quote_async).
+    synthetic_rows = [
+        {"date": "2026-04-21", "close": 100.0, "open": 100.0, "high": 100.0, "low": 100.0, "volume": 1000},
+        {"date": "2026-04-22", "close": 101.0, "open": 101.0, "high": 101.0, "low": 101.0, "volume": 1000},
+        {"date": "2026-04-23", "close": 102.0, "open": 102.0, "high": 102.0, "low": 102.0, "volume": 1000},
+        {"date": "2026-04-24", "close": 103.0, "open": 103.0, "high": 103.0, "low": 103.0, "volume": 1000},
+        {"date": "2026-04-25", "close": 104.0, "open": 104.0, "high": 104.0, "low": 104.0, "volume": 1000},
+    ]
+    async def fake_get_historical_data(symbol: str, days: int):
+        return synthetic_rows
+    monkeypatch.setattr(insights_mod._price, "get_historical_data", fake_get_historical_data)
 
     # Bust the in-process cache so a fresh fetch is forced
     insights_mod._cache.clear()
 
-    # Now if disk-first works, no yfinance call should happen. We assert by
-    # making yfinance.Ticker raise — if it gets called, we'd see no items.
+    # Disable the EOD-seal step (it would try to write to PriceService too).
+    async def _noop_seal(*a, **kw):
+        return None
+    monkeypatch.setattr(insights_mod.mcache, "seal_eod_for_today_if_overdue", _noop_seal)
+
+    # Market-cap fast_info still uses yfinance — make it a no-op stub so the
+    # quote builder gets mc=0 instead of hitting the network.
     import yfinance as yf
-    monkeypatch.setattr(yf, "Ticker", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("must not hit yfinance")))
+    fake_ticker = MagicMock()
+    fake_ticker.fast_info = {"marketCap": 0}
+    monkeypatch.setattr(yf, "Ticker", lambda *a, **kw: fake_ticker)
 
     r = client.get("/api/insights/heatmap?index=NIFTYIT&performance=1d")
     body = r.json()
