@@ -516,7 +516,7 @@ export default function Heatmap() {
                       <motion.div
                         initial={reduced ? { opacity: 0 } : { opacity: 0, y: 4 }}
                         animate={{ opacity: 0.95, y: 0 }}
-                        transition={reduced ? { duration: 0.15 } : { delay: diag + 0.15, duration: 0.4 }}
+                        transition={reduced ? { duration: 0.15 } : { delay: fanDelay + 0.15, duration: 0.4 }}
                         className={`font-bold flex items-center gap-1 ${style.text}`}
                         style={{ fontSize: Math.max(8, Math.min(12, Math.floor(Math.min(w, h) / 8))) }}
                       >
