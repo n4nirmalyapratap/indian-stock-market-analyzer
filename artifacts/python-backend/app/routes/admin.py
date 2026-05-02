@@ -302,6 +302,215 @@ async def validate_secrets(request: Request):
     }
 
 
+# ── Data Consistency Audit ─────────────────────────────────────────────────────
+
+@router.get("/admin/data-consistency")
+async def data_consistency(request: Request, symbols: str = ""):
+    """
+    Cross-check that every page serves the same price for the same symbol.
+
+    For each symbol we compare:
+      - `/stocks/{sym}`              → quote.lastPrice  (StocksService)
+      - `/stocks/{sym}/history`      → last candle close (PriceService, daily)
+      - `/sectors`                   → only if symbol is a known index
+
+    Drift > 0.1% (or > ₹0.05 absolute) is flagged.
+
+    Open to admins only.
+    """
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+
+    syms = [s.strip().upper() for s in (symbols or "").split(",") if s.strip()]
+    if not syms:
+        syms = ["RELIANCE", "TCS", "HDFCBANK", "INFY"]
+
+    from app.services.nse_service import NseService              # noqa: PLC0415
+    from app.services.yahoo_service import YahooService          # noqa: PLC0415
+    from app.services.price_service import PriceService          # noqa: PLC0415
+    from app.services.stocks_service import StocksService        # noqa: PLC0415
+    from app.services.sectors_service import SectorsService, SECTOR_INDICES  # noqa: PLC0415
+    from app.services import market_cache_service as _disk       # noqa: PLC0415
+
+    nse    = NseService()
+    yahoo  = YahooService()
+    price  = PriceService(nse, yahoo)
+    stocks = StocksService(nse, yahoo)
+    sectors_svc = SectorsService(nse, yahoo)
+
+    sectors_list = await sectors_svc.get_all_sectors()
+    sector_map = {s["symbol"].upper(): s for s in sectors_list}
+
+    results = []
+    drift_count = 0
+    nse_yahoo_div = 0
+    market_closed = not _disk.is_market_open()
+
+    for sym in syms:
+        try:
+            details = await stocks.get_stock_details(sym)
+            quote_price = details.get("lastPrice")
+
+            history = await price.get_historical_data(sym, 30)
+            hist_close = history[-1]["close"] if history else None
+            hist_date  = history[-1]["date"]  if history else None
+
+            sector_price = None
+            if sym in sector_map:
+                sector_price = sector_map[sym].get("lastPrice")
+
+            # NSE-vs-Yahoo divergence check (closed market only — both should
+            # agree on the official close). NSE is preferred; we report drift
+            # so ops can spot upstream data-source disagreements.
+            nse_close = None
+            yahoo_close = None
+            divergence = None
+            divergence_pct = None
+            if market_closed:
+                try:
+                    nq = await nse.get_stock_quote(sym)
+                    if nq and nq.get("priceInfo"):
+                        nse_close = nq["priceInfo"].get("lastPrice")
+                except Exception:
+                    nse_close = None
+                try:
+                    yq = await yahoo.get_quote(sym)
+                    if yq:
+                        yahoo_close = yq.get("lastPrice")
+                except Exception:
+                    yahoo_close = None
+                if nse_close is not None and yahoo_close is not None:
+                    divergence     = round(abs(nse_close - yahoo_close), 4)
+                    divergence_pct = round(divergence / nse_close * 100, 4) if nse_close else 0
+                    if divergence > 0.05 and divergence_pct > 0.1:
+                        nse_yahoo_div += 1
+
+            # Compare across our internal endpoints
+            references = [v for v in (quote_price, hist_close, sector_price) if v is not None]
+            drift = None
+            drift_pct = None
+            consistent = True
+            if len(references) >= 2:
+                lo, hi = min(references), max(references)
+                drift = round(hi - lo, 4)
+                drift_pct = round((drift / lo * 100), 4) if lo else 0
+                consistent = (drift <= 0.05) or (drift_pct <= 0.1)
+            if not consistent:
+                drift_count += 1
+
+            results.append({
+                "symbol":         sym,
+                "quotePrice":     quote_price,
+                "historyClose":   hist_close,
+                "historyDate":    hist_date,
+                "sectorPrice":    sector_price,
+                "nseClose":       nse_close,
+                "yahooClose":     yahoo_close,
+                "nseYahooDiff":   divergence,
+                "nseYahooDiffPct": divergence_pct,
+                "preferredSource": "NSE" if nse_close is not None else ("YAHOO" if yahoo_close is not None else None),
+                "drift":          drift,
+                "driftPct":       drift_pct,
+                "consistent":     consistent,
+                "meta":           details.get("meta", {}),
+            })
+        except Exception as e:
+            results.append({"symbol": sym, "error": str(e)})
+
+    # ── Sector index audit ────────────────────────────────────────────────
+    # Cross-check the sector page's lastPrice against the sealed disk close
+    # for every NIFTY index (NIFTY IT, NIFTY BANK, NIFTY 50, …) so ops can
+    # spot drift between /sectors and the canonical EOD snapshot.
+    index_results: list[dict] = []
+    index_drift_count = 0
+    expected_eod_date = _disk._eod_date_for(_disk.current_market_state())
+    for idx in SECTOR_INDICES:
+        sym = idx["symbol"]
+        sector_entry = sector_map.get(sym.upper()) or {}
+        sector_price = sector_entry.get("lastPrice")
+
+        # Only treat the disk row as a valid sealed close when the snapshot
+        # matches the sealed-snapshot contract: eodSealed + source==NSE +
+        # eodDate==today's expected EOD date. Otherwise we'd compare against
+        # a stale or non-canonical row and emit noisy false drift.
+        payload = _disk.load_with_meta(sym, 30)
+        is_sealed_nse = bool(
+            payload
+            and payload.get("eodSealed")
+            and (payload.get("source") or "").upper() == "NSE"
+            and payload.get("eodDate") == expected_eod_date
+            and payload.get("data")
+        )
+        disk_close = None
+        disk_date  = None
+        if is_sealed_nse:
+            rows = payload["data"]
+            if rows and rows[-1].get("close") is not None:
+                disk_close = round(float(rows[-1]["close"]), 2)
+                disk_date  = rows[-1].get("date")
+
+        refs = [v for v in (sector_price, disk_close) if v is not None]
+        comparable = len(refs) >= 2
+        idx_drift = idx_drift_pct = None
+        idx_consistent = True
+        if comparable:
+            lo, hi = min(refs), max(refs)
+            idx_drift     = round(hi - lo, 4)
+            idx_drift_pct = round(idx_drift / lo * 100, 4) if lo else 0
+            idx_consistent = idx_drift <= 0.05 or idx_drift_pct <= 0.1
+        if comparable and not idx_consistent:
+            index_drift_count += 1
+
+        index_results.append({
+            "name":         idx["name"],
+            "symbol":       sym,
+            "category":     idx["category"],
+            "sectorPrice":  sector_price,
+            "diskClose":    disk_close,
+            "diskDate":     disk_date,
+            "eodSealed":    is_sealed_nse,
+            "servedFrom":   sector_entry.get("servedFrom"),
+            "drift":        idx_drift,
+            "driftPct":     idx_drift_pct,
+            # `comparable=false` means we couldn't run the audit (sector
+            # price or sealed disk close was absent). Such rows do NOT
+            # count toward `indexDriftCount` and `consistent` is null —
+            # this prevents silently passing audits that weren't actually
+            # checked.
+            "comparable":   comparable,
+            "consistent":   idx_consistent if comparable else None,
+        })
+
+    return {
+        "marketState":      _disk.current_market_state(),
+        "marketOpen":       _disk.is_market_open(),
+        "cacheVersion":     _disk.cache_version(),
+        "asOf":             _disk._now_ist().isoformat(),
+        "checked":          len(results),
+        "driftCount":       drift_count,
+        "nseYahooDivergent": nse_yahoo_div,
+        "indexChecked":     len(index_results),
+        "indexComparableCount": (index_comparable_count := sum(1 for ir in index_results if ir.get("comparable"))),
+        "indexDriftCount":  index_drift_count,
+        # On closed-market runs we expect at least some indices to be
+        # comparable (sealed disk + sector price both present). If NONE
+        # are comparable we cannot honestly claim consistency for the
+        # sector audit, so degrade `consistent` to false and surface why.
+        "indexAuditUnavailable": (
+            not _disk.is_market_open() and index_comparable_count == 0
+        ),
+        "consistent":       (
+            drift_count == 0
+            and nse_yahoo_div == 0
+            and index_drift_count == 0
+            and not (not _disk.is_market_open() and index_comparable_count == 0)
+        ),
+        "preferredSource":  "NSE",
+        "results":          results,
+        "indexResults":     index_results,
+    }
+
+
 # ── Bug Fixer ─────────────────────────────────────────────────────────────────
 
 _fixer_running = False

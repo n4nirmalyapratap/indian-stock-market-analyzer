@@ -7,6 +7,8 @@ import {
   Filter, BarChart2, Loader2, Target,
 } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
+import DataFreshness from "@/components/DataFreshness";
+import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 // ─── Indicator Definitions ───────────────────────────────────────────────────
 
@@ -347,9 +349,11 @@ export default function Scanners() {
   const [result, setResult]         = useState<ScanResult | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const { data: scanners = [], isLoading } = useQuery({
-    queryKey: ["scanners"], queryFn: api.scanners, staleTime: 30_000,
-  });
+  const { data: scannersResp, isLoading } = useQuery(
+    marketDataQueryOptions(["scanners"], api.scannersWithMeta),
+  );
+  const scanners: Scanner[] = scannersResp?.scanners ?? [];
+  const scannersMeta = pickMeta(scannersResp);
 
   const saveMut = useMutation({
     mutationFn: (d: ScannerDraft & { id?: string }) =>
@@ -430,10 +434,13 @@ export default function Scanners() {
           <h1 className="text-2xl font-bold text-gray-900">Stock Scanners</h1>
           <p className="text-sm text-gray-500">Build, save & run custom condition-based scans across any universe</p>
         </div>
-        <button onClick={startNew}
-          className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 transition shadow-sm">
-          <Plus className="w-4 h-4" /> New Scanner
-        </button>
+        <div className="flex items-center gap-3 flex-wrap">
+          <DataFreshness meta={scannersMeta} refreshKeys={["scanners"]} />
+          <button onClick={startNew}
+            className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 transition shadow-sm">
+            <Plus className="w-4 h-4" /> New Scanner
+          </button>
+        </div>
       </div>
 
       {/* Split layout */}

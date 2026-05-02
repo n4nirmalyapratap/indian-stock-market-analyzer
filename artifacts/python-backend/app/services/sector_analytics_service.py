@@ -127,9 +127,21 @@ SECTOR_YAHOO_TICKER: dict[str, str] = {
 # ── Cache ─────────────────────────────────────────────────────────────────────
 
 _CACHE: dict[str, dict] = {}
+_CACHE_VERSION = 0  # tracks the market-state version of the entries above
+
+
+def _flush_if_state_changed() -> None:
+    """Drop in-memory entries when market state has just transitioned (open↔closed)."""
+    global _CACHE_VERSION, _CACHE
+    from . import market_cache_service as _disk
+    v = _disk.cache_version()
+    if v != _CACHE_VERSION:
+        _CACHE.clear()
+        _CACHE_VERSION = v
 
 
 def _cache_get(key: str) -> Optional[Any]:
+    _flush_if_state_changed()
     e = _CACHE.get(key)
     if e and time.time() < e["expiry"]:
         return e["data"]
@@ -137,6 +149,7 @@ def _cache_get(key: str) -> Optional[Any]:
 
 
 def _cache_set(key: str, data: Any, ttl: int) -> None:
+    _flush_if_state_changed()
     _CACHE[key] = {"data": data, "expiry": time.time() + ttl}
 
 
@@ -185,6 +198,37 @@ async def _yf_history(ticker: str, period: str = "1y") -> list[dict]:
     cached = _cache_get(f"yfh:{ticker}:{period}")
     if cached is not None:
         return cached
+
+    # SINGLE-SOURCE OF TRUTH: try the sealed EOD snapshot from disk first
+    # (PriceService writes here for every NSE symbol). If present, every
+    # consumer of this analytic gets the SAME closes as the quote/history/
+    # sectors endpoints. Only fall back to a direct yfinance pull when the
+    # disk snapshot is missing (e.g. an index ticker not in our universe).
+    from . import market_cache_service as _disk
+    period_to_days = {
+        "1mo": 35, "3mo": 95, "6mo": 185, "1y": 370, "2y": 740, "5y": 1830,
+    }
+    days_needed = period_to_days.get(period, 370)
+    bare_sym = ticker.replace(".NS", "").replace(".BO", "").upper()
+    payload = _disk.load_with_meta(bare_sym, days_needed)
+    if payload and payload.get("data"):
+        rows = [
+            {
+                "date":   r.get("date"),
+                "open":   r.get("open"),
+                "high":   r.get("high"),
+                "low":    r.get("low"),
+                "close":  r.get("close"),
+                "volume": r.get("volume", 0),
+            }
+            for r in payload["data"]
+            if r.get("close") is not None
+        ]
+        if rows:
+            # Cache version is consulted by _cache_set's _flush_if_state_changed
+            # so the next market-state transition flushes this entry.
+            _cache_set(f"yfh:{ticker}:{period}", rows, 4 * 3600)
+            return rows
 
     def _fetch():
         try:

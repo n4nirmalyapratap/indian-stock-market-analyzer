@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import { api, NewsArticle } from "@/lib/api";
 import { useTheme } from "@/context/ThemeContext";
+import DataFreshness from "@/components/DataFreshness";
+import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -756,13 +758,16 @@ export default function NewsFeed() {
 
   const feedCategory = (activeTab === "deals" || activeTab === "events") ? "all" : activeTab;
 
-  const { data: feed, isLoading: feedLoading, isFetching: feedFetching } = useQuery({
-    queryKey: ["newsFeed", feedCategory, debouncedSearch],
-    queryFn:  () => api.newsFeed({ category: feedCategory, search: debouncedSearch, limit: 60 }),
-    staleTime: 8 * 60 * 1000,
-    placeholderData: keepPreviousData,
-    enabled: activeTab !== "deals" && activeTab !== "events",
-  });
+  const { data: feed, isLoading: feedLoading, isFetching: feedFetching } = useQuery(
+    marketDataQueryOptions(
+      ["newsFeed", feedCategory, debouncedSearch],
+      () => api.newsFeed({ category: feedCategory, search: debouncedSearch, limit: 60 }),
+      {
+        placeholderData: keepPreviousData,
+        enabled: activeTab !== "deals" && activeTab !== "events",
+      },
+    ),
+  );
 
   const { data: stats, isFetching: statsFetching } = useQuery({
     queryKey: ["newsStats"],
@@ -807,6 +812,7 @@ export default function NewsFeed() {
   }, [search]);
 
   const articles = feed?.articles ?? [];
+  const feedMeta = pickMeta(feed);
 
   const sourceStats = useMemo(() => {
     const s = stats?.sources ?? {};
@@ -860,6 +866,7 @@ export default function NewsFeed() {
               {reelsMode ? "List View" : "Reels"}
             </button>
           )}
+          <DataFreshness meta={feedMeta} hideRefresh />
           <RefreshCountdown seconds={countdown} onRefresh={handleRefresh} isDark={isDark} isRefreshing={refreshMutation.isPending} />
         </div>
       </div>

@@ -3,6 +3,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Scan, TrendingUp, TrendingDown, Filter, Activity } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
+import DataFreshness from "@/components/DataFreshness";
+import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 const UNIVERSES  = ["ALL", "NIFTY100", "MIDCAP", "SMALLCAP"];
 const SIGNALS    = ["ALL", "CALL", "PUT", "WAIT"];
@@ -34,15 +36,16 @@ export default function Patterns() {
   const [category, setCategory]   = useState("ALL");
   const qc = useQueryClient();
 
-  const { data, isLoading } = useQuery({
-    queryKey: ["patterns", universe, signal, category],
-    queryFn: () => api.patterns({
-      universe: universe !== "ALL" ? universe : undefined,
-      signal:   signal   !== "ALL" ? signal   : undefined,
-      category: category !== "ALL" ? category : undefined,
-    }),
-    staleTime: 10 * 60 * 1000,
-  });
+  const { data, isLoading } = useQuery(
+    marketDataQueryOptions(
+      ["patterns", universe, signal, category],
+      () => api.patterns({
+        universe: universe !== "ALL" ? universe : undefined,
+        signal:   signal   !== "ALL" ? signal   : undefined,
+        category: category !== "ALL" ? category : undefined,
+      }),
+    ),
+  );
 
   const scanMut = useMutation({
     mutationFn: api.triggerScan,
@@ -50,6 +53,7 @@ export default function Patterns() {
   });
 
   const patterns: any[] = data?.patterns ?? [];
+  const meta = pickMeta(data);
 
   return (
     <div className="space-y-6">
@@ -61,14 +65,17 @@ export default function Patterns() {
             50+ pattern types — candlestick, indicator & structural — across Nifty 100, Midcap & Smallcap
           </p>
         </div>
-        <button
-          onClick={() => scanMut.mutate()}
-          disabled={scanMut.isPending}
-          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-60 transition"
-        >
-          <Scan className="w-4 h-4" />
-          {scanMut.isPending ? "Scanning… (~2 min)" : "Run Scan Now"}
-        </button>
+        <div className="flex items-center gap-3 flex-wrap">
+          <DataFreshness meta={meta} refreshKeys={["patterns"]} />
+          <button
+            onClick={() => scanMut.mutate()}
+            disabled={scanMut.isPending}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-60 transition"
+          >
+            <Scan className="w-4 h-4" />
+            {scanMut.isPending ? "Scanning… (~2 min)" : "Run Scan Now"}
+          </button>
+        </div>
       </div>
 
       {/* Stats */}
