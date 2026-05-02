@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
 import DataFreshness from "@/components/DataFreshness";
-import { pickMeta } from "@/lib/marketData";
+import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 // ─── Indicator Definitions ───────────────────────────────────────────────────
 
@@ -349,9 +349,9 @@ export default function Scanners() {
   const [result, setResult]         = useState<ScanResult | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const { data: scannersResp, isLoading } = useQuery({
-    queryKey: ["scanners"], queryFn: api.scannersWithMeta, staleTime: 30_000,
-  });
+  const { data: scannersResp, isLoading } = useQuery(
+    marketDataQueryOptions(["scanners"], api.scannersWithMeta),
+  );
   const scanners: Scanner[] = scannersResp?.scanners ?? [];
   const scannersMeta = pickMeta(scannersResp);
 

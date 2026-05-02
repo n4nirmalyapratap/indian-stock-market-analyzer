@@ -665,7 +665,7 @@ export default function Sectors() {
       <DataFreshness
         meta={
           pickMeta(rotation) ??
-          (rotation ? { source: "NSE", asOf: (rotation as any).timestamp } : null)
+          (rotation ? { source: "NSE", asOf: rotation.timestamp } : null)
         }
         refreshKeys={[["rotation"], ["sectorHeatmap", heatmapHour]]}
       />

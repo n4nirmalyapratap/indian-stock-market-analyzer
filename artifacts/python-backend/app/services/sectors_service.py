@@ -173,9 +173,15 @@ def _z_scores(values: list[float]) -> list[float]:
 # ── Main Service ──────────────────────────────────────────────────────────────
 
 class SectorsService:
-    def __init__(self, nse: NseService, yahoo: YahooService):
+    def __init__(self, nse: NseService, yahoo: YahooService, price=None):
         self.nse = nse
         self.yahoo = yahoo
+        # PriceService is the canonical EOD-overlay source. Imported lazily
+        # to avoid a circular import (PriceService → sectors via routes).
+        if price is None:
+            from .price_service import PriceService
+            price = PriceService(nse, yahoo)
+        self.price = price
 
     # ── Public endpoints ──────────────────────────────────────────────────────
 
@@ -215,22 +221,31 @@ class SectorsService:
                             s["previousClose"] = eod_prev
                             s["change"]   = round(eod_close - eod_prev, 2)
                             s["pChange"]  = round((eod_close - eod_prev) / eod_prev * 100, 4) if eod_prev else 0
-                        s["source"]      = "DISK_EOD"
+                        # Provenance contract: source = original provider,
+                        # servedFrom = layer that returned it.
+                        s["source"]      = "NSE"
+                        s["servedFrom"]  = "DISK_EOD"
                         s["eodSealed"]   = True
                         s["eodDate"]     = payload.get("eodDate")
 
         for s in sectors:
             s.setdefault("asOf", as_of)
             s.setdefault("marketState", state)
+            s.setdefault("source", "NSE")
+            s.setdefault("servedFrom", "PRICE_SERVICE")
         return sectors
 
     async def _get_sectors_from_yahoo(self) -> list[dict]:
-        """Fetch sector index prices from Yahoo Finance when NSE is unavailable."""
-        tasks = [self.yahoo.get_quote(s["yahooTicker"]) for s in SECTOR_INDICES]
+        """NSE-down fallback. Routed through PriceService.get_quote_with_meta
+        so the EOD overlay still applies and provenance is uniform with the
+        rest of the app (source=NSE/YAHOO, servedFrom=PRICE_SERVICE/DISK_EOD).
+        """
+        tasks = [self.price.get_quote_with_meta(s["yahooTicker"]) for s in SECTOR_INDICES]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         sectors = []
         for i, sector in enumerate(SECTOR_INDICES):
-            quote = results[i] if not isinstance(results[i], Exception) else None
+            snap = results[i] if not isinstance(results[i], Exception) else None
+            quote = (snap or {}).get("quote") if snap else None
             if quote and quote.get("lastPrice"):
                 sectors.append({
                     "name": sector["name"],
@@ -247,7 +262,12 @@ class SectorsService:
                     "yearLow": quote.get("fiftyTwoWeekLow"),
                     "advances": 0,
                     "declines": 0,
-                    "source": "YAHOO",
+                    "source":     snap.get("source", "YAHOO"),
+                    "servedFrom": snap.get("servedFrom", "PRICE_SERVICE"),
+                    "asOf":       snap.get("asOf"),
+                    "marketState":snap.get("marketState"),
+                    "eodSealed":  snap.get("eodSealed", False),
+                    "eodDate":    snap.get("eodDate"),
                     "yahooTicker": sector["yahooTicker"],
                 })
             else:
@@ -257,7 +277,8 @@ class SectorsService:
                     "category": sector["category"],
                     "lastPrice": 0, "change": 0, "pChange": 0,
                     "advances": 0, "declines": 0,
-                    "source": "UNAVAILABLE", "yahooTicker": sector["yahooTicker"],
+                    "source": "NSE", "servedFrom": "UNAVAILABLE",
+                    "yahooTicker": sector["yahooTicker"],
                 })
         return sorted(sectors, key=lambda s: s["pChange"], reverse=True)
 
