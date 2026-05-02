@@ -3,6 +3,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { TrendingUp, TrendingDown, Activity, AlertCircle, RefreshCw } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
+import DataFreshness from "@/components/DataFreshness";
+import { marketDataQueryOptions, pickMeta } from "@/lib/marketData";
 
 function CardLoader() {
   return (
@@ -36,16 +38,15 @@ export default function Dashboard() {
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
 
-  const { data: rotation, isLoading: rotLoading, isFetching: rotFetching, error: rotErr } = useQuery({
-    queryKey: ["rotation"],
-    queryFn: api.sectorRotation,
-    staleTime: 5 * 60 * 1000,
-  });
-  const { data: patterns, isLoading: patLoading, isFetching: patFetching } = useQuery({
-    queryKey: ["patterns-overview"],
-    queryFn: () => api.patterns(),
-    staleTime: 10 * 60 * 1000,
-  });
+  const { data: rotation, isLoading: rotLoading, isFetching: rotFetching, error: rotErr } = useQuery(
+    marketDataQueryOptions(["rotation"], api.sectorRotation),
+  );
+  const { data: patterns, isLoading: patLoading, isFetching: patFetching } = useQuery(
+    marketDataQueryOptions(["patterns-overview"], () => api.patterns(), {
+      staleTime: 10 * 60 * 1000,
+      refetchInterval: false,
+    }),
+  );
 
   const rotBusy = rotLoading || rotFetching;
   const patBusy = patLoading || patFetching;
@@ -82,6 +83,11 @@ export default function Dashboard() {
           {isRefreshing ? "Refreshing…" : "Refresh"}
         </button>
       </div>
+
+      <DataFreshness
+        meta={pickMeta(rotation) ?? (rotation ? { source: "NSE", asOf: rotation.timestamp } : null)}
+        refreshKeys={[["rotation"], ["patterns-overview"]]}
+      />
 
       {rotErr && (
         <div className="flex items-center gap-2 text-red-600 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg p-3 text-sm">

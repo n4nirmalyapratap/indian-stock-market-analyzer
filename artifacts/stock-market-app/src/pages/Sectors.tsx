@@ -4,6 +4,8 @@ import { Link } from "wouter";
 import { api, SectorHeatmapItem } from "@/lib/api";
 import { Info, Target, Shield, BarChart2, Zap, Activity, ChevronRight, ArrowUp, ArrowDown } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
+import DataFreshness from "@/components/DataFreshness";
+import { marketDataQueryOptions, pickMeta } from "@/lib/marketData";
 
 // ── Theme-aware tier config ────────────────────────────────────────────────────
 function getTierMeta(isDark: boolean) {
@@ -627,19 +629,15 @@ export default function Sectors() {
   const { theme } = useTheme();
   const isDark = theme === "dark";
 
-  const { data: rotation, isLoading } = useQuery({
-    queryKey: ["rotation"],
-    queryFn:  api.sectorRotation,
-    staleTime: 4 * 60 * 1000,
-  });
+  const { data: rotation, isLoading } = useQuery(
+    marketDataQueryOptions(["rotation"], api.sectorRotation),
+  );
 
   // Key includes the current hour so cache auto-busts every 60 min and fetches fresh data
   const heatmapHour = new Date().toISOString().slice(0, 13);
-  const { data: heatmapData, isLoading: heatmapLoading } = useQuery({
-    queryKey:  ["sectorHeatmap", heatmapHour],
-    queryFn:   api.sectorHeatmap,
-    staleTime: 2 * 60 * 1000,
-  });
+  const { data: heatmapData, isLoading: heatmapLoading } = useQuery(
+    marketDataQueryOptions(["sectorHeatmap", heatmapHour], api.sectorHeatmap),
+  );
 
   const sectors  = rotation?.sectors ?? [];
   const phase    = rotation?.economicPhase;
@@ -663,6 +661,15 @@ export default function Sectors() {
           Rotation Analysis <ChevronRight className="w-3 h-3" />
         </button>
       </div>
+
+      <DataFreshness
+        meta={
+          pickMeta(rotation) ??
+          (rotation ? { source: "NSE", asOf: rotation.timestamp } : null)
+        }
+        refreshKeys={[["rotation"], ["sectorHeatmap", heatmapHour]]}
+      />
+
 
       {heatmapLoading ? (
         <div className="h-48 animate-pulse rounded-2xl" style={{ background: isDark ? "#1e293b" : "#f3f4f6" }} />

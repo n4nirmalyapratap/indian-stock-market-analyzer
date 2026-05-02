@@ -355,7 +355,11 @@ export const api = {
       { method: "POST" },
     ),
 
-  scanners:      () => fetchApi<Scanner[]>("/scanners"),
+  scanners:      async () => {
+    const res = await fetchApi<Scanner[] | { scanners: Scanner[]; meta?: unknown }>("/scanners");
+    return Array.isArray(res) ? res : (res?.scanners ?? []);
+  },
+  scannersWithMeta: () => fetchApi<{ scanners: Scanner[]; meta?: unknown }>("/scanners"),
   createScanner: (data: ScannerCreateInput) =>
     fetchApi<Scanner>("/scanners", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(data) }),
   updateScanner: (id: string, data: Partial<ScannerCreateInput>) =>
@@ -414,6 +418,31 @@ export const api = {
   newsStats: () => fetchApi<NewsStatsResponse>("/news/stats"),
 
   newsRefresh: () => fetchApi<{ ok: boolean }>("/news/refresh", { method: "POST" }),
+
+  dataConsistency: (symbols: string[] = []) => {
+    const q = symbols.length ? `?symbols=${encodeURIComponent(symbols.join(","))}` : "";
+    return fetchApi<{
+      marketState: string;
+      marketOpen:  boolean;
+      cacheVersion: number;
+      asOf:        string;
+      checked:     number;
+      driftCount:  number;
+      consistent:  boolean;
+      results: Array<{
+        symbol:        string;
+        quotePrice?:   number;
+        historyClose?: number;
+        historyDate?:  string;
+        sectorPrice?:  number | null;
+        drift?:        number | null;
+        driftPct?:     number | null;
+        consistent?:   boolean;
+        meta?:         Record<string, unknown>;
+        error?:        string;
+      }>;
+    }>(`/admin/data-consistency${q}`);
+  },
 };
 
 // ─── News types ────────────────────────────────────────────────────────────────
@@ -553,6 +582,7 @@ export interface ConstituentStock {
   ps:           number | null;
   evEbitda:     number | null;
   roe:          number | null;
+  roa:          number | null;
   debtToEquity: number | null;
   dividendYield: number | null;
   beta:         number | null;
@@ -571,6 +601,11 @@ export interface SectorDetailData {
   constituents:    ConstituentStock[];
   topGainers:      ConstituentStock[];
   topLosers:       ConstituentStock[];
+  /** Provenance fields surfaced by the backend for DataFreshness. */
+  asOf?:           string;
+  marketState?:    string;
+  source?:         "NSE" | "YAHOO" | string;
+  servedFrom?:     string;
 }
 
 // ── Technical Summary (TradingView Indicators' Summary) ──────────────────────
@@ -620,6 +655,14 @@ export interface TechnicalSummary {
     camarilla: PivotLevel;
     woodie:    PivotLevel;
     dm:        DmPivot;
+  };
+  meta?: {
+    source?:       string;
+    asOf?:         string | null;
+    marketState?:  string;
+    eodSealed?:    boolean;
+    eodDate?:      string | null;
+    cacheVersion?: number;
   };
 }
 
