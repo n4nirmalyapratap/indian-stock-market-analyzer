@@ -343,6 +343,8 @@ async def data_consistency(request: Request, symbols: str = ""):
 
     results = []
     drift_count = 0
+    nse_yahoo_div = 0
+    market_closed = not _disk.is_market_open()
 
     for sym in syms:
         try:
@@ -357,7 +359,33 @@ async def data_consistency(request: Request, symbols: str = ""):
             if sym in sector_map:
                 sector_price = sector_map[sym].get("lastPrice")
 
-            # Compare
+            # NSE-vs-Yahoo divergence check (closed market only — both should
+            # agree on the official close). NSE is preferred; we report drift
+            # so ops can spot upstream data-source disagreements.
+            nse_close = None
+            yahoo_close = None
+            divergence = None
+            divergence_pct = None
+            if market_closed:
+                try:
+                    nq = await nse.get_stock_quote(sym)
+                    if nq and nq.get("priceInfo"):
+                        nse_close = nq["priceInfo"].get("lastPrice")
+                except Exception:
+                    nse_close = None
+                try:
+                    yq = await yahoo.get_quote(sym)
+                    if yq:
+                        yahoo_close = yq.get("lastPrice")
+                except Exception:
+                    yahoo_close = None
+                if nse_close is not None and yahoo_close is not None:
+                    divergence     = round(abs(nse_close - yahoo_close), 4)
+                    divergence_pct = round(divergence / nse_close * 100, 4) if nse_close else 0
+                    if divergence > 0.05 and divergence_pct > 0.1:
+                        nse_yahoo_div += 1
+
+            # Compare across our internal endpoints
             references = [v for v in (quote_price, hist_close, sector_price) if v is not None]
             drift = None
             drift_pct = None
@@ -371,28 +399,35 @@ async def data_consistency(request: Request, symbols: str = ""):
                 drift_count += 1
 
             results.append({
-                "symbol":       sym,
-                "quotePrice":   quote_price,
-                "historyClose": hist_close,
-                "historyDate":  hist_date,
-                "sectorPrice":  sector_price,
-                "drift":        drift,
-                "driftPct":     drift_pct,
-                "consistent":   consistent,
-                "meta":         details.get("meta", {}),
+                "symbol":         sym,
+                "quotePrice":     quote_price,
+                "historyClose":   hist_close,
+                "historyDate":    hist_date,
+                "sectorPrice":    sector_price,
+                "nseClose":       nse_close,
+                "yahooClose":     yahoo_close,
+                "nseYahooDiff":   divergence,
+                "nseYahooDiffPct": divergence_pct,
+                "preferredSource": "NSE" if nse_close is not None else ("YAHOO" if yahoo_close is not None else None),
+                "drift":          drift,
+                "driftPct":       drift_pct,
+                "consistent":     consistent,
+                "meta":           details.get("meta", {}),
             })
         except Exception as e:
             results.append({"symbol": sym, "error": str(e)})
 
     return {
-        "marketState":  _disk.current_market_state(),
-        "marketOpen":   _disk.is_market_open(),
-        "cacheVersion": _disk.cache_version(),
-        "asOf":         _disk._now_ist().isoformat(),
-        "checked":      len(results),
-        "driftCount":   drift_count,
-        "consistent":   drift_count == 0,
-        "results":      results,
+        "marketState":      _disk.current_market_state(),
+        "marketOpen":       _disk.is_market_open(),
+        "cacheVersion":     _disk.cache_version(),
+        "asOf":             _disk._now_ist().isoformat(),
+        "checked":          len(results),
+        "driftCount":       drift_count,
+        "nseYahooDivergent": nse_yahoo_div,
+        "consistent":       drift_count == 0 and nse_yahoo_div == 0,
+        "preferredSource":  "NSE",
+        "results":          results,
     }
 
 

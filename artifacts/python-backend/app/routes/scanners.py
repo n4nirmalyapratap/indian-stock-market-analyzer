@@ -5,6 +5,7 @@ from ..services.scanners_service import ScannersService
 from ..services.yahoo_service import YahooService
 from ..services.nse_service import NseService
 from ..services.price_service import PriceService
+from ..services import market_cache_service as _disk
 
 router = APIRouter(prefix="/scanners", tags=["scanners"])
 
@@ -14,8 +15,23 @@ _price = PriceService(_nse, _yahoo)
 _service = ScannersService(_price)
 
 
+def _meta() -> dict:
+    state = _disk.current_market_state()
+    return {
+        "source":       "PRICE_SERVICE",
+        "asOf":         _disk._now_ist().isoformat(),
+        "marketState":  state,
+        "eodSealed":    state in ("CLOSED", "WEEKEND"),
+        "eodDate":      _disk._eod_date_for(state),
+        "cacheVersion": _disk.cache_version(),
+    }
+
+
 async def _get_scanners():
-    return _service.get_all_scanners()
+    res = _service.get_all_scanners()
+    if isinstance(res, dict):
+        res.setdefault("meta", _meta())
+    return res
 
 async def _create_scanner(body: dict[str, Any]):
     return _service.create_scanner(body)
@@ -28,7 +44,10 @@ router.add_api_route("/", _create_scanner,  methods=["POST"])
 
 @router.post("/adhoc/run")
 async def run_adhoc(body: dict[str, Any]):
-    return await _service.run_adhoc(body)
+    res = await _service.run_adhoc(body)
+    if isinstance(res, dict):
+        res.setdefault("meta", _meta())
+    return res
 
 
 @router.get("/{scanner_id}")
