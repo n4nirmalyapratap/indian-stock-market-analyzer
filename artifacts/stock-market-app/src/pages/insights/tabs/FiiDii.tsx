@@ -8,7 +8,7 @@ import {
 } from "../_shared";
 import {
   ResponsiveContainer, ComposedChart, BarChart, CartesianGrid, XAxis, YAxis,
-  Tooltip, Legend, Bar, ReferenceLine, Line,
+  Tooltip, Bar, ReferenceLine, Line,
 } from "recharts";
 import {
   ArrowDownUp, BarChart3, Table as TableIcon, Info, ExternalLink,
@@ -442,8 +442,8 @@ function FiiDiiChart({ rows, segment, reduced }: { rows: Row[]; segment: string;
             Daily Net Flows
           </h3>
           <div className="flex items-center gap-3 text-[11px]">
-            <Legend kind="fii" color={palette.fii} />
-            <Legend kind="dii" color={palette.dii} />
+            <LegendChip kind="fii" color={palette.fii} />
+            <LegendChip kind="dii" color={palette.dii} />
           </div>
         </div>
         <div className="h-72 md:h-80">
@@ -478,7 +478,7 @@ function FiiDiiChart({ rows, segment, reduced }: { rows: Row[]; segment: string;
   );
 }
 
-function Legend({ kind, color }: { kind: "fii" | "dii"; color: string }) {
+function LegendChip({ kind, color }: { kind: "fii" | "dii"; color: string }) {
   return (
     <span className="inline-flex items-center gap-1.5 text-gray-600 dark:text-gray-300">
       <span className="w-2.5 h-2.5 rounded-sm" style={{ background: color }} />
