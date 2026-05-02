@@ -376,28 +376,35 @@ export default function Heatmap() {
             const isClicked = clicked === item.symbol;
             // Wave-stagger: tiles flow in diagonally from top-left to bottom-right.
             // Skipped entirely when reduced motion is preferred.
+            // Cap stagger window so the entrance never feels long, and so the
+            // last tile lands within ~350ms even on Nifty 500.
             const diag = reduced ? 0 : (containerW && containerH)
-              ? (x / containerW + y / containerH) * 0.25
-              : Math.min(idx * 0.005, 0.4);
+              ? Math.min((x / containerW + y / containerH) * 0.12, 0.18)
+              : Math.min(idx * 0.002, 0.18);
 
             return (
               <motion.div
                 key={item.symbol}
-                initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, filter: "blur(14px)" }}
+                // Position via inline style (paint-only) instead of animating
+                // left/top/width/height — those properties trigger layout on
+                // every frame for every tile, which is what made the entrance
+                // feel laggy on big indices.
+                style={{ left: x, top: y, width: w - 1, height: h - 1, willChange: "transform, opacity" }}
+                // Animate only opacity + scale (compositor-only properties).
+                // Dropped the blur filter entirely — it's the single most
+                // expensive CSS property to animate and on ~150 tiles it
+                // dominates the frame budget.
+                initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.92 }}
                 animate={{
                   opacity: 1,
                   scale: isClicked && !reduced ? [1, 1.08, 1] : 1,
-                  filter: "blur(0px)",
-                  left: x, top: y, width: w - 1, height: h - 1,
                 }}
-                exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 1.15, filter: "blur(20px)" }}
+                exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.96 }}
                 transition={reduced
-                  ? { duration: 0.15, delay: 0 }
+                  ? { duration: 0.12, delay: 0 }
                   : {
-                      type: "spring",
-                      stiffness: 240,
-                      damping: 26,
-                      mass: 0.7,
+                      duration: 0.32,
+                      ease: [0.22, 1, 0.36, 1], // easeOutQuint — snappy + soft landing
                       delay: diag,
                       scale: isClicked ? { duration: 0.35, ease: "easeOut" } : undefined,
                     }
