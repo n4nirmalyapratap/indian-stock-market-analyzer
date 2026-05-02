@@ -21,6 +21,7 @@ from typing import Optional
 
 from .nse_service import NseService
 from .yahoo_service import YahooService
+from . import market_cache_service as _disk
 
 logger = logging.getLogger(__name__)
 
@@ -123,9 +124,20 @@ TIER_BY_NAME = {t["tier"]: t for t in TIERS}
 
 # ── Momentum cache (4-hour TTL) ───────────────────────────────────────────────
 _CACHE: dict = {}
+_CACHE_VERSION: int = 0
+
+
+def _flush_if_state_changed() -> None:
+    """Drop the rotation cache whenever the market state transitions."""
+    global _CACHE_VERSION
+    v = _disk.cache_version()
+    if v != _CACHE_VERSION:
+        _CACHE.clear()
+        _CACHE_VERSION = v
 
 
 def _get_cache() -> Optional[dict]:
+    _flush_if_state_changed()
     e = _CACHE.get("rotation")
     if e and time.time() < e["expiry"]:
         return e["data"]
@@ -133,11 +145,13 @@ def _get_cache() -> Optional[dict]:
 
 
 def _get_stale() -> Optional[dict]:
+    _flush_if_state_changed()
     e = _CACHE.get("rotation")
     return e["data"] if e else None
 
 
 def _set_cache(data: dict, ttl: int = 4 * 3600) -> None:
+    _flush_if_state_changed()
     _CACHE["rotation"] = {"data": data, "expiry": time.time() + ttl}
 
 
@@ -159,31 +173,104 @@ def _z_scores(values: list[float]) -> list[float]:
 # ── Main Service ──────────────────────────────────────────────────────────────
 
 class SectorsService:
-    def __init__(self, nse: NseService, yahoo: YahooService):
+    def __init__(self, nse: NseService, yahoo: YahooService, price=None):
         self.nse = nse
         self.yahoo = yahoo
+        # PriceService is the canonical EOD-overlay source. Imported lazily
+        # to avoid a circular import (PriceService → sectors via routes).
+        if price is None:
+            from .price_service import PriceService
+            price = PriceService(nse, yahoo)
+        self.price = price
 
     # ── Public endpoints ──────────────────────────────────────────────────────
 
     async def get_all_sectors(self) -> list[dict]:
-        try:
-            nse_data = await self.nse.get_sector_indices()
-            if nse_data and nse_data.get("data"):
-                parsed = self._parse_nse_sectors(nse_data["data"])
-                if parsed:
-                    return parsed
-        except Exception:
-            pass
-        # NSE unavailable — fall back to Yahoo Finance for live prices
-        return await self._get_sectors_from_yahoo()
+        as_of  = _disk._now_ist().isoformat()
+        state  = _disk.current_market_state()
+        market_closed = not _disk.is_market_open()
+
+        sectors: list[dict] = []
+        disk_by_symbol: dict[str, dict] = {}
+
+        # When the market is closed prefer sealed disk snapshots for the
+        # sector indices so we don't re-hit NSE on every page refresh —
+        # if NSE is briefly unreachable the sector cards still show the
+        # official close, identical to the per-stock and history pages.
+        if market_closed:
+            sealed_now = 0
+            try:
+                sealed_now = await self._ensure_sector_index_snapshots()
+            except Exception as e:
+                logger.debug("Sector index seal-on-read failed: %s", e)
+            disk_by_symbol = self._build_sectors_from_disk()
+            # Ops visibility: surface how many sector indices ended up
+            # served from sealed disk vs needed live fallback.
+            logger.info(
+                "Sector index seal/disk status: sealed_now=%d disk_ready=%d/%d (state=%s)",
+                sealed_now, len(disk_by_symbol), len(SECTOR_INDICES), state,
+            )
+            if len(disk_by_symbol) == len(SECTOR_INDICES):
+                sectors = sorted(
+                    disk_by_symbol.values(),
+                    key=lambda x: x["pChange"],
+                    reverse=True,
+                )
+
+        # Live path — open market, or some disk snapshots are missing.
+        # Partial-disk merge below replaces any sector that DOES have a
+        # sealed disk version with the disk version, so a single missing
+        # index doesn't force every sector to re-hit NSE.
+        if not sectors:
+            try:
+                nse_data = await self.nse.get_sector_indices()
+                if nse_data and nse_data.get("data"):
+                    parsed = self._parse_nse_sectors(nse_data["data"])
+                    if parsed:
+                        sectors = parsed
+            except Exception:
+                pass
+        if not sectors:
+            # NSE unavailable — fall back to Yahoo Finance for live prices
+            sectors = await self._get_sectors_from_yahoo()
+
+        # Partial-disk overlay: prefer the sealed NSE close for any sector
+        # we already have on disk, even if the rest came from live.
+        # Re-sort by updated pChange so ranking reflects post-overlay values.
+        if market_closed and disk_by_symbol:
+            sectors = [
+                disk_by_symbol.get((s.get("symbol") or "").upper(), s)
+                if (s.get("symbol") or "").upper() in disk_by_symbol
+                else s
+                for s in sectors
+            ]
+            sectors.sort(key=lambda x: x.get("pChange") or 0, reverse=True)
+
+        # NOTE: closed-market disk overlay is handled above by the
+        # `disk_by_symbol` partial-merge which enforces the strict
+        # sealed-snapshot contract (eodSealed + source==NSE +
+        # eodDate==today). We deliberately do NOT run a second lax
+        # overlay here — relabeling a Yahoo-sealed payload as
+        # source="NSE" would violate the official-close guarantee.
+
+        for s in sectors:
+            s.setdefault("asOf", as_of)
+            s.setdefault("marketState", state)
+            s.setdefault("source", "NSE")
+            s.setdefault("servedFrom", "PRICE_SERVICE")
+        return sectors
 
     async def _get_sectors_from_yahoo(self) -> list[dict]:
-        """Fetch sector index prices from Yahoo Finance when NSE is unavailable."""
-        tasks = [self.yahoo.get_quote(s["yahooTicker"]) for s in SECTOR_INDICES]
+        """NSE-down fallback. Routed through PriceService.get_quote_with_meta
+        so the EOD overlay still applies and provenance is uniform with the
+        rest of the app (source=NSE/YAHOO, servedFrom=PRICE_SERVICE/DISK_EOD).
+        """
+        tasks = [self.price.get_quote_with_meta(s["yahooTicker"]) for s in SECTOR_INDICES]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         sectors = []
         for i, sector in enumerate(SECTOR_INDICES):
-            quote = results[i] if not isinstance(results[i], Exception) else None
+            snap = results[i] if not isinstance(results[i], Exception) else None
+            quote = (snap or {}).get("quote") if snap else None
             if quote and quote.get("lastPrice"):
                 sectors.append({
                     "name": sector["name"],
@@ -200,7 +287,12 @@ class SectorsService:
                     "yearLow": quote.get("fiftyTwoWeekLow"),
                     "advances": 0,
                     "declines": 0,
-                    "source": "YAHOO",
+                    "source":     snap.get("source", "YAHOO"),
+                    "servedFrom": snap.get("servedFrom", "PRICE_SERVICE"),
+                    "asOf":       snap.get("asOf"),
+                    "marketState":snap.get("marketState"),
+                    "eodSealed":  snap.get("eodSealed", False),
+                    "eodDate":    snap.get("eodDate"),
                     "yahooTicker": sector["yahooTicker"],
                 })
             else:
@@ -210,7 +302,8 @@ class SectorsService:
                     "category": sector["category"],
                     "lastPrice": 0, "change": 0, "pChange": 0,
                     "advances": 0, "declines": 0,
-                    "source": "UNAVAILABLE", "yahooTicker": sector["yahooTicker"],
+                    "source": "NSE", "servedFrom": "UNAVAILABLE",
+                    "yahooTicker": sector["yahooTicker"],
                 })
         return sorted(sectors, key=lambda s: s["pChange"], reverse=True)
 
@@ -274,6 +367,190 @@ class SectorsService:
             }
             for s in SECTOR_INDICES
         ]
+
+    # ── Sector-index disk snapshot helpers ────────────────────────────────────
+
+    async def _ensure_sector_index_snapshots(self) -> int:
+        """When the market is CLOSED/WEEKEND, seal a daily OHLC snapshot
+        for every NIFTY sector index that's still missing one on disk, so
+        subsequent /sectors requests can serve the official close from
+        disk instead of re-hitting NSE.
+
+        The seal source is **NSE's official `/api/allIndices` payload**
+        (one HTTP call covers every index) — never Yahoo. NSE doesn't
+        publish a working public endpoint for daily index history, so we
+        synthesize a 2-row OHLC snapshot per sector from the index quote:
+
+            row[-2] = { close: previousClose }                # prior session
+            row[-1] = { open, high, low, close: last }        # today's EOD
+
+        That's enough for the existing overlay path (which reads
+        `rows[-1].close` and `rows[-2].close` to derive change/pChange)
+        and for the admin audit (which compares `rows[-1].close` against
+        the sector page).
+
+        If NSE is unreachable we leave the disk empty for that index —
+        /sectors then keeps using its existing live + Yahoo fallback path
+        (cards may show a slightly different Yahoo price, exactly as
+        documented in the consistency contract).
+
+        Returns the number of indices that were freshly sealed.
+        """
+        # Only seal during true post-close states (CLOSED / WEEKEND).
+        # During PRE_OPEN there's nothing to seal yet — the previous
+        # session is already sealed and today's close doesn't exist —
+        # so attempting to write would just churn the cache with a
+        # non-canonical row.
+        state = _disk.current_market_state()
+        if state not in ("CLOSED", "WEEKEND"):
+            return 0
+
+        # Skip the round-trip to NSE if every sector already has an
+        # NSE-sealed snapshot for today.
+        eod_date_now = _disk._eod_date_for(state)
+        needs: set[str] = set()
+        for s in SECTOR_INDICES:
+            payload = _disk.load_with_meta(s["symbol"], 30)
+            if not (
+                payload
+                and payload.get("eodSealed")
+                and payload.get("data")
+                and (payload.get("source") or "").upper() == "NSE"
+                and payload.get("eodDate") == eod_date_now
+            ):
+                needs.add(s["symbol"])
+        if not needs:
+            return 0
+
+        try:
+            nse_payload = await self.nse.get_sector_indices()
+        except Exception as e:
+            logger.debug("Sector index seal: NSE all-indices fetch failed: %s", e)
+            return 0
+        rows = (nse_payload or {}).get("data") or []
+        if not rows:
+            return 0
+
+        # Map every NSE row by both index name and indexSymbol for robust lookup
+        by_key: dict[str, dict] = {}
+        for r in rows:
+            for k in (r.get("index"), r.get("indexSymbol")):
+                if k:
+                    by_key[str(k).strip().upper()] = r
+
+        eod_date  = _disk._eod_date_for(_disk.current_market_state())
+        prev_date = self._previous_trading_date(eod_date)
+        sealed = 0
+        for s in SECTOR_INDICES:
+            sym = s["symbol"]
+            if sym not in needs:
+                continue
+            row = by_key.get(sym.upper()) or by_key.get((s["nseKey"] or "").upper())
+            if not row:
+                continue
+            try:
+                last  = float(row.get("last") or row.get("indexValue") or 0)
+                prev  = float(row.get("previousClose") or 0)
+                if last <= 0:
+                    continue
+                open_ = float(row.get("open")  or last)
+                high  = float(row.get("high")  or last)
+                low   = float(row.get("low")   or last)
+            except (TypeError, ValueError):
+                continue
+
+            data = []
+            if prev > 0:
+                data.append({
+                    "date":   prev_date,
+                    "open":   prev, "high": prev, "low": prev,
+                    "close":  prev, "volume": 0,
+                })
+            data.append({
+                "date":   eod_date,
+                "open":   open_, "high": high, "low": low,
+                "close":  last,  "volume": 0,
+            })
+            try:
+                _disk.save_to_disk(sym, 90, data, source="NSE")
+                sealed += 1
+            except Exception as e:
+                logger.debug("Sector index disk save failed for %s: %s", sym, e)
+        return sealed
+
+    @staticmethod
+    def _previous_trading_date(eod_date: str) -> str:
+        """Return the trading day immediately before `eod_date` (YYYY-MM-DD)."""
+        from datetime import datetime, timedelta
+        try:
+            d = datetime.strptime(eod_date, "%Y-%m-%d").date()
+        except Exception:
+            d = _disk._now_ist().date()
+        d -= timedelta(days=1)
+        while d.weekday() >= 5:
+            d -= timedelta(days=1)
+        return d.isoformat()
+
+    def _build_sectors_from_disk(self) -> dict[str, dict]:
+        """Return `{symbol: sector_dict}` for every sector that has a
+        valid NSE-sealed snapshot on disk for today's EOD date.
+
+        Result may be empty or partial — the caller merges any missing
+        sectors with live data so a single missing index doesn't force
+        every sector to re-hit NSE.
+
+        Eligibility (defensive correctness): payload must be `eodSealed`,
+        non-empty `data`, `source == "NSE"`, and `eodDate` must match the
+        current trading-day EOD date.
+        """
+        state    = _disk.current_market_state()
+        eod_date = _disk._eod_date_for(state)
+        out: dict[str, dict] = {}
+        for s in SECTOR_INDICES:
+            payload = _disk.load_with_meta(s["symbol"], 30)
+            if not (
+                payload
+                and payload.get("eodSealed")
+                and payload.get("data")
+                and (payload.get("source") or "").upper() == "NSE"
+                and payload.get("eodDate") == eod_date
+            ):
+                continue
+            rows = payload["data"]
+            last = rows[-1] if rows else None
+            prev = rows[-2] if len(rows) >= 2 else None
+            if not last or last.get("close") is None:
+                continue
+
+            eod_close = round(float(last["close"]), 2)
+            eod_prev  = (
+                round(float(prev["close"]), 2)
+                if prev and prev.get("close") is not None
+                else None
+            )
+            change  = round(eod_close - eod_prev, 2) if eod_prev is not None else 0
+            pchange = round((eod_close - eod_prev) / eod_prev * 100, 4) if eod_prev else 0
+
+            out[s["symbol"]] = {
+                "name":          s["name"],
+                "symbol":        s["symbol"],
+                "category":      s["category"],
+                "lastPrice":     eod_close,
+                "change":        change,
+                "pChange":       pchange,
+                "open":          round(float(last["open"]),  2) if last.get("open")  is not None else None,
+                "high":          round(float(last["high"]),  2) if last.get("high")  is not None else None,
+                "low":           round(float(last["low"]),   2) if last.get("low")   is not None else None,
+                "previousClose": eod_prev,
+                "advances":      0,
+                "declines":      0,
+                "source":        "NSE",
+                "servedFrom":    "DISK_EOD",
+                "eodSealed":     True,
+                "eodDate":       payload.get("eodDate") or eod_date,
+                "yahooTicker":   s["yahooTicker"],
+            }
+        return out
 
     # ── Phase 2: Technical Strength (async data fetching) ─────────────────────
 
@@ -630,6 +907,20 @@ class SectorsService:
                 "breadthScore":       round((advancing / total) * 100, 1) if total else 0,
             },
             "adRatio": round(advancing / declining, 2) if declining else advancing,
+        }
+
+        # Canonical provenance contract — same shape as every other route's
+        # meta. Frontend (Dashboard, Sectors) reads this directly via
+        # pickMeta(rotation), no ad-hoc `timestamp` fallback needed.
+        state = _disk.current_market_state()
+        result["meta"] = {
+            "source":       "NSE",
+            "servedFrom":   "ROTATION_ENGINE",
+            "asOf":         _disk._now_ist().isoformat(),
+            "marketState":  state,
+            "eodSealed":    state in ("CLOSED", "WEEKEND"),
+            "eodDate":      _disk._eod_date_for(state),
+            "cacheVersion": _disk.cache_version(),
         }
 
         _set_cache(result)

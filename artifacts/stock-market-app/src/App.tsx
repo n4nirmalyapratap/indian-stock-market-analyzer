@@ -23,11 +23,15 @@ import GlobalAssistant from "@/components/GlobalAssistant";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { CustomAuthProvider, useCustomAuth } from "@/context/CustomAuthContext";
 import { setTokenGetter } from "@/lib/api";
+import { useMarketStateBoundary } from "@/lib/marketData";
 import { LayoutShell } from "@/LayoutShell";
 import { LogOut } from "lucide-react";
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
+  // refetchOnWindowFocus defaults to true so any market-data query (even
+  // ones not yet migrated to marketDataQueryOptions) re-validates against
+  // the official close when the user returns to the tab.
+  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: true } },
 });
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -122,6 +126,13 @@ function TokenInjector() {
   return null;
 }
 
+// Watches IST market open/closed boundary and invalidates all React-Query
+// caches at the transition so post-close pages snap to the sealed EOD close.
+function MarketStateBoundary() {
+  useMarketStateBoundary();
+  return null;
+}
+
 
 // ── Auth gate ─────────────────────────────────────────────────────────────────
 
@@ -142,6 +153,7 @@ function AuthGate() {
   return (
     <>
       <TokenInjector />
+      <MarketStateBoundary />
       <AppRoutes />
       <GlobalAssistant />
     </>

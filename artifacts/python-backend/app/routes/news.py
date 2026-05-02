@@ -1,7 +1,21 @@
 from fastapi import APIRouter, Query
 from ..services import news_service
+from ..services import market_cache_service as _disk
 
 router = APIRouter(prefix="/news", tags=["news"])
+
+
+def _meta() -> dict:
+    state = _disk.current_market_state()
+    return {
+        "source":       "NSE",
+        "servedFrom":   "NEWS_FEED",
+        "asOf":         _disk._now_ist().isoformat(),
+        "marketState":  state,
+        "eodSealed":    state in ("CLOSED", "WEEKEND"),
+        "eodDate":      _disk._eod_date_for(state),
+        "cacheVersion": _disk.cache_version(),
+    }
 
 
 @router.get("/feed")
@@ -11,7 +25,10 @@ async def get_feed(
     limit:    int = Query(30, ge=1, le=100),
     offset:   int = Query(0, ge=0),
 ):
-    return await news_service.get_news_feed(category, search, limit, offset)
+    data = await news_service.get_news_feed(category, search, limit, offset)
+    if isinstance(data, dict):
+        data.setdefault("meta", _meta())
+    return data
 
 
 @router.get("/deals")
