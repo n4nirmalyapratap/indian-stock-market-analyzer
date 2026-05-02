@@ -124,9 +124,20 @@ TIER_BY_NAME = {t["tier"]: t for t in TIERS}
 
 # ── Momentum cache (4-hour TTL) ───────────────────────────────────────────────
 _CACHE: dict = {}
+_CACHE_VERSION: int = 0
+
+
+def _flush_if_state_changed() -> None:
+    """Drop the rotation cache whenever the market state transitions."""
+    global _CACHE_VERSION
+    v = _disk.cache_version()
+    if v != _CACHE_VERSION:
+        _CACHE.clear()
+        _CACHE_VERSION = v
 
 
 def _get_cache() -> Optional[dict]:
+    _flush_if_state_changed()
     e = _CACHE.get("rotation")
     if e and time.time() < e["expiry"]:
         return e["data"]
@@ -134,11 +145,13 @@ def _get_cache() -> Optional[dict]:
 
 
 def _get_stale() -> Optional[dict]:
+    _flush_if_state_changed()
     e = _CACHE.get("rotation")
     return e["data"] if e else None
 
 
 def _set_cache(data: dict, ttl: int = 4 * 3600) -> None:
+    _flush_if_state_changed()
     _CACHE["rotation"] = {"data": data, "expiry": time.time() + ttl}
 
 

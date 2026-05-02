@@ -253,6 +253,77 @@ class PriceService:
         })
         return chart
 
+    # ── Custom date-range history (used by chart range picker) ───────────────
+
+    async def get_range_history(
+        self,
+        symbol: str,
+        start: str,
+        end: str,
+        interval: str = "1d",
+    ) -> dict:
+        """Yahoo-backed range fetcher (NSE doesn't expose arbitrary windows).
+
+        Routed through PriceService so callers don't talk to yfinance directly
+        and so the response carries the same provenance contract as every
+        other market-data endpoint.
+        """
+        import asyncio as _asyncio
+        import yfinance as yf
+        from ..lib.symbol_map import yahoo_candidates as _yc
+
+        market_state = _disk.current_market_state()
+        sym = symbol.upper()
+
+        def _fetch():
+            for tk_sym in _yc(sym):
+                try:
+                    tk = yf.Ticker(tk_sym)
+                    hist = tk.history(start=start, end=end, interval=interval, auto_adjust=True)
+                    if not hist.empty:
+                        return tk.info, hist
+                except Exception:
+                    continue
+            return {}, None
+
+        info, hist = await _asyncio.to_thread(_fetch)
+        if hist is None or hist.empty:
+            return {
+                "candles":     [],
+                "companyName": sym,
+                "currency":    "INR",
+                "source":      "YAHOO",
+                "asOf":        _disk._now_ist().isoformat(),
+                "marketState": market_state,
+                "eodSealed":   not _disk.is_market_open(),
+                "eodDate":     _disk._eod_date_for(market_state),
+            }
+
+        candles = []
+        for dt_idx, row in hist.iterrows():
+            try:
+                candles.append({
+                    "time":   int(dt_idx.timestamp()),
+                    "open":   round(float(row["Open"]),  2),
+                    "high":   round(float(row["High"]),  2),
+                    "low":    round(float(row["Low"]),   2),
+                    "close":  round(float(row["Close"]), 2),
+                    "volume": int(row.get("Volume", 0)),
+                })
+            except Exception:
+                continue
+
+        return {
+            "candles":     candles,
+            "companyName": info.get("longName") or info.get("shortName") or sym,
+            "currency":    info.get("currency", "INR"),
+            "source":      "YAHOO",
+            "asOf":        _disk._now_ist().isoformat(),
+            "marketState": market_state,
+            "eodSealed":   not _disk.is_market_open(),
+            "eodDate":     _disk._eod_date_for(market_state),
+        }
+
     # ── Daily OHLCV as a pandas DataFrame (for indicator libraries) ──────────
 
     async def get_history_dataframe(self, symbol: str, days: int = 500):
