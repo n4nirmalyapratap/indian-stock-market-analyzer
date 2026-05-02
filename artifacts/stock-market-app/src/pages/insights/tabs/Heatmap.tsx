@@ -352,14 +352,6 @@ export default function Heatmap() {
 
       {/* The Heatmap Canvas */}
       <div ref={containerRef} className="flex-1 min-h-0 relative m-2 md:m-4 rounded-3xl overflow-hidden border border-white/5 shadow-2xl bg-black/20">
-        {/* Animated grid scanline — only when motion is allowed */}
-        {!reduced && (
-          <motion.div
-            className="absolute inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-white/20 to-transparent pointer-events-none z-[5]"
-            animate={{ top: ["-2%", "102%"] }}
-            transition={{ duration: 6, repeat: Infinity, ease: "linear" }}
-          />
-        )}
         <AnimatePresence mode="popLayout">
           {rects?.map(({ x, y, w, h, item }, idx) => {
             const style = bucket(item.changePct);
