@@ -48,6 +48,7 @@ interface Props {
   indicators: Set<string>;
   isActive: boolean;
   onIndicatorRemove?: (key: string) => void;
+  onClearIndicators?: () => void;
   drawings: Drawing[];
   onDrawingAdd: (d: Drawing) => void;
   onDrawingErase: (id: string) => void;
@@ -1005,7 +1006,7 @@ interface HoverCandle {
 export default function ChartPanel({
   symbol, symbolName, periodCfg, drawingTool, chartType, indicators,
   isActive, drawings, onDrawingAdd, onDrawingErase, onClearDrawings, onActivate,
-  onDrawingDone, onDrawingUpdate, theme, onIndicatorRemove,
+  onDrawingDone, onDrawingUpdate, theme, onIndicatorRemove, onClearIndicators,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef       = useRef<SVGSVGElement>(null);
@@ -2262,15 +2263,17 @@ export default function ChartPanel({
             onMouseDown={e => e.stopPropagation()}
           >
             {[
-              { label: "Reset zoom",    action: () => { chartRef.current?.dispatchAction({ type: "dataZoom", start: 60, end: 100 }); setCtxMenu(null); } },
-              { label: "Clear drawings",action: () => { onClearDrawings?.(); setCtxMenu(null); } },
-              { label: "Reload data",   action: () => { fetchData(); setCtxMenu(null); } },
+              { label: "Reset zoom",             action: () => { chartRef.current?.dispatchAction({ type: "dataZoom", start: 60, end: 100 }); setCtxMenu(null); } },
+              { label: "Remove all indicators",  action: () => { onClearIndicators?.(); setCtxMenu(null); }, disabled: indicators.size === 0 },
+              { label: "Clear drawings",         action: () => { onClearDrawings?.(); setCtxMenu(null); } },
+              { label: "Reload data",            action: () => { fetchData(); setCtxMenu(null); } },
             ].map((item, i) => (
               <button
                 key={item.label}
-                className="w-full text-left px-4 py-1.5 text-xs transition-colors"
+                disabled={!!item.disabled}
+                className="w-full text-left px-4 py-1.5 text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 style={{ color: TC.tipText, ...(i === 1 ? { borderTop: `1px solid ${TC.ctxBor}`, borderBottom: `1px solid ${TC.ctxBor}` } : {}) }}
-                onMouseEnter={e => (e.currentTarget.style.background = TC.grid)}
+                onMouseEnter={e => { if (!item.disabled) e.currentTarget.style.background = TC.grid; }}
                 onMouseLeave={e => (e.currentTarget.style.background = "")}
                 onClick={item.action}
               >{item.label}</button>
