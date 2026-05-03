@@ -171,6 +171,100 @@ def test_council_persona_count_is_eight():
                    "klarman", "marks", "dalio", "burry"}
 
 
+# ── Yahoo percent-vs-fraction normalisation ─────────────────────────────────
+#
+# Regression guards for the late-2024 yfinance flip where `dividendYield`
+# turned from a fraction (0.025 == 2.5 %) into a percentage (2.5 == 2.5 %).
+# These tests catch a future format flip and ensure the same defensive
+# pattern protects `payoutRatio`, `heldPercentInsiders`, etc.
+
+def _ctx_with_div(**overrides) -> dict:
+    base = {
+        "currentPrice": 100.0,
+        "dividendRate":   2.0,    # ⇒ true yield = 2.0 / 100 = 0.02 (2 %)
+    }
+    base.update(overrides)
+    return ag.build_context({"symbol": "X", "info": base})
+
+
+def test_dividend_yield_fraction_form_passes_through():
+    # Yahoo's classic form: 0.02 == 2 %.
+    ctx = _ctx_with_div(dividendYield=0.02)
+    assert ctx["dividendYield"] == pytest.approx(0.02, abs=1e-6)
+
+
+def test_dividend_yield_percentage_form_is_normalised():
+    # Late-2024 form: 2.0 == 2 %.  Must be divided by 100.
+    ctx = _ctx_with_div(dividendYield=2.0)
+    assert ctx["dividendYield"] == pytest.approx(0.02, abs=1e-6)
+
+
+def test_dividend_yield_low_yield_resolved_via_dividend_rate():
+    # A low-yield Indian-style name where both interpretations sit < 1:
+    # 0.4 could mean 0.4 % (fraction) or 40 % (raw fraction value).
+    # `dividendRate / currentPrice` (2 / 500 = 0.004) is the tie-breaker
+    # and tells us the raw 0.4 was a percentage (0.4 % == 0.004).
+    ctx = _ctx_with_div(currentPrice=500.0, dividendRate=2.0, dividendYield=0.4)
+    assert ctx["dividendYield"] == pytest.approx(0.004, abs=1e-6)
+
+
+def test_dividend_yield_falls_back_to_trailing_when_rate_missing():
+    # Without dividendRate, trailingAnnualDividendYield (a fraction) is the
+    # cross-check.  Raw 0.4 vs trailing 0.004 ⇒ raw was a percentage.
+    ctx = ag.build_context({"symbol": "X", "info": {
+        "dividendYield": 0.4,
+        "trailingAnnualDividendYield": 0.004,
+    }})
+    assert ctx["dividendYield"] == pytest.approx(0.004, abs=1e-6)
+
+
+def test_dividend_yield_no_reference_keeps_legacy_heuristic():
+    # No dividendRate, no currentPrice, no trailing yield: fall back to the
+    # conservative "> 1 ⇒ percentage" rule.
+    ctx_frac = ag.build_context({"symbol": "X", "info": {"dividendYield": 0.02}})
+    ctx_pct  = ag.build_context({"symbol": "X", "info": {"dividendYield": 2.0}})
+    assert ctx_frac["dividendYield"] == pytest.approx(0.02, abs=1e-6)
+    assert ctx_pct["dividendYield"]  == pytest.approx(0.02, abs=1e-6)
+
+
+def test_dividend_yield_missing_is_none():
+    ctx = ag.build_context({"symbol": "X", "info": {}})
+    assert ctx["dividendYield"] is None
+
+
+@pytest.mark.parametrize("field", [
+    "payoutRatio", "heldPercentInsiders", "heldPercentInstitutions",
+])
+def test_other_percent_fields_normalised_when_in_percentage_form(field):
+    # 42 (percentage form) must collapse to 0.42 (fraction).
+    ctx = ag.build_context({"symbol": "X", "info": {field: 42.0}})
+    assert ctx[field] == pytest.approx(0.42, abs=1e-6)
+
+
+@pytest.mark.parametrize("field", [
+    "payoutRatio", "heldPercentInsiders", "heldPercentInstitutions",
+])
+def test_other_percent_fields_passthrough_when_in_fraction_form(field):
+    # 0.42 (legitimate fraction) must be left alone.
+    ctx = ag.build_context({"symbol": "X", "info": {field: 0.42}})
+    assert ctx[field] == pytest.approx(0.42, abs=1e-6)
+
+
+def test_pays_a_dividend_gate_survives_yahoo_format_flip():
+    """The Dalio / Damani-style 'Pays a dividend' gate (threshold > 0.0
+    after normalisation) must fire regardless of which representation
+    Yahoo serves.  This is the original audit failure mode."""
+    for raw in (0.025, 2.5):
+        ctx = ag.build_context({"symbol": "X", "info": {
+            "dividendYield": raw,
+            "dividendRate":  2.5,
+            "currentPrice":  100.0,
+        }})
+        # Both forms collapse to ~0.025 (2.5 %), comfortably > 0 and > 0.02.
+        assert ctx["dividendYield"] == pytest.approx(0.025, abs=1e-6)
+        assert ctx["dividendYield"] > 0.02
+
+
 # ── External-context fetchers degrade gracefully ─────────────────────────────
 
 def test_fetch_symbol_news_returns_empty_on_no_match(monkeypatch):
