@@ -639,147 +639,268 @@ async def _run_analysis_impl(ticker: str, user_id: str,
         yield _ev("error", status="error", error="quota_exceeded",
                   quota=get_quota(user_id))
         return
-    quota_reserved = True
+    # `quota_reserved` is a single-element list so the post-reservation
+    # generator block can flip it via assignment AND the outer
+    # try/except/finally can still see the latest value.
+    # On client disconnect / asyncio cancellation the runtime calls
+    # aclose() on this generator, which raises GeneratorExit at the
+    # current `yield` — we MUST refund the reserved slot in that case
+    # so a stop-mid-scan doesn't burn quota the user never received a
+    # report for.
+    quota_reserved = [True]
 
     started = time.time()
     sources_used: list[str] = []
     models_used: list[str] = []
 
-    # Phase 0 — gather context
-    yield _ev("context", status="running")
-    ctx = await _gather_context(upper)
-    summary = _summarise_for_prompt(ctx)
-    if ctx.get("stockDetail"):
-        sources_used.append("stocks_service")
-    if ctx.get("news"):
-        sources_used.append("news_service")
-    if ctx.get("fiiDii"):
-        sources_used.append("fii_dii_service")
-    yield _ev("context", status="done")
+    try:
+      # Phase 0 — gather context
+      yield _ev("context", status="running")
+      ctx = await _gather_context(upper)
+      summary = _summarise_for_prompt(ctx)
+      if ctx.get("stockDetail"):
+          sources_used.append("stocks_service")
+      if ctx.get("news"):
+          sources_used.append("news_service")
+      if ctx.get("fiiDii"):
+          sources_used.append("fii_dii_service")
+      yield _ev("context", status="done")
 
-    if not ctx.get("stockDetail") or (ctx["stockDetail"] or {}).get("error"):
-        # Refund the reserved quota slot — we never made any LLM calls.
-        if quota_reserved:
+      if not ctx.get("stockDetail") or (ctx["stockDetail"] or {}).get("error"):
+          # Refund the reserved quota slot — we never made any LLM calls.
+          if quota_reserved[0]:
+              _refund_quota(user_id)
+              quota_reserved[0] = False
+          yield _ev("error", status="error",
+                    error=f"Could not load market data for {upper}. "
+                          f"Check the ticker (e.g. RELIANCE, TCS, INFY).")
+          return
+
+      # Phase 1 — analysts in parallel
+      notes: dict[str, str] = {}
+      for key, _ in ANALYST_ROLES:
+          yield _ev("analyst", agent=key, status="pending")
+
+      async def _wrap(key: str, label: str):
+          try:
+              yield_event = _ev("analyst", agent=key, status="running")
+              return key, label, yield_event, await _run_analyst(key, label, summary)
+          except Exception as e:
+              logger.warning("Analyst %s failed: %s", key, e)
+              return key, label, None, (key, f"[{key} analyst unavailable: {e}]")
+
+      # Mark all running, then await
+      for key, _ in ANALYST_ROLES:
+          yield _ev("analyst", agent=key, status="running")
+      results = await asyncio.gather(*[
+          _run_analyst(key, label, summary) for key, label in ANALYST_ROLES
+      ], return_exceptions=True)
+      models_used.append(ai_client.AI_MODEL)
+      for r in results:
+          if isinstance(r, tuple):
+              k, txt = r
+              notes[k] = txt
+              yield _ev("analyst", agent=k, status="done", partial=txt)
+          else:
+              logger.warning("Analyst gather error: %s", r)
+
+      # Backfill any analyst that errored so the debate has all four notes
+      for k, _ in ANALYST_ROLES:
+          notes.setdefault(k, "(analyst note unavailable)")
+
+      # Phase 2 — Bull vs Bear (in parallel)
+      yield _ev("debate", agent="bull", status="running")
+      yield _ev("debate", agent="bear", status="running")
+      bull_task = ai_client.ask(_debate_prompt("BULL", notes),
+                                system=_SYSTEM_BASE, max_tokens=500, temperature=0.5)
+      bear_task = ai_client.ask(_debate_prompt("BEAR", notes),
+                                system=_SYSTEM_BASE, max_tokens=500, temperature=0.5)
+      bull_text, bear_text = await asyncio.gather(bull_task, bear_task,
+                                                  return_exceptions=True)
+      bull_text = _scrub_advice((bull_text if isinstance(bull_text, str)
+                                 else "(bull researcher unavailable)").strip())
+      bear_text = _scrub_advice((bear_text if isinstance(bear_text, str)
+                                 else "(bear researcher unavailable)").strip())
+      yield _ev("debate", agent="bull", status="done", partial=bull_text)
+      yield _ev("debate", agent="bear", status="done", partial=bear_text)
+
+      # Phase 3 — Trader synthesis (JSON verdict)
+      yield _ev("trader", status="running")
+      trader_raw = await ai_client.ask(
+          _trader_prompt(notes, bull_text, bear_text, summary),
+          system=_SYSTEM_BASE + " Reply with strict JSON only.",
+          max_tokens=400,
+          temperature=0.2,
+      )
+      verdict_obj = await _safe_json(trader_raw)
+      verdict = (verdict_obj.get("verdict") or "HOLD").upper()
+      if verdict not in ("BUY", "HOLD", "SELL"):
+          verdict = "HOLD"
+      confidence = (verdict_obj.get("confidence") or "MEDIUM").upper()
+      headline = _scrub_advice((verdict_obj.get("headline") or
+                                "Synthesis incomplete — review the analyst notes.").strip())
+      yield _ev("trader", status="done", partial=json.dumps(verdict_obj))
+
+      # Phase 4 — Risk gate
+      yield _ev("risk", status="running")
+      # Already scrubbed all components; the risk gate is the final assembly.
+      report = {
+          "ticker":     upper,
+          "name":       (ctx["stockDetail"].get("info") or {}).get("longName")
+                         or ctx["stockDetail"].get("companyName") or upper,
+          "verdict":    verdict,
+          "confidence": confidence,
+          "headline":   headline,
+          "priceTarget": verdict_obj.get("priceTarget") or "N/A",
+          "horizon":    verdict_obj.get("horizon") or "3-6 months",
+          "keyRisks":   verdict_obj.get("keyRisks") or [],
+          "analysts": {
+              "fundamentals": notes.get("fundamentals", ""),
+              "news":         notes.get("news", ""),
+              "technicals":   notes.get("technicals", ""),
+              "macro":        notes.get("macro", ""),
+          },
+          "debate": {
+              "bull": bull_text,
+              "bear": bear_text,
+          },
+          "snapshot": {
+              "lastPrice":   ctx["stockDetail"].get("lastPrice"),
+              "pChange":     ctx["stockDetail"].get("pChange"),
+              "marketState": ctx.get("marketState"),
+              "asOfIst":     ctx.get("asOfIst"),
+          },
+          "modelsUsed":  list(dict.fromkeys(models_used)),
+          "sourcesUsed": sources_used,
+          "disclaimer":  SEBI_DISCLAIMER,
+          "cached":      False,
+      }
+      # Final defence-in-depth scrub pass across every user-visible string.
+      report = _scrub_report(report)
+      yield _ev("risk", status="done")
+
+      elapsed_ms = int((time.time() - started) * 1000)
+      report["wallClockMs"] = elapsed_ms
+
+      # Persist (quota was already reserved atomically before LLM calls).
+      try:
+          _save_report(upper, user_id, report, models_used, sources_used, elapsed_ms)
+      except Exception as e:
+          logger.warning("Failed to persist AI analyst report: %s", e)
+
+      # User actually received a report — the reserved slot is rightfully spent.
+      quota_reserved[0] = False
+      new_quota = get_quota(user_id)
+      try:
+          yield _ev("done", status="done", report=report, quota=new_quota)
+      except (asyncio.CancelledError, GeneratorExit):
+          # Client disconnected at the very last frame — the report is
+          # persisted to the shared cache anyway, so quota was earned. Just
+          # propagate so the runtime closes cleanly.
+          raise
+    except (asyncio.CancelledError, GeneratorExit):
+        # Client disconnected (browser navigated away, Stop pressed,
+        # request aborted). Refund the reserved quota slot — the user
+        # never got a finished report.
+        if quota_reserved[0]:
             _refund_quota(user_id)
-        yield _ev("error", status="error",
-                  error=f"Could not load market data for {upper}. "
-                        f"Check the ticker (e.g. RELIANCE, TCS, INFY).")
+            quota_reserved[0] = False
+        raise
+
+
+async def scan_watchlist(tickers: list, user_id: str,
+                         force_refresh: bool = False) -> AsyncGenerator[dict, None]:
+    """Scan a list of tickers sequentially.
+
+    Strategy (cost-aware):
+      1. For each ticker, serve today's shared cached report immediately
+         (free — does NOT touch the user's quota).
+      2. For uncached tickers, attempt a fresh run only while the user has
+         remaining quota. Stop cleanly with a `quota_exhausted` event when
+         out, marking the rest as `skipped`.
+
+    Yields:
+      - {phase:"start", total, queued:[…]}
+      - {phase:"item", ticker, status:"cached"|"analyzing"}
+      - {phase:"result", ticker, report}                      (success)
+      - {phase:"result", ticker, error, status:"error"}       (per-item failure)
+      - {phase:"result", ticker, status:"skipped",
+         reason:"quota_exhausted"}                            (out of quota)
+      - {phase:"done", processed, cached, analyzed, skipped, errors,
+         quota:{…}}
+    """
+    # Normalise + dedupe in order
+    seen = set()
+    queue = []
+    for t in (tickers or []):
+        u = (t or "").upper().strip()
+        if u and u not in seen:
+            seen.add(u)
+            queue.append(u)
+
+    if not queue:
+        yield _ev("done", processed=0, cached=0, analyzed=0,
+                  skipped=0, errors=0, quota=get_quota(user_id))
         return
 
-    # Phase 1 — analysts in parallel
-    notes: dict[str, str] = {}
-    for key, _ in ANALYST_ROLES:
-        yield _ev("analyst", agent=key, status="pending")
+    yield _ev("start", total=len(queue), queued=queue)
 
-    async def _wrap(key: str, label: str):
-        try:
-            yield_event = _ev("analyst", agent=key, status="running")
-            return key, label, yield_event, await _run_analyst(key, label, summary)
-        except Exception as e:
-            logger.warning("Analyst %s failed: %s", key, e)
-            return key, label, None, (key, f"[{key} analyst unavailable: {e}]")
+    cached_n = analyzed_n = skipped_n = errors_n = 0
 
-    # Mark all running, then await
-    for key, _ in ANALYST_ROLES:
-        yield _ev("analyst", agent=key, status="running")
-    results = await asyncio.gather(*[
-        _run_analyst(key, label, summary) for key, label in ANALYST_ROLES
-    ], return_exceptions=True)
-    models_used.append(ai_client.AI_MODEL)
-    for r in results:
-        if isinstance(r, tuple):
-            k, txt = r
-            notes[k] = txt
-            yield _ev("analyst", agent=k, status="done", partial=txt)
+    for tk in queue:
+        # 1. Serve cached if available and caller hasn't asked for a refresh
+        if not force_refresh:
+            cached = get_cached_report(tk, user_id)
+            if cached:
+                cached_n += 1
+                yield _ev("item", ticker=tk, status="cached")
+                yield _ev("result", ticker=tk, status="cached", report=cached)
+                continue
+
+        # 2. Need a fresh run — check quota first (peek; reservation is atomic
+        #    inside _run_analysis_impl). If clearly out, skip without trying.
+        q = get_quota(user_id)
+        if q.get("remaining", 0) <= 0:
+            skipped_n += 1
+            yield _ev("result", ticker=tk, status="skipped",
+                      reason="quota_exhausted")
+            continue
+
+        yield _ev("item", ticker=tk, status="analyzing")
+        final = None
+        per_item_error = None
+        async for ev in run_analysis(tk, user_id, force_refresh=force_refresh):
+            phase = ev.get("phase")
+            if phase == "done":
+                final = ev.get("report")
+            elif phase == "error":
+                per_item_error = ev.get("error", "unknown error")
+                # If quota was the cause, mark as skipped instead of error.
+                if "quota" in (per_item_error or "").lower():
+                    skipped_n += 1
+                    yield _ev("result", ticker=tk, status="skipped",
+                              reason=per_item_error)
+                    per_item_error = "__handled__"
+                    break
+        if per_item_error == "__handled__":
+            continue
+        if per_item_error:
+            errors_n += 1
+            yield _ev("result", ticker=tk, status="error",
+                      error=per_item_error)
+        elif final:
+            analyzed_n += 1
+            yield _ev("result", ticker=tk, status="analyzed", report=final)
         else:
-            logger.warning("Analyst gather error: %s", r)
+            errors_n += 1
+            yield _ev("result", ticker=tk, status="error",
+                      error="no report produced")
 
-    # Backfill any analyst that errored so the debate has all four notes
-    for k, _ in ANALYST_ROLES:
-        notes.setdefault(k, "(analyst note unavailable)")
-
-    # Phase 2 — Bull vs Bear (in parallel)
-    yield _ev("debate", agent="bull", status="running")
-    yield _ev("debate", agent="bear", status="running")
-    bull_task = ai_client.ask(_debate_prompt("BULL", notes),
-                              system=_SYSTEM_BASE, max_tokens=500, temperature=0.5)
-    bear_task = ai_client.ask(_debate_prompt("BEAR", notes),
-                              system=_SYSTEM_BASE, max_tokens=500, temperature=0.5)
-    bull_text, bear_text = await asyncio.gather(bull_task, bear_task,
-                                                return_exceptions=True)
-    bull_text = _scrub_advice((bull_text if isinstance(bull_text, str)
-                               else "(bull researcher unavailable)").strip())
-    bear_text = _scrub_advice((bear_text if isinstance(bear_text, str)
-                               else "(bear researcher unavailable)").strip())
-    yield _ev("debate", agent="bull", status="done", partial=bull_text)
-    yield _ev("debate", agent="bear", status="done", partial=bear_text)
-
-    # Phase 3 — Trader synthesis (JSON verdict)
-    yield _ev("trader", status="running")
-    trader_raw = await ai_client.ask(
-        _trader_prompt(notes, bull_text, bear_text, summary),
-        system=_SYSTEM_BASE + " Reply with strict JSON only.",
-        max_tokens=400,
-        temperature=0.2,
-    )
-    verdict_obj = await _safe_json(trader_raw)
-    verdict = (verdict_obj.get("verdict") or "HOLD").upper()
-    if verdict not in ("BUY", "HOLD", "SELL"):
-        verdict = "HOLD"
-    confidence = (verdict_obj.get("confidence") or "MEDIUM").upper()
-    headline = _scrub_advice((verdict_obj.get("headline") or
-                              "Synthesis incomplete — review the analyst notes.").strip())
-    yield _ev("trader", status="done", partial=json.dumps(verdict_obj))
-
-    # Phase 4 — Risk gate
-    yield _ev("risk", status="running")
-    # Already scrubbed all components; the risk gate is the final assembly.
-    report = {
-        "ticker":     upper,
-        "name":       (ctx["stockDetail"].get("info") or {}).get("longName")
-                       or ctx["stockDetail"].get("companyName") or upper,
-        "verdict":    verdict,
-        "confidence": confidence,
-        "headline":   headline,
-        "priceTarget": verdict_obj.get("priceTarget") or "N/A",
-        "horizon":    verdict_obj.get("horizon") or "3-6 months",
-        "keyRisks":   verdict_obj.get("keyRisks") or [],
-        "analysts": {
-            "fundamentals": notes.get("fundamentals", ""),
-            "news":         notes.get("news", ""),
-            "technicals":   notes.get("technicals", ""),
-            "macro":        notes.get("macro", ""),
-        },
-        "debate": {
-            "bull": bull_text,
-            "bear": bear_text,
-        },
-        "snapshot": {
-            "lastPrice":   ctx["stockDetail"].get("lastPrice"),
-            "pChange":     ctx["stockDetail"].get("pChange"),
-            "marketState": ctx.get("marketState"),
-            "asOfIst":     ctx.get("asOfIst"),
-        },
-        "modelsUsed":  list(dict.fromkeys(models_used)),
-        "sourcesUsed": sources_used,
-        "disclaimer":  SEBI_DISCLAIMER,
-        "cached":      False,
-    }
-    # Final defence-in-depth scrub pass across every user-visible string.
-    report = _scrub_report(report)
-    yield _ev("risk", status="done")
-
-    elapsed_ms = int((time.time() - started) * 1000)
-    report["wallClockMs"] = elapsed_ms
-
-    # Persist (quota was already reserved atomically before LLM calls).
-    try:
-        _save_report(upper, user_id, report, models_used, sources_used, elapsed_ms)
-    except Exception as e:
-        logger.warning("Failed to persist AI analyst report: %s", e)
-
-    new_quota = get_quota(user_id)
-    yield _ev("done", status="done", report=report, quota=new_quota)
+    yield _ev("done",
+              processed=cached_n + analyzed_n + errors_n,
+              cached=cached_n, analyzed=analyzed_n,
+              skipped=skipped_n, errors=errors_n,
+              quota=get_quota(user_id))
 
 
 async def run_analysis(ticker: str, user_id: str,
@@ -795,8 +916,10 @@ async def run_analysis(ticker: str, user_id: str,
                 yield _ev("error", status="error",
                           error=f"Analysis exceeded {_ANALYSIS_TIMEOUT_SEC}s budget. "
                                 f"Try again later — the model may be slow right now.")
-                # Refund the reserved quota slot since the user didn't get a report
-                _refund_quota(user_id)
+                # Quota refund is owned by `_run_analysis_impl`'s GeneratorExit
+                # handler, which fires when `inner.aclose()` runs in the finally
+                # below. Refunding here too would double-decrement the slot and
+                # could let other concurrent runs exceed the daily limit.
                 return
             try:
                 ev = await asyncio.wait_for(inner.__anext__(), timeout=remaining)
@@ -805,11 +928,13 @@ async def run_analysis(ticker: str, user_id: str,
             except asyncio.TimeoutError:
                 yield _ev("error", status="error",
                           error=f"Analysis exceeded {_ANALYSIS_TIMEOUT_SEC}s budget.")
-                _refund_quota(user_id)
+                # Same — refund happens once via aclose() → GeneratorExit.
                 return
             yield ev
     finally:
         # Make sure the inner generator is fully closed even on early return.
+        # This is what triggers the cancellation-refund path in
+        # `_run_analysis_impl` for both timeouts and client disconnects.
         try:
             await inner.aclose()
         except Exception:  # pragma: no cover

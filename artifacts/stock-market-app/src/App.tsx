@@ -23,6 +23,7 @@ import LoginPage from "@/pages/LoginPage";
 import InsightsLayout from "@/pages/insights/InsightsLayout";
 import AIAnalyst from "@/pages/AIAnalyst";
 import AIAnalystCompare from "@/pages/AIAnalystCompare";
+import AIAnalystScan from "@/pages/AIAnalystScan";
 import GlobalAssistant from "@/components/GlobalAssistant";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { CustomAuthProvider, useCustomAuth } from "@/context/CustomAuthContext";
@@ -112,6 +113,7 @@ function AppRoutes() {
         <Route path="/hydra"           component={HydraAlpha} />
         <Route path="/agents/:symbol"  component={InvestorCouncil} />
         <Route path="/agents"          component={InvestorCouncil} />
+        <Route path="/ai-analyst/scan"    component={AIAnalystScan} />
         <Route path="/ai-analyst/compare" component={AIAnalystCompare} />
         <Route path="/ai-analyst/:ticker" component={AIAnalyst} />
         <Route path="/ai-analyst"      component={AIAnalyst} />
