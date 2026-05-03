@@ -529,7 +529,7 @@ async def get_heatmap(
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Company filings (BSE)
+# Company filings (BSE + NSE — corporate announcements & insider trading)
 # ────────────────────────────────────────────────────────────────────────────
 BSE_API = "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w"
 BSE_HEADERS = {
@@ -539,14 +539,34 @@ BSE_HEADERS = {
     "Referer": "https://www.bseindia.com/",
 }
 
+# BSE returns naive IST timestamps like "2026-05-03T02:21:56" (no tz suffix).
+# JS `new Date()` would parse those as the browser's local time, so the
+# "X min ago" label drifts by IST offset for non-IST users. We tag the
+# offset on the server so every consumer parses the same instant.
+_IST_OFFSET = "+05:30"
+
+
+def _ist_isoformat(s: str) -> str:
+    """Append +05:30 to a naive IST datetime string. Idempotent."""
+    if not s:
+        return ""
+    s = s.strip().replace(" ", "T")
+    # Already timezone-suffixed? Leave alone. Detect Z, +HH:MM, or -HH:MM (only
+    # the trailing offset, not the date's own '-' separators — len("YYYY-MM-DDTHH:MM:SS") = 19).
+    if s.endswith("Z"):
+        return s
+    if len(s) >= 6 and s[-6] in ("+", "-") and s[-3] == ":":
+        return s
+    return f"{s}{_IST_OFFSET}"
+
 
 def _adapt_bse_announcements(payload: Any) -> list[dict]:
-    """Convert BSE API JSON to our normalised filing shape."""
+    """Convert BSE Corporate Announcements JSON to our normalised filing shape."""
     if not isinstance(payload, dict):
         return []
     rows = payload.get("Table") or []
     out: list[dict] = []
-    for r in rows:
+    for idx, r in enumerate(rows):
         if not isinstance(r, dict):
             continue
         scrip = str(r.get("SCRIP_CD", "")).strip()
@@ -554,46 +574,341 @@ def _adapt_bse_announcements(payload: Any) -> list[dict]:
         doc_url = ""
         if attachment:
             doc_url = f"https://www.bseindia.com/xml-data/corpfiling/AttachLive/{attachment}"
+        news_id = (r.get("NEWSID") or "").strip()
+        # Synthetic stable id avoids React key collisions when BSE returns blanks.
+        if not news_id:
+            news_id = f"bse:{scrip}:{(r.get('NEWS_DT') or '').strip()}:{idx}"
         out.append({
-            "id": r.get("NEWSID", ""),
+            "id": f"bse:{news_id}",
+            "exchange": "BSE",
             "symbol": scrip,
             "company": (r.get("SLONGNAME") or "").strip() or scrip,
             "category": (r.get("CATEGORYNAME") or "").strip() or "Other",
             "purpose": (r.get("HEADLINE") or r.get("NEWSSUB") or "").strip(),
             "subject": (r.get("NEWSSUB") or "").strip(),
-            "date": (r.get("NEWS_DT") or "").strip(),
+            "date": _ist_isoformat(r.get("NEWS_DT") or ""),
             "documentUrl": doc_url,
         })
     return out
 
 
-@router.get("/company-filings")
-async def get_company_filings(
-    category: str = Query("-1", description="-1=All; 'Result','AGM','Dividend','Board Meeting'..."),
-    page: int = Query(1),
-):
-    cache_key = f"company-filings:{category}:{page}"
-    cached = _cache_get(cache_key, ttl=900)  # 15 min
-    if cached is not None:
-        return cached
+def _bse_total_count(payload: Any) -> int:
+    """Total available rows across all pages, from BSE Table1[0].ROWCNT."""
+    try:
+        t1 = (payload or {}).get("Table1") or []
+        if t1 and isinstance(t1[0], dict):
+            return int(t1[0].get("ROWCNT") or 0)
+    except Exception:
+        pass
+    return 0
+
+
+def _adapt_nse_announcements(payload: Any) -> list[dict]:
+    """Convert NSE corporate-announcements feed to our normalised filing shape."""
+    rows = payload if isinstance(payload, list) else (payload or {}).get("data") or []
+    out: list[dict] = []
+    for idx, r in enumerate(rows):
+        if not isinstance(r, dict):
+            continue
+        sym = (r.get("symbol") or "").strip()
+        company = (r.get("sm_name") or sym).strip()
+        desc = (r.get("desc") or "").strip()
+        subject = (r.get("attchmntText") or desc).strip()
+        # NSE has no fixed taxonomy — derive a coarse category from desc text.
+        category = _infer_category(desc + " " + subject)
+        # Prefer ISO sort_date ("2026-05-02 23:58:27") over DDMMYYYYHHMMSS dt.
+        raw_date = (r.get("sort_date") or "").strip()
+        seq = (r.get("seq_id") or "").strip()
+        out.append({
+            "id": f"nse:{seq or idx}",
+            "exchange": "NSE",
+            "symbol": sym,
+            "company": company,
+            "category": category,
+            "purpose": desc or subject or "—",
+            "subject": subject,
+            "date": _ist_isoformat(raw_date),
+            "documentUrl": (r.get("attchmntFile") or "").strip(),
+        })
+    return out
+
+
+def _adapt_nse_pit(payload: Any) -> list[dict]:
+    """Convert NSE PIT (insider trading) feed to our normalised filing shape."""
+    rows = (payload or {}).get("data") or []
+    out: list[dict] = []
+    for idx, r in enumerate(rows):
+        if not isinstance(r, dict):
+            continue
+        sym = (r.get("symbol") or "").strip()
+        company = (r.get("company") or sym).strip()
+        acq_name = (r.get("acqName") or r.get("tkdAcqm") or "").strip()
+        sec_acq = (r.get("secAcq") or "").strip()
+        buy_q = (r.get("buyQuantity") or "0").strip()
+        sell_q = (r.get("sellquantity") or "0").strip()
+        sec_type = (r.get("secType") or "").strip()
+        purpose_bits = []
+        if acq_name:
+            purpose_bits.append(acq_name)
+        if buy_q and buy_q != "0":
+            purpose_bits.append(f"Bought {buy_q} {sec_type}")
+        elif sell_q and sell_q != "0":
+            purpose_bits.append(f"Sold {sell_q} {sec_type}")
+        elif sec_acq and sec_acq != "0":
+            purpose_bits.append(f"Holding change: {sec_acq} {sec_type}")
+        purpose = " · ".join(purpose_bits) or "Insider trade disclosure"
+        # NSE PIT date is "02-May-2026 16:46" — convert to ISO.
+        raw_date = (r.get("date") or "").strip()
+        iso_date = _parse_nse_pit_date(raw_date)
+        pid = (r.get("pid") or r.get("did") or str(idx)).strip()
+        out.append({
+            "id": f"nse-pit:{pid}",
+            "exchange": "NSE",
+            "symbol": sym,
+            "company": company,
+            "category": "Insider Trading",
+            "purpose": purpose,
+            "subject": purpose,
+            "date": iso_date,
+            "documentUrl": "",
+        })
+    return out
+
+
+def _parse_nse_pit_date(s: str) -> str:
+    """Convert '02-May-2026 16:46' → '2026-05-02T16:46:00+05:30'."""
+    if not s:
+        return ""
+    try:
+        from datetime import datetime
+        dt = datetime.strptime(s, "%d-%b-%Y %H:%M")
+        return dt.strftime("%Y-%m-%dT%H:%M:00") + _IST_OFFSET
+    except Exception:
+        return _ist_isoformat(s)
+
+
+_CATEGORY_KEYWORDS: list[tuple[str, str]] = [
+    ("Result",                ("result", "financial result", "quarterly", "annual report")),
+    ("Dividend",              ("dividend",)),
+    ("Bonus",                 ("bonus", "stock split", "sub-division", "subdivision")),
+    ("AGM/EGM",               ("agm", "egm", "annual general meeting", "extraordinary general")),
+    ("Board Meeting",         ("board meeting",)),
+    ("Acquisition",           ("acquisition", "acquired", "merger", "amalgamation", "scheme of arrangement")),
+    ("Investor Presentation", ("investor presentation", "analyst meet", "investor meet", "earnings call", "concall")),
+    ("Insider Trading",       ("sast", "insider", "regulation 7", "pit ")),
+    ("Company Update",        ("update", "intimation", "press release", "newspaper")),
+]
+
+
+def _infer_category(text: str) -> str:
+    """Map free-text NSE descriptions to our coarse BSE-aligned categories."""
+    t = (text or "").lower()
+    for label, kws in _CATEGORY_KEYWORDS:
+        for kw in kws:
+            if kw in t:
+                return label
+    return "Other"
+
+
+def _matches_category(item: dict, category: str) -> bool:
+    """Client-side category filter — handles BSE rows the strCat= server filter misses
+    (e.g. NSE rows, or BSE 'Investor Presentation' that lives under 'Company Update')."""
+    if not category or category in ("all", "-1"):
+        return True
+    target = category.lower()
+    blob = (item.get("category", "") + " " + item.get("purpose", "") + " " + item.get("subject", "")).lower()
+    # Match on first slash-segment so "AGM/EGM" matches "AGM" too.
+    head = target.split("/")[0].strip()
+    return head in blob or target in blob
+
+
+# BSE's strCat= server filter only accepts categories that appear in its own
+# taxonomy. Items like "Investor Presentation" live under CATEGORYNAME="Company
+# Update" with the marker in HEADLINE — passing strCat=Investor Presentation
+# returns 0 rows. For those we fetch all and rely on _matches_category instead.
+_BSE_NATIVE_CATEGORIES = {
+    "Result", "Board Meeting", "AGM/EGM", "Dividend", "Bonus",
+    "Acquisition", "Company Update",
+}
+
+
+async def _fetch_bse_corporate(category: str, page: int) -> tuple[list[dict], int, str]:
+    """Fetch one page of BSE corporate announcements. Returns (items, total, error)."""
+    str_cat = category if (category in _BSE_NATIVE_CATEGORIES) else "-1"
     try:
         async with httpx.AsyncClient(timeout=12.0, headers=BSE_HEADERS) as cli:
             resp = await cli.get(BSE_API, params={
                 "pageno": page,
-                "strCat": category,
+                "strCat": str_cat,
                 "strPrevDate": "",
                 "strScrip": "",
                 "strSearch": "P",
                 "strToDate": "",
                 "strType": "C",
             })
-        resp.raise_for_status()
-        items = _adapt_bse_announcements(resp.json())
-    except Exception as e:
-        logger.warning("BSE filings fetch failed: %s", e)
-        return {"available": False, "message": "BSE feed temporarily unavailable.", "items": []}
+        if resp.status_code >= 400:
+            logger.warning("BSE filings HTTP %s for cat=%s page=%s", resp.status_code, category, page)
+            return [], 0, f"BSE HTTP {resp.status_code}"
+        payload = resp.json()
+        return _adapt_bse_announcements(payload), _bse_total_count(payload), ""
+    except httpx.TimeoutException:
+        logger.warning("BSE filings timeout cat=%s page=%s", category, page)
+        return [], 0, "BSE timeout"
+    except Exception as e:  # pragma: no cover — defensive
+        logger.warning("BSE filings fetch failed cat=%s page=%s: %s", category, page, e)
+        return [], 0, f"BSE error: {e.__class__.__name__}"
 
-    res = {"available": True, "source": "BSE Corporate Announcements", "items": items}
+
+async def _fetch_nse_corporate() -> tuple[list[dict], str]:
+    """Fetch NSE corporate announcements (latest ~20 across all equities)."""
+    data = await _nse.fetch_nse(
+        "/api/corporate-announcements?index=equities",
+        cache_key="nse-corp-anno",
+        ttl=600,
+    )
+    if data is None:
+        return [], "NSE corporate feed unavailable"
+    return _adapt_nse_announcements(data), ""
+
+
+async def _fetch_nse_insider() -> tuple[list[dict], str]:
+    """Fetch NSE PIT (insider) feed."""
+    data = await _nse.fetch_nse(
+        "/api/corporates-pit?index=equities",
+        cache_key="nse-pit",
+        ttl=600,
+    )
+    if data is None:
+        return [], "NSE insider feed unavailable"
+    return _adapt_nse_pit(data), ""
+
+
+@router.get("/company-filings")
+async def get_company_filings(
+    request: Request,
+    source: str = Query("all", description="all | bse | nse"),
+    type: str = Query("corporate", description="corporate | insider | shareholding"),
+    category: str = Query("all", description="all | Result | Dividend | Board Meeting | AGM/EGM | Bonus | Acquisition | Investor Presentation | Company Update"),
+    page: int = Query(1, ge=1, le=20),
+    pageSize: int = Query(50, ge=1, le=200),
+):
+    source = (source or "all").lower()
+    type_ = (type or "corporate").lower()
+    category = category or "all"
+    cache_key = f"company-filings:v2:{source}:{type_}:{category}:{page}:{pageSize}"
+    cached = _cache_get(cache_key, ttl=900)  # 15 min
+    if cached is not None:
+        return cached
+
+    # Shareholding-pattern feeds are gated/unstable on both exchanges right now.
+    if type_ == "shareholding":
+        res = {
+            "available": False,
+            "sources": [],
+            "items": [],
+            "total": 0,
+            "hasMore": False,
+            "page": page,
+            "message": "Shareholding-pattern feed is not currently available. Use the BSE/NSE corporate filings tab — companies file SHP under 'Company Update' there.",
+            "meta": _meta("BSE_NSE_FILINGS"),
+        }
+        _cache_set(cache_key, res)
+        return res
+
+    tasks: list = []
+    plan: list[str] = []  # parallel to tasks, identifies which fetcher
+
+    if type_ == "insider":
+        # NSE PIT is the only working live insider feed; BSE InsiderTrading2 endpoint is dead.
+        if source in ("all", "nse"):
+            tasks.append(_fetch_nse_insider())
+            plan.append("nse-insider")
+    else:
+        # type_ == "corporate" (default)
+        if source in ("all", "bse"):
+            tasks.append(_fetch_bse_corporate(category, page))
+            plan.append("bse-corp")
+        if source in ("all", "nse"):
+            tasks.append(_fetch_nse_corporate())
+            plan.append("nse-corp")
+
+    if not tasks:
+        res = {
+            "available": False, "sources": [], "items": [], "total": 0,
+            "hasMore": False, "page": page,
+            "message": "No source available for the requested type.",
+            "meta": _meta("BSE_NSE_FILINGS"),
+        }
+        _cache_set(cache_key, res)
+        return res
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    items: list[dict] = []
+    sources_used: list[str] = []
+    errors: list[str] = []
+    bse_total = 0
+
+    for label, r in zip(plan, results):
+        if isinstance(r, Exception):
+            errors.append(f"{label}: {r}")
+            continue
+        if label == "bse-corp":
+            rows, total, err = r  # type: ignore[misc]
+            if rows:
+                items.extend(rows)
+                if "BSE Corporate" not in sources_used:
+                    sources_used.append("BSE Corporate")
+            if total:
+                bse_total = total
+            if err:
+                errors.append(err)
+        else:
+            rows, err = r  # type: ignore[misc]
+            if rows:
+                items.extend(rows)
+                src_name = "NSE Insider" if label == "nse-insider" else "NSE Corporate"
+                if src_name not in sources_used:
+                    sources_used.append(src_name)
+            if err:
+                errors.append(err)
+
+    # Dedupe: same company + same minute + same headline prefix.
+    seen: set[tuple[str, str, str]] = set()
+    unique: list[dict] = []
+    for it in items:
+        key = (it.get("company") or it.get("symbol") or "", (it.get("date") or "")[:16], (it.get("purpose") or "")[:60].lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(it)
+
+    # Server-side category filter for NSE rows (BSE was already filtered upstream).
+    if category and category != "all":
+        unique = [it for it in unique if _matches_category(it, category)]
+
+    # Sort newest first; date is now ISO with +05:30 so string sort works.
+    unique.sort(key=lambda x: x.get("date") or "", reverse=True)
+
+    # Cap to pageSize for the UI; expose total so the client can show "Load more".
+    capped = unique[:pageSize]
+    # Approximate total: BSE knows its own count; NSE feeds are ~latest 20 only.
+    total = max(bse_total, len(unique))
+    has_more = len(unique) > len(capped) or (bse_total and page * pageSize < bse_total)
+
+    available = bool(capped) or not errors
+    res = {
+        "available": available,
+        "sources": sources_used,
+        "source": ", ".join(sources_used) if sources_used else None,  # back-compat
+        "items": capped,
+        "total": total,
+        "hasMore": bool(has_more),
+        "page": page,
+        "errors": errors if errors else None,
+        "message": (None if capped else (errors[0] if errors else "No filings match the selected filter.")),
+        "meta": _meta("BSE_NSE_FILINGS"),
+    }
     _cache_set(cache_key, res)
     return res
 
