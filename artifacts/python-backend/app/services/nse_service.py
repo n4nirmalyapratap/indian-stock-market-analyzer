@@ -1,7 +1,10 @@
 import asyncio
+import logging
 import time
 from typing import Any, Optional
 import httpx
+
+logger = logging.getLogger(__name__)
 
 from . import market_cache_service as _mcs
 
@@ -222,11 +225,41 @@ class NseService:
         )
 
         await _ensure_cookies()
-        headers = {**HEADERS_API, "Cookie": _cookies}
+        # Path-specific Referer — Akamai's WAF rejects bare-domain Referer for
+        # the historical endpoints. Plus retry-on-503 (transient Akamai
+        # bot-challenge) with one cookie refresh in between.
+        headers = {
+            **HEADERS_API,
+            "Cookie":  _cookies,
+            "Referer": f"https://www.nseindia.com/get-quotes/equity?symbol={symbol}",
+        }
         try:
             async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                # Warm session by hitting the equity quote page first — this
+                # is what the browser does before issuing the XHR.
+                try:
+                    await client.get(
+                        f"https://www.nseindia.com/get-quotes/equity?symbol={symbol}",
+                        headers={**HEADERS_BROWSER, "Cookie": _cookies},
+                    )
+                except Exception:
+                    pass
                 resp = await client.get(f"https://www.nseindia.com{path}", headers=headers)
+                if resp.status_code == 503:
+                    # Akamai bot-challenge — refresh cookies and retry once
+                    global _cookie_expiry
+                    _cookie_expiry = 0
+                    await _ensure_cookies()
+                    headers["Cookie"] = _cookies
+                    resp = await client.get(f"https://www.nseindia.com{path}", headers=headers)
                 if resp.status_code != 200:
+                    # Visible warning so the YAHOO-sealed disk fallback is
+                    # never silent. NSE historical is commonly Akamai-blocked
+                    # from data-center IPs (Replit / AWS / GCP).
+                    logger.warning(
+                        "NSE historical %s for %s — falling back to Yahoo",
+                        resp.status_code, symbol,
+                    )
                     return []
                 raw = resp.json()
                 rows = raw.get("data", [])

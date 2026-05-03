@@ -30,6 +30,100 @@ def _log_returns(closes: list[float]) -> list[float]:
     return returns
 
 
+def sortino_ratio(
+    closes: list[float],
+    risk_free_rate_annual: float = 0.07,
+    target_return_daily: float | None = None,
+) -> dict:
+    """
+    Sortino ratio = (mean_excess_return / downside_deviation) * sqrt(252).
+
+    Unlike Sharpe, Sortino only penalises *downside* volatility (returns
+    below the target). Default target = risk-free rate / 252.
+
+    Returns annualised Sortino + supporting components.  None when there is
+    insufficient downside data.
+    """
+    if len(closes) < 30:
+        return {"sortino": None, "error": "Need at least 30 days of history"}
+    rets = _log_returns(closes)
+    if not rets:
+        return {"sortino": None, "error": "Could not compute returns"}
+
+    rets_arr = np.array(rets)
+    rf_daily = risk_free_rate_annual / 252.0
+    target   = rf_daily if target_return_daily is None else float(target_return_daily)
+
+    excess   = rets_arr - target
+    downside = excess[excess < 0]
+    if downside.size == 0:
+        # No drawdowns in the sample — Sortino is undefined (treat as None to
+        # avoid pretending the portfolio has infinite risk-adjusted return).
+        return {
+            "sortino":            None,
+            "annualReturn":       round(float(rets_arr.mean()) * 252 * 100, 4),
+            "downsideDeviation":  0.0,
+            "riskFreeRateAnnual": risk_free_rate_annual,
+            "sampleSize":         len(rets),
+            "note":               "No downside observations in sample.",
+        }
+
+    downside_dev_daily = float(np.sqrt(np.mean(downside ** 2)))
+    annual_excess      = float(excess.mean()) * 252
+    annual_downside    = downside_dev_daily * np.sqrt(252)
+    sortino            = annual_excess / annual_downside if annual_downside > 0 else None
+
+    return {
+        "sortino":            round(sortino, 4) if sortino is not None else None,
+        "annualReturn":       round(float(rets_arr.mean()) * 252 * 100, 4),
+        "downsideDeviation":  round(annual_downside * 100, 4),
+        "riskFreeRateAnnual": risk_free_rate_annual,
+        "sampleSize":         len(rets),
+    }
+
+
+def max_drawdown(closes: list[float]) -> dict:
+    """Return the worst peak-to-trough drawdown over the price series."""
+    if len(closes) < 2:
+        return {"maxDrawdownPct": 0.0, "peakIndex": 0, "troughIndex": 0}
+    arr  = np.array(closes, dtype=float)
+    peak = np.maximum.accumulate(arr)
+    dd   = (arr - peak) / peak
+    trough_idx = int(np.argmin(dd))
+    peak_idx   = int(np.argmax(arr[: trough_idx + 1])) if trough_idx > 0 else 0
+    return {
+        "maxDrawdownPct": round(float(dd.min()) * 100, 4),
+        "peakIndex":      peak_idx,
+        "troughIndex":    trough_idx,
+        "peakPrice":      round(float(arr[peak_idx]), 2),
+        "troughPrice":    round(float(arr[trough_idx]), 2),
+    }
+
+
+def sharpe_ratio(
+    closes: list[float],
+    risk_free_rate_annual: float = 0.07,
+) -> dict:
+    """Annualised Sharpe ratio = mean_excess_return / volatility * sqrt(252)."""
+    if len(closes) < 30:
+        return {"sharpe": None, "error": "Need at least 30 days of history"}
+    rets = _log_returns(closes)
+    if not rets:
+        return {"sharpe": None, "error": "Could not compute returns"}
+    rets_arr = np.array(rets)
+    rf_daily = risk_free_rate_annual / 252.0
+    excess   = rets_arr - rf_daily
+    vol      = float(np.std(rets_arr))
+    sharpe   = (float(excess.mean()) / vol * np.sqrt(252)) if vol > 0 else None
+    return {
+        "sharpe":             round(sharpe, 4) if sharpe is not None else None,
+        "annualReturn":       round(float(rets_arr.mean()) * 252 * 100, 4),
+        "annualVolatility":   round(vol * np.sqrt(252) * 100, 4),
+        "riskFreeRateAnnual": risk_free_rate_annual,
+        "sampleSize":         len(rets),
+    }
+
+
 def historical_var(
     closes: list[float],
     confidence: float = 0.95,

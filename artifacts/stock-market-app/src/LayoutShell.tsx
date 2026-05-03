@@ -6,7 +6,7 @@ import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
   Brain, TrendingUp, CandlestickChart,
   Settings, ChevronRight, ChevronLeft, ChevronDown, Sun, Moon,
-  Newspaper, Gauge, Sparkles,
+  Newspaper, Gauge, Sparkles, Users, Briefcase,
 } from "lucide-react";
 
 export const MAIN_NAV = [
@@ -17,10 +17,12 @@ export const MAIN_NAV = [
   { path: "/sentiment",  label: "Sentiment",      icon: Gauge },
   { path: "/news",       label: "News Feed",      icon: Newspaper },
   { path: "/stocks",     label: "Stock Lookup",   icon: Search },
+  { path: "/agents",     label: "Investor Council", icon: Users },
   { path: "/patterns",   label: "Patterns",       icon: Scan },
   { path: "/scanners",   label: "Scanners",       icon: Filter },
   { path: "/hydra",      label: "AI Analyzer",    icon: Brain },
   { path: "/options",    label: "Options Tester", icon: TrendingUp },
+  { path: "/portfolio",  label: "Portfolio",      icon: Briefcase },
 ];
 
 export const SETTINGS_NAV: { path: string; label: string; icon: ComponentType }[] = [];

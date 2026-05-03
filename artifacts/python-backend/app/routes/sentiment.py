@@ -21,7 +21,10 @@ router = APIRouter(prefix="/sentiment", tags=["sentiment"])
 def _meta() -> dict:
     state = _disk.current_market_state()
     return {
-        "source":       "NSE",
+        # Market Sentiment composes Yahoo Finance (VIX, Nifty, sector indices)
+        # with RSS feed scoring (news leg). It does NOT call NSE directly —
+        # claiming "NSE" as the source was provenance-lying.
+        "source":       "Yahoo Finance + RSS feeds",
         "servedFrom":   "SENTIMENT_ENGINE",
         "asOf":         _disk._now_ist().isoformat(),
         "marketState":  state,
@@ -36,7 +39,10 @@ async def get_market_sentiment():
     """Full centralized market sentiment snapshot (cached 15 min)."""
     try:
         data = await engine.get_market_sentiment()
-        data["cached"] = True
+        # Preserve engine's `cached` flag — it's False on a fresh compute and
+        # True on a cache hit. The previous unconditional `data["cached"]=True`
+        # made it impossible to tell from the response whether the engine had
+        # just run or returned a cached snapshot.
         if isinstance(data, dict):
             data.setdefault("meta", _meta())
         return data
