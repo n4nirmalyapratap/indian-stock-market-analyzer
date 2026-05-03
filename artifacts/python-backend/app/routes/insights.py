@@ -1012,12 +1012,74 @@ def _safe_float(s: str) -> float | None:
         return None
 
 
+_EQUITY_SUBS = [
+    "Large Cap", "Mid Cap", "Small Cap", "Large & Mid Cap", "Multi Cap",
+    "Flexi Cap", "ELSS", "Focused", "Value", "Contra", "Dividend Yield",
+    "Sectoral", "Thematic",
+]
+_DEBT_SUBS = [
+    "Overnight", "Liquid", "Ultra Short", "Low Duration", "Money Market",
+    "Short Duration", "Medium Duration", "Medium to Long", "Long Duration",
+    "Dynamic Bond", "Corporate Bond", "Credit Risk", "Banking and PSU",
+    "Banking & PSU", "Gilt", "Floater", "10 year",
+]
+_HYBRID_SUBS = [
+    "Conservative", "Balanced", "Aggressive", "Dynamic Asset Allocation",
+    "Multi Asset", "Arbitrage", "Equity Savings",
+]
+_INDEX_SUBS = ["Index Funds", "ETFs", "Fund of Funds", "FoF"]
+_SOLN_SUBS  = ["Retirement", "Children"]
+
+
+def _categorize_scheme(category_str: str) -> dict:
+    """Map an AMFI category header like
+    'Open Ended Schemes(Equity Scheme - Large Cap Fund)' into structured
+    {assetClass, subCategory, openEnded} so the UI can offer a clean
+    two-level filter (asset class → sub-category)."""
+    s = (category_str or "").strip()
+    if not s:
+        return {"assetClass": "Other", "subCategory": "", "openEnded": True}
+
+    open_ended = "Open Ended" in s or "Open-Ended" in s
+    inner = s
+    if "(" in s and ")" in s:
+        inner = s[s.index("(") + 1 : s.rindex(")")]
+
+    low = inner.lower()
+    asset = "Other"
+    if "equity" in low:    asset = "Equity"
+    elif "debt" in low:    asset = "Debt"
+    elif "hybrid" in low:  asset = "Hybrid"
+    elif "solution" in low: asset = "Solution Oriented"
+    elif "index" in low or "etf" in low or "exchange traded" in low or "fund of funds" in low or "fof" in low:
+        asset = "Index / ETF"
+    elif "money market" in low:
+        asset = "Debt"  # AMFI sometimes lists money-market under "Other"
+
+    pool = {
+        "Equity": _EQUITY_SUBS, "Debt": _DEBT_SUBS, "Hybrid": _HYBRID_SUBS,
+        "Index / ETF": _INDEX_SUBS, "Solution Oriented": _SOLN_SUBS,
+    }.get(asset, [])
+    sub = ""
+    for cand in pool:
+        if cand.lower() in low:
+            sub = cand
+            break
+    if not sub and asset == "Index / ETF":
+        if "etf" in low: sub = "ETFs"
+        elif "fund of fund" in low or "fof" in low: sub = "Fund of Funds"
+        else: sub = "Index Funds"
+
+    return {"assetClass": asset, "subCategory": sub, "openEnded": open_ended}
+
+
 def _parse_amfi_text(text: str) -> list[dict]:
     """Parse AMFI's NAVAll.txt — semicolon-separated rows interleaved with
     AMC-name and category-header lines (no semicolons)."""
     rows: list[dict] = []
     current_amc = ""
     current_cat = ""
+    current_meta = {"assetClass": "Other", "subCategory": "", "openEnded": True}
     for raw in text.splitlines():
         line = raw.rstrip()
         if not line.strip():
@@ -1029,6 +1091,7 @@ def _parse_amfi_text(text: str) -> list[dict]:
             # Headers like "Open Ended Schemes(Equity Scheme - Large Cap Fund)"
             if "Scheme" in stripped and "(" in stripped:
                 current_cat = stripped
+                current_meta = _categorize_scheme(stripped)
             elif stripped.endswith("Mutual Fund"):
                 current_amc = stripped
             continue
@@ -1044,17 +1107,14 @@ def _parse_amfi_text(text: str) -> list[dict]:
             "date": dt,
             "amc": current_amc,
             "category": current_cat,
+            "assetClass": current_meta["assetClass"],
+            "subCategory": current_meta["subCategory"],
+            "openEnded": current_meta["openEnded"],
         })
     return rows
 
 
-@router.get("/mf-holdings")
-async def get_mf_holdings(
-    amc: str = Query("", description="Filter by AMC name (substring, case-insensitive)"),
-    category: str = Query("", description="Filter by category (substring)"),
-    search: str = Query("", description="Filter by scheme name (substring)"),
-    limit: int = Query(200, ge=1, le=2000),
-):
+async def _load_amfi() -> list[dict] | None:
     cache_key = "amfi:nav-all"
     parsed = _cache_get(cache_key, ttl=LONG_TTL)
     if parsed is None:
@@ -1067,12 +1127,34 @@ async def get_mf_holdings(
             _cache_set(cache_key, parsed)
         except Exception as e:
             logger.warning("AMFI fetch failed: %s", e)
-            return {"available": False, "message": "AMFI NAV feed temporarily unavailable.", "items": []}
+            return None
+    return parsed
+
+
+@router.get("/mf-holdings")
+async def get_mf_holdings(
+    amc: str = Query("", description="Filter by AMC name (substring, case-insensitive)"),
+    assetClass: str = Query("", description="Equity / Debt / Hybrid / Index / ETF / Solution Oriented / Other"),
+    subCategory: str = Query("", description="e.g. Large Cap, ELSS, Liquid"),
+    category: str = Query("", description="Legacy free-text category filter"),
+    search: str = Query("", description="Filter by scheme name (substring)"),
+    openOnly: bool = Query(True, description="Only include open-ended schemes"),
+    limit: int = Query(300, ge=1, le=2000),
+):
+    parsed = await _load_amfi()
+    if parsed is None:
+        return {"available": False, "message": "AMFI NAV feed temporarily unavailable.", "items": []}
 
     items = parsed
+    if openOnly:
+        items = [x for x in items if x.get("openEnded")]
     if amc:
         ql = amc.lower()
         items = [x for x in items if ql in (x.get("amc") or "").lower()]
+    if assetClass:
+        items = [x for x in items if (x.get("assetClass") or "") == assetClass]
+    if subCategory:
+        items = [x for x in items if (x.get("subCategory") or "") == subCategory]
     if category:
         ql = category.lower()
         items = [x for x in items if ql in (x.get("category") or "").lower()]
@@ -1080,9 +1162,23 @@ async def get_mf_holdings(
         ql = search.lower()
         items = [x for x in items if ql in (x.get("schemeName") or "").lower()]
 
-    # Build facets so the UI can populate dropdowns even when filters are empty.
-    amcs = sorted({x["amc"] for x in parsed if x.get("amc")})
-    cats = sorted({x["category"] for x in parsed if x.get("category")})
+    # Drop schemes without a NAV — they clutter the table without adding value.
+    items = [x for x in items if x.get("nav") is not None]
+
+    # Facets for the UI (computed after openOnly so dropdowns reflect what's listable).
+    base = [x for x in parsed if (not openOnly) or x.get("openEnded")]
+    amcs = sorted({x["amc"] for x in base if x.get("amc")})
+    asset_classes = sorted({x["assetClass"] for x in base if x.get("assetClass")})
+    sub_by_class: dict[str, list[str]] = {}
+    for x in base:
+        ac = x.get("assetClass") or ""
+        sc = x.get("subCategory") or ""
+        if ac and sc:
+            sub_by_class.setdefault(ac, [])
+            if sc not in sub_by_class[ac]:
+                sub_by_class[ac].append(sc)
+    for k in sub_by_class:
+        sub_by_class[k].sort()
 
     return {
         "available": True,
@@ -1091,8 +1187,295 @@ async def get_mf_holdings(
         "matched": len(items),
         "items": items[:limit],
         "amcs": amcs,
-        "categories": cats,
+        "assetClasses": asset_classes,
+        "subCategoriesByClass": sub_by_class,
     }
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# MF Scheme Detail (NAV history + returns + risk vs Nifty 50)
+# ────────────────────────────────────────────────────────────────────────────
+MFAPI_URL = "https://api.mfapi.in/mf/{code}"
+_RISK_FREE_ANNUAL = 0.06   # ~RBI repo, used for Sharpe
+
+
+def _fetch_nifty_history_sync() -> list[tuple[str, float]] | None:
+    """Blocking yfinance Nifty 50 daily-close pull (10y). Cached LONG_TTL."""
+    try:
+        import yfinance as yf
+        hist = yf.Ticker("^NSEI").history(period="10y", auto_adjust=False)
+        if hist is None or hist.empty:
+            return None
+        out: list[tuple[str, float]] = []
+        for idx, row in hist.iterrows():
+            try:
+                out.append((idx.strftime("%Y-%m-%d"), float(row["Close"])))
+            except Exception:
+                continue
+        return out
+    except Exception as e:
+        logger.warning("Nifty history fetch failed: %s", e)
+        return None
+
+
+async def _get_nifty_history() -> list[tuple[str, float]] | None:
+    cache_key = "yf:nifty:10y"
+    cached = _cache_get(cache_key, ttl=LONG_TTL)
+    if cached is not None:
+        return cached
+    loop = asyncio.get_event_loop()
+    data = await loop.run_in_executor(None, _fetch_nifty_history_sync)
+    if data:
+        _cache_set(cache_key, data)
+    return data
+
+
+def _parse_mf_date(s: str) -> str:
+    """'30-04-2026' → '2026-04-30'."""
+    try:
+        d, m, y = s.split("-")
+        return f"{y}-{m.zfill(2)}-{d.zfill(2)}"
+    except Exception:
+        return s
+
+
+def _compute_returns(nav_series: list[tuple[str, float]]) -> dict:
+    """Returns dict with absolute % for ≤1Y windows, CAGR for >1Y.
+    nav_series is newest-first list of (iso_date, nav)."""
+    if not nav_series:
+        return {}
+    latest = nav_series[0][1]
+    out: dict[str, float | None] = {}
+    # AMFI publishes NAVs only on business days; ~22 trading days/month.
+    windows = {"1M": 22, "3M": 66, "6M": 132, "1Y": 252,
+               "3Y": 756, "5Y": 1260, "10Y": 2520}
+    for label, days in windows.items():
+        if days < len(nav_series):
+            old = nav_series[days][1]
+            if old <= 0:
+                out[label] = None
+                continue
+            ratio = latest / old
+            if days >= 252:
+                yrs = days / 252
+                out[label] = (ratio ** (1 / yrs) - 1) * 100
+            else:
+                out[label] = (ratio - 1) * 100
+        else:
+            out[label] = None
+    # Since-inception CAGR (or absolute if <1Y old).
+    oldest_date, oldest_nav = nav_series[-1]
+    if oldest_nav > 0:
+        n = len(nav_series)
+        ratio = latest / oldest_nav
+        if n >= 252:
+            yrs = n / 252
+            out["SI"] = (ratio ** (1 / yrs) - 1) * 100
+        else:
+            out["SI"] = (ratio - 1) * 100
+        out["sinceDate"] = oldest_date
+    return out
+
+
+def _compute_risk(nav_series: list[tuple[str, float]],
+                  nifty: list[tuple[str, float]] | None) -> dict:
+    """Alpha/beta/std/sharpe/max-DD over the most recent ≤3Y window.
+    nav_series is newest-first; nifty is yfinance order (oldest-first)."""
+    import math
+    if len(nav_series) < 30:
+        return {}
+    # Build {date: nav} for fund.
+    fund_map = {d: v for d, v in nav_series}
+    # Restrict to last 3Y of overlap.
+    res: dict = {}
+
+    # ── Max drawdown: from full series, oldest→newest. ─────────────────
+    chrono = list(reversed(nav_series))
+    peak = 0.0
+    mdd = 0.0
+    for _, v in chrono:
+        if v > peak:
+            peak = v
+        if peak > 0:
+            dd = (v / peak) - 1.0
+            if dd < mdd:
+                mdd = dd
+    res["maxDrawdown"] = mdd * 100  # negative %
+
+    # ── Annualised standard deviation from daily returns (last 3Y). ────
+    last3y = chrono[-min(len(chrono), 756):]
+    daily: list[float] = []
+    for i in range(1, len(last3y)):
+        a, b = last3y[i - 1][1], last3y[i][1]
+        if a > 0:
+            daily.append(b / a - 1.0)
+    if daily:
+        mean = sum(daily) / len(daily)
+        var = sum((d - mean) ** 2 for d in daily) / max(1, len(daily) - 1)
+        std = math.sqrt(var)
+        res["stdDev"] = std * math.sqrt(252) * 100  # annualised %
+        # Sharpe vs RISK_FREE_ANNUAL.
+        ann_ret = (mean + 1) ** 252 - 1
+        if std > 0:
+            res["sharpe"] = (ann_ret - _RISK_FREE_ANNUAL) / (std * math.sqrt(252))
+
+    # ── Alpha / Beta vs Nifty: align by date over last ~3Y. ───────────
+    if nifty and len(nifty) > 30:
+        nifty_chron = nifty  # already oldest-first
+        # Pair daily returns where both sides have a NAV that day.
+        f_pairs: list[tuple[str, float]] = []
+        prev_date, prev_nav = None, None
+        for date in sorted(fund_map.keys()):
+            nav = fund_map[date]
+            if prev_nav is not None and prev_nav > 0:
+                f_pairs.append((date, nav / prev_nav - 1.0))
+            prev_date, prev_nav = date, nav
+
+        n_pairs: dict[str, float] = {}
+        prev = None
+        for date, close in nifty_chron:
+            if prev is not None and prev > 0:
+                n_pairs[date] = close / prev - 1.0
+            prev = close
+
+        # Take last 756 trading days of overlap.
+        overlap = [(d, fr, n_pairs[d]) for d, fr in f_pairs if d in n_pairs]
+        overlap = overlap[-756:]
+        if len(overlap) >= 30:
+            f = [x[1] for x in overlap]
+            n = [x[2] for x in overlap]
+            mf = sum(f) / len(f)
+            mn = sum(n) / len(n)
+            cov = sum((f[i] - mf) * (n[i] - mn) for i in range(len(f))) / (len(f) - 1)
+            var_n = sum((x - mn) ** 2 for x in n) / (len(n) - 1)
+            if var_n > 0:
+                beta = cov / var_n
+                # Daily alpha annualised, vs risk-free baseline.
+                rf_d = _RISK_FREE_ANNUAL / 252
+                alpha_d = (mf - rf_d) - beta * (mn - rf_d)
+                res["beta"] = beta
+                res["alpha"] = alpha_d * 252 * 100  # annualised %
+    return res
+
+
+def _downsample(series: list[dict], target: int = 240) -> list[dict]:
+    if len(series) <= target:
+        return series
+    step = len(series) / target
+    return [series[int(i * step)] for i in range(target)] + [series[-1]]
+
+
+def _amc_factsheet_search_url(amc: str, scheme_name: str) -> str:
+    """Best-effort link to a search for the scheme's monthly factsheet PDF.
+    AMC sites aren't standardised, so we route the user to a Google search
+    scoped to the AMC's domain — far more reliable than guessing URLs."""
+    import urllib.parse as up
+    q = f"{scheme_name} monthly factsheet portfolio"
+    return "https://www.google.com/search?q=" + up.quote(q)
+
+
+@router.get("/mf-scheme/{code}")
+async def get_mf_scheme(code: str):
+    """Per-scheme detail: NAV history (downsampled), returns ladder,
+    alpha/beta/std-dev/Sharpe/max-drawdown vs Nifty 50."""
+    cache_key = f"mf-scheme:{code}"
+    cached = _cache_get(cache_key, ttl=LONG_TTL)
+    if cached is not None:
+        return cached
+
+    # Fetch in parallel: per-scheme NAV history + Nifty (cached).
+    async def _fetch_scheme():
+        try:
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True,
+                                          headers={"User-Agent": "Mozilla/5.0"}) as cli:
+                r = await cli.get(MFAPI_URL.format(code=code))
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            logger.warning("mfapi fetch failed for %s: %s", code, e)
+            return None
+
+    scheme_data, nifty = await asyncio.gather(_fetch_scheme(), _get_nifty_history())
+    if not scheme_data or not scheme_data.get("data"):
+        return JSONResponse({"available": False,
+                             "message": "Scheme NAV history is not available."}, status_code=200)
+
+    meta = scheme_data.get("meta") or {}
+    raw = scheme_data["data"]  # newest-first list of {date, nav}
+    # Convert to (iso_date, float) newest-first.
+    nav_series: list[tuple[str, float]] = []
+    for row in raw:
+        try:
+            d = _parse_mf_date(row["date"])
+            v = float(row["nav"])
+            if v > 0:
+                nav_series.append((d, v))
+        except Exception:
+            continue
+    if not nav_series:
+        return {"available": False, "message": "No usable NAV data."}
+
+    returns = _compute_returns(nav_series)
+    risk = _compute_risk(nav_series, nifty)
+
+    # Build chart series — last 5y, oldest→newest, with rebased benchmark overlay.
+    chrono = list(reversed(nav_series))
+    cutoff_idx = max(0, len(chrono) - 1260)  # 5y of trading days
+    chrono = chrono[cutoff_idx:]
+    if not chrono:
+        nav_chart = []
+        bench_chart = []
+    else:
+        first_date = chrono[0][0]
+        first_nav = chrono[0][1]
+        nav_pts = [{"date": d, "nav": v, "navIdx": (v / first_nav) * 100.0}
+                   for d, v in chrono]
+        nav_chart = _downsample(nav_pts)
+        # Benchmark: rebase Nifty to 100 on first_date or nearest later day.
+        bench_chart = []
+        if nifty:
+            nifty_map = dict(nifty)
+            first_n = None
+            for d, _ in chrono:
+                if d in nifty_map:
+                    first_n = nifty_map[d]
+                    break
+            if first_n and first_n > 0:
+                pts = [{"date": d, "benchIdx": (nifty_map[d] / first_n) * 100.0}
+                       for d, _ in chrono if d in nifty_map]
+                bench_chart = _downsample(pts)
+
+    amc = meta.get("fund_house") or ""
+    scheme_name = meta.get("scheme_name") or ""
+
+    res = {
+        "available": True,
+        "schemeCode": str(code),
+        "meta": {
+            "schemeName": scheme_name,
+            "fundHouse": amc,
+            "schemeType": meta.get("scheme_type") or "",
+            "schemeCategory": meta.get("scheme_category") or "",
+            "isinGrowth": meta.get("isin_growth") or "",
+            "isinDivReinvestment": meta.get("isin_div_reinvestment") or "",
+        },
+        "latest": {
+            "nav": nav_series[0][1],
+            "date": nav_series[0][0],
+        },
+        "returns": returns,
+        "risk": risk,
+        "navChart": nav_chart,
+        "benchmarkChart": bench_chart,
+        "benchmarkLabel": "Nifty 50" if bench_chart else None,
+        "factsheetUrl": _amc_factsheet_search_url(amc, scheme_name),
+        "holdingsNote": (
+            "Stock-level holdings are only published in the AMC's monthly "
+            "factsheet PDF — no public live feed. Click 'View factsheet' for the latest."
+        ),
+    }
+    _cache_set(cache_key, res)
+    return res
 
 
 # ────────────────────────────────────────────────────────────────────────────
