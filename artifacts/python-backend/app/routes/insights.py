@@ -1693,6 +1693,139 @@ async def get_mf_scheme(code: str):
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Bulk / Block Deals (scraped from scanx.trade — same ng-state JSON pattern
+# as MF holdings). NSE/BSE publish daily disclosures; scanx aggregates and
+# enriches with stock symbols + logos. Cached 30 min during market hours.
+# ────────────────────────────────────────────────────────────────────────────
+SCANX_DEALS_URL = "https://scanx.trade/insight/bulk-block-deals"
+
+
+def _parse_scanx_deals(html: str) -> list[dict]:
+    """Extract bulk/block deals from the scanx ng-state JSON blob.
+    Each row carries: date, exch (NSE/BSE), sym, csym (company), deal
+    (BULK/BLOCK), cname (client), bs (B/S), qty, avgprice, val (rupees)."""
+    m = _NG_STATE_RE.search(html)
+    if not m:
+        return []
+    try:
+        ng = json.loads(m.group(1))
+    except Exception:
+        return []
+    rows: list[dict] = []
+    seen_keys: set[str] = set()
+    for v in ng.values():
+        if not isinstance(v, dict):
+            continue
+        data = (v.get("b") or {}).get("data")
+        if not isinstance(data, list) or not data:
+            continue
+        first = data[0]
+        if not (isinstance(first, dict) and "deal" in first and "bs" in first
+                and "sym" in first):
+            continue
+        for d in data:
+            if not isinstance(d, dict):
+                continue
+            sym = (d.get("sym") or "").strip()
+            if not sym:
+                continue
+            # De-dupe across multiple state entries (scanx sometimes nests
+            # the same dataset under different keys).
+            key = f"{d.get('date','')}|{sym}|{d.get('cname','')}|{d.get('bs','')}|{d.get('qty','')}|{d.get('avgprice','')}"
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            rows.append({
+                "date":      (d.get("date") or "").split(" ")[0],  # YYYY-MM-DD
+                "exchange":  (d.get("exch") or "").upper(),
+                "symbol":    sym,
+                "company":   d.get("csym") or sym,
+                "dealType":  (d.get("deal") or "").upper(),  # BULK | BLOCK
+                "client":    (d.get("cname") or "").strip(),
+                "side":      "BUY" if (d.get("bs") or "").upper() == "B" else "SELL",
+                "qty":       int(d.get("qty") or 0),
+                "avgPrice":  float(d.get("avgprice") or 0.0),
+                "valueRs":   float(d.get("val") or 0.0),
+                "logo":      DHAN_STOCK_LOGO.format(sym=sym),
+            })
+    # Newest first, then by value desc within the same date.
+    rows.sort(key=lambda r: (r["date"], r["valueRs"]), reverse=True)
+    return rows
+
+
+async def _fetch_scanx_deals() -> list[dict]:
+    cache_key = "scanx:bulk-block-deals"
+    cached = _cache_get(cache_key, ttl=60 * 30)  # 30 min
+    if cached is not None:
+        return cached
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True,
+                                      headers={"User-Agent": "Mozilla/5.0"}) as cli:
+            r = await cli.get(SCANX_DEALS_URL)
+        r.raise_for_status()
+        rows = _parse_scanx_deals(r.text)
+    except Exception as exc:
+        logger.warning("scanx bulk/block deals fetch failed: %s", exc)
+        rows = []
+    _cache_set(cache_key, rows)
+    return rows
+
+
+@router.get("/bulk-block-deals")
+async def bulk_block_deals(
+    side: str = "",         # "" | "BUY" | "SELL"
+    deal_type: str = "",    # "" | "BULK" | "BLOCK"
+    search: str = "",       # case-insensitive on company / client / symbol
+    start_date: str = "",   # YYYY-MM-DD
+    end_date: str = "",     # YYYY-MM-DD
+    limit: int = 500,
+):
+    rows = await _fetch_scanx_deals()
+    if not rows:
+        return {
+            "available": False,
+            "message": "Bulk/block deals feed temporarily unavailable.",
+            "items": [], "highlights": [],
+            "totalDeals": 0, "matched": 0,
+            "dateRange": {"from": None, "to": None},
+        }
+
+    side_u = side.upper().strip()
+    dtype_u = deal_type.upper().strip()
+    q = search.lower().strip()
+
+    def keep(r: dict) -> bool:
+        if side_u and r["side"] != side_u: return False
+        if dtype_u and r["dealType"] != dtype_u: return False
+        if start_date and r["date"] < start_date: return False
+        if end_date and r["date"] > end_date: return False
+        if q and not (q in r["company"].lower()
+                      or q in r["client"].lower()
+                      or q in r["symbol"].lower()):
+            return False
+        return True
+
+    filtered = [r for r in rows if keep(r)]
+    items = filtered[:max(1, min(limit, 1000))]
+
+    # Top-5 highlights: largest deals across the visible window (after filters).
+    highlights = sorted(filtered, key=lambda r: r["valueRs"], reverse=True)[:5]
+
+    dates = [r["date"] for r in rows if r["date"]]
+    return {
+        "available": True,
+        "items": items,
+        "highlights": highlights,
+        "totalDeals": len(rows),
+        "matched": len(filtered),
+        "dateRange": {
+            "from": min(dates) if dates else None,
+            "to":   max(dates) if dates else None,
+        },
+    }
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Signals (RSI / MA cross from yfinance)
 # ────────────────────────────────────────────────────────────────────────────
 def _rsi(closes: list[float], period: int = 14) -> float | None:
