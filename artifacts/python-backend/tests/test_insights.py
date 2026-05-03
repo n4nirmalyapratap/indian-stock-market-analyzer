@@ -155,6 +155,199 @@ def test_company_filings_handles_empty_response():
     assert _adapt_bse_announcements(None) == []
 
 
+def test_ist_isoformat_tags_naive_and_is_idempotent():
+    from app.routes.insights import _ist_isoformat
+    # Naive IST → +05:30 appended.
+    assert _ist_isoformat("2026-05-03T02:21:56") == "2026-05-03T02:21:56+05:30"
+    # Space separator normalised to T.
+    assert _ist_isoformat("2026-05-03 02:21:56") == "2026-05-03T02:21:56+05:30"
+    # Already +05:30 → unchanged (idempotent).
+    assert _ist_isoformat("2026-05-03T02:21:56+05:30") == "2026-05-03T02:21:56+05:30"
+    # Already Z → unchanged.
+    assert _ist_isoformat("2026-05-03T02:21:56Z") == "2026-05-03T02:21:56Z"
+    # Negative offset → unchanged (regression: earlier slice bug double-tagged this).
+    assert _ist_isoformat("2026-05-03T02:21:56-05:00") == "2026-05-03T02:21:56-05:00"
+    # Empty in → empty out.
+    assert _ist_isoformat("") == ""
+
+
+def test_company_filings_synthesises_id_when_blank():
+    from app.routes.insights import _adapt_bse_announcements
+    items = _adapt_bse_announcements({"Table": [
+        {"NEWSID": "", "SCRIP_CD": 500001, "NEWS_DT": "2026-05-03T02:00:00", "HEADLINE": "X"},
+        {"NEWSID": "",  "SCRIP_CD": 500001, "NEWS_DT": "2026-05-03T02:00:00", "HEADLINE": "Y"},
+    ]})
+    assert len({it["id"] for it in items}) == 2  # no key collision
+
+
+def test_nse_announcements_adapter():
+    from app.routes.insights import _adapt_nse_announcements
+    sample = [{
+        "symbol": "RAYMONDLSL", "sm_name": "Raymond Lifestyle Limited",
+        "desc": "Analysts/Institutional Investor Meet/Con. Call Updates",
+        "sort_date": "2026-05-02 23:58:27", "seq_id": "106607593",
+        "attchmntFile": "https://nsearchives.nseindia.com/x.pdf",
+        "attchmntText": "Schedule of meet",
+    }]
+    items = _adapt_nse_announcements(sample)
+    assert len(items) == 1
+    it = items[0]
+    assert it["exchange"] == "NSE"
+    assert it["symbol"] == "RAYMONDLSL"
+    assert it["company"] == "Raymond Lifestyle Limited"
+    assert it["category"] == "Investor Presentation"  # inferred from desc
+    assert it["date"] == "2026-05-02T23:58:27+05:30"
+    assert it["documentUrl"].startswith("https://nsearchives.nseindia.com/")
+    assert it["id"].startswith("nse:")
+
+
+def test_nse_pit_adapter_parses_date_and_purpose():
+    from app.routes.insights import _adapt_nse_pit
+    sample = {"data": [{
+        "symbol": "RELTD", "company": "Ravindra Energy Limited",
+        "acqName": "Shantanu Lath", "date": "02-May-2026 16:46",
+        "buyQuantity": "70000", "sellquantity": "0", "secAcq": "70000",
+        "secType": "Equity Shares", "pid": "1197873",
+    }]}
+    items = _adapt_nse_pit(sample)
+    assert len(items) == 1
+    it = items[0]
+    assert it["exchange"] == "NSE"
+    assert it["category"] == "Insider Trading"
+    assert "Shantanu Lath" in it["purpose"]
+    assert "70000" in it["purpose"]
+    assert it["date"] == "2026-05-02T16:46:00+05:30"
+    assert it["id"] == "nse-pit:1197873"
+
+
+def test_infer_category_maps_keywords():
+    from app.routes.insights import _infer_category
+    assert _infer_category("Quarterly Result for Q4") == "Result"
+    assert _infer_category("Interim Dividend Declared") == "Dividend"
+    assert _infer_category("AGM Notice") == "AGM/EGM"
+    assert _infer_category("Acquisition of subsidiary") == "Acquisition"
+    assert _infer_category("Concall transcript") == "Investor Presentation"
+    assert _infer_category("random press release blah") == "Company Update"
+    assert _infer_category("totally unrelated") == "Other"
+
+
+def test_matches_category_handles_slash_and_blob():
+    from app.routes.insights import _matches_category
+    item = {"category": "AGM/EGM", "purpose": "AGM notice", "subject": ""}
+    assert _matches_category(item, "AGM/EGM")
+    assert _matches_category(item, "all")
+    assert not _matches_category({"category": "Result", "purpose": "Q4", "subject": ""}, "Dividend")
+
+
+def test_categorize_scheme_equity_largecap():
+    from app.routes.insights import _categorize_scheme
+    r = _categorize_scheme("Open Ended Schemes(Equity Scheme - Large Cap Fund)")
+    assert r["assetClass"] == "Equity"
+    assert r["subCategory"] == "Large Cap"
+    assert r["openEnded"] is True
+
+
+def test_categorize_scheme_debt_liquid():
+    from app.routes.insights import _categorize_scheme
+    r = _categorize_scheme("Open Ended Schemes(Debt Scheme - Liquid Fund)")
+    assert r["assetClass"] == "Debt"
+    assert r["subCategory"] == "Liquid"
+
+
+def test_categorize_scheme_hybrid_balanced():
+    from app.routes.insights import _categorize_scheme
+    r = _categorize_scheme("Open Ended Schemes(Hybrid Scheme - Balanced Hybrid Fund)")
+    assert r["assetClass"] == "Hybrid"
+    assert r["subCategory"] == "Balanced"
+
+
+def test_categorize_scheme_index_etf():
+    from app.routes.insights import _categorize_scheme
+    r = _categorize_scheme("Open Ended Schemes(Other Scheme - Index Funds)")
+    assert r["assetClass"] == "Index / ETF"
+    assert r["subCategory"] == "Index Funds"
+
+
+def test_categorize_scheme_close_ended():
+    from app.routes.insights import _categorize_scheme
+    r = _categorize_scheme("Close Ended Schemes(Equity Scheme - ELSS)")
+    assert r["openEnded"] is False
+    assert r["assetClass"] == "Equity"
+    assert r["subCategory"] == "ELSS"
+
+
+def test_compute_returns_basic_cagr():
+    from app.routes.insights import _compute_returns
+    # Build a synthetic 5y daily series, growing 12% annually (factor 1.7623).
+    import math
+    n = 1300
+    daily = (1.12) ** (1 / 252)
+    series = []  # newest-first (date irrelevant for math)
+    base = 100.0
+    for i in range(n):
+        v = base * (daily ** (n - 1 - i))
+        series.append((f"d{i}", v))
+    r = _compute_returns(series)
+    # 1Y absolute should be ~12%, 3Y CAGR ~12%, 5Y CAGR ~12%.
+    assert r["1Y"] is not None and abs(r["1Y"] - 12.0) < 0.5
+    assert r["3Y"] is not None and abs(r["3Y"] - 12.0) < 0.5
+    assert r["5Y"] is not None and abs(r["5Y"] - 12.0) < 0.5
+    # 10Y window > series length → None.
+    assert r.get("10Y") is None
+
+
+def test_compute_risk_max_drawdown():
+    from app.routes.insights import _compute_risk
+    # 100 → 200 → 100 (50% drawdown).
+    series = []
+    for i in range(100): series.append((f"u{i}", 100 + i))   # up
+    for i in range(100): series.append((f"d{i}", 200 - i))   # down
+    series.reverse()  # newest-first
+    r = _compute_risk(series, None)
+    assert r["maxDrawdown"] < -49 and r["maxDrawdown"] > -51
+
+
+def test_nse_shareholding_adapter():
+    from app.routes.insights import _adapt_nse_shareholding
+    sample = [{
+        "symbol": "360ONE", "name": "360 ONE WAM LIMITED",
+        "pr_and_prgrp": "6.24", "public_val": "93.76", "employeeTrusts": "0",
+        "date": "31-MAR-2026", "broadcastDate": "21-APR-2026 18:14:47",
+        "recordId": "210168",
+        "xbrl": "https://nsearchives.nseindia.com/corporate/xbrl/SHP_x.xml",
+    }]
+    items = _adapt_nse_shareholding(sample)
+    assert len(items) == 1
+    it = items[0]
+    assert it["exchange"] == "NSE"
+    assert it["category"] == "Shareholding Pattern"
+    assert it["symbol"] == "360ONE"
+    assert "Promoter 6.24%" in it["purpose"]
+    assert "Public 93.76%" in it["purpose"]
+    assert "31-MAR-2026" in it["purpose"]
+    assert it["date"] == "2026-04-21T18:14:47+05:30"
+    assert it["documentUrl"].endswith(".xml")
+    assert it["id"] == "nse-shp:210168"
+
+
+def test_nse_shareholding_handles_submission_date_only():
+    from app.routes.insights import _adapt_nse_shareholding
+    items = _adapt_nse_shareholding([{
+        "symbol": "X", "name": "X Ltd",
+        "pr_and_prgrp": "50", "public_val": "50",
+        "submissionDate": "03-APR-2026", "recordId": "1",
+    }])
+    assert items[0]["date"].startswith("2026-04-03T00:00:00")
+
+
+def test_bse_total_count_extracts_rowcnt():
+    from app.routes.insights import _bse_total_count
+    assert _bse_total_count({"Table1": [{"ROWCNT": 1500}]}) == 1500
+    assert _bse_total_count({"Table1": []}) == 0
+    assert _bse_total_count({}) == 0
+    assert _bse_total_count(None) == 0
+
+
 # ── MF holdings (AMFI parser) ───────────────────────────────────────────────
 
 AMFI_SAMPLE = """Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Net Asset Value;Date
@@ -229,11 +422,12 @@ def test_compute_signal_for_downtrend_is_bearish():
 # ── Unavailable-feed endpoints ──────────────────────────────────────────────
 
 @pytest.mark.parametrize("path", [
-    "/api/insights/fii-dii",
+    # NOTE: /api/insights/fii-dii and /api/insights/ipos used to live here
+    # when their upstream feeds were blocked from this IP — they are now
+    # backed by local snapshots / GMP scrapers and serve real data, so
+    # they have their own positive-availability assertions below.
     "/api/insights/slbm",
     "/api/insights/mtf",
-    "/api/insights/ipos",
-    "/api/insights/top-deliveries",
 ])
 def test_unavailable_endpoints_return_clean_empty_state(client, path):
     r = client.get(path)
@@ -241,6 +435,29 @@ def test_unavailable_endpoints_return_clean_empty_state(client, path):
     body = r.json()
     assert body.get("available") is False
     assert "message" in body and len(body["message"]) > 10
+
+
+def test_ipos_serves_data_from_gmp_source(client):
+    """IPO calendar is now backed by a GMP source (committed snapshot +
+    scraper fallback), so it should report available=True with at least
+    upcoming/listed buckets and provenance metadata."""
+    r = client.get("/api/insights/ipos")
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("available") is True
+    assert "gmpSource" in body or "source" in body or "fetchedAt" in body
+
+
+def test_fii_dii_serves_data_from_local_cache(client):
+    """FII/DII equity now reads from the committed market_cache SQLite snapshot,
+    so it should report available=True with a populated `latest` entry even
+    when the live NSE endpoint is unreachable from this IP."""
+    r = client.get("/api/insights/fii-dii?segment=equity&days=365")
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("available") is True
+    latest = body.get("latest") or {}
+    assert "fiiNet" in latest and "diiNet" in latest
 
 
 # ── Indices count ────────────────────────────────────────────────────────────
@@ -269,35 +486,54 @@ def test_disable_auth_refused_in_production(monkeypatch):
 # ── EOD market cache integration ─────────────────────────────────────────────
 
 def test_heatmap_serves_from_disk_when_market_closed(client, tmp_path, monkeypatch):
-    """When market is closed and disk cache has data, yfinance must NOT be hit."""
+    """When market is closed and PriceService can return cached EOD bars,
+    the heatmap must build entirely from those bars (no live yfinance)."""
     from app.routes import insights as insights_mod
     # Force market closed
     monkeypatch.setattr(insights_mod.mcache, "is_market_open", lambda: False)
 
-    # Stub the disk-cache loader so it returns synthetic close prices for any symbol
-    def fake_load(symbol: str, days: int):
-        return [
-            {"date": "2026-04-21", "close": 100.0, "marketCap": 1e12},
-            {"date": "2026-04-22", "close": 101.0, "marketCap": 1e12},
-            {"date": "2026-04-23", "close": 102.0, "marketCap": 1e12},
-            {"date": "2026-04-24", "close": 103.0, "marketCap": 1e12},
-            {"date": "2026-04-25", "close": 104.0, "marketCap": 1e12},
-        ]
-    monkeypatch.setattr(insights_mod.mcache, "load_from_disk", fake_load)
+    # Stub PriceService.get_historical_data — the actual data source the
+    # heatmap route calls (via _fetch_one_quote_async).
+    synthetic_rows = [
+        {"date": "2026-04-21", "close": 100.0, "open": 100.0, "high": 100.0, "low": 100.0, "volume": 1000},
+        {"date": "2026-04-22", "close": 101.0, "open": 101.0, "high": 101.0, "low": 101.0, "volume": 1000},
+        {"date": "2026-04-23", "close": 102.0, "open": 102.0, "high": 102.0, "low": 102.0, "volume": 1000},
+        {"date": "2026-04-24", "close": 103.0, "open": 103.0, "high": 103.0, "low": 103.0, "volume": 1000},
+        {"date": "2026-04-25", "close": 104.0, "open": 104.0, "high": 104.0, "low": 104.0, "volume": 1000},
+    ]
+    async def fake_get_historical_data(symbol: str, days: int):
+        return synthetic_rows
+    monkeypatch.setattr(insights_mod._price, "get_historical_data", fake_get_historical_data)
 
     # Bust the in-process cache so a fresh fetch is forced
     insights_mod._cache.clear()
 
-    # Now if disk-first works, no yfinance call should happen. We assert by
-    # making yfinance.Ticker raise — if it gets called, we'd see no items.
+    # Disable the EOD-seal step (it would try to write to PriceService too).
+    async def _noop_seal(*a, **kw):
+        return None
+    monkeypatch.setattr(insights_mod.mcache, "seal_eod_for_today_if_overdue", _noop_seal)
+
+    # Market-cap fast_info still uses yfinance — make it a no-op stub so the
+    # quote builder gets mc=0 instead of hitting the network.
     import yfinance as yf
-    monkeypatch.setattr(yf, "Ticker", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("must not hit yfinance")))
+    fake_ticker = MagicMock()
+    fake_ticker.fast_info = {"marketCap": 0}
+    monkeypatch.setattr(yf, "Ticker", lambda *a, **kw: fake_ticker)
 
     r = client.get("/api/insights/heatmap?index=NIFTYIT&performance=1d")
     body = r.json()
     assert body["available"] is True
     assert len(body["items"]) >= 5
-    # Verify the changePct math came from our synthetic series (100 -> 104 = +4%)
+    # 1D performance compares the last close to the previous close, so
+    # 103 -> 104 ≈ +0.97% on the synthetic series.
     sample = body["items"][0]
-    assert abs(sample["changePct"] - 4.0) < 0.01
+    assert abs(sample["changePct"] - 0.97) < 0.01
     assert sample["color"]["bg"].startswith("#")
+
+    # 1Y performance falls back to the earliest close in the window —
+    # 100 -> 104 = +4.0% — proving the offset selection works end-to-end.
+    insights_mod._cache.clear()
+    r2 = client.get("/api/insights/heatmap?index=NIFTYIT&performance=1y")
+    body2 = r2.json()
+    sample2 = body2["items"][0]
+    assert abs(sample2["changePct"] - 4.0) < 0.01

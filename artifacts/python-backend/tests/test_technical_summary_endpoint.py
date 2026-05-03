@@ -74,8 +74,24 @@ def client():
 
 # ── Helper: fetch the summary response ───────────────────────────────────────
 
+def _patch_price_df(df: pd.DataFrame):
+    """Patch BOTH the PriceService daily-history path (used for interval=1d)
+    AND yfinance.Ticker (used by sub-daily intervals + market-cap fast_info).
+    Without the PriceService patch the tests would race against the in-process
+    cache populated by earlier tests in the same module.
+    """
+    async def _fake(*a, **kw):
+        return df
+    return (
+        patch("app.routes.stocks._price.get_history_dataframe", side_effect=_fake),
+        patch("yfinance.Ticker", return_value=_mock_ticker(df)),
+    )
+
+
 def _get(client, symbol: str = "TCS", interval: str = "1d"):
-    with patch("yfinance.Ticker", return_value=_mock_ticker()):
+    df = _make_ohlcv()
+    p1, p2 = _patch_price_df(df)
+    with p1, p2:
         return client.get(f"/api/stocks/{symbol}/technical-summary?interval={interval}")
 
 
@@ -276,14 +292,16 @@ class TestSignalLogic:
 
     def test_rsi_sell_when_overbought(self, client):
         df = self._ohlcv_with_rsi(80)
-        with patch("yfinance.Ticker", return_value=_mock_ticker(df)):
+        p1, p2 = _patch_price_df(df)
+        with p1, p2:
             data = client.get("/api/stocks/TEST/technical-summary").json()
         rsi_row = next(i for i in data["oscillators"]["indicators"] if i["name"] == "RSI (14)")
         assert rsi_row["action"] == "SELL", f"RSI value={rsi_row['value']}, expected SELL for overbought"
 
     def test_rsi_buy_when_oversold(self, client):
         df = self._ohlcv_with_rsi(20)
-        with patch("yfinance.Ticker", return_value=_mock_ticker(df)):
+        p1, p2 = _patch_price_df(df)
+        with p1, p2:
             data = client.get("/api/stocks/TEST/technical-summary").json()
         rsi_row = next(i for i in data["oscillators"]["indicators"] if i["name"] == "RSI (14)")
         assert rsi_row["action"] == "BUY", f"RSI value={rsi_row['value']}, expected BUY for oversold"
@@ -300,7 +318,8 @@ class TestSignalLogic:
         idx    = pd.date_range(end="2026-04-10", periods=n, freq="B")
         df = pd.DataFrame({"Open": opens, "High": highs, "Low": lows,
                            "Close": closes, "Volume": vols}, index=idx)
-        with patch("yfinance.Ticker", return_value=_mock_ticker(df)):
+        p1, p2 = _patch_price_df(df)
+        with p1, p2:
             data = client.get("/api/stocks/TEST/technical-summary").json()
         ma_data = data["movingAverages"]
         # At least EMA(10)/SMA(10) should be BUY (short MAs are close, definitely below close)
@@ -319,7 +338,8 @@ class TestSignalLogic:
         idx    = pd.date_range(end="2026-04-10", periods=n, freq="B")
         df = pd.DataFrame({"Open": opens, "High": highs, "Low": lows,
                            "Close": closes, "Volume": vols}, index=idx)
-        with patch("yfinance.Ticker", return_value=_mock_ticker(df)):
+        p1, p2 = _patch_price_df(df)
+        with p1, p2:
             data = client.get("/api/stocks/TEST/technical-summary").json()
         ma_data = data["movingAverages"]
         ema10 = next(i for i in ma_data["indicators"] if i["name"] == "EMA (10)")
@@ -344,7 +364,8 @@ class TestSignalLogic:
         prev_c = closes[-2]
         expected_p = (prev_h + prev_l + prev_c) / 3
 
-        with patch("yfinance.Ticker", return_value=_mock_ticker(df)):
+        p1, p2 = _patch_price_df(df)
+        with p1, p2:
             data = client.get("/api/stocks/TEST/technical-summary").json()
         classic = data["pivots"]["classic"]
         assert abs(classic["p"] - expected_p) < 0.01, \
@@ -366,7 +387,8 @@ class TestSignalLogic:
         p = (prev_h + prev_l + prev_c) / 3
         expected_r1 = p + 0.382 * (prev_h - prev_l)
 
-        with patch("yfinance.Ticker", return_value=_mock_ticker(df)):
+        p1, p2 = _patch_price_df(df)
+        with p1, p2:
             data = client.get("/api/stocks/TEST/technical-summary").json()
         fib_r1 = data["pivots"]["fibonacci"]["r1"]
         assert abs(fib_r1 - expected_r1) < 0.01, \
@@ -383,7 +405,8 @@ class TestSignalLogic:
         idx    = pd.date_range(end="2026-04-10", periods=n, freq="B")
         df = pd.DataFrame({"Open": opens, "High": highs, "Low": lows,
                            "Close": closes, "Volume": vols}, index=idx)
-        with patch("yfinance.Ticker", return_value=_mock_ticker(df)):
+        p1, p2 = _patch_price_df(df)
+        with p1, p2:
             data = client.get("/api/stocks/TEST/technical-summary").json()
         assert data["summary"]["signal"] in {"BUY", "STRONG_BUY"}, \
             f"Expected BUY/STRONG_BUY, got {data['summary']['signal']}"

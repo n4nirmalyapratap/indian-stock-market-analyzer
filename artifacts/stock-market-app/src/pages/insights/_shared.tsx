@@ -1,24 +1,19 @@
 import { ReactNode, ReactElement, cloneElement, isValidElement, useState, useRef, useEffect, useMemo } from "react";
 import { Info, Loader2, Lock, ExternalLink, ChevronDown, Check } from "lucide-react";
 import { createPortal } from "react-dom";
+import { useTheme } from "@/context/ThemeContext";
 
-/** Reactively detect dark mode (the app toggles `class="dark"` on <html>).
- *  Used by Recharts and any other consumers that need real hex colors,
- *  since recharts uses inline styles that Tailwind's `dark:` variant
- *  cannot reach. */
+/** Reactively detect dark mode.
+ *
+ *  Subscribes to ThemeContext (which is updated *synchronously* during the
+ *  theme-toggle View Transition) instead of using a MutationObserver on
+ *  `html.dark`. The MO approach fired async after commit, which meant
+ *  recharts and other inline-styled consumers were captured by the View
+ *  Transitions snapshot with stale colours — the ripple played but the
+ *  charts didn't actually change. Reading from context guarantees every
+ *  consumer re-renders with the new palette inside the same paint. */
 export function useIsDark(): boolean {
-  const [dark, setDark] = useState(() =>
-    typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
-  );
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const obs = new MutationObserver(() =>
-      setDark(document.documentElement.classList.contains("dark")),
-    );
-    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-    return () => obs.disconnect();
-  }, []);
-  return dark;
+  return useTheme().theme === "dark";
 }
 
 /** App-wide chart palette derived from Tailwind's gray/indigo scales so
@@ -142,7 +137,7 @@ export function Dropdown({ label, value, onChange, options }: {
  */
 export function MenuDropdown({
   label, value, options, onChange, placeholder = "Select…", clearable = false,
-  minButtonWidth = 0, maxButtonWidth = 280, customButton,
+  minButtonWidth = 0, maxButtonWidth = 280, customButton, renderOption, searchPlaceholder,
 }: {
   label?: string;
   value: string;
@@ -152,6 +147,10 @@ export function MenuDropdown({
   clearable?: boolean;
   minButtonWidth?: number;
   maxButtonWidth?: number;
+  /** Custom row renderer — receives the option and selected state. */
+  renderOption?: (opt: { value: string; label: string }, selected: boolean) => ReactNode;
+  /** Override the search box placeholder. */
+  searchPlaceholder?: string;
   /**
    * Optional custom trigger element. When provided, this element fully
    * replaces the default styled button. The component clones it to inject
@@ -187,20 +186,36 @@ export function MenuDropdown({
 
   useEffect(() => {
     if (!open) return;
-    const r = btnRef.current?.getBoundingClientRect();
-    if (!r) return;
-    const margin = 8;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const want = Math.max(r.width, 260);
-    const width = Math.min(want, vw - margin * 2);
-    const left = Math.max(margin, Math.min(r.left, vw - width - margin));
-    const spaceBelow = vh - r.bottom - margin;
-    const top = spaceBelow < 220 && r.top > spaceBelow
-      ? Math.max(margin, r.top - Math.min(420, r.top - margin) - 6)
-      : r.bottom + 6;
-    setPos({ top, left, width });
-  }, [open]);
+    const computePosition = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const margin = 8;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const want = Math.max(r.width, 260);
+      const width = Math.min(want, vw - margin * 2);
+      const left = Math.max(margin, Math.min(r.left, vw - width - margin));
+      const spaceBelow = vh - r.bottom - margin;
+      const flipUp = spaceBelow < 220 && r.top > spaceBelow;
+      let top: number;
+      if (flipUp) {
+        // Anchor the menu's BOTTOM 6px above the button. Use the menu's
+        // actual rendered height when available so a 5-item menu sits flush
+        // to the button instead of leaving the old "max 420px" gap.
+        const measured = menuRef.current?.getBoundingClientRect().height;
+        const h = measured && measured > 0 ? measured : Math.min(420, r.top - margin);
+        top = Math.max(margin, r.top - 6 - h);
+      } else {
+        top = r.bottom + 6;
+      }
+      setPos({ top, left, width });
+    };
+    computePosition();
+    // Re-measure once the menu has actually rendered so the upward flip
+    // snaps to the real height (first pass uses an estimate).
+    const raf = requestAnimationFrame(computePosition);
+    return () => cancelAnimationFrame(raf);
+  }, [open, baseOptions.length]);
 
   useEffect(() => {
     if (!open) return;
@@ -287,8 +302,19 @@ export function MenuDropdown({
       {open && createPortal(
         <div
           ref={menuRef}
-          style={{ position: "fixed", top: pos.top, left: pos.left, width: pos.width, maxHeight: "min(420px, 60vh)" }}
-          className="z-[1000] rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-2xl overflow-hidden flex flex-col"
+          style={{
+            position: "fixed",
+            top: pos.top,
+            left: pos.left,
+            width: pos.width,
+            maxHeight: "min(420px, 60vh)",
+            // Inline backgroundColor so no portal/dark-mode/global rule can
+            // make the menu translucent. `colorScheme` lets the browser pick
+            // the right form-control colors automatically.
+            backgroundColor: document.documentElement.classList.contains("dark") ? "#1e293b" : "#ffffff",
+            colorScheme: document.documentElement.classList.contains("dark") ? "dark" : "light",
+          }}
+          className="z-[1000] rounded-xl border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white shadow-2xl overflow-hidden flex flex-col"
         >
           {showSearch && (
             <input
@@ -296,7 +322,7 @@ export function MenuDropdown({
               value={q}
               onChange={e => setQ(e.target.value)}
               onKeyDown={onKeyDown}
-              placeholder="Search…"
+              placeholder={searchPlaceholder || "Search…"}
               aria-label={`Search ${label || "options"}`}
               className="w-full text-sm px-3 py-2 border-b border-gray-200 dark:border-gray-700 bg-transparent outline-none flex-shrink-0 placeholder:text-gray-400 text-gray-900 dark:text-white"
             />
@@ -324,7 +350,11 @@ export function MenuDropdown({
                       ? "text-gray-500 dark:text-gray-400 italic"
                       : "text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"}`}
                 >
-                  <span className="truncate">{o.label}</span>
+                  {renderOption && !isClear ? (
+                    <div className="flex-1 min-w-0">{renderOption(o, sel)}</div>
+                  ) : (
+                    <span className="truncate">{o.label}</span>
+                  )}
                   {sel && <Check className="w-4 h-4 text-indigo-600 dark:text-indigo-400 flex-shrink-0" />}
                 </button>
               );

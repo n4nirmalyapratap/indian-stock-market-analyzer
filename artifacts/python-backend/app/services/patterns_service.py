@@ -1,4 +1,5 @@
 import asyncio
+import time
 from datetime import datetime
 from typing import Optional
 from .yahoo_service import YahooService
@@ -10,8 +11,28 @@ from .indicators import (
 )
 from ..lib.universe import NIFTY100, MIDCAP, SMALLCAP
 
+# Pattern scans are expensive (~20 symbols × ~400ms each) and entirely
+# derived from daily OHLCV, so a 30-minute TTL is plenty during market
+# hours and avoids the previous behaviour where a single scan would
+# pin stale results until process restart.
+_PATTERN_CACHE_TTL = 30 * 60  # seconds
+
 _cached_patterns: list[dict] = []
 _last_scan_time: str = ""
+_last_scan_monotonic: float = 0.0
+
+# Singleflight lock — prevents N concurrent get_patterns() callers from
+# all firing run_scan() simultaneously when the cache is empty/expired.
+# Lazy-initialised inside the running event loop to avoid binding to the
+# wrong loop at import time.
+_scan_lock: Optional[asyncio.Lock] = None
+
+
+def _get_scan_lock() -> asyncio.Lock:
+    global _scan_lock
+    if _scan_lock is None:
+        _scan_lock = asyncio.Lock()
+    return _scan_lock
 
 
 def _body(c: dict) -> float:
@@ -58,10 +79,21 @@ class PatternsService:
         self.price = price or PriceService(nse, yahoo)
 
     async def get_patterns(self, universe: Optional[str] = None, signal: Optional[str] = None, category: Optional[str] = None) -> dict:
-        global _cached_patterns
-        patterns = _cached_patterns
-        if not patterns:
-            patterns = await self.run_scan()
+        # Re-scan if cache is empty OR has expired. Without the TTL check
+        # the first scan would pin its results until the process restarts.
+        # Singleflight: serialise refreshes so concurrent callers share
+        # one scan. The cheap TTL check is done outside the lock to avoid
+        # serialising the hot path when the cache is fresh.
+        if self._cache_is_fresh():
+            patterns = _cached_patterns
+        else:
+            async with _get_scan_lock():
+                # Double-checked: another waiter may have refreshed it
+                # while we were queued behind the lock.
+                if self._cache_is_fresh():
+                    patterns = _cached_patterns
+                else:
+                    patterns = await self.run_scan()
         if universe:
             patterns = [p for p in patterns if p["universe"] == universe.upper()]
         if signal:
@@ -94,8 +126,14 @@ class PatternsService:
             "patterns": patterns[:30],
         }
 
+    @staticmethod
+    def _cache_is_fresh() -> bool:
+        return bool(_cached_patterns) and (
+            time.monotonic() - _last_scan_monotonic <= _PATTERN_CACHE_TTL
+        )
+
     async def run_scan(self) -> list[dict]:
-        global _cached_patterns, _last_scan_time
+        global _cached_patterns, _last_scan_time, _last_scan_monotonic
         all_patterns: list[dict] = []
         universe_map = [
             (NIFTY100[:15], "NIFTY100"),
@@ -116,6 +154,7 @@ class PatternsService:
                     pass
         _cached_patterns = sorted(all_patterns, key=lambda p: p["confidence"], reverse=True)
         _last_scan_time = datetime.utcnow().isoformat() + "Z"
+        _last_scan_monotonic = time.monotonic()
         return _cached_patterns
 
     def _detect(self, symbol: str, history: list[dict], universe: str) -> list[dict]:

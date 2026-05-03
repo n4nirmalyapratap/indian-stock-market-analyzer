@@ -15,7 +15,7 @@ _yahoo = YahooService()
 _price = PriceService(_nse, _yahoo)
 _service = StocksService(_nse, _yahoo)
 
-VALID_PERIODS   = {"1d","5d","1mo","3mo","6mo","1y","2y","5y"}
+VALID_PERIODS   = {"1d","5d","1mo","3mo","6mo","1y","2y","5y","10y","max"}
 VALID_INTERVALS = {"1m","2m","5m","15m","30m","60m","90m","1h","1d","5d","1wk","1mo"}
 
 
@@ -271,7 +271,7 @@ async def get_stock_financials(symbol: str):
         "grossMargin":     _pct(ov.get("grossMargins")),
         "operatingMargin": _pct(ov.get("operatingMargins")),
         "netMargin":       _pct(ov.get("profitMargins")),
-        "dividendYield":   _f(ov.get("dividendYield")),
+        "dividendYield":   _pct(ov.get("dividendYield")),
         "dividendRate":    _f(ov.get("dividendRate")),
         "earningsGrowth":  _pct(ov.get("earningsGrowth")),
         "revenueGrowth":   _pct(ov.get("revenueGrowth")),

@@ -1522,8 +1522,17 @@ class TestIndicatorPatterns:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _run(coro):
-    """Run an async coroutine synchronously in tests."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Run an async coroutine synchronously in tests.
+
+    Uses a fresh event loop per call so this works even when an earlier test
+    in the same pytest run has already closed the default loop (the deprecated
+    `asyncio.get_event_loop()` then raises 'no current event loop').
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 def _make_mock_patterns():
@@ -1549,7 +1558,9 @@ class TestGetPatternsFiltering:
     MOCK_PATTERNS = _make_mock_patterns()
 
     def _run_with_cache(self, universe=None, signal=None, category=None):
-        with patch.object(_ps_mod, "_cached_patterns", self.MOCK_PATTERNS):
+        import time as _time
+        with patch.object(_ps_mod, "_cached_patterns", self.MOCK_PATTERNS), \
+             patch.object(_ps_mod, "_last_scan_monotonic", _time.monotonic()):
             return _run(SVC.get_patterns(universe, signal, category))
 
     # ── No filter ─────────────────────────────────────────────────────────────

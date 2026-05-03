@@ -13,10 +13,12 @@ Phase 3: Portfolio Construction — Core-Satellite model, top picks, risk rules
 """
 
 import asyncio
+import json
 import logging
 import statistics
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from .nse_service import NseService
@@ -24,6 +26,47 @@ from .yahoo_service import YahooService
 from . import market_cache_service as _disk
 
 logger = logging.getLogger(__name__)
+
+# Persistent rotation-state file (used for phase hysteresis across restarts).
+_STATE_FILE: Path = Path(__file__).parent.parent.parent / "market_cache" / "rotation_state.json"
+
+
+def _load_rotation_state() -> Optional[dict]:
+    try:
+        with open(_STATE_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def _save_rotation_state(state: dict) -> None:
+    """Atomically persist rotation state.
+
+    Writes to a temp file in the same directory, then `os.replace` swaps
+    it in. Two parallel writes either both succeed (last writer wins) or
+    one is replaced by the other — the file never appears half-written or
+    truncated to a reader, which would break `json.load` on the next call.
+    """
+    import os
+    import tempfile
+    try:
+        _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(
+            prefix=".rotation_state.", suffix=".tmp", dir=str(_STATE_FILE.parent)
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(state, f)
+            os.replace(tmp, _STATE_FILE)
+        except Exception:
+            # Make sure we don't leak temp files on a failed write
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    except OSError as e:
+        logger.warning("rotation_state.json save failed: %s", e)
 
 # ── NSE Sector Index Definitions ─────────────────────────────────────────────
 
@@ -73,6 +116,15 @@ CYCLE_PHASES: dict[str, dict] = {
         "color": "#22c55e",
         "bgColor": "#f0fdf4",
         "leadingSectors": ["NIFTY BANK", "NIFTY FINANCIAL SERVICES", "NIFTY REALTY", "NIFTY AUTO", "NIFTY CONSUMER DURABLES"],
+        # Weighted leaders/laggards: leaders should outperform, laggards should
+        # underperform.  Phase score = w_avg(leaders.composite) − w_avg(laggards.composite).
+        "leadingWeights": {
+            "NIFTY BANK": 1.0, "NIFTY FINANCIAL SERVICES": 1.0,
+            "NIFTY REALTY": 1.0, "NIFTY AUTO": 0.7, "NIFTY CONSUMER DURABLES": 0.7,
+        },
+        "laggingWeights": {
+            "NIFTY FMCG": 0.6, "NIFTY PHARMA": 0.4, "NIFTY HEALTHCARE INDEX": 0.4,
+        },
         "characteristics": "RBI easing rates, credit growth picking up, real estate & consumption recovering from trough",
         "theorySectors": ["Banking & Financials", "Real Estate", "Auto & Consumer Durables", "IT"],
         "actionableSectors": ["NIFTY BANK", "NIFTY FINANCIAL SERVICES", "NIFTY AUTO", "NIFTY REALTY"],
@@ -83,6 +135,14 @@ CYCLE_PHASES: dict[str, dict] = {
         "color": "#3b82f6",
         "bgColor": "#eff6ff",
         "leadingSectors": ["NIFTY IT", "NIFTY AUTO", "NIFTY CONSUMER DURABLES", "NIFTY FINANCIAL SERVICES"],
+        "leadingWeights": {
+            "NIFTY IT": 1.0, "NIFTY AUTO": 0.9, "NIFTY CONSUMER DURABLES": 0.8,
+            "NIFTY FINANCIAL SERVICES": 0.8,
+        },
+        "laggingWeights": {
+            "NIFTY FMCG": 0.6, "NIFTY PHARMA": 0.5, "NIFTY ENERGY": 0.4,
+            "NIFTY HEALTHCARE INDEX": 0.4,
+        },
         "characteristics": "GDP above trend, corporate earnings strong, broad market participation, IT exports booming",
         "theorySectors": ["IT & Technology", "Auto", "Consumer Discretionary", "Financials"],
         "actionableSectors": ["NIFTY IT", "NIFTY AUTO", "NIFTY CONSUMER DURABLES"],
@@ -93,6 +153,14 @@ CYCLE_PHASES: dict[str, dict] = {
         "color": "#f59e0b",
         "bgColor": "#fffbeb",
         "leadingSectors": ["NIFTY ENERGY", "NIFTY OIL AND GAS", "NIFTY METAL", "NIFTY PHARMA"],
+        "leadingWeights": {
+            "NIFTY ENERGY": 1.0, "NIFTY OIL AND GAS": 1.0, "NIFTY METAL": 1.0,
+            "NIFTY PHARMA": 0.5,
+        },
+        "laggingWeights": {
+            "NIFTY IT": 0.7, "NIFTY REALTY": 0.6, "NIFTY CONSUMER DURABLES": 0.5,
+            "NIFTY AUTO": 0.4,
+        },
         "characteristics": "RBI tightening, inflation elevated, commodity & defensive sectors outperform",
         "theorySectors": ["Energy & Commodities", "Metals & Mining", "Pharma & Healthcare"],
         "actionableSectors": ["NIFTY ENERGY", "NIFTY METAL", "NIFTY PHARMA"],
@@ -103,6 +171,13 @@ CYCLE_PHASES: dict[str, dict] = {
         "color": "#ef4444",
         "bgColor": "#fef2f2",
         "leadingSectors": ["NIFTY FMCG", "NIFTY PHARMA", "NIFTY HEALTHCARE INDEX"],
+        "leadingWeights": {
+            "NIFTY FMCG": 1.0, "NIFTY HEALTHCARE INDEX": 1.0, "NIFTY PHARMA": 0.8,
+        },
+        "laggingWeights": {
+            "NIFTY BANK": 1.0, "NIFTY METAL": 1.0, "NIFTY AUTO": 0.8,
+            "NIFTY REALTY": 0.8, "NIFTY IT": 0.5, "NIFTY ENERGY": 0.4,
+        },
         "characteristics": "GDP slowing, corporate earnings declining, defensive rotation into staples and healthcare",
         "theorySectors": ["FMCG & Staples", "Pharmaceuticals", "Healthcare", "Utilities"],
         "actionableSectors": ["NIFTY FMCG", "NIFTY PHARMA", "NIFTY HEALTHCARE INDEX"],
@@ -296,16 +371,18 @@ class SectorsService:
                     "yahooTicker": sector["yahooTicker"],
                 })
             else:
+                # Quote unavailable — surface None so the UI renders "—"
+                # instead of a misleading "₹0 / 0.00%". Sort failures last.
                 sectors.append({
                     "name": sector["name"],
                     "symbol": sector["symbol"],
                     "category": sector["category"],
-                    "lastPrice": 0, "change": 0, "pChange": 0,
+                    "lastPrice": None, "change": None, "pChange": None,
                     "advances": 0, "declines": 0,
                     "source": "NSE", "servedFrom": "UNAVAILABLE",
                     "yahooTicker": sector["yahooTicker"],
                 })
-        return sorted(sectors, key=lambda s: s["pChange"], reverse=True)
+        return sorted(sectors, key=lambda s: (s["pChange"] is None, -(s["pChange"] or 0)))
 
     async def get_sector_rotation(self) -> dict:
         fresh = _get_cache()
@@ -555,22 +632,31 @@ class SectorsService:
     # ── Phase 2: Technical Strength (async data fetching) ─────────────────────
 
     async def _fetch_index_history(self, yahoo_ticker: str) -> dict:
-        """Fetch 6-month price/volume history for a sector index ticker."""
+        """Fetch 6-month price/volume history for a sector index ticker.
+
+        Returns a dict with `data_ok=True` when usable history is present.
+        On any failure / insufficient data, returns `data_ok=False` so callers
+        can EXCLUDE the sector from z-score ranking instead of treating it
+        as a neutral data point (which previously biased rankings).
+        """
+        empty = {"roc_6m": None, "roc_3m": None, "vol_trend": None, "closes": [], "data_ok": False}
         try:
             hist = await self.yahoo.get_historical_data(yahoo_ticker, days=180)
             if not hist or len(hist) < 10:
-                return {"roc_6m": 0.0, "roc_3m": 0.0, "vol_trend": 1.0, "closes": []}
+                return empty
 
             closes = [h["close"] for h in hist if h.get("close")]
             volumes = [h.get("volume") or 0 for h in hist]
 
-            if len(closes) < 2:
-                return {"roc_6m": 0.0, "roc_3m": 0.0, "vol_trend": 1.0, "closes": closes}
+            if len(closes) < 2 or closes[0] <= 0:
+                return empty
 
-            roc_6m = ((closes[-1] - closes[0]) / closes[0]) * 100 if closes[0] > 0 else 0.0
+            roc_6m = ((closes[-1] - closes[0]) / closes[0]) * 100
 
             mid = max(1, len(closes) // 2)
-            roc_3m = ((closes[-1] - closes[mid]) / closes[mid]) * 100 if closes[mid] > 0 else 0.0
+            if closes[mid] <= 0:
+                return empty
+            roc_3m = ((closes[-1] - closes[mid]) / closes[mid]) * 100
 
             if len(volumes) >= 40:
                 recent_vol = statistics.mean([v for v in volumes[-20:] if v > 0] or [1])
@@ -579,51 +665,73 @@ class SectorsService:
             else:
                 vol_trend = 1.0
 
-            return {"roc_6m": roc_6m, "roc_3m": roc_3m, "vol_trend": vol_trend, "closes": closes}
+            return {
+                "roc_6m": roc_6m, "roc_3m": roc_3m, "vol_trend": vol_trend,
+                "closes": closes, "data_ok": True,
+            }
         except Exception as e:
             logger.warning("History fetch failed for %s: %s", yahoo_ticker, e)
-            return {"roc_6m": 0.0, "roc_3m": 0.0, "vol_trend": 1.0, "closes": []}
+            return empty
 
     async def _fetch_stock_breadth(self, symbol: str) -> dict:
         """
         Calculate % of key sector stocks above their 50-day and 200-day SMAs.
         Uses 5 representative stocks per sector.
+
+        Bug-fix: previously incremented a single `valid` counter for any stock
+        with ≥50 closes, even when 200-SMA was never computed — making the
+        denominator wrong and reporting 0% when most stocks simply lacked a
+        full 200-bar history. Now tracks `valid_50` and `valid_200` separately
+        and returns `None` when a window cannot be measured (caller imputes
+        the cross-sector median so missing data doesn't bias the ranking).
         """
         key_stocks = SECTOR_KEY_STOCKS.get(symbol, [])
         if not key_stocks:
-            return {"pct_above_50": 50.0, "pct_above_200": 50.0, "sample_size": 0}
+            return {"pct_above_50": None, "pct_above_200": None,
+                    "sample_size_50": 0, "sample_size_200": 0, "sample_size": 0}
 
         tasks = [self.yahoo.get_historical_data(s, days=250) for s in key_stocks]
         all_hist = await asyncio.gather(*tasks, return_exceptions=True)
 
-        above_50, above_200, valid = 0, 0, 0
+        above_50 = above_200 = valid_50 = valid_200 = 0
         for hist in all_hist:
             if isinstance(hist, Exception) or not hist:
                 continue
             closes = [h["close"] for h in hist if h.get("close")]
-            if len(closes) < 50:
-                continue
-            current = closes[-1]
-            sma50 = statistics.mean(closes[-50:])
-            above_50 += 1 if current > sma50 else 0
+            if len(closes) >= 50:
+                sma50 = statistics.mean(closes[-50:])
+                above_50 += 1 if closes[-1] > sma50 else 0
+                valid_50 += 1
             if len(closes) >= 200:
                 sma200 = statistics.mean(closes[-200:])
-                above_200 += 1 if current > sma200 else 0
-            valid += 1
-
-        if valid == 0:
-            return {"pct_above_50": 50.0, "pct_above_200": 50.0, "sample_size": 0}
+                above_200 += 1 if closes[-1] > sma200 else 0
+                valid_200 += 1
 
         return {
-            "pct_above_50":  round((above_50  / valid) * 100, 1),
-            "pct_above_200": round((above_200  / valid) * 100, 1),
-            "sample_size": valid,
+            "pct_above_50":   round((above_50  / valid_50)  * 100, 1) if valid_50  else None,
+            "pct_above_200":  round((above_200 / valid_200) * 100, 1) if valid_200 else None,
+            "sample_size_50":  valid_50,
+            "sample_size_200": valid_200,
+            "sample_size":     valid_50,  # back-compat alias
         }
 
-    async def _build_momentum_scores(self, sectors: list[dict]) -> dict[str, dict]:
+    async def _build_momentum_scores(
+        self, sectors: list[dict]
+    ) -> tuple[dict[str, dict], list[str], dict]:
         """
         Phase 2 core: compute composite momentum score for every sector.
-        Weights: RS Trend 40% | % above 200-SMA 25% | 6m ROC 20% | Volume 15%
+        Weights: RS 35% | %>200-SMA 20% | %>50-SMA 15% | 6m ROC 20% | Volume 10%
+
+        Returns (scored_sectors, excluded_symbols, nifty_hist).
+
+        Bug fixes vs prior version:
+          • Sectors whose index history fetch FAILS are excluded entirely
+            instead of being injected as neutral zeros (which silently biased
+            the ranking — failed sectors would clump around `-nifty_3m`).
+          • Missing breadth values are median-imputed (per-window) so a sector
+            with too-short stock history doesn't drag its breadth score to 0.
+          • `pct_above_50` is now actually used in the composite (was fetched
+            but ignored before).
         """
         score_sectors = [s for s in sectors if s["symbol"] != "NIFTY 50"]
 
@@ -638,43 +746,107 @@ class SectorsService:
             asyncio.gather(*breadth_tasks, return_exceptions=True),
         )
 
-        nifty_3m = nifty_hist.get("roc_3m", 0.0)
+        # Benchmark availability — if the Nifty 50 history fetch fails, we
+        # CANNOT meaningfully compute relative-strength. Rather than silently
+        # using 0.0 (which turns RS into absolute 3-month ROC and biases the
+        # ranking), we drop the RS component entirely and redistribute its
+        # weight to the remaining indicators. The reliability flag is
+        # surfaced on every sector for UI transparency.
+        benchmark_ok = bool(nifty_hist.get("data_ok"))
+        nifty_3m = nifty_hist.get("roc_3m") if benchmark_ok else 0.0
+        if not benchmark_ok:
+            logger.warning("Nifty benchmark history unavailable — RS component dropped")
 
-        # Collect raw indicator values per sector
+        # Collect raw indicator values per sector — EXCLUDING sectors with
+        # no usable index history (no ghost-rank fabrication).
         raw: list[dict] = []
+        excluded: list[str] = []
         for i, sector in enumerate(score_sectors):
-            idx = all_index[i] if not isinstance(all_index[i], Exception) else {}
+            idx = all_index[i] if not isinstance(all_index[i], Exception) else None
             brd = all_breadth[i] if not isinstance(all_breadth[i], Exception) else {}
 
-            rs     = (idx.get("roc_3m", 0.0) - nifty_3m)   # outperformance vs benchmark
-            roc_6m = idx.get("roc_6m", 0.0)
-            vol    = min(idx.get("vol_trend", 1.0), 3.0)    # cap outliers at 3×
-            b200   = brd.get("pct_above_200", 50.0)
-            b50    = brd.get("pct_above_50",  50.0)
+            if not idx or not idx.get("data_ok"):
+                excluded.append(sector["symbol"])
+                continue
+
+            rs     = idx["roc_3m"] - nifty_3m              # outperformance vs benchmark
+            roc_6m = idx["roc_6m"]
+            vol    = min(idx["vol_trend"], 3.0)            # cap outliers at 3×
 
             raw.append({
-                "symbol":         sector["symbol"],
-                "rs":             rs,
-                "roc_6m":         roc_6m,
-                "vol_trend":      vol,
-                "pct_above_200":  b200,
-                "pct_above_50":   b50,
-                "breadth_sample": brd.get("sample_size", 0),
+                "symbol":          sector["symbol"],
+                "rs":              rs,
+                "roc_6m":          roc_6m,
+                "vol_trend":       vol,
+                "pct_above_200":   brd.get("pct_above_200"),  # may be None
+                "pct_above_50":    brd.get("pct_above_50"),   # may be None
+                "breadth_sample":  brd.get("sample_size_50", brd.get("sample_size", 0)),
+                "breadth_sample_200": brd.get("sample_size_200", 0),
             })
 
+        if not raw:
+            return {}, excluded, nifty_hist
+
+        # Median-impute missing breadth so absent data doesn't bias rank.
+        # If a breadth window has too FEW native data points (< MIN_NATIVE),
+        # treat the whole indicator as unreliable: zero-weight it and
+        # redistribute its weight proportionally to RS + ROC. This stops
+        # one outlier sector's breadth from dictating the entire ranking.
+        MIN_NATIVE = 3
+        b200_present = [r["pct_above_200"] for r in raw if r["pct_above_200"] is not None]
+        b50_present  = [r["pct_above_50"]  for r in raw if r["pct_above_50"]  is not None]
+        b200_reliable = len(b200_present) >= MIN_NATIVE
+        b50_reliable  = len(b50_present)  >= MIN_NATIVE
+        b200_med = statistics.median(b200_present) if b200_present else 50.0
+        b50_med  = statistics.median(b50_present)  if b50_present  else 50.0
+        for r in raw:
+            if r["pct_above_200"] is None:
+                r["pct_above_200"] = b200_med
+                r["b200_imputed"] = True
+            else:
+                r["b200_imputed"] = False
+            if r["pct_above_50"] is None:
+                r["pct_above_50"] = b50_med
+                r["b50_imputed"] = True
+            else:
+                r["b50_imputed"] = False
+
         # Z-score each indicator across all sectors (same scale)
-        rs_z    = _z_scores([r["rs"]           for r in raw])
-        roc_z   = _z_scores([r["roc_6m"]       for r in raw])
-        vol_z   = _z_scores([r["vol_trend"]    for r in raw])
+        rs_z    = _z_scores([r["rs"]            for r in raw])
+        roc_z   = _z_scores([r["roc_6m"]        for r in raw])
+        vol_z   = _z_scores([r["vol_trend"]     for r in raw])
         b200_z  = _z_scores([r["pct_above_200"] for r in raw])
+        b50_z   = _z_scores([r["pct_above_50"]  for r in raw])
+
+        # Dynamic weights — drop unreliable breadth and redistribute.
+        w_rs, w_b200, w_b50, w_roc, w_vol = 0.35, 0.20, 0.15, 0.20, 0.10
+        if not b200_reliable:
+            w_rs += w_b200 * 0.7; w_roc += w_b200 * 0.3; w_b200 = 0.0
+        if not b50_reliable:
+            w_rs += w_b50  * 0.7; w_roc += w_b50  * 0.3; w_b50  = 0.0
+        if not benchmark_ok:
+            # No benchmark → RS is meaningless. Push its weight onto ROC and
+            # the breadth indicators that remain reliable.
+            shed = w_rs
+            w_rs = 0.0
+            w_roc += shed * 0.5
+            if w_b200 > 0:
+                w_b200 += shed * 0.25
+            else:
+                w_roc += shed * 0.25
+            if w_b50 > 0:
+                w_b50 += shed * 0.25
+            else:
+                w_roc += shed * 0.25
 
         result: dict[str, dict] = {}
         for i, r in enumerate(raw):
             composite = (
-                rs_z[i]   * 0.40 +
-                b200_z[i] * 0.25 +
-                roc_z[i]  * 0.20 +
-                vol_z[i]  * 0.15
+                rs_z[i]   * w_rs +
+                b200_z[i] * w_b200 +
+                b50_z[i]  * w_b50 +
+                roc_z[i]  * w_roc +
+                vol_z[i]  * w_vol
             )
             result[r["symbol"]] = {
                 "composite":      round(composite, 4),
@@ -684,59 +856,182 @@ class SectorsService:
                 "pct_above_200":  round(r["pct_above_200"], 1),
                 "vol_trend":      round(r["vol_trend"], 3),
                 "breadthSample":  r["breadth_sample"],
+                "breadthSample200": r["breadth_sample_200"],
+                "b200Imputed":    r["b200_imputed"],
+                "b50Imputed":     r["b50_imputed"],
                 # Normalized z-scores for transparency
                 "zRS":            round(rs_z[i], 3),
                 "zROC":           round(roc_z[i], 3),
                 "zBreadth200":    round(b200_z[i], 3),
+                "zBreadth50":     round(b50_z[i], 3),
                 "zVolume":        round(vol_z[i], 3),
+                "weights": {
+                    "rs": w_rs, "breadth200": w_b200, "breadth50": w_b50,
+                    "roc6m": w_roc, "volume": w_vol,
+                },
+                "indicatorReliability": {
+                    "breadth200Reliable": b200_reliable,
+                    "breadth50Reliable":  b50_reliable,
+                    "benchmarkOk":        benchmark_ok,
+                    "nativeB200Count":    len(b200_present),
+                    "nativeB50Count":     len(b50_present),
+                },
             }
 
-        return result
+        return result, excluded, nifty_hist
 
     @staticmethod
-    def _assign_tier(rank_pct: float) -> dict:
-        """Map rank-percentile (0 = best, 100 = worst) to 5-tier label + colour."""
-        if rank_pct <= 20:
+    def _assign_tier(rank_pct: float, composite: float) -> dict:
+        """Map rank-percentile (0 = best, 100 = worst) AND absolute composite
+        score to the 5-tier label + colour.
+
+        Bug fix: previously, rank alone determined the tier — so the top 20%
+        was ALWAYS "DEEP_GREEN / STRONG BUY" even in a crashing market.
+        Now we also require an absolute composite floor for greens / ceiling
+        for reds so a sector that's merely "least-bad" can't masquerade as a
+        strong buy.
+        """
+        if rank_pct <= 20 and composite >= 0.30:
             tier = TIER_BY_NAME["DEEP_GREEN"]
-        elif rank_pct <= 40:
+        elif rank_pct <= 40 and composite >= 0.0:
             tier = TIER_BY_NAME["LIGHT_GREEN"]
-        elif rank_pct <= 60:
-            tier = TIER_BY_NAME["YELLOW"]
-        elif rank_pct <= 80:
+        elif rank_pct >= 80 and composite <= -0.30:
+            tier = TIER_BY_NAME["DEEP_RED"]
+        elif rank_pct >= 60 and composite <= 0.0:
             tier = TIER_BY_NAME["ORANGE"]
         else:
-            tier = TIER_BY_NAME["DEEP_RED"]
+            tier = TIER_BY_NAME["YELLOW"]
         return {k: v for k, v in tier.items()}  # copy
 
     # ── Phase 1: Economic cycle detection ─────────────────────────────────────
 
-    def _detect_economic_phase(self, momentum: dict[str, dict]) -> dict:
-        if not momentum:
-            info = CYCLE_PHASES["Mid Cycle / Expansion"]
-            return {"phase": "Mid Cycle / Expansion", **info, "confidence": 40, "phaseScores": {}}
+    @staticmethod
+    def _macro_prior(nifty_closes: list[float]) -> dict[str, float]:
+        """Macro overlay derived from Nifty 50 trend + slope.
 
+        Returns a dict mapping each phase name to a prior in [0, 1] that
+        biases the leading-sector momentum signal. This is what makes the
+        phase actually adapt to the regime (bull vs bear) instead of just
+        labelling whatever sector basket happens to be leading.
+        """
+        if not nifty_closes or len(nifty_closes) < 60:
+            return {p: 0.0 for p in CYCLE_PHASES}
+
+        last = nifty_closes[-1]
+        sma200 = statistics.mean(nifty_closes[-200:]) if len(nifty_closes) >= 200 else statistics.mean(nifty_closes)
+        sma50  = statistics.mean(nifty_closes[-50:])  if len(nifty_closes) >= 50  else statistics.mean(nifty_closes)
+        # Slope: SMA50 now vs SMA50 ~30 bars ago
+        ref_window = nifty_closes[-80:-30] if len(nifty_closes) >= 80 else nifty_closes[: max(1, len(nifty_closes) // 2)]
+        slope = sma50 - statistics.mean(ref_window) if ref_window else 0.0
+
+        above = last > sma200
+        rising = slope > 0
+        if above and rising:
+            return {"Mid Cycle / Expansion": 0.60, "Early Cycle / Recovery": 0.30,
+                    "Late Cycle / Slowdown": 0.10, "Recession / Contraction": 0.0}
+        if above and not rising:
+            return {"Late Cycle / Slowdown": 0.60, "Mid Cycle / Expansion": 0.30,
+                    "Early Cycle / Recovery": 0.05, "Recession / Contraction": 0.05}
+        if not above and rising:
+            return {"Early Cycle / Recovery": 0.60, "Mid Cycle / Expansion": 0.20,
+                    "Late Cycle / Slowdown": 0.10, "Recession / Contraction": 0.10}
+        return {"Recession / Contraction": 0.60, "Late Cycle / Slowdown": 0.30,
+                "Early Cycle / Recovery": 0.05, "Mid Cycle / Expansion": 0.05}
+
+    def _detect_economic_phase(
+        self,
+        momentum: dict[str, dict],
+        nifty_closes: Optional[list[float]] = None,
+    ) -> dict:
+        # No usable momentum at all — surface uncertainty rather than the
+        # old silent default of "Mid Cycle / Expansion @ 40%".
+        if not momentum:
+            return {
+                "phase":         "Unknown",
+                "code":          "UNKNOWN",
+                "color":         "#6b7280",
+                "bgColor":       "#f3f4f6",
+                "leadingSectors":   [],
+                "actionableSectors":[],
+                "theorySectors":    [],
+                "characteristics": "No sector data available — unable to detect phase.",
+                "strategy":      "Defer trading decisions until data is available.",
+                "confidence":    0,
+                "confidenceLabel":"No Data",
+                "phaseScores":   {},
+                "macroPrior":    {p: 0.0 for p in CYCLE_PHASES},
+                "transitional":  False,
+                "stable":        False,
+            }
+
+        # Leading − lagging weighted score per phase (de-overlapped).
         phase_scores: dict[str, float] = {}
         for phase_name, info in CYCLE_PHASES.items():
-            scores = [
-                momentum[s]["composite"]
-                for s in info["leadingSectors"]
-                if s in momentum
-            ]
-            phase_scores[phase_name] = statistics.mean(scores) if scores else -9.0
+            lead_w = info.get("leadingWeights", {})
+            lag_w  = info.get("laggingWeights", {})
+            lead_pairs = [(momentum[s]["composite"], w) for s, w in lead_w.items() if s in momentum]
+            lag_pairs  = [(momentum[s]["composite"], w) for s, w in lag_w.items()  if s in momentum]
 
-        best_phase = max(phase_scores, key=lambda k: phase_scores[k])
-        best_score = phase_scores[best_phase]
-        others = [v for k, v in phase_scores.items() if k != best_phase]
+            lead_score = (
+                sum(c * w for c, w in lead_pairs) / sum(w for _, w in lead_pairs)
+                if lead_pairs else 0.0
+            )
+            lag_score = (
+                sum(c * w for c, w in lag_pairs) / sum(w for _, w in lag_pairs)
+                if lag_pairs else 0.0
+            )
+            phase_scores[phase_name] = lead_score - lag_score
+
+        macro = self._macro_prior(nifty_closes or [])
+        # Add macro prior on top of leadership signal. Macro contributes
+        # up to ±1.5 z-units of pull; leadership signal is ±2 z-units typical.
+        combined = {p: phase_scores[p] + 1.5 * macro.get(p, 0.0) for p in phase_scores}
+
+        best_phase = max(combined, key=lambda k: combined[k])
+        best_score = combined[best_phase]
+        others = [v for k, v in combined.items() if k != best_phase]
         other_avg = statistics.mean(others) if others else 0.0
         gap = best_score - other_avg
-        confidence = min(95, max(35, int(50 + gap * 25)))
+
+        # ── Hysteresis ───────────────────────────────────────────────────
+        # If the previous phase still scores within 0.20 of the new winner,
+        # keep the previous phase (markets transition slowly; a one-day
+        # ranking flip shouldn't jump the user between Late and Mid).
+        prev_state = _load_rotation_state() or {}
+        prev_phase = prev_state.get("phase")
+        transitional = False
+        if (
+            prev_phase
+            and prev_phase in combined
+            and prev_phase != best_phase
+            and (best_score - combined[prev_phase]) < 0.20
+        ):
+            best_phase = prev_phase
+            best_score = combined[prev_phase]
+            transitional = True
+
+        # Confidence: lower floor (20) so we can honestly say "low conviction".
+        confidence = min(95, max(20, int(40 + gap * 25)))
+        if confidence >= 70:
+            label = "High"
+        elif confidence >= 45:
+            label = "Medium"
+        else:
+            label = "Low / Transitional"
+        if transitional:
+            label = "Transitional (hysteresis hold)"
 
         info = CYCLE_PHASES[best_phase]
         return {
-            "phase": best_phase,
+            "phase":            best_phase,
             **info,
-            "confidence": confidence,
-            "phaseScores": {k: round(v, 3) for k, v in phase_scores.items()},
+            "confidence":       confidence,
+            "confidenceLabel":  label,
+            "phaseScores":      {k: round(v, 3) for k, v in combined.items()},
+            "phaseScoresRaw":   {k: round(v, 3) for k, v in phase_scores.items()},
+            "macroPrior":       {k: round(v, 3) for k, v in macro.items()},
+            "transitional":     transitional,
+            "stable":           prev_phase == best_phase,
         }
 
     # ── Phase 3: Portfolio logic ───────────────────────────────────────────────
@@ -799,8 +1094,10 @@ class SectorsService:
         score_sectors = [s for s in sectors if s["symbol"] != "NIFTY 50"]
 
         # ── Phase 2 ──────────────────────────────────────────────────────────
+        excluded: list[str] = []
+        nifty_hist: dict = {}
         try:
-            momentum = await self._build_momentum_scores(sectors)
+            momentum, excluded, nifty_hist = await self._build_momentum_scores(sectors)
         except Exception as e:
             logger.error("Momentum computation failed: %s", e)
             momentum = {}
@@ -810,28 +1107,56 @@ class SectorsService:
         n = len(ranked)
         for i, sym in enumerate(ranked):
             pct = (i / n) * 100 if n > 0 else 50
-            tier_info = self._assign_tier(pct)
+            tier_info = self._assign_tier(pct, momentum[sym]["composite"])
             momentum[sym].update(tier_info)
             momentum[sym]["rank"]    = i + 1
             momentum[sym]["rankPct"] = round(pct, 1)
 
-        # ── Phase 1 ──────────────────────────────────────────────────────────
-        eco_phase = self._detect_economic_phase(momentum)
+        # ── Phase 1 (with macro overlay + hysteresis) ──────────────────────
+        nifty_closes = nifty_hist.get("closes") or []
+        eco_phase = self._detect_economic_phase(momentum, nifty_closes)
         favored   = eco_phase.get("actionableSectors", [])
 
+        # Persist phase for hysteresis on the next compute
+        if eco_phase.get("phase") and eco_phase["phase"] != "Unknown":
+            _save_rotation_state({
+                "phase":     eco_phase["phase"],
+                "asOf":      datetime.utcnow().isoformat() + "Z",
+                "score":     eco_phase.get("phaseScores", {}).get(eco_phase["phase"]),
+            })
+
         # ── Enrich sector list ────────────────────────────────────────────────
+        # Sectors excluded from scoring (no data) get a flagged-empty momentum
+        # entry so the UI can show them as "Data unavailable" instead of
+        # silently treating them as YELLOW/HOLD.
         enriched: list[dict] = []
         for s in score_sectors:
             ms = momentum.get(s["symbol"], {})
+            is_excluded = s["symbol"] in excluded
+            if is_excluded and not ms:
+                ms = {"tier": "UNKNOWN", "label": "Data Unavailable",
+                      "color": "#6b7280", "bg": "#f3f4f6",
+                      "dataMissing": True, "composite": None}
+            focus_tier = ms.get("tier", "YELLOW")
             enriched.append({
                 **s,
                 "momentum": ms,
-                "focus":    self._focus_label(ms.get("tier", "YELLOW")),
+                "focus":    self._focus_label(focus_tier) if focus_tier != "UNKNOWN" else "NO DATA",
+                # When declines == 0 the ratio is mathematically infinite.
+                # Returning the raw advances count silently changes units
+                # (a count is not a ratio), so surface None and let the UI
+                # render "∞" / "—".
                 "advanceDeclineRatio": (
-                    round(s["advances"] / s["declines"], 2) if s.get("declines") else s.get("advances", 0)
+                    round(s["advances"] / s["declines"], 2) if s.get("declines") else None
                 ),
             })
-        enriched.sort(key=lambda s: s.get("momentum", {}).get("composite", -99), reverse=True)
+        # Sort: scored sectors (with composite) first by composite desc, then unknown
+        enriched.sort(
+            key=lambda s: (
+                0 if s.get("momentum", {}).get("composite") is not None else 1,
+                -(s.get("momentum", {}).get("composite") or 0),
+            )
+        )
 
         # ── Phase 3 — portfolio picks ──────────────────────────────────────────
         top_picks = self._build_top_picks(enriched, eco_phase, favored)
@@ -847,13 +1172,23 @@ class SectorsService:
             tier = s.get("momentum", {}).get("tier", "YELLOW")
             tier_counts[tier] = tier_counts.get(tier, 0) + 1
 
-        recommendation = (
-            f"{eco_phase['phase']} detected. "
-            f"Top momentum picks: {', '.join(p['sector'] for p in top_picks)}. "
-            f"{eco_phase.get('strategy','')}"
-        ) if top_picks else (
-            f"{eco_phase['phase']} — no strong momentum sectors. Adopt defensive posture."
-        )
+        if not momentum:
+            recommendation = (
+                "No usable sector data — phase detection unavailable. "
+                "Defer trading decisions until data feed is restored."
+            )
+        elif top_picks:
+            recommendation = (
+                f"{eco_phase['phase']} detected ({eco_phase.get('confidenceLabel','')}, "
+                f"{eco_phase.get('confidence','')}% conf). "
+                f"Top momentum picks: {', '.join(p['sector'] for p in top_picks)}. "
+                f"{eco_phase.get('strategy','')}"
+            )
+        else:
+            recommendation = (
+                f"{eco_phase['phase']} — no sectors meet absolute strength thresholds. "
+                "Adopt defensive posture; raise cash."
+            )
 
         result = {
             "date":      datetime.utcnow().strftime("%Y-%m-%d"),
@@ -903,10 +1238,12 @@ class SectorsService:
                 "declining":          declining,
                 "unchanged":          total - advancing - declining,
                 "total":              total,
-                "advanceDeclineRatio":round(advancing / declining, 2) if declining else advancing,
+                # See note above — None signals "undefined / infinite",
+                # the UI converts that to "∞".
+                "advanceDeclineRatio":round(advancing / declining, 2) if declining else None,
                 "breadthScore":       round((advancing / total) * 100, 1) if total else 0,
             },
-            "adRatio": round(advancing / declining, 2) if declining else advancing,
+            "adRatio": round(advancing / declining, 2) if declining else None,
         }
 
         # Canonical provenance contract — same shape as every other route's
