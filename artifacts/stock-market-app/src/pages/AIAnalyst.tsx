@@ -7,6 +7,7 @@ import {
   Zap, Shield, Bookmark,
 } from "lucide-react";
 import { useCustomAuth } from "@/context/CustomAuthContext";
+import { friendlyError, friendlyMessage, sanitizeTicker } from "@/lib/friendlyError";
 import {
   RadialBarChart, RadialBar, PolarAngleAxis,
 } from "recharts";
@@ -325,29 +326,32 @@ export default function AIAnalyst() {
     return () => { cancelled = true; };
   }, [ticker, token]);
 
+  const runIdRef = useRef(0);
   const start = useCallback(async (force = false) => {
-    if (!ticker.trim()) { setError("Enter a ticker"); return; }
-    if (!token)         { setError("Please sign in"); return; }
+    const t = sanitizeTicker(ticker);
+    if (!t)     { setError("Enter a valid ticker (letters, digits, '.', '-')"); return; }
+    if (!token) { setError("Please sign in"); return; }
 
     abortRef.current?.abort();
     abortRef.current = new AbortController();
+    const myId = ++runIdRef.current;
+    const isStale = () => runIdRef.current !== myId;
     setEvents([]); setReport(null); setError(null); setRunning(true);
 
     try {
-      const res = await fetch(`/api/ai-analyst/run/${encodeURIComponent(ticker)}?force=${force}`, {
+      const res = await fetch(`/api/ai-analyst/run/${encodeURIComponent(t)}?force=${force}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
         signal: abortRef.current.signal,
       });
-      if (!res.ok || !res.body) {
-        const body = await res.text().catch(() => "");
-        throw new Error(body || `HTTP ${res.status}`);
-      }
+      if (isStale()) return;
+      if (!res.ok || !res.body) throw new Error(await friendlyError(res));
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
       while (true) {
         const { value, done } = await reader.read();
+        if (isStale()) { try { reader.cancel(); } catch { /* noop */ } return; }
         if (done) break;
         buf += decoder.decode(value, { stream: true });
         const frames = buf.split("\n\n");
@@ -357,6 +361,7 @@ export default function AIAnalyst() {
           if (!line) continue;
           try {
             const ev: PhaseEvent = JSON.parse(line.slice(6));
+            if (isStale()) return;
             setEvents(prev => [...prev, ev]);
             if (ev.phase === "done" && ev.report) {
               setReport(ev.report);
@@ -369,9 +374,11 @@ export default function AIAnalyst() {
         }
       }
     } catch (e: any) {
-      if (e.name !== "AbortError") setError(e.message || String(e));
+      if (isStale()) return;
+      if (e?.name === "AbortError") return;
+      setError(friendlyMessage(e));
     } finally {
-      setRunning(false);
+      if (!isStale()) setRunning(false);
     }
   }, [ticker, token]);
 

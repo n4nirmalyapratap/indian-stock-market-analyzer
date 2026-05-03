@@ -6,6 +6,7 @@ import {
   Bookmark,
 } from "lucide-react";
 import { useCustomAuth } from "@/context/CustomAuthContext";
+import { friendlyError, friendlyMessage, sanitizeTickers } from "@/lib/friendlyError";
 
 type Verdict = "BUY" | "HOLD" | "SELL";
 type Confidence = "LOW" | "MEDIUM" | "HIGH";
@@ -110,8 +111,7 @@ export default function AIAnalystScan() {
   // `?rerun=1` immediately forces a fresh re-scan that overwrites the saved
   // entry instead of loading it from the saved store.
   const adhocTickers = useMemo(() => {
-    const raw = queryParams.get("tickers") || "";
-    return raw.split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
+    return sanitizeTickers(queryParams.get("tickers") || "", 50);
   }, [queryParams]);
 
   const [watchlists] = useState<Watchlist[]>(loadWatchlists);
@@ -199,11 +199,7 @@ export default function AIAnalystScan() {
         signal: ctl.signal,
       });
       if (!isCurrent()) return; // superseded between fetch start and headers
-      if (!resp.ok || !resp.body) {
-        let msg = `HTTP ${resp.status}`;
-        try { const j = await resp.json(); msg = j.detail || j.error || msg; } catch {}
-        throw new Error(msg);
-      }
+      if (!resp.ok || !resp.body) throw new Error(await friendlyError(resp));
 
       const reader = resp.body.getReader();
       const dec = new TextDecoder();
@@ -261,7 +257,7 @@ export default function AIAnalystScan() {
         }
       }
     } catch (e: any) {
-      if (isCurrent() && e?.name !== "AbortError") setErr(e?.message || "Scan failed");
+      if (isCurrent() && e?.name !== "AbortError") setErr(friendlyMessage(e) || "Scan failed");
     } finally {
       // Only the current scan is allowed to flip `running` back off, so an
       // aborted earlier scan can't race the new one's button state.
