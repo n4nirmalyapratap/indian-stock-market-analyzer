@@ -6,6 +6,7 @@ import {
   BarChart3, LineChart, Newspaper, Globe2, Sparkles,
 } from "lucide-react";
 import { useCustomAuth } from "@/context/CustomAuthContext";
+import { friendlyError, friendlyMessage, sanitizeTicker } from "@/lib/friendlyError";
 
 type Verdict = "BUY" | "HOLD" | "SELL";
 type Confidence = "LOW" | "MEDIUM" | "HIGH";
@@ -255,6 +256,9 @@ export default function AIAnalystCompare() {
   const { token } = useCustomAuth();
   const [running, setRunning] = useState(false);
   const [error, setError]     = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const runIdRef = useRef(0);
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
   const [data,  setData]      = useState<{ a: Report; b: Report } | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const initRef = useRef(false);
@@ -290,26 +294,37 @@ export default function AIAnalystCompare() {
   }, [token]);
 
   const run = async (force = false) => {
-    if (!a.trim() || !b.trim()) { setError("Pick two tickers"); return; }
-    if (!token) { setError("Please sign in"); return; }
+    const ca = sanitizeTicker(a);
+    const cb = sanitizeTicker(b);
+    if (!ca || !cb) { setError("Enter two valid tickers (letters, digits, '.', '-')"); return; }
+    if (ca === cb)  { setError("Pick two different tickers"); return; }
+    if (!token)     { setError("Please sign in"); return; }
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+    const myId = ++runIdRef.current;
     setError(null); setData(null); setSavedAt(null); setRunning(true);
     try {
       const res = await fetch(
-        `/api/ai-analyst/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}&force=${force}`,
+        `/api/ai-analyst/compare?a=${encodeURIComponent(ca)}&b=${encodeURIComponent(cb)}&force=${force}`,
         {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
+          signal: abortRef.current.signal,
         });
-      if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+      if (runIdRef.current !== myId) return;  // stale — newer run started
+      if (!res.ok) throw new Error(await friendlyError(res));
       const j = await res.json();
+      if (runIdRef.current !== myId) return;
       setData({ a: j.a, b: j.b });
       // Newly persisted — surface the freshly-saved timestamp so the banner
       // shows immediately on the next compare load (or page refresh).
       if (j.saved) setSavedAt(new Date().toISOString());
     } catch (e: any) {
-      setError(e.message || String(e));
+      if (runIdRef.current !== myId) return;
+      if (e?.name === "AbortError") return;
+      setError(friendlyMessage(e));
     } finally {
-      setRunning(false);
+      if (runIdRef.current === myId) setRunning(false);
     }
   };
 
@@ -364,17 +379,19 @@ export default function AIAnalystCompare() {
         </div>
       )}
 
-      {/* Input bar */}
-      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-xl p-3 sm:p-4 flex flex-wrap items-center gap-2">
-        <input value={a} onChange={e => setA(e.target.value.toUpperCase())}
-               placeholder="Ticker A (e.g. RELIANCE)"
-               className="flex-1 min-w-[140px] px-3 py-2 text-sm bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-white/10 rounded-lg text-gray-900 dark:text-white placeholder:text-gray-400" />
-        <span className="text-gray-400 text-xs font-bold px-1">VS</span>
-        <input value={b} onChange={e => setB(e.target.value.toUpperCase())}
-               placeholder="Ticker B (e.g. TCS)"
-               className="flex-1 min-w-[140px] px-3 py-2 text-sm bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-white/10 rounded-lg text-gray-900 dark:text-white placeholder:text-gray-400" />
+      {/* Input bar — grid on mobile (no overflow at 320px), flex on >=sm */}
+      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-xl p-3 sm:p-4 grid grid-cols-[1fr_auto_1fr] sm:flex sm:flex-wrap items-center gap-2">
+        <input value={a} onChange={e => setA(e.target.value.toUpperCase().slice(0, 20))}
+               aria-label="First ticker"
+               placeholder="Ticker A"
+               className="min-w-0 sm:flex-1 sm:min-w-[140px] px-3 py-2 text-sm bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-white/10 rounded-lg text-gray-900 dark:text-white placeholder:text-gray-400" />
+        <span className="text-gray-400 text-xs font-bold px-1" aria-hidden="true">VS</span>
+        <input value={b} onChange={e => setB(e.target.value.toUpperCase().slice(0, 20))}
+               aria-label="Second ticker"
+               placeholder="Ticker B"
+               className="min-w-0 sm:flex-1 sm:min-w-[140px] px-3 py-2 text-sm bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-white/10 rounded-lg text-gray-900 dark:text-white placeholder:text-gray-400" />
         <button onClick={() => run()} disabled={running}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg flex items-center gap-2">
+                className="col-span-3 sm:col-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg flex items-center justify-center gap-2">
           {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Microscope className="w-4 h-4" />}
           {running ? "Analysing…" : "Compare"}
         </button>
