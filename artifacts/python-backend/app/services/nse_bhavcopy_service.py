@@ -420,8 +420,13 @@ def refresh_recent(days: int = 7) -> list[dict]:
     today = date.today()
     out: list[dict] = []
     with _connect() as conn:
+        # Skip dates we've already processed regardless of outcome (`ok` or
+        # `empty`).  An `empty` row means we successfully reached the
+        # archive and got back zero option records — typically a holiday
+        # the NSE calendar didn't flag — so we shouldn't keep hammering it.
+        # Only `error` rows are worth retrying.
         cached = {row["trade_date"] for row in conn.execute(
-            "SELECT trade_date FROM ingest_log WHERE status='ok'"
+            "SELECT trade_date FROM ingest_log WHERE status IN ('ok','empty')"
         )}
     for i in range(1, days + 1):
         d = today - timedelta(days=i)
