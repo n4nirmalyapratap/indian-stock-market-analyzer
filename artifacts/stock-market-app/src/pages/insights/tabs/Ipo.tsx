@@ -2,13 +2,21 @@ import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
 import { PageHeader, PillTabs, Card, Loading, EmptyState } from "../_shared";
-import { Rocket, Calendar, TrendingUp, Users, Building2, Info } from "lucide-react";
+import { Rocket, Calendar, TrendingUp, Users, Building2, Info, TrendingDown, Flame } from "lucide-react";
 import DataFreshness from "@/components/DataFreshness";
 import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 type Tab = "open" | "upcoming" | "listed";
 
 interface Subscription { qib: number | null; nii: number | null; retail: number | null; total: number | null; }
+
+interface Gmp {
+  premium:     number | null;   // ₹ over issue price
+  estListing:  number | null;   // ₹ estimated listing price
+  estGainPct:  number | null;   // %
+  lastUpdated: string | null;
+  matchedName: string | null;
+}
 
 interface IpoIssue {
   symbol:       string;
@@ -25,6 +33,7 @@ interface IpoIssue {
   issueShares:  number | null;
   status:       "open" | "upcoming";
   subscription?: Subscription;
+  gmp?:         Gmp | null;
 }
 
 interface IpoResponse {
@@ -33,6 +42,7 @@ interface IpoResponse {
   open:      IpoIssue[];
   upcoming:  IpoIssue[];
   fetchedAt?: string;
+  gmpSource?: { url: string | null; fetchedAt: string | null };
 }
 
 const fmtDate = (iso: string | null) => {
@@ -65,6 +75,54 @@ const daysUntil = (iso: string | null) => {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const target = new Date(iso + "T00:00:00");
   return Math.round((target.getTime() - today.getTime()) / 86_400_000);
+};
+
+const GmpBlock = ({ gmp }: { gmp: Gmp }) => {
+  // GMP can be 0, positive, or negative (rare but happens for cold IPOs).
+  const prem = gmp.premium;
+  const pct  = gmp.estGainPct;
+  const tone =
+    prem == null      ? "neutral"
+    : prem > 0        ? "up"
+    : prem < 0        ? "down"
+    :                   "neutral";
+  const cls = tone === "up"
+    ? "bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/20"
+    : tone === "down"
+    ? "bg-rose-50 dark:bg-rose-500/10 border-rose-200 dark:border-rose-500/20"
+    : "bg-gray-50 dark:bg-gray-700/40 border-gray-200 dark:border-gray-700";
+  const Icon = tone === "up" ? TrendingUp : tone === "down" ? TrendingDown : Flame;
+  const colorText = tone === "up"
+    ? "text-emerald-700 dark:text-emerald-300"
+    : tone === "down"
+    ? "text-rose-700 dark:text-rose-300"
+    : "text-gray-700 dark:text-gray-200";
+  return (
+    <div className={`rounded-lg border px-2.5 py-2 flex items-center justify-between gap-2 ${cls}`}>
+      <div className="flex items-center gap-2 min-w-0">
+        <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${colorText}`} />
+        <div className="min-w-0">
+          <p className="text-[10px] uppercase tracking-wide font-bold text-gray-500 dark:text-gray-400 leading-tight">
+            Grey Market Premium
+          </p>
+          <p className={`text-sm font-bold tabular-nums leading-tight ${colorText}`}>
+            {prem == null ? "—" : `${prem >= 0 ? "+" : ""}₹${prem}`}
+            {pct != null && pct !== 0 && (
+              <span className="ml-1.5 text-[11px] font-semibold opacity-80">
+                ({pct >= 0 ? "+" : ""}{pct.toFixed(2)}%)
+              </span>
+            )}
+          </p>
+        </div>
+      </div>
+      {gmp.estListing != null && (
+        <div className="text-right">
+          <p className="text-[9px] uppercase tracking-wide text-gray-500 dark:text-gray-400 leading-tight">Est. Listing</p>
+          <p className="text-xs font-bold text-gray-900 dark:text-white tabular-nums leading-tight">₹{gmp.estListing}</p>
+        </div>
+      )}
+    </div>
+  );
 };
 
 const SeriesBadge = ({ issue }: { issue: IpoIssue }) => {
@@ -152,6 +210,9 @@ const OpenIssueCard = ({ issue }: { issue: IpoIssue }) => {
         </div>
       </div>
 
+      {/* GMP */}
+      {issue.gmp && <GmpBlock gmp={issue.gmp} />}
+
       {/* Subscription */}
       {sub && (
         <div className="space-y-2 pt-2 border-t border-gray-100 dark:border-gray-700">
@@ -210,6 +271,7 @@ const UpcomingIssueCard = ({ issue }: { issue: IpoIssue }) => {
           </p>
         </div>
       </div>
+      {issue.gmp && <GmpBlock gmp={issue.gmp} />}
     </Card>
   );
 };
@@ -331,11 +393,25 @@ export default function Ipo() {
         </div>
       )}
 
-      {tab === "open" && data?.open && data.open.length > 0 && (
-        <p className="mt-4 flex items-start gap-1.5 text-[11px] text-gray-500 dark:text-gray-400">
-          <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-          <span>Subscription multiples are live from NSE. Bars use a log scale anchored at 100× — a violet bar means oversubscribed beyond 10×.</span>
-        </p>
+      {tab !== "listed" && items.length > 0 && (
+        <div className="mt-4 space-y-1.5">
+          {tab === "open" && (
+            <p className="flex items-start gap-1.5 text-[11px] text-gray-500 dark:text-gray-400">
+              <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+              <span>Subscription multiples are live from NSE. Bars use a log scale anchored at 100× — a violet bar means oversubscribed beyond 10×.</span>
+            </p>
+          )}
+          <p className="flex items-start gap-1.5 text-[11px] text-gray-500 dark:text-gray-400">
+            <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+            <span>
+              Grey Market Premium is an unofficial pre-listing indicator sourced from{" "}
+              <a href={data?.gmpSource?.url ?? "https://ipowatch.in/"} target="_blank" rel="noreferrer"
+                 className="text-blue-600 dark:text-blue-400 underline">ipowatch.in</a>
+              {data?.gmpSource?.fetchedAt && <> · last fetched {data.gmpSource.fetchedAt.replace("T"," ").replace("Z"," UTC")}</>}.
+              Estimated listing = issue price + GMP. Treat it as sentiment, not a forecast.
+            </span>
+          </p>
+        </div>
       )}
     </div>
   );
