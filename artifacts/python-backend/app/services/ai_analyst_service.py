@@ -681,14 +681,6 @@ async def _run_analysis_impl(ticker: str, user_id: str,
       for key, _ in ANALYST_ROLES:
           yield _ev("analyst", agent=key, status="pending")
 
-      async def _wrap(key: str, label: str):
-          try:
-              yield_event = _ev("analyst", agent=key, status="running")
-              return key, label, yield_event, await _run_analyst(key, label, summary)
-          except Exception as e:
-              logger.warning("Analyst %s failed: %s", key, e)
-              return key, label, None, (key, f"[{key} analyst unavailable: {e}]")
-
       # Mark all running, then await
       for key, _ in ANALYST_ROLES:
           yield _ev("analyst", agent=key, status="running")
