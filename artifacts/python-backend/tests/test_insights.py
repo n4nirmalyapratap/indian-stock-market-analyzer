@@ -239,6 +239,74 @@ def test_matches_category_handles_slash_and_blob():
     assert not _matches_category({"category": "Result", "purpose": "Q4", "subject": ""}, "Dividend")
 
 
+def test_categorize_scheme_equity_largecap():
+    from app.routes.insights import _categorize_scheme
+    r = _categorize_scheme("Open Ended Schemes(Equity Scheme - Large Cap Fund)")
+    assert r["assetClass"] == "Equity"
+    assert r["subCategory"] == "Large Cap"
+    assert r["openEnded"] is True
+
+
+def test_categorize_scheme_debt_liquid():
+    from app.routes.insights import _categorize_scheme
+    r = _categorize_scheme("Open Ended Schemes(Debt Scheme - Liquid Fund)")
+    assert r["assetClass"] == "Debt"
+    assert r["subCategory"] == "Liquid"
+
+
+def test_categorize_scheme_hybrid_balanced():
+    from app.routes.insights import _categorize_scheme
+    r = _categorize_scheme("Open Ended Schemes(Hybrid Scheme - Balanced Hybrid Fund)")
+    assert r["assetClass"] == "Hybrid"
+    assert r["subCategory"] == "Balanced"
+
+
+def test_categorize_scheme_index_etf():
+    from app.routes.insights import _categorize_scheme
+    r = _categorize_scheme("Open Ended Schemes(Other Scheme - Index Funds)")
+    assert r["assetClass"] == "Index / ETF"
+    assert r["subCategory"] == "Index Funds"
+
+
+def test_categorize_scheme_close_ended():
+    from app.routes.insights import _categorize_scheme
+    r = _categorize_scheme("Close Ended Schemes(Equity Scheme - ELSS)")
+    assert r["openEnded"] is False
+    assert r["assetClass"] == "Equity"
+    assert r["subCategory"] == "ELSS"
+
+
+def test_compute_returns_basic_cagr():
+    from app.routes.insights import _compute_returns
+    # Build a synthetic 5y daily series, growing 12% annually (factor 1.7623).
+    import math
+    n = 1300
+    daily = (1.12) ** (1 / 252)
+    series = []  # newest-first (date irrelevant for math)
+    base = 100.0
+    for i in range(n):
+        v = base * (daily ** (n - 1 - i))
+        series.append((f"d{i}", v))
+    r = _compute_returns(series)
+    # 1Y absolute should be ~12%, 3Y CAGR ~12%, 5Y CAGR ~12%.
+    assert r["1Y"] is not None and abs(r["1Y"] - 12.0) < 0.5
+    assert r["3Y"] is not None and abs(r["3Y"] - 12.0) < 0.5
+    assert r["5Y"] is not None and abs(r["5Y"] - 12.0) < 0.5
+    # 10Y window > series length → None.
+    assert r.get("10Y") is None
+
+
+def test_compute_risk_max_drawdown():
+    from app.routes.insights import _compute_risk
+    # 100 → 200 → 100 (50% drawdown).
+    series = []
+    for i in range(100): series.append((f"u{i}", 100 + i))   # up
+    for i in range(100): series.append((f"d{i}", 200 - i))   # down
+    series.reverse()  # newest-first
+    r = _compute_risk(series, None)
+    assert r["maxDrawdown"] < -49 and r["maxDrawdown"] > -51
+
+
 def test_nse_shareholding_adapter():
     from app.routes.insights import _adapt_nse_shareholding
     sample = [{

@@ -1,8 +1,16 @@
-import { useState } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
-import { PageHeader, Card, Loading, EmptyState, MenuDropdown, ErrorState } from "../_shared";
-import { PieChart } from "lucide-react";
+import {
+  PageHeader, Card, Loading, EmptyState, MenuDropdown, ErrorState,
+  PillTabs, useChartPalette,
+} from "../_shared";
+import {
+  PieChart, ChevronDown, ChevronRight, ExternalLink, RefreshCw, TrendingUp, TrendingDown,
+} from "lucide-react";
+import {
+  ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+} from "recharts";
 
 interface Scheme {
   schemeCode: string;
@@ -12,8 +20,10 @@ interface Scheme {
   date: string;
   amc: string;
   category: string;
+  assetClass: string;
+  subCategory: string;
+  openEnded: boolean;
 }
-
 interface MfResponse {
   available: boolean;
   source?: string;
@@ -22,51 +32,153 @@ interface MfResponse {
   matched?: number;
   items: Scheme[];
   amcs?: string[];
-  categories?: string[];
+  assetClasses?: string[];
+  subCategoriesByClass?: Record<string, string[]>;
+}
+interface SchemeDetail {
+  available: boolean;
+  message?: string;
+  schemeCode?: string;
+  meta?: {
+    schemeName: string; fundHouse: string; schemeType: string;
+    schemeCategory: string; isinGrowth: string; isinDivReinvestment: string;
+  };
+  latest?: { nav: number; date: string };
+  returns?: Record<string, number | null | string>;
+  risk?: { alpha?: number; beta?: number; stdDev?: number; sharpe?: number; maxDrawdown?: number };
+  navChart?: { date: string; nav: number; navIdx: number }[];
+  benchmarkChart?: { date: string; benchIdx: number }[];
+  benchmarkLabel?: string | null;
+  factsheetUrl?: string;
+  holdingsNote?: string;
+}
+
+const ASSET_TABS = [
+  { value: "", label: "All" },
+  { value: "Equity", label: "Equity" },
+  { value: "Debt", label: "Debt" },
+  { value: "Hybrid", label: "Hybrid" },
+  { value: "Index / ETF", label: "Index / ETF" },
+  { value: "Solution Oriented", label: "Solution" },
+  { value: "Other", label: "Other" },
+];
+
+function fmtPct(v: number | null | undefined, digits = 2): string {
+  if (v == null || !isFinite(v as number)) return "—";
+  const sign = v > 0 ? "+" : "";
+  return `${sign}${(v as number).toFixed(digits)}%`;
+}
+function pctClass(v: number | null | undefined): string {
+  if (v == null) return "text-gray-500 dark:text-gray-400";
+  return v >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400";
+}
+function fmtNum(v: number | null | undefined, digits = 2): string {
+  if (v == null || !isFinite(v as number)) return "—";
+  return (v as number).toFixed(digits);
 }
 
 export default function MfHoldings() {
+  const [assetClass, setAssetClass] = useState("");
+  const [subCategory, setSubCategory] = useState("");
   const [amc, setAmc] = useState("");
-  const [category, setCategory] = useState("");
   const [search, setSearch] = useState("");
+  const [openOnly, setOpenOnly] = useState(true);
+  const [expanded, setExpanded] = useState<string | null>(null);
 
   const params = new URLSearchParams();
+  if (assetClass) params.set("assetClass", assetClass);
+  if (subCategory) params.set("subCategory", subCategory);
   if (amc) params.set("amc", amc);
-  if (category) params.set("category", category);
   if (search) params.set("search", search);
-  params.set("limit", "300");
+  params.set("openOnly", String(openOnly));
+  params.set("limit", "500");
 
-  const { data, isLoading, error } = useQuery<MfResponse>({
-    queryKey: ["insights/mf-holdings", amc, category, search],
+  const { data, isLoading, error, refetch, isFetching } = useQuery<MfResponse>({
+    queryKey: ["insights/mf-holdings", assetClass, subCategory, amc, search, openOnly],
     queryFn: () => fetchApi(`/insights/mf-holdings?${params}`),
     staleTime: 30 * 60_000,
   });
 
-  const amcOptions = (data?.amcs || []).map(a => ({ value: a, label: a }));
-  const catOptions = (data?.categories || []).map(c => ({ value: c, label: c }));
+  const amcOptions = useMemo(
+    () => (data?.amcs || []).map(a => ({ value: a, label: a })),
+    [data?.amcs],
+  );
+  const subOptions = useMemo(() => {
+    const subs = assetClass
+      ? (data?.subCategoriesByClass?.[assetClass] || [])
+      : Object.values(data?.subCategoriesByClass || {}).flat();
+    return Array.from(new Set(subs)).sort().map(s => ({ value: s, label: s }));
+  }, [assetClass, data?.subCategoriesByClass]);
+
+  const setAssetAndReset = (v: string) => { setAssetClass(v); setSubCategory(""); setExpanded(null); };
 
   return (
     <div>
       <PageHeader
-        title="Mutual Fund — Schemes & NAVs"
-        info="Live AMFI scheme list with daily Net Asset Values"
+        title="Mutual Funds — Schemes, Returns & Risk"
+        info="AMFI live NAV feed + per-scheme historical returns and risk metrics vs Nifty 50"
         right={
-          data?.available && (
-            <span className="text-[11px] text-gray-500 dark:text-gray-400">
-              <span className="font-semibold text-gray-900 dark:text-white">{data.matched?.toLocaleString()}</span> of <span className="font-semibold text-gray-900 dark:text-white">{data.totalSchemes?.toLocaleString()}</span> schemes
-            </span>
-          )
+          <div className="flex items-center gap-3">
+            {data?.available && (
+              <span className="text-[11px] text-gray-500 dark:text-gray-400">
+                <span className="font-semibold text-gray-900 dark:text-white">{data.matched?.toLocaleString()}</span>
+                {" of "}
+                <span className="font-semibold text-gray-900 dark:text-white">{data.totalSchemes?.toLocaleString()}</span>
+                {" schemes"}
+              </span>
+            )}
+            <button
+              onClick={() => refetch()}
+              disabled={isFetching}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-60"
+              title="Refresh">
+              <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
+              Refresh
+            </button>
+          </div>
         }
       />
 
+      {/* Filter row 1 — asset class chips */}
+      <div className="mb-3">
+        <PillTabs value={assetClass} onChange={setAssetAndReset} options={ASSET_TABS} />
+      </div>
+
+      {/* Filter row 2 — sub-cat / amc / search / open-only */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
-        <MenuDropdown label="AMC" value={amc} onChange={setAmc} options={amcOptions}
-          placeholder="All AMCs" minButtonWidth={180} maxButtonWidth={260} />
-        <MenuDropdown label="Category" value={category} onChange={setCategory} options={catOptions}
-          placeholder="All categories" minButtonWidth={180} maxButtonWidth={260} />
-        <input value={search} onChange={e => setSearch(e.target.value)}
+        <MenuDropdown
+          label="Sub-category"
+          value={subCategory}
+          onChange={(v) => { setSubCategory(v); setExpanded(null); }}
+          options={subOptions}
+          placeholder={assetClass ? `All ${assetClass}` : "All sub-categories"}
+          minButtonWidth={200}
+          maxButtonWidth={260}
+        />
+        <MenuDropdown
+          label="AMC"
+          value={amc}
+          onChange={(v) => { setAmc(v); setExpanded(null); }}
+          options={amcOptions}
+          placeholder="All AMCs"
+          minButtonWidth={200}
+          maxButtonWidth={280}
+        />
+        <input
+          value={search}
+          onChange={e => { setSearch(e.target.value); setExpanded(null); }}
           placeholder="Search scheme name…"
-          className="text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white rounded-lg px-3 py-2 w-72 outline-none focus:border-indigo-600 dark:border-indigo-500 placeholder:text-gray-500 dark:text-gray-400" />
+          className="text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white rounded-lg px-3 py-2 w-72 outline-none focus:border-indigo-600 dark:focus:border-indigo-500 placeholder:text-gray-500 dark:placeholder:text-gray-400"
+        />
+        <label className="inline-flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300 ml-1 select-none cursor-pointer">
+          <input
+            type="checkbox"
+            checked={openOnly}
+            onChange={e => setOpenOnly(e.target.checked)}
+            className="accent-indigo-600 w-3.5 h-3.5"
+          />
+          Open-ended only
+        </label>
       </div>
 
       {isLoading && <Loading label="Fetching AMFI NAV feed…" />}
@@ -85,29 +197,262 @@ export default function MfHoldings() {
           <table className="w-full text-sm">
             <thead className="text-xs uppercase text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/40">
               <tr>
-                <th className="px-4 py-3 text-left">Scheme</th>
-                <th className="px-4 py-3 text-left">AMC</th>
-                <th className="px-4 py-3 text-left">Category</th>
-                <th className="px-4 py-3 text-right">NAV (₹)</th>
-                <th className="px-4 py-3 text-left">As of</th>
+                <th className="px-3 py-3 text-left w-6"></th>
+                <th className="px-3 py-3 text-left">Scheme</th>
+                <th className="px-3 py-3 text-left">AMC</th>
+                <th className="px-3 py-3 text-left">Class</th>
+                <th className="px-3 py-3 text-left">Sub-category</th>
+                <th className="px-3 py-3 text-right">NAV (₹)</th>
+                <th className="px-3 py-3 text-left">As of</th>
               </tr>
             </thead>
             <tbody>
-              {data.items.map(s => (
-                <tr key={s.schemeCode} className="border-t border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition">
-                  <td className="px-4 py-2.5 font-medium text-gray-900 dark:text-white max-w-md truncate" title={s.schemeName}>{s.schemeName}</td>
-                  <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 text-xs max-w-[200px] truncate" title={s.amc}>{s.amc}</td>
-                  <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 text-xs max-w-[180px] truncate" title={s.category}>{s.category}</td>
-                  <td className="px-4 py-2.5 text-right font-semibold text-gray-900 dark:text-white tabular-nums">
-                    {s.nav != null ? s.nav.toFixed(4) : "—"}
-                  </td>
-                  <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 text-xs whitespace-nowrap">{s.date}</td>
-                </tr>
-              ))}
+              {data.items.map(s => {
+                const isOpen = expanded === s.schemeCode;
+                return (
+                  <Fragment key={s.schemeCode}>
+                    <tr
+                      onClick={() => setExpanded(isOpen ? null : s.schemeCode)}
+                      className="border-t border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition cursor-pointer"
+                    >
+                      <td className="px-3 py-2.5 text-gray-400">
+                        {isOpen ? <ChevronDown className="w-4 h-4"/> : <ChevronRight className="w-4 h-4"/>}
+                      </td>
+                      <td className="px-3 py-2.5 font-medium text-gray-900 dark:text-white max-w-md truncate" title={s.schemeName}>
+                        {s.schemeName}
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-500 dark:text-gray-400 text-xs max-w-[180px] truncate" title={s.amc}>{s.amc}</td>
+                      <td className="px-3 py-2.5 text-xs">
+                        <span className="inline-block px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-700 dark:text-indigo-300">
+                          {s.assetClass || "—"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-600 dark:text-gray-300 text-xs">{s.subCategory || "—"}</td>
+                      <td className="px-3 py-2.5 text-right font-semibold text-gray-900 dark:text-white tabular-nums">
+                        {s.nav != null ? s.nav.toFixed(4) : "—"}
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-500 dark:text-gray-400 text-xs whitespace-nowrap">{s.date}</td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="bg-gray-50/60 dark:bg-gray-900/30">
+                        <td colSpan={7} className="px-4 py-4">
+                          <SchemeDetailPanel code={s.schemeCode} fallbackName={s.schemeName} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </Card>
       )}
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Per-scheme expansion: NAV chart vs Nifty + return ladder + risk badges.
+ * ────────────────────────────────────────────────────────────────────── */
+
+function SchemeDetailPanel({ code, fallbackName }: { code: string; fallbackName: string }) {
+  const { data, isLoading, error } = useQuery<SchemeDetail>({
+    queryKey: ["insights/mf-scheme", code],
+    queryFn: () => fetchApi(`/insights/mf-scheme/${code}`),
+    staleTime: 30 * 60_000,
+  });
+
+  if (isLoading) {
+    return <div className="text-xs text-gray-500 dark:text-gray-400 py-3">Loading scheme details…</div>;
+  }
+  if (error || !data || data.available === false) {
+    return (
+      <div className="text-xs text-gray-500 dark:text-gray-400 py-2">
+        {(data?.message) || "Could not load scheme details."}
+      </div>
+    );
+  }
+
+  const ret = data.returns || {};
+  const risk = data.risk || {};
+  const returnEntries: { label: string; key: string; isCagr: boolean }[] = [
+    { label: "1M",  key: "1M",  isCagr: false },
+    { label: "3M",  key: "3M",  isCagr: false },
+    { label: "6M",  key: "6M",  isCagr: false },
+    { label: "1Y",  key: "1Y",  isCagr: false },
+    { label: "3Y",  key: "3Y",  isCagr: true  },
+    { label: "5Y",  key: "5Y",  isCagr: true  },
+    { label: "10Y", key: "10Y", isCagr: true  },
+    { label: "SI",  key: "SI",  isCagr: true  },
+  ];
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      {/* Left: chart */}
+      <div className="lg:col-span-2">
+        <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">
+          NAV indexed to 100{data.benchmarkLabel ? ` vs ${data.benchmarkLabel}` : ""} · last 5 yrs
+        </div>
+        <NavChart nav={data.navChart || []} bench={data.benchmarkChart || []} benchLabel={data.benchmarkLabel || ""} />
+      </div>
+
+      {/* Right: meta + returns + risk */}
+      <div className="space-y-3">
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500">Scheme</div>
+          <div className="text-sm font-semibold text-gray-900 dark:text-white leading-tight">
+            {data.meta?.schemeName || fallbackName}
+          </div>
+          <div className="text-xs text-gray-500 dark:text-gray-400">
+            {data.meta?.fundHouse} · {data.meta?.schemeCategory}
+          </div>
+          {data.latest && (
+            <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+              NAV ₹<span className="font-semibold text-gray-900 dark:text-white">{data.latest.nav.toFixed(4)}</span>
+              <span className="ml-1">as of {data.latest.date}</span>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1.5">Returns</div>
+          <div className="grid grid-cols-4 gap-1.5">
+            {returnEntries.map(r => {
+              const v = ret[r.key] as number | null | undefined;
+              return (
+                <div key={r.key}
+                  className="rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-1.5 py-1 text-center">
+                  <div className="text-[10px] text-gray-500 dark:text-gray-400">
+                    {r.label}{r.isCagr && v != null ? <span className="text-[9px] opacity-70"> CAGR</span> : ""}
+                  </div>
+                  <div className={`text-xs font-semibold tabular-nums ${pctClass(v)}`}>
+                    {fmtPct(v, 1)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1.5">Risk (3-yr daily, vs Nifty 50)</div>
+          <div className="grid grid-cols-2 gap-1.5">
+            <RiskBadge label="Alpha"     value={fmtPct(risk.alpha, 2)} positive={(risk.alpha ?? 0) >= 0} />
+            <RiskBadge label="Beta"      value={fmtNum(risk.beta, 2)} />
+            <RiskBadge label="Std Dev"   value={fmtPct(risk.stdDev, 2)} />
+            <RiskBadge label="Sharpe"    value={fmtNum(risk.sharpe, 2)} positive={(risk.sharpe ?? 0) >= 1} />
+            <RiskBadge label="Max DD" value={fmtPct(risk.maxDrawdown, 1)} negative className="col-span-2" />
+          </div>
+        </div>
+
+        <div className="pt-1">
+          <div className="text-[11px] text-gray-500 dark:text-gray-400 mb-1">Stock-level holdings</div>
+          <p className="text-[11px] leading-relaxed text-gray-500 dark:text-gray-400 mb-1.5">
+            {data.holdingsNote}
+          </p>
+          {data.factsheetUrl && (
+            <a href={data.factsheetUrl} target="_blank" rel="noopener noreferrer"
+               className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
+              View factsheet <ExternalLink className="w-3 h-3"/>
+            </a>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RiskBadge({ label, value, positive, negative, className = "" }: {
+  label: string; value: string; positive?: boolean; negative?: boolean; className?: string;
+}) {
+  const tone = negative
+    ? "text-rose-600 dark:text-rose-400"
+    : positive === true
+      ? "text-emerald-600 dark:text-emerald-400"
+      : positive === false
+        ? "text-rose-600 dark:text-rose-400"
+        : "text-gray-900 dark:text-white";
+  const Icon = positive === true ? TrendingUp : positive === false ? TrendingDown : null;
+  return (
+    <div className={`rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1.5 ${className}`}>
+      <div className="text-[10px] text-gray-500 dark:text-gray-400 leading-none">{label}</div>
+      <div className={`text-sm font-semibold tabular-nums leading-tight inline-flex items-center gap-1 ${tone}`}>
+        {Icon && <Icon className="w-3 h-3"/>}
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function NavChart({ nav, bench, benchLabel }: {
+  nav: { date: string; navIdx: number }[];
+  bench: { date: string; benchIdx: number }[];
+  benchLabel: string;
+}) {
+  const palette = useChartPalette();
+  // Merge nav + benchmark on date (chart needs single series array).
+  const merged = useMemo(() => {
+    const map = new Map<string, { date: string; navIdx?: number; benchIdx?: number }>();
+    for (const p of nav) map.set(p.date, { date: p.date, navIdx: p.navIdx });
+    for (const p of bench) {
+      const cur = map.get(p.date);
+      if (cur) cur.benchIdx = p.benchIdx;
+      else map.set(p.date, { date: p.date, benchIdx: p.benchIdx });
+    }
+    return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+  }, [nav, bench]);
+
+  if (merged.length === 0) {
+    return <div className="text-xs text-gray-500 dark:text-gray-400 py-6">No NAV history available.</div>;
+  }
+
+  return (
+    <div className="h-56 w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={merged} margin={{ top: 4, right: 8, left: -10, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke={palette.border} />
+          <XAxis
+            dataKey="date"
+            tick={{ fontSize: 10, fill: palette.muted }}
+            stroke={palette.border}
+            interval="preserveStartEnd"
+            minTickGap={50}
+            tickFormatter={(d: string) => d.slice(0, 7)}
+          />
+          <YAxis
+            tick={{ fontSize: 10, fill: palette.muted }}
+            stroke={palette.border}
+            domain={["auto", "auto"]}
+          />
+          <Tooltip
+            contentStyle={{ background: palette.surf, border: `1px solid ${palette.border}`, fontSize: 11, color: palette.text }}
+            labelStyle={{ color: palette.muted }}
+            formatter={(v: number, name: string) => [v.toFixed(2), name]}
+          />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+          <Line
+            type="monotone"
+            dataKey="navIdx"
+            name="Scheme"
+            stroke={palette.accent}
+            strokeWidth={2}
+            dot={false}
+            isAnimationActive={false}
+          />
+          {bench.length > 0 && (
+            <Line
+              type="monotone"
+              dataKey="benchIdx"
+              name={benchLabel || "Benchmark"}
+              stroke={palette.line}
+              strokeWidth={1.5}
+              strokeDasharray="4 3"
+              dot={false}
+              isAnimationActive={false}
+            />
+          )}
+        </LineChart>
+      </ResponsiveContainer>
     </div>
   );
 }
