@@ -813,12 +813,18 @@ export interface ConstituentStock {
   dividendYield: number | null;
   beta:         number | null;
   industry:     string | null;
+  priceSource?:     string | null;
+  priceServedFrom?: string | null;
 }
 
 export interface SectorDetailData {
   symbol:          string;
   name:            string;
   marketCap:       number;
+  /** True when the official sector-index history is unavailable (e.g. the
+   *  Yahoo ticker is delisted) and we reconstruct the series from
+   *  equal-weighted constituents. Performance/RS numbers are then approximations. */
+  historySynthetic?: boolean;
   relativeStrength: RSPoint[];
   performance:     Record<string, number | null>;
   valuation:       SectorValuation;
