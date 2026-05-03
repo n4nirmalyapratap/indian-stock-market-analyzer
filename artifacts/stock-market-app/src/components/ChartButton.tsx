@@ -1,35 +1,31 @@
 import { useLocation } from "wouter";
-import { LineChart, SearchCode } from "lucide-react";
+import { LineChart, SearchCode, PieChart } from "lucide-react";
 
 interface ChartButtonProps {
   symbol: string;
   className?: string;
-  /** Hide the Stock Lookup icon (e.g. when rendered inside the lookup page itself). */
+  /** Hide the secondary lookup/detail icon (e.g. when rendered inside the destination page itself). */
   hideLookup?: boolean;
 }
 
 /**
  * A compact action group placed next to any stock or sector name.
- * Renders two subtle icons:
- *   • LineChart  → Chart Studio (`/trading?symbol=…`)
- *   • SearchCode → Stock Lookup (`/stocks?symbol=…`)
+ * Always renders the Chart Studio icon, plus a context-aware second icon:
+ *   • Stocks  → SearchCode → Stock Lookup    (`/stocks?symbol=…`)
+ *   • Sectors → PieChart   → Sector Detail   (`/sectors/…`)
+ *
+ * Sector vs stock is detected by the presence of whitespace in the symbol
+ * (e.g. "NIFTY BANK", "NIFTY 50", "BANK NIFTY"). Stock tickers never have
+ * spaces (RELIANCE, HDFCBANK, M&M).
  *
  * Kept as a single drop-in component so all existing call-sites
- * (`<ChartButton symbol="RELIANCE.NS" />`) automatically gain the
- * second icon without any code changes.
- *
- * Usage:
- *   <ChartButton symbol="RELIANCE.NS" />            ← stock (.NS stripped automatically)
- *   <ChartButton symbol="NIFTY BANK" />             ← sector index (chart only)
- *   <ChartButton symbol="ITC" hideLookup />         ← suppress lookup icon
+ * (`<ChartButton symbol="RELIANCE.NS" />`) automatically gain the second
+ * icon without any code changes.
  */
 export default function ChartButton({ symbol, className = "", hideLookup = false }: ChartButtonProps) {
   const [, navigate] = useLocation();
   const clean = symbol.replace(/\.(NS|BO)$/i, "").trim().toUpperCase();
-  // Sector indices ("NIFTY BANK", "BANK NIFTY", "NIFTY 50") shouldn't go to
-  // /stocks lookup — that page is for tickers only. Detect by space.
-  const isIndex = /\s/.test(clean);
-  const showLookup = !hideLookup && !isIndex;
+  const isSector = /\s/.test(clean);
 
   const baseBtn =
     "inline-flex items-center justify-center w-5 h-5 rounded-md flex-shrink-0 " +
@@ -52,7 +48,20 @@ export default function ChartButton({ symbol, className = "", hideLookup = false
       >
         <LineChart className="w-3.5 h-3.5" />
       </button>
-      {showLookup && (
+      {!hideLookup && (isSector ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            navigate(`/sectors/${encodeURIComponent(clean)}`);
+          }}
+          title={`Open ${clean} sector page`}
+          aria-label={`Open ${clean} in Sector Detail`}
+          className={`${baseBtn} text-emerald-500 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40`}
+        >
+          <PieChart className="w-3.5 h-3.5" />
+        </button>
+      ) : (
         <button
           type="button"
           onClick={(e) => {
@@ -65,7 +74,7 @@ export default function ChartButton({ symbol, className = "", hideLookup = false
         >
           <SearchCode className="w-3.5 h-3.5" />
         </button>
-      )}
+      ))}
     </span>
   );
 }
