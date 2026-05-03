@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState, useTransition } from "react";
+import { memo, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { fetchApi } from "@/lib/api";
@@ -329,25 +329,83 @@ function Body({
   );
 }
 
-/** Generic "mount on next idle frame" boundary. Re-defers whenever any
- *  dependency in `deps` changes, so segment / range switches show the
- *  skeleton for ~1 frame instead of stalling on heavy chart layout. */
+/** "Mount in the next animation frame" boundary. Re-defers whenever any
+ *  dependency in `deps` changes — the placeholder paints in frame 1,
+ *  the heavy children mount in frame 2 (~16-32 ms). Fast enough that
+ *  cached tab switches never linger on a skeleton, but still gives the
+ *  browser a frame to commit the lighter parts of the page first. */
 function IdleMount({ deps, placeholder, children }: {
   deps: unknown[]; placeholder: React.ReactNode; children: React.ReactNode;
 }) {
   const [ready, setReady] = useState(false);
   useEffect(() => {
     setReady(false);
-    const ric = (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }).requestIdleCallback;
-    if (ric) {
-      const id = ric(() => setReady(true), { timeout: 250 });
-      return () => (window as Window & { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback?.(id);
-    }
-    const t = setTimeout(() => setReady(true), 60);
-    return () => clearTimeout(t);
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setReady(true));
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      if (raf2) cancelAnimationFrame(raf2);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
   return <>{ready ? children : placeholder}</>;
+}
+
+/** Downsample an array of rows for charting. Returns the original rows
+ *  when count <= maxPoints, otherwise groups consecutive rows into
+ *  buckets and sums fii/dii nets per bucket so the chart never plots
+ *  more than ~maxPoints bars. Massively reduces SVG paint cost on
+ *  wide ranges (e.g. 1y of F&O = 365 → ~120 buckets). */
+function downsampleRows(rows: Row[], maxPoints: number): Row[] {
+  if (rows.length <= maxPoints) return rows;
+  const bucketSize = Math.ceil(rows.length / maxPoints);
+  const out: Row[] = [];
+  for (let i = 0; i < rows.length; i += bucketSize) {
+    const slice = rows.slice(i, i + bucketSize);
+    let fii = 0, dii = 0;
+    for (const r of slice) {
+      fii += r.fiiNet ?? 0;
+      dii += r.diiNet ?? 0;
+    }
+    const head = slice[0];
+    const tail = slice[slice.length - 1];
+    out.push({
+      ...head,
+      fiiNet: fii,
+      diiNet: dii,
+      // Label spans bucket window: "01 Jan→07 Jan"
+      displayDate: slice.length > 1
+        ? `${tail.displayDate || tail.date}→${head.displayDate || head.date}`
+        : (head.displayDate || head.date),
+    });
+  }
+  return out;
+}
+
+/** Mount-on-visible boundary using IntersectionObserver. Renders the
+ *  placeholder until the wrapper enters the viewport, then mounts the
+ *  children. Used by MonthCard so the 13 mini charts only build SVG
+ *  when the user actually scrolls them into view. */
+function VisibleOnce({ placeholder, children, rootMargin = "200px" }: {
+  placeholder: React.ReactNode; children: React.ReactNode; rootMargin?: string;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (visible || !ref.current) return;
+    const el = ref.current;
+    if (typeof IntersectionObserver === "undefined") { setVisible(true); return; }
+    const obs = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) { setVisible(true); obs.disconnect(); break; }
+      }
+    }, { rootMargin });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [visible, rootMargin]);
+  return <div ref={ref}>{visible ? children : placeholder}</div>;
 }
 
 function ChartSkeleton() {
@@ -512,11 +570,17 @@ function _HeroCard({
 const FiiDiiChart = memo(function FiiDiiChart({ rows, segment }: { rows: Row[]; segment: string }) {
   const palette = useChartPalette();
   const isContracts = segment !== "equity";
-  const data = useMemo(() => [...rows].reverse().map(r => ({
-    label: (r.displayDate || r.date).slice(0, 6),
-    fii: r.fiiNet ?? 0,
-    dii: r.diiNet ?? 0,
-  })), [rows]);
+  const data = useMemo(() => {
+    // Downsample to keep SVG paint cost flat regardless of range.
+    // 120 bars renders in a single frame even on mid-tier devices.
+    const sampled = downsampleRows(rows, 120);
+    return [...sampled].reverse().map(r => ({
+      label: (r.displayDate || r.date).slice(0, 6),
+      fii: r.fiiNet ?? 0,
+      dii: r.diiNet ?? 0,
+    }));
+  }, [rows]);
+  const isAggregated = rows.length > 120;
 
   if (!data.length) {
     return <EmptyState title="Nothing to plot yet" message="Once a few daily snapshots are collected, this chart will populate." icon={<BarChart3 className="w-6 h-6" />} />;
@@ -561,6 +625,7 @@ const FiiDiiChart = memo(function FiiDiiChart({ rows, segment }: { rows: Row[]; 
         </div>
         <p className="mt-2 text-[11px] text-gray-500 dark:text-gray-400">
           {isContracts ? "Net flows in contracts (Long − Short)." : "Net flows in ₹ Cr (Buy − Sell)."} Positive bars indicate net buying, negative bars indicate net selling.
+          {isAggregated && ` Showing ${data.length} aggregated buckets across ${rows.length} sessions for performance — see the table for daily detail.`}
         </p>
       </Card>
     </div>
@@ -726,26 +791,31 @@ const MonthCard = memo(function MonthCard({ month, isContracts, reduced }: {
           </div>
         </div>
 
-        {/* Mini chart */}
+        {/* Mini chart — only mounts when the card scrolls into view, so
+            the initial 13-card grid doesn't pay for 13 SVG charts at once. */}
         {miniData.length > 1 && (
-          <div className="h-20 px-2 pb-2">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={miniData} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
-                <ReferenceLine y={0} stroke={palette.border} strokeWidth={1} />
-                <Tooltip
-                  contentStyle={{
-                    background: palette.surf, border: `1px solid ${palette.border}`,
-                    borderRadius: 8, color: palette.text, fontSize: 11, padding: "6px 8px",
-                  }}
-                  labelStyle={{ color: palette.muted, fontSize: 10, marginBottom: 2 }}
-                  cursor={{ fill: palette.border, opacity: 0.2 }}
-                  formatter={(v: number, n: string) => [fmtCr(v, isContracts), n === "fii" ? "FII" : "DII"]}
-                />
-                <Bar dataKey="fii" fill={palette.fii} maxBarSize={6} isAnimationActive={false} />
-                <Bar dataKey="dii" fill={palette.dii} maxBarSize={6} isAnimationActive={false} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          <VisibleOnce
+            placeholder={<div className="h-20 px-2 pb-2"><div className="h-full rounded bg-gray-50/80 dark:bg-gray-800/40 animate-pulse" /></div>}
+          >
+            <div className="h-20 px-2 pb-2">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={miniData} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
+                  <ReferenceLine y={0} stroke={palette.border} strokeWidth={1} />
+                  <Tooltip
+                    contentStyle={{
+                      background: palette.surf, border: `1px solid ${palette.border}`,
+                      borderRadius: 8, color: palette.text, fontSize: 11, padding: "6px 8px",
+                    }}
+                    labelStyle={{ color: palette.muted, fontSize: 10, marginBottom: 2 }}
+                    cursor={{ fill: palette.border, opacity: 0.2 }}
+                    formatter={(v: number, n: string) => [fmtCr(v, isContracts), n === "fii" ? "FII" : "DII"]}
+                  />
+                  <Bar dataKey="fii" fill={palette.fii} maxBarSize={6} isAnimationActive={false} />
+                  <Bar dataKey="dii" fill={palette.dii} maxBarSize={6} isAnimationActive={false} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </VisibleOnce>
         )}
 
         {/* Expanded daily table */}
