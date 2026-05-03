@@ -79,9 +79,14 @@ _stocks = StocksService(_nse, _yahoo)
 
 
 def feature_enabled() -> bool:
-    """Feature flag — defaults to ON in dev, can be turned off via env."""
-    val = (os.environ.get("FEATURE_AI_ANALYST", "on") or "").lower()
+    """Feature flag — defaults OFF for staged rollout (per task spec).
+    Set FEATURE_AI_ANALYST=on (or 1/true/yes) to enable."""
+    val = (os.environ.get("FEATURE_AI_ANALYST", "off") or "").lower()
     return val in ("1", "true", "on", "yes")
+
+
+# Hard wall-clock timeout per analysis (task spec: ≤4 min).
+_ANALYSIS_TIMEOUT_SEC = int(os.environ.get("AI_ANALYST_TIMEOUT_SEC", "240"))
 
 
 # ── DB schema ─────────────────────────────────────────────────────────────────
@@ -105,7 +110,11 @@ def _ensure_schema() -> None:
                 wall_clock_ms INTEGER NOT NULL DEFAULT 0,
                 sources_used  TEXT NOT NULL DEFAULT '',
                 created_at    INTEGER NOT NULL,
-                PRIMARY KEY (ticker, run_date_ist, user_id)
+                -- Shared per-ticker/day cache (task spec): the report is
+                -- generated public research, the same ticker on the same IST
+                -- day returns the same report regardless of who triggered it.
+                -- `user_id` records who originally generated it for audit.
+                PRIMARY KEY (ticker, run_date_ist)
             );
             CREATE INDEX IF NOT EXISTS idx_reports_created ON ai_analyst_reports(created_at);
 
@@ -198,15 +207,17 @@ def _try_reserve_quota(user_id: str, limit: int = DEFAULT_DAILY_QUOTA) -> bool:
 # ── Cache ─────────────────────────────────────────────────────────────────────
 
 def get_cached_report(ticker: str, user_id: str = "") -> Optional[dict]:
-    """Return today's cached report for this (user, ticker), if any.
-    Cache is intentionally per-user so one user's report cannot leak to another
-    (each user's run also counts against their own quota)."""
+    """Return today's shared cached report for this ticker, if any.
+    Cache is intentionally shared per-ticker/IST-day so a popular ticker is
+    only analysed once per day (cost / quota objective in task spec). The
+    `user_id` argument is accepted for API symmetry but not used for lookup —
+    the report content is generated public research, not user-specific PII."""
     today = _today_ist()
     with _DB_LOCK, _conn() as c:
         row = c.execute(
             "SELECT report_json, created_at FROM ai_analyst_reports "
-            "WHERE ticker=? AND run_date_ist=? AND user_id=?",
-            (ticker.upper(), today, user_id or "anonymous"),
+            "WHERE ticker=? AND run_date_ist=?",
+            (ticker.upper(), today),
         ).fetchone()
     if not row:
         return None
@@ -596,9 +607,9 @@ async def _safe_json(text: str) -> dict:
         return {}
 
 
-async def run_analysis(ticker: str, user_id: str,
-                       force_refresh: bool = False) -> AsyncGenerator[dict, None]:
-    """Run one full analyst pipeline. Yields phase events and a final report."""
+async def _run_analysis_impl(ticker: str, user_id: str,
+                              force_refresh: bool = False) -> AsyncGenerator[dict, None]:
+    """Inner pipeline. Wrap with `run_analysis` to enforce the wall-clock budget."""
     upper = (ticker or "").upper().strip()
     if not upper:
         yield _ev("error", status="error", error="Ticker is required")
@@ -769,3 +780,37 @@ async def run_analysis(ticker: str, user_id: str,
 
     new_quota = get_quota(user_id)
     yield _ev("done", status="done", report=report, quota=new_quota)
+
+
+async def run_analysis(ticker: str, user_id: str,
+                       force_refresh: bool = False) -> AsyncGenerator[dict, None]:
+    """Public entry point — enforces a hard wall-clock budget around the
+    inner pipeline (task spec: fail gracefully within ~4 minutes)."""
+    inner = _run_analysis_impl(ticker, user_id, force_refresh=force_refresh)
+    deadline = time.time() + _ANALYSIS_TIMEOUT_SEC
+    try:
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                yield _ev("error", status="error",
+                          error=f"Analysis exceeded {_ANALYSIS_TIMEOUT_SEC}s budget. "
+                                f"Try again later — the model may be slow right now.")
+                # Refund the reserved quota slot since the user didn't get a report
+                _refund_quota(user_id)
+                return
+            try:
+                ev = await asyncio.wait_for(inner.__anext__(), timeout=remaining)
+            except StopAsyncIteration:
+                return
+            except asyncio.TimeoutError:
+                yield _ev("error", status="error",
+                          error=f"Analysis exceeded {_ANALYSIS_TIMEOUT_SEC}s budget.")
+                _refund_quota(user_id)
+                return
+            yield ev
+    finally:
+        # Make sure the inner generator is fully closed even on early return.
+        try:
+            await inner.aclose()
+        except Exception:  # pragma: no cover
+            pass
