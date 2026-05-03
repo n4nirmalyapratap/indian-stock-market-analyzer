@@ -22,6 +22,7 @@ from scipy.stats import norm as _norm   # module-level import — not inside hot
 
 from .options_service import bs_price as _bs_price
 from . import sebi_registry as _sebi
+from . import nse_bhavcopy_service as _bhav
 
 logger = logging.getLogger("options_backtest")
 
@@ -366,6 +367,19 @@ def _run_backtest_sync(
     trades:       list[dict] = []
     equity_curve: list[dict] = []
     cum_pnl       = 0.0
+    # Premium-source accounting: every leg fill (entry + exit) is tagged with
+    # one of {'bhavcopy', 'synthetic_bs'}.  Aggregated into the result so the
+    # UI can show an honesty badge ("X% real / Y% synthetic").
+    premium_source_counter = {"bhavcopy": 0, "synthetic_bs": 0}
+
+    def _resolve_premium(opt_type: str, K: float, S_now: float, T_now: float,
+                         iv_now: float, on_date: date, exp_date: date) -> tuple[float, str]:
+        """Try real bhavcopy CLOSE first; on miss, fall back to Black-Scholes
+        and tag the source loudly."""
+        real = _bhav.lookup_premium(symbol, exp_date, K, opt_type, on_date)
+        if real is not None and real > 0:
+            return float(real), "bhavcopy"
+        return _bs_price_fast(S_now, K, T_now, risk_free, iv_now, opt_type), "synthetic_bs"
 
     for exp in expiries:
         entry_target = exp - timedelta(days=entry_dte)
@@ -418,7 +432,10 @@ def _run_backtest_sync(
             # lots_mult > 1 for butterfly ATM sell (2 lots at ATM, not 4 separate legs)
             effective_lots = lots * int(leg.get("lots_mult", 1))
 
-            raw_price  = _bs_price_fast(S_entry, K, T_entry, risk_free, iv_entry, opt_type)
+            raw_price, src_entry = _resolve_premium(
+                opt_type, K, S_entry, T_entry, iv_entry, entry_date_obj, exp,
+            )
+            premium_source_counter[src_entry] += 1
             fill_price = _apply_slippage(raw_price, action, is_entry=True)
             fill_price = max(0.01, fill_price)
 
@@ -437,7 +454,8 @@ def _run_backtest_sync(
                 cost_breakdown[k] += getattr(entry_cb, k)
 
             filled_legs.append({**leg, "premium": fill_price, "lots": effective_lots,
-                                 "lot_size": lot_size, "iv": iv_entry})
+                                 "lot_size": lot_size, "iv": iv_entry,
+                                 "_entry_src": src_entry})
 
         exit_debit = 0.0
 
@@ -449,9 +467,14 @@ def _run_backtest_sync(
 
             is_exercise_exit = (T_exit <= 0)
             if is_exercise_exit:
+                # Cash settlement at expiry — intrinsic value is the truth.
                 exit_price = max(0.0, S_exit - K) if opt_type == "call" else max(0.0, K - S_exit)
+                premium_source_counter["bhavcopy"] += 1   # settled, not modelled
             else:
-                raw_exit    = _bs_price_fast(S_exit, K, T_exit, risk_free, iv_exit, opt_type)
+                raw_exit, src_exit = _resolve_premium(
+                    opt_type, K, S_exit, T_exit, iv_exit, exit_date_obj, exp,
+                )
+                premium_source_counter[src_exit] += 1
                 exit_action = "sell" if action == "buy" else "buy"
                 exit_price  = _apply_slippage(raw_exit, exit_action, is_entry=False)
                 exit_price  = max(0.0, exit_price)
@@ -531,9 +554,28 @@ def _run_backtest_sync(
     down_std = float(np.std(neg_arr)) if len(neg_arr) > 1 else (abs(avg_loss) or 1.0)
     sortino  = float(np.mean(pnl_arr) / down_std * freq) if down_std > 0 else 0.0
 
+    total_fills    = sum(premium_source_counter.values()) or 1
+    real_pct       = round(premium_source_counter["bhavcopy"] / total_fills * 100, 1)
+    synth_pct      = round(premium_source_counter["synthetic_bs"] / total_fills * 100, 1)
+    primary_source = ("bhavcopy" if premium_source_counter["bhavcopy"] >=
+                       premium_source_counter["synthetic_bs"] else "synthetic_bs")
+
     return {
         "trades":       trades,
         "equity_curve": equity_curve,
+        "premium_source_breakdown": {
+            "bhavcopy_fills":       premium_source_counter["bhavcopy"],
+            "synthetic_bs_fills":   premium_source_counter["synthetic_bs"],
+            "total_fills":          total_fills,
+            "real_pct":             real_pct,
+            "synthetic_pct":        synth_pct,
+            "primary_source":       primary_source,
+            "note": (
+                "bhavcopy = NSE/BSE F&O daily settlement archive; "
+                "synthetic_bs = Black-Scholes fallback (cache miss for that "
+                "exact contract on that date)."
+            ),
+        },
         "metrics": {
             "symbol":        symbol,
             "strategy":      strategy,
