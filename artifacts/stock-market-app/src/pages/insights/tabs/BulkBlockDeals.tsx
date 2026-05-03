@@ -20,6 +20,7 @@ interface Deal {
   avgPrice: number;
   valueRs: number;
   logo: string;
+  source?: "NSE" | "SCANX" | string;
 }
 interface DealsResponse {
   available: boolean;
@@ -29,6 +30,7 @@ interface DealsResponse {
   totalDeals: number;
   matched: number;
   dateRange: { from: string | null; to: string | null };
+  sources?: string[];
 }
 
 const SIDE_TABS = [
@@ -87,7 +89,11 @@ export default function BulkBlockDeals() {
     <div>
       <PageHeader
         title="Bulk & Block Deals"
-        info="Large single-trade transactions disclosed under SEBI rules — NSE & BSE EOD via scanx.trade"
+        info={
+          data?.sources && data.sources.length
+            ? `Large single-trade disclosures under SEBI rules — sources: ${data.sources.join(" + ")}`
+            : "Large single-trade transactions disclosed under SEBI rules (NSE & BSE EOD)"
+        }
         right={
           <div className="flex items-center gap-3">
             {data?.available && (
