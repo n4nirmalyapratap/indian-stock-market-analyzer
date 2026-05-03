@@ -172,6 +172,71 @@ def _safe_num(v: Any) -> Optional[float]:
         return None
 
 
+def _normalise_fraction(value: Any, *, cap: float = 1.0) -> Optional[float]:
+    """Normalise a Yahoo field that should semantically be a fraction in
+    [0, cap] (e.g. ``payoutRatio``, ``heldPercentInsiders``,
+    ``heldPercentInstitutions``).
+
+    Yahoo occasionally publishes these as percentages (e.g. ``42`` for 42 %)
+    instead of fractions (``0.42``).  Any legitimate fraction stays ≤ ``cap``
+    (typically 1.0), so a value strictly greater than ``cap`` must be a
+    percentage and is divided by 100.  Returns ``None`` for missing /
+    non-numeric input, mirroring :func:`_safe_num`.
+    """
+    v = _safe_num(value)
+    if v is None:
+        return None
+    if v > cap:
+        v = v / 100.0
+    return v
+
+
+def _normalise_dividend_yield(merged: dict) -> Optional[float]:
+    """Return ``dividendYield`` as a fraction (0.025 == 2.5 %), robust to
+    Yahoo's late-2024 format flip from fraction → percentage.
+
+    The simple ``> 1`` heuristic breaks for low-yielding Indian names where
+    both the fraction (0.004 == 0.4 %) and the percentage (0.4 == 0.4 %)
+    fall below 1.  We disambiguate by cross-checking against an independent
+    derivation of the yield:
+
+      * ``dividendRate / currentPrice`` (always a fraction by construction)
+      * fall back to ``trailingAnnualDividendYield`` (historically a fraction)
+
+    Whichever interpretation of the raw ``dividendYield`` (as-is vs. ÷100)
+    sits closer to the reference wins.  When no reference is available we
+    fall back to the conservative ``> 1 ⇒ percentage`` rule.
+    """
+    raw = _safe_num(merged.get("dividendYield"))
+    if raw is None:
+        return None
+
+    div_rate    = _safe_num(merged.get("dividendRate"))
+    last_price  = _safe_num(merged.get("currentPrice")
+                            or merged.get("regularMarketPrice")
+                            or merged.get("lastPrice"))
+    ref: Optional[float] = None
+    if div_rate is not None and last_price and last_price > 0:
+        ref = div_rate / last_price
+    else:
+        ref = _safe_num(merged.get("trailingAnnualDividendYield"))
+        # trailingAnnualDividendYield itself flipped on some tickers; if it
+        # looks like a percentage, normalise it before using as reference.
+        if ref is not None and ref > 1:
+            ref = ref / 100.0
+
+    as_fraction   = raw
+    as_percentage = raw / 100.0
+
+    if ref is not None and ref >= 0:
+        if abs(as_percentage - ref) < abs(as_fraction - ref):
+            return as_percentage
+        return as_fraction
+
+    # No reference — fall back to the original heuristic.
+    return as_percentage if raw > 1 else as_fraction
+
+
 def _check(label: str, value: Any, op: str, threshold: float, weight: float = 1.0,
            detail: str = "") -> dict:
     """Build a single checklist item.  op ∈ {>=, >, <=, <, between}.
@@ -239,11 +304,11 @@ def build_context(stock_detail: dict) -> dict:
 
     # Audit fix: yfinance flipped `dividendYield` to a percentage (e.g. 2.5
     # for 2.5%) in late 2024, but our checklists were written when it was a
-    # fraction (0.025).  Normalise back to a fraction so thresholds like
-    # ">= 0.02" behave correctly across both representations.
-    div_yld = _safe_num(merged.get("dividendYield"))
-    if div_yld is not None and div_yld > 1:
-        div_yld = div_yld / 100.0
+    # fraction (0.025).  `_normalise_dividend_yield` cross-checks against
+    # `dividendRate / currentPrice` (or `trailingAnnualDividendYield`) so
+    # low-yielding Indian names — where both interpretations sit below 1 —
+    # don't get mis-bucketed by a naive `> 1` rule.
+    div_yld = _normalise_dividend_yield(merged)
 
     # ROCE proxy — Yahoo doesn't always expose it.  Derive from EBIT and
     # invested capital when possible so Indian personas (Agrawal, Khanna,
@@ -294,13 +359,16 @@ def build_context(stock_detail: dict) -> dict:
         "fcfYield":           fcf_yld,
         "dividendYield":      div_yld,
         "roce":               roce,
-        "payoutRatio":        _safe_num(merged.get("payoutRatio")),
+        # Apply the same defensive normalisation to other percent-vs-fraction
+        # Yahoo fields that are sometimes published as percentages.  Any
+        # legitimate fraction is ≤ 1, so values >1 are unambiguously % form.
+        "payoutRatio":        _normalise_fraction(merged.get("payoutRatio")),
         "trailingEps":        _safe_num(merged.get("trailingEps")),
         # Ownership / risk
         "beta":               _safe_num(merged.get("beta")),
-        "heldPercentInsiders":      _safe_num(merged.get("heldPercentInsiders")),
-        "heldPercentInstitutions":  _safe_num(merged.get("heldPercentInstitutions")),
-        "shortPercentOfFloat":      _safe_num(merged.get("shortPercentOfFloat")),
+        "heldPercentInsiders":      _normalise_fraction(merged.get("heldPercentInsiders")),
+        "heldPercentInstitutions":  _normalise_fraction(merged.get("heldPercentInstitutions")),
+        "shortPercentOfFloat":      _normalise_fraction(merged.get("shortPercentOfFloat")),
         # Price action
         "high52":       high_52,
         "low52":        low_52,
