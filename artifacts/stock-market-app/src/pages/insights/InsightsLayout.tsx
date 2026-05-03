@@ -44,6 +44,15 @@ const TABS = [
     bg: "bg-blue-50 dark:bg-blue-500/10"
   },
   {
+    slug: "top-deliveries",
+    label: "Top Deliveries",
+    description: "Highest-conviction names by delivery % — long-term accumulation signal.",
+    icon: Truck,
+    Component: TopDeliveriesTab,
+    color: "text-violet-500",
+    bg: "bg-violet-50 dark:bg-violet-500/10"
+  },
+  {
     slug: "company-filings",
     label: "Company Filings",
     description: "Stay updated with the latest corporate announcements and BSE filings.",
@@ -78,15 +87,6 @@ const TABS = [
     Component: FoBanTab,
     color: "text-red-500",
     bg: "bg-red-50 dark:bg-red-500/10"
-  },
-  {
-    slug: "top-deliveries",
-    label: "Top Deliveries",
-    description: "Daily high-delivery stocks indicating long-term institutional interest.",
-    icon: Truck,
-    Component: TopDeliveriesTab,
-    color: "text-slate-500",
-    bg: "bg-slate-50 dark:bg-slate-500/10"
   },
   {
     slug: "market-valuation",
