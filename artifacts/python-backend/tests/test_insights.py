@@ -422,12 +422,12 @@ def test_compute_signal_for_downtrend_is_bearish():
 # ── Unavailable-feed endpoints ──────────────────────────────────────────────
 
 @pytest.mark.parametrize("path", [
-    # NOTE: /api/insights/fii-dii used to live here when NSE was blocked from
-    # this IP — it is now backed by a committed SQLite cache (FiiDiiService)
-    # and serves real flow data, so it has its own assertion below.
+    # NOTE: /api/insights/fii-dii and /api/insights/ipos used to live here
+    # when their upstream feeds were blocked from this IP — they are now
+    # backed by local snapshots / GMP scrapers and serve real data, so
+    # they have their own positive-availability assertions below.
     "/api/insights/slbm",
     "/api/insights/mtf",
-    "/api/insights/ipos",
 ])
 def test_unavailable_endpoints_return_clean_empty_state(client, path):
     r = client.get(path)
@@ -435,6 +435,17 @@ def test_unavailable_endpoints_return_clean_empty_state(client, path):
     body = r.json()
     assert body.get("available") is False
     assert "message" in body and len(body["message"]) > 10
+
+
+def test_ipos_serves_data_from_gmp_source(client):
+    """IPO calendar is now backed by a GMP source (committed snapshot +
+    scraper fallback), so it should report available=True with at least
+    upcoming/listed buckets and provenance metadata."""
+    r = client.get("/api/insights/ipos")
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("available") is True
+    assert "gmpSource" in body or "source" in body or "fetchedAt" in body
 
 
 def test_fii_dii_serves_data_from_local_cache(client):
