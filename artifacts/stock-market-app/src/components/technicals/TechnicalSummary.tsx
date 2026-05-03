@@ -294,6 +294,31 @@ const TIMEFRAMES = [
 ] as const;
 type Interval = typeof TIMEFRAMES[number]["key"];
 
+// ── Per-indicator precision ────────────────────────────────────────────────────
+// Different indicators live on wildly different scales. Showing every one to
+// .toFixed(2) was the previous default, but that silently truncated MACD
+// histograms (often <0.01) to "0.00" and inflated Stochastic %K (0–100) into
+// false precision. Pick the right precision per indicator family.
+function fmtIndicatorValue(name: string, val: number | null | undefined): string {
+  if (val == null || !Number.isFinite(val)) return "—";
+  const n = name.toUpperCase();
+  // Percent-scaled oscillators (0–100): 2 decimals
+  if (/RSI|STOCH|%K|%D|WILLIAMS|CCI|MFI|ULTIMATE|ROC|MOM/.test(n)) {
+    return val.toFixed(2);
+  }
+  // MACD / Awesome Oscillator / small-magnitude momentum: 4 decimals when tiny
+  if (/MACD|AO\b|AWESOME/.test(n)) {
+    return Math.abs(val) < 1 ? val.toFixed(4) : val.toFixed(2);
+  }
+  // ATR / Bull-Bear Power: keep 4 decimals for small values
+  if (/ATR|BULL.*BEAR|BBP/.test(n)) {
+    return Math.abs(val) < 1 ? val.toFixed(4) : val.toFixed(2);
+  }
+  // Anything else (EMAs, SMAs, VWAP, HMA — all on price scale): 2 decimals
+  // unless the price itself is sub-rupee, then bump to 4.
+  return Math.abs(val) < 1 ? val.toFixed(4) : val.toFixed(2);
+}
+
 // ── Indicator table ────────────────────────────────────────────────────────────
 
 function IndicatorTable({ section, title, isFetching }: {
@@ -327,7 +352,7 @@ function IndicatorTable({ section, title, isFetching }: {
                 style={{ borderTop: `1px solid ${p.border}`, background: i % 2 ? p.bgHover : "transparent" }}>
               <td className="px-3 py-2" style={{ color: p.txtMain }}>{row.name}</td>
               <td className="px-3 py-2 text-right tabular-nums" style={{ color: p.txtDim }}>
-                {row.value != null ? row.value.toFixed(2) : "—"}
+                {fmtIndicatorValue(row.name, row.value)}
               </td>
               <td className="px-3 py-2 text-right font-semibold" style={{ color: actionColor(row.action, p) }}>
                 {row.action === "BUY" ? "Buy" : row.action === "SELL" ? "Sell" : "Neutral"}
