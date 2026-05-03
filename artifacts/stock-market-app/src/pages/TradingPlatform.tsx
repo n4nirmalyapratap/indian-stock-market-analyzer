@@ -595,6 +595,24 @@ export default function TradingPlatform() {
   const [showWatchlist, setShowWatchlist] = useState(true);
   const [showLayouts, setShowLayouts] = useState(false);
   const [showIndMenu, setShowIndMenu] = useState(false);
+  const indMenuRef = useRef<HTMLDivElement | null>(null);
+  const layoutMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // Close popovers on outside click or Escape so they don't linger.
+  useEffect(() => {
+    if (!showIndMenu && !showLayouts) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (showIndMenu && indMenuRef.current && !indMenuRef.current.contains(t))    setShowIndMenu(false);
+      if (showLayouts && layoutMenuRef.current && !layoutMenuRef.current.contains(t)) setShowLayouts(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setShowIndMenu(false); setShowLayouts(false); }
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [showIndMenu, showLayouts]);
 
   const [customPeriodCfg, setCustomPeriodCfg] = useState<{ p: string; i: string; start?: string; end?: string } | null>(null);
   const [activeRange, setActiveRange] = useState<string | null>(null);
@@ -818,7 +836,7 @@ export default function TradingPlatform() {
         <div className="w-px h-5" style={{ background: PT.divider }} />
 
         {/* Indicators */}
-        <div className="relative">
+        <div className="relative" ref={indMenuRef}>
           <button
             onClick={() => setShowIndMenu(v => !v)}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors"
@@ -882,7 +900,7 @@ export default function TradingPlatform() {
         </div>
 
         {/* Layout selector */}
-        <div className="relative">
+        <div className="relative" ref={layoutMenuRef}>
           <button
             onClick={() => setShowLayouts(v => !v)}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors"
@@ -895,7 +913,7 @@ export default function TradingPlatform() {
               {LAYOUTS.map(l => (
                 <button
                   key={l.mode}
-                  onClick={() => setLayout(l.mode)}
+                  onClick={() => { setLayout(l.mode); setShowLayouts(false); }}
                   title={l.label}
                   className="w-9 h-9 flex items-center justify-center rounded transition-colors"
                   style={layoutMode === l.mode ? { background: "#6366f1", color: "#ffffff" } : { color: PT.iconTxt }}
