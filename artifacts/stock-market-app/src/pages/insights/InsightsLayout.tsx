@@ -90,7 +90,7 @@ const TABS = [
   },
   {
     slug: "market-valuation",
-    label: "Market Valuation",
+    label: "Index Comparison",
     description: "Historical PE, PB, and Yield analysis for major market indices.",
     icon: LineChart,
     Component: MarketValuationTab,
