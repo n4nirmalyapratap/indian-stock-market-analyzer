@@ -321,6 +321,106 @@ def test_constituent_overlay_falls_back_to_yfinance_when_canonical_missing():
     assert row["priceSource"] is None  # not overlaid
 
 
+# ── 7. Empty rows are dropped from constituent table ─────────────────────────
+
+
+def test_constituents_table_drops_pure_failure_rows():
+    """If a constituent yfinance call fails completely AND the canonical
+    PriceService also has no data, the row would be all '—'s. Filter it out
+    so wrong/delisted tickers in our SECTOR_CONSTITUENTS list don't pollute
+    the table with useless rows."""
+    price = AsyncMock()
+    price.get_quote_with_meta.return_value = None  # canonical also failed
+
+    svc = SectorAnalyticsService(yahoo=MagicMock(), price=price)
+
+    payloads = [
+        {"symbol": "GOOD.NS", "name": "Good", "price": 100, "change1d": 1.5,
+         "marketCap": 1e10, "pe": 10, "pb": 1, "ps": 1, "evEbitda": 5,
+         "roe": 0.1, "roa": 0.05, "earningsGrowth": 0.1, "revenueGrowth": 0.1,
+         "debtToEquity": 0.5, "netMargin": 0.1, "dividendYield": 0.01,
+         "beta": 1, "sector": None, "industry": None},
+        # Pure failure shell (delisted/wrong ticker) — should be dropped
+        {"symbol": "DEAD.NS", "name": "DEAD.NS", "price": None, "change1d": None,
+         "marketCap": None, "pe": None, "pb": None, "ps": None, "evEbitda": None,
+         "roe": None, "roa": None, "earningsGrowth": None, "revenueGrowth": None,
+         "debtToEquity": None, "netMargin": None, "dividendYield": None,
+         "beta": None, "sector": None, "industry": None},
+    ]
+
+    async def _fake_history(*_a, **_kw): return [{"date": "2025-01-01", "close": 1.0}] * 30
+
+    with patch.object(sas, "_yf_info", side_effect=_stub_yf_info_for(*payloads)), \
+         patch.object(sas, "_yf_history", side_effect=_fake_history), \
+         patch.dict(sas.SECTOR_CONSTITUENTS, {"NIFTY BANK": ["GOOD.NS", "DEAD.NS"]}, clear=False), \
+         patch.dict(sas.SECTOR_YAHOO_TICKER, {"NIFTY BANK": "^NSEBANK"}, clear=False):
+        result = asyncio.run(svc.get_sector_detail("NIFTY BANK", "1y"))
+
+    syms = [c["symbol"] for c in result["constituents"]]
+    assert syms == ["GOOD.NS"]   # DEAD.NS dropped
+
+
+# ── 8. historySynthetic flag surfaces when index history is unavailable ──────
+
+
+def test_history_synthetic_flag_set_when_index_history_empty():
+    """When yfinance has no index history (e.g. delisted ^CNXOILGAS), we
+    fall back to a synthetic equal-weight series. The response must surface
+    a `historySynthetic` flag so the UI can disclose the approximation."""
+    price = AsyncMock()
+    price.get_quote_with_meta.return_value = None
+
+    svc = SectorAnalyticsService(yahoo=MagicMock(), price=price)
+
+    yf_payload = {
+        "symbol": "X.NS", "name": "X", "price": 100, "change1d": 0.0,
+        "marketCap": 1e9, "pe": 10, "pb": 1, "ps": 1, "evEbitda": 5,
+        "roe": 0.1, "roa": 0.05, "earningsGrowth": 0.1, "revenueGrowth": 0.1,
+        "debtToEquity": 0.5, "netMargin": 0.1, "dividendYield": 0.01,
+        "beta": 1, "sector": None, "industry": None,
+    }
+
+    call_count = {"n": 0}
+    async def _fake_history(ticker, _p="1y"):
+        call_count["n"] += 1
+        # First call is for the sector index (empty), subsequent calls are
+        # for synthetic-history reconstruction (return real bars).
+        if ticker.startswith("^"):
+            return []
+        return [{"date": f"2025-{(i%12)+1:02d}-01", "close": 100 + i} for i in range(60)]
+
+    with patch.object(sas, "_yf_info", side_effect=_stub_yf_info_for(yf_payload)), \
+         patch.object(sas, "_yf_history", side_effect=_fake_history), \
+         patch.dict(sas.SECTOR_CONSTITUENTS, {"NIFTY OIL AND GAS": ["X.NS"]}, clear=False), \
+         patch.dict(sas.SECTOR_YAHOO_TICKER, {"NIFTY OIL AND GAS": "^CNXOILGAS"}, clear=False):
+        result = asyncio.run(svc.get_sector_detail("NIFTY OIL AND GAS", "1y"))
+
+    assert result["historySynthetic"] is True
+
+
+def test_history_synthetic_flag_false_when_index_history_present():
+    price = AsyncMock()
+    price.get_quote_with_meta.return_value = None
+    svc = SectorAnalyticsService(yahoo=MagicMock(), price=price)
+    yf_payload = {
+        "symbol": "X.NS", "name": "X", "price": 100, "change1d": 0.0,
+        "marketCap": 1e9, "pe": 10, "pb": 1, "ps": 1, "evEbitda": 5,
+        "roe": 0.1, "roa": 0.05, "earningsGrowth": 0.1, "revenueGrowth": 0.1,
+        "debtToEquity": 0.5, "netMargin": 0.1, "dividendYield": 0.01,
+        "beta": 1, "sector": None, "industry": None,
+    }
+    async def _fake_history(*_a, **_kw):
+        return [{"date": f"2025-{(i%12)+1:02d}-01", "close": 100 + i} for i in range(60)]
+
+    with patch.object(sas, "_yf_info", side_effect=_stub_yf_info_for(yf_payload)), \
+         patch.object(sas, "_yf_history", side_effect=_fake_history), \
+         patch.dict(sas.SECTOR_CONSTITUENTS, {"NIFTY BANK": ["X.NS"]}, clear=False), \
+         patch.dict(sas.SECTOR_YAHOO_TICKER, {"NIFTY BANK": "^NSEBANK"}, clear=False):
+        result = asyncio.run(svc.get_sector_detail("NIFTY BANK", "1y"))
+
+    assert result["historySynthetic"] is False
+
+
 # ── 5. Top gainers/losers exclude None change1d ──────────────────────────────
 
 
