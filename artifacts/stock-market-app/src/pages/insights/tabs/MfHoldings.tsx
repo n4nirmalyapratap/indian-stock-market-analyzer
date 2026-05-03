@@ -7,6 +7,7 @@ import {
 } from "../_shared";
 import {
   PieChart, ChevronDown, ChevronRight, ExternalLink, RefreshCw, TrendingUp, TrendingDown,
+  ArrowUpRight, ArrowDownRight, Sparkles, Building2,
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -23,7 +24,23 @@ interface Scheme {
   assetClass: string;
   subCategory: string;
   openEnded: boolean;
+  amcLogo?: string;
+  seo?: string;
 }
+interface HoldingRow {
+  symbol: string;
+  name: string;
+  isin: string;
+  sector: string;
+  subSector: string;
+  action: string;
+  latestPct: number | null;
+  series: number[];
+  months: string[];
+  logo: string;
+}
+interface HoldingCategory { name: string; rows: HoldingRow[]; }
+interface Holdings { months: string[]; categories: HoldingCategory[]; }
 interface MfResponse {
   available: boolean;
   source?: string;
@@ -50,7 +67,9 @@ interface SchemeDetail {
   benchmarkChart?: { date: string; benchIdx: number }[];
   benchmarkLabel?: string | null;
   factsheetUrl?: string;
-  holdingsNote?: string;
+  amcLogo?: string;
+  holdings?: Holdings;
+  holdingsSource?: string | null;
 }
 
 const ASSET_TABS = [
@@ -218,8 +237,18 @@ export default function MfHoldings() {
                       <td className="px-3 py-2.5 text-gray-400">
                         {isOpen ? <ChevronDown className="w-4 h-4"/> : <ChevronRight className="w-4 h-4"/>}
                       </td>
-                      <td className="px-3 py-2.5 font-medium text-gray-900 dark:text-white max-w-md truncate" title={s.schemeName}>
-                        {s.schemeName}
+                      <td className="px-3 py-2.5 font-medium text-gray-900 dark:text-white max-w-md" title={s.schemeName}>
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <AmcAvatar logo={s.amcLogo} name={s.amc} size={28}/>
+                          <div className="min-w-0">
+                            <div className="truncate">{s.schemeName}</div>
+                            {s.seo && (
+                              <div className="text-[10px] text-emerald-600 dark:text-emerald-400 inline-flex items-center gap-1 mt-0.5">
+                                <Sparkles className="w-2.5 h-2.5"/> Holdings available
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       </td>
                       <td className="px-3 py-2.5 text-gray-500 dark:text-gray-400 text-xs max-w-[180px] truncate" title={s.amc}>{s.amc}</td>
                       <td className="px-3 py-2.5 text-xs">
@@ -345,20 +374,187 @@ function SchemeDetailPanel({ code, fallbackName }: { code: string; fallbackName:
           </div>
         </div>
 
-        <div className="pt-1">
-          <div className="text-[11px] text-gray-500 dark:text-gray-400 mb-1">Stock-level holdings</div>
-          <p className="text-[11px] leading-relaxed text-gray-500 dark:text-gray-400 mb-1.5">
-            {data.holdingsNote}
-          </p>
-          {data.factsheetUrl && (
+        {data.factsheetUrl && (
+          <div className="pt-1">
             <a href={data.factsheetUrl} target="_blank" rel="noopener noreferrer"
                className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
-              View factsheet <ExternalLink className="w-3 h-3"/>
+              View AMC factsheet <ExternalLink className="w-3 h-3"/>
             </a>
-          )}
+          </div>
+        )}
+      </div>
+
+      {/* Full-width holdings panel */}
+      {data.holdings && (data.holdings.categories?.length || 0) > 0 && (
+        <div className="lg:col-span-3 pt-2">
+          <HoldingsPanel holdings={data.holdings} amcLogo={data.amcLogo}/>
+        </div>
+      )}
+      {(!data.holdings || (data.holdings.categories?.length || 0) === 0) && (
+        <div className="lg:col-span-3 text-[11px] text-gray-500 dark:text-gray-400 italic">
+          Stock-level holdings not in our index for this scheme — check the AMC factsheet for the latest portfolio.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Holdings panel — scanx-style stock-level table with logos + monthly %
+ * ────────────────────────────────────────────────────────────────────── */
+
+function HoldingsPanel({ holdings, amcLogo }: { holdings: Holdings; amcLogo?: string }) {
+  void amcLogo;
+  const cats = holdings.categories.filter(c => c.rows.length);
+  const [activeCat, setActiveCat] = useState(cats[0]?.name || "");
+  const [showAll, setShowAll] = useState(false);
+  const cat = cats.find(c => c.name === activeCat) || cats[0];
+  if (!cat) return null;
+  // Show last 6 months of columns (newest-first → display oldest→newest)
+  const months = (cat.rows[0]?.months || holdings.months || []).slice(0, 6).reverse();
+  const visibleRows = showAll ? cat.rows : cat.rows.slice(0, 12);
+
+  return (
+    <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-900/30">
+        <div className="flex items-center gap-2">
+          <PieChart className="w-3.5 h-3.5 text-indigo-500"/>
+          <div className="text-xs font-semibold text-gray-900 dark:text-white">Portfolio Holdings</div>
+          <span className="text-[10px] text-gray-500 dark:text-gray-400">· {cat.rows.length} positions</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-1">
+          {cats.map(c => (
+            <button key={c.name}
+              onClick={() => { setActiveCat(c.name); setShowAll(false); }}
+              className={`text-[11px] px-2 py-0.5 rounded-full transition ${
+                c.name === cat.name
+                  ? "bg-indigo-600 text-white"
+                  : "bg-gray-100 dark:bg-gray-700/50 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+              }`}>
+              {c.name} <span className="opacity-70">({c.rows.length})</span>
+            </button>
+          ))}
         </div>
       </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead className="text-[10px] uppercase text-gray-500 dark:text-gray-400 bg-gray-50/40 dark:bg-gray-900/20">
+            <tr>
+              <th className="px-3 py-2 text-left">Stock</th>
+              <th className="px-2 py-2 text-left">Sector</th>
+              <th className="px-2 py-2 text-center">Action</th>
+              {months.map(m => (
+                <th key={m} className="px-2 py-2 text-right whitespace-nowrap">{fmtMonth(m)}</th>
+              ))}
+              <th className="px-3 py-2 text-right">Latest %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleRows.map(r => {
+              const newestFirst = r.series.slice(0, 6);
+              const cells = newestFirst.slice().reverse();
+              while (cells.length < months.length) cells.unshift(NaN as unknown as number);
+              return (
+                <tr key={(r.isin || r.symbol) + r.name} className="border-t border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/20">
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <StockLogo logo={r.logo} symbol={r.symbol}/>
+                      <div className="min-w-0">
+                        <div className="font-medium text-gray-900 dark:text-white truncate max-w-[200px]" title={r.name}>{r.name || r.symbol}</div>
+                        <div className="text-[10px] text-gray-500 dark:text-gray-400">{r.symbol || r.isin}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-2 py-2 text-gray-600 dark:text-gray-300 max-w-[140px] truncate" title={r.subSector || r.sector}>{r.sector || "—"}</td>
+                  <td className="px-2 py-2 text-center"><ActionBadge action={r.action}/></td>
+                  {cells.map((v, i) => (
+                    <td key={i} className="px-2 py-2 text-right tabular-nums text-gray-700 dark:text-gray-300">
+                      {isFinite(v) ? v.toFixed(2) : "—"}
+                    </td>
+                  ))}
+                  <td className="px-3 py-2 text-right font-semibold text-gray-900 dark:text-white tabular-nums">
+                    {r.latestPct != null ? r.latestPct.toFixed(2) + "%" : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {cat.rows.length > 12 && (
+        <div className="px-3 py-2 border-t border-gray-200 dark:border-gray-700 text-center">
+          <button onClick={() => setShowAll(s => !s)}
+            className="text-[11px] font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
+            {showAll ? "Show top 12 only" : `Show all ${cat.rows.length} positions`}
+          </button>
+        </div>
+      )}
+      <div className="px-3 py-1.5 text-[10px] text-gray-400 dark:text-gray-500 text-right border-t border-gray-200 dark:border-gray-700">
+        Holdings sourced from public AMC monthly portfolio disclosures
+      </div>
     </div>
+  );
+}
+
+function fmtMonth(m: string): string {
+  if (!m || !/^\d{4}-\d{2}$/.test(m)) return m;
+  const [y, mo] = m.split("-");
+  const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return `${names[Number(mo) - 1]} ${y.slice(2)}`;
+}
+
+function ActionBadge({ action }: { action: string }) {
+  const a = (action || "").toLowerCase();
+  if (a.includes("increase")) return (
+    <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-md text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20">
+      <ArrowUpRight className="w-2.5 h-2.5"/> Increased
+    </span>
+  );
+  if (a.includes("decrease") || a.includes("reduce")) return (
+    <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-md text-rose-700 dark:text-rose-400 bg-rose-500/10 border border-rose-500/20">
+      <ArrowDownRight className="w-2.5 h-2.5"/> Decreased
+    </span>
+  );
+  if (a.includes("new")) return (
+    <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-md text-indigo-700 dark:text-indigo-400 bg-indigo-500/10 border border-indigo-500/20">
+      <Sparkles className="w-2.5 h-2.5"/> New
+    </span>
+  );
+  if (a.includes("exit") || a.includes("sold")) return (
+    <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-md text-gray-700 dark:text-gray-300 bg-gray-500/10 border border-gray-500/20">
+      Exited
+    </span>
+  );
+  return <span className="text-[10px] text-gray-400 dark:text-gray-500">—</span>;
+}
+
+function StockLogo({ logo, symbol }: { logo: string; symbol: string }) {
+  const [err, setErr] = useState(false);
+  const initial = (symbol || "?").slice(0, 2).toUpperCase();
+  if (err || !logo) return (
+    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500/20 to-fuchsia-500/20 border border-gray-200 dark:border-gray-700 flex items-center justify-center text-[9px] font-bold text-indigo-700 dark:text-indigo-300 flex-shrink-0">
+      {initial}
+    </div>
+  );
+  return (
+    <img src={logo} alt={symbol} onError={() => setErr(true)}
+      className="w-7 h-7 rounded-full object-contain bg-white border border-gray-200 dark:border-gray-700 flex-shrink-0"/>
+  );
+}
+
+function AmcAvatar({ logo, name, size = 28 }: { logo?: string; name: string; size?: number }) {
+  const [err, setErr] = useState(false);
+  const initial = (name || "?").trim().split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase() || "MF";
+  if (err || !logo) return (
+    <div style={{ width: size, height: size }}
+      className="rounded-lg bg-gradient-to-br from-indigo-500/15 to-fuchsia-500/15 border border-gray-200 dark:border-gray-700 flex items-center justify-center text-[9px] font-bold text-indigo-700 dark:text-indigo-300 flex-shrink-0">
+      {initial.length > 1 ? initial : <Building2 className="w-3 h-3"/>}
+    </div>
+  );
+  return (
+    <img src={logo} alt={name} onError={() => setErr(true)}
+      style={{ width: size, height: size }}
+      className="rounded-lg object-contain bg-white border border-gray-200 dark:border-gray-700 p-0.5 flex-shrink-0"/>
   );
 }
 
