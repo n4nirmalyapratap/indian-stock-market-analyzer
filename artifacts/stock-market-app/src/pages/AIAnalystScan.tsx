@@ -1,14 +1,15 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { Link } from "wouter";
+import { Link, useSearch } from "wouter";
 import {
   Microscope, Loader2, AlertCircle, ListChecks, RotateCw,
   TrendingUp, TrendingDown, Minus, ArrowUpDown, Check, Clock, Ban,
+  Bookmark,
 } from "lucide-react";
 import { useCustomAuth } from "@/context/CustomAuthContext";
 
 type Verdict = "BUY" | "HOLD" | "SELL";
 type Confidence = "LOW" | "MEDIUM" | "HIGH";
-type RowStatus = "queued" | "analyzing" | "cached" | "analyzed" | "skipped" | "error";
+type RowStatus = "queued" | "analyzing" | "cached" | "saved" | "analyzed" | "skipped" | "error";
 
 interface ScanReport {
   ticker: string;
@@ -26,6 +27,7 @@ interface Row {
   report?: ScanReport;
   error?: string;
   reason?: string;
+  savedAt?: string;
 }
 
 interface Watchlist {
@@ -75,7 +77,17 @@ function StatusCell({ row }: { row: Row }) {
     case "analyzing":
       return <span className="text-xs text-indigo-600 dark:text-indigo-400 inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" />Analyzing</span>;
     case "cached":
-      return <span className="text-xs text-emerald-600 dark:text-emerald-400 inline-flex items-center gap-1"><Check className="w-3 h-3" />Cached</span>;
+    case "saved":
+      return (
+        <span
+          className="text-xs text-emerald-600 dark:text-emerald-400 inline-flex items-center gap-1"
+          title={row.savedAt
+            ? `Saved on ${new Date(row.savedAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}`
+            : "Loaded from your saved analyses"}
+        >
+          <Bookmark className="w-3 h-3" />Saved
+        </span>
+      );
     case "analyzed":
       return <span className="text-xs text-emerald-600 dark:text-emerald-400 inline-flex items-center gap-1"><Check className="w-3 h-3" />Fresh</span>;
     case "skipped":
@@ -89,16 +101,35 @@ type SortKey = "ticker" | "verdict" | "confidence" | "status";
 
 export default function AIAnalystScan() {
   const { token } = useCustomAuth();
+  const search = useSearch();
+  const queryParams = useMemo(() => new URLSearchParams(search || ""), [search]);
+
+  // Ad-hoc tickers passed via `?tickers=A,B,C` (e.g. when re-opening a saved
+  // group from Saved Analyses) take precedence over the local watchlist
+  // picker and run as their own group. `?name=...` sets an optional label,
+  // `?rerun=1` immediately forces a fresh re-scan that overwrites the saved
+  // entry instead of loading it from the saved store.
+  const adhocTickers = useMemo(() => {
+    const raw = queryParams.get("tickers") || "";
+    return raw.split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
+  }, [queryParams]);
+
   const [watchlists] = useState<Watchlist[]>(loadWatchlists);
   const [activeId, setActiveId] = useState<string>(watchlists[0]?.id || "");
+  const [groupName, setGroupName] = useState<string>(queryParams.get("name") || "");
   const [rows, setRows] = useState<Row[]>([]);
   const [running, setRunning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [quota, setQuota] = useState<{ used: number; limit: number; remaining: number } | null>(null);
   const [summary, setSummary] = useState<{ cached: number; analyzed: number; skipped: number; errors: number } | null>(null);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("verdict");
   const [sortAsc, setSortAsc] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
+  // Tracks which symbol-set we've already attempted to auto-load from the
+  // saved store, so switching the watchlist re-runs the lookup but the
+  // same selection doesn't re-fetch on every render.
+  const autoLoadedKeyRef = useRef<string>("");
   // Monotonic scan id — only the most recent scan is allowed to mutate
   // shared state (running / rows / summary). Stale callbacks from an
   // aborted previous scan compare their captured id against this ref and
@@ -107,6 +138,11 @@ export default function AIAnalystScan() {
   const scanIdRef = useRef(0);
 
   const active = watchlists.find(w => w.id === activeId) || watchlists[0];
+  // Effective symbols for the next scan: if the URL provided ad-hoc tickers,
+  // they win; otherwise we use whichever watchlist is selected.
+  const effectiveSymbols = adhocTickers.length > 0
+    ? adhocTickers
+    : (active?.symbols || []).map(s => s.toUpperCase());
 
   useEffect(() => {
     if (!token) return;
@@ -127,33 +163,39 @@ export default function AIAnalystScan() {
     });
   }, []);
 
-  const start = useCallback(async () => {
-    if (!active || !token || running) return;
+  const start = useCallback(async (force = false) => {
+    if (!token || running) return;
+    if (effectiveSymbols.length === 0) return;
     abortRef.current?.abort();
     const ctl = new AbortController();
     abortRef.current = ctl;
     const myScanId = ++scanIdRef.current;
     const isCurrent = () => scanIdRef.current === myScanId;
 
-    // Backend caps a single scan at 50 tickers — slice the watchlist and
+    // Backend caps a single scan at 50 tickers — slice the symbols list and
     // surface a note instead of failing the whole request.
     const MAX_PER_SCAN = 50;
-    const allSymbols = active.symbols.map(s => s.toUpperCase());
+    const allSymbols = effectiveSymbols;
     const symbols = allSymbols.slice(0, MAX_PER_SCAN);
     const trimmedNote = allSymbols.length > MAX_PER_SCAN
-      ? `Watchlist has ${allSymbols.length} tickers — scanning the first ${MAX_PER_SCAN}. Run again for the rest tomorrow.`
+      ? `Group has ${allSymbols.length} tickers — scanning the first ${MAX_PER_SCAN}. Run again for the rest tomorrow.`
       : null;
 
     setRunning(true);
     setErr(trimmedNote);
     setSummary(null);
+    setSavedAt(null);
     setRows(symbols.map(s => ({ ticker: s, status: "queued" })));
 
     try {
       const resp = await fetch("/api/ai-analyst/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ tickers: symbols }),
+        body: JSON.stringify({
+          tickers: symbols,
+          force,
+          ...(groupName.trim() ? { name: groupName.trim() } : {}),
+        }),
         signal: ctl.signal,
       });
       if (!isCurrent()) return; // superseded between fetch start and headers
@@ -178,9 +220,12 @@ export default function AIAnalystScan() {
           if (!line) continue;
           let ev: any; try { ev = JSON.parse(line.slice(6)); } catch { continue; }
           if (ev.phase === "item") {
-            upsertRow(ev.ticker, { status: ev.status === "cached" ? "cached" : "analyzing" });
+            const isPersisted = ev.status === "saved" || ev.status === "cached";
+            upsertRow(ev.ticker, { status: isPersisted ? "saved" : "analyzing" });
           } else if (ev.phase === "result") {
-            const status = ev.status as RowStatus;
+            // Backend now emits status="saved" instead of "cached"; tolerate both.
+            const raw = ev.status as string;
+            const status: RowStatus = raw === "cached" ? "saved" : (raw as RowStatus);
             upsertRow(ev.ticker, {
               status,
               report: ev.report ? {
@@ -194,13 +239,24 @@ export default function AIAnalystScan() {
               } : undefined,
               error: ev.error,
               reason: ev.reason,
+              savedAt: ev.report?.cachedAt || ev.report?.savedAt,
             });
           } else if (ev.phase === "done") {
+            // Backend `done` event fields:
+            //   cached  — number of items served from the saved store
+            //   analyzed/skipped/errors — numeric counters
+            //   saved   — metadata object for the persisted group entry
+            //             ({id, scopeKey, ...}) — NEVER a number
             setSummary({
-              cached: ev.cached || 0, analyzed: ev.analyzed || 0,
-              skipped: ev.skipped || 0, errors: ev.errors || 0,
+              cached: Number(ev.cached) || 0,
+              analyzed: Number(ev.analyzed) || 0,
+              skipped: Number(ev.skipped) || 0,
+              errors: Number(ev.errors) || 0,
             });
             if (ev.quota) setQuota(ev.quota);
+            // The group entry was just persisted — surface the timestamp so
+            // the saved banner appears immediately without a page reload.
+            setSavedAt(new Date().toISOString());
           }
         }
       }
@@ -211,7 +267,85 @@ export default function AIAnalystScan() {
       // aborted earlier scan can't race the new one's button state.
       if (isCurrent()) setRunning(false);
     }
-  }, [active, token, running, upsertRow]);
+  }, [token, running, upsertRow, effectiveSymbols, groupName]);
+
+  // Auto-load the saved group entry (if any) for whatever symbol-set is
+  // currently selected — both for ad-hoc tickers from the URL and for the
+  // normal watchlist picker. This means re-opening the page with the same
+  // watchlist instantly shows the previously saved scan with a banner +
+  // Re-run button, no manual Scan press required.
+  //
+  // ?rerun=1 (only meaningful when the URL also carries ad-hoc tickers,
+  // e.g. from Saved Analyses) bypasses the saved load and forces a fresh
+  // scan that overwrites the saved entry.
+  useEffect(() => {
+    if (!token) return;
+    if (running) return;
+    if (effectiveSymbols.length === 0) return;
+    const key = effectiveSymbols.join(",");
+    if (autoLoadedKeyRef.current === key) return;
+    autoLoadedKeyRef.current = key;
+
+    const wantRerun = adhocTickers.length > 0 && queryParams.get("rerun") === "1";
+    if (wantRerun) {
+      void start(true);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(
+          `/api/ai-analyst/saved/group?tickers=${encodeURIComponent(effectiveSymbols.join(","))}`,
+          { headers: { Authorization: `Bearer ${token}` } });
+        if (cancelled) return;
+        if (!r.ok) {
+          // No saved entry for this watchlist yet — leave the empty state up
+          // so the user can press Scan when they're ready. We never auto-run
+          // a fresh scan from a watchlist switch (that would silently burn
+          // quota).
+          setRows([]); setSummary(null); setSavedAt(null);
+          return;
+        }
+        const j = await r.json();
+        const items = (j?.report?.items || []) as any[];
+        if (items.length === 0) {
+          setRows([]); setSummary(null); setSavedAt(null);
+          return;
+        }
+        setSavedAt(j.savedAt || null);
+        if (j?.report?.name && !groupName) setGroupName(j.report.name);
+        setRows(items.map((it: any) => ({
+          ticker: it.ticker,
+          status: (it.status === "cached" ? "saved" : it.status) as RowStatus,
+          report: it.report ? {
+            ticker: it.report.ticker,
+            name: it.report.name,
+            verdict: it.report.verdict,
+            confidence: it.report.confidence,
+            headline: it.report.headline,
+            priceTarget: it.report.priceTarget,
+            horizon: it.report.horizon,
+          } : undefined,
+          error: it.error,
+          reason: it.reason,
+          savedAt: j.savedAt,
+        })));
+        const counts = j?.report?.counts || {};
+        setSummary({
+          cached: counts.saved ?? counts.cached ?? items.filter(i => i.status === "saved" || i.status === "cached").length,
+          analyzed: counts.analyzed ?? items.filter(i => i.status === "analyzed").length,
+          skipped: counts.skipped ?? items.filter(i => i.status === "skipped").length,
+          errors: counts.errors ?? items.filter(i => i.status === "error").length,
+        });
+      } catch {
+        // Network blip — leave the page in its empty state; the user can
+        // still press Scan manually.
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, effectiveSymbols.join(",")]);
 
   const stop = useCallback(() => {
     // Bump the scan id so any in-flight callbacks bail out on isCurrent().
@@ -255,7 +389,7 @@ export default function AIAnalystScan() {
             Scan watchlist with AI Analyst
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            Run the deep analyst across every stock in a watchlist. Cached
+            Run the deep analyst across every stock in a watchlist. Saved
             reports are free; fresh analyses respect your daily quota.
           </p>
         </div>
@@ -268,38 +402,84 @@ export default function AIAnalystScan() {
                 className="text-xs px-3 py-1.5 rounded-md border border-gray-200 dark:border-white/10 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5">
             Compare two
           </Link>
+          <Link href="/ai-analyst/saved"
+                className="text-xs px-3 py-1.5 rounded-md border border-gray-200 dark:border-white/10 text-indigo-600 dark:text-indigo-400 hover:bg-gray-50 dark:hover:bg-white/5 inline-flex items-center gap-1.5">
+            <Bookmark className="w-3.5 h-3.5" /> Saved analyses
+          </Link>
         </div>
       </div>
 
+      {savedAt && rows.length > 0 && !running && (
+        <div className="rounded-md border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50 dark:bg-indigo-500/10 p-3 flex items-center gap-3 flex-wrap">
+          <Bookmark className="w-4 h-4 text-indigo-600 dark:text-indigo-400 flex-shrink-0" />
+          <p className="text-xs text-indigo-900 dark:text-indigo-100 flex-1 min-w-0">
+            {groupName ? <><strong>{groupName}</strong> · </> : null}
+            Saved on{" "}
+            <strong>
+              {new Date(savedAt).toLocaleDateString("en-IN", {
+                day: "numeric", month: "short", year: "numeric",
+              })}
+            </strong>{" "}
+            · Re-run to refresh every stock in this group.
+          </p>
+          <button
+            onClick={() => start(true)}
+            disabled={running}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-semibold"
+          >
+            <RotateCw className="w-3.5 h-3.5" /> Re-run
+          </button>
+        </div>
+      )}
+
       {/* Controls */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-xl p-4 flex flex-wrap items-end gap-3">
-        <div className="flex-1 min-w-[200px]">
-          <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Watchlist</label>
-          <select
-            value={activeId}
-            onChange={e => setActiveId(e.target.value)}
+        {adhocTickers.length === 0 ? (
+          <div className="flex-1 min-w-[200px]">
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Watchlist</label>
+            <select
+              value={activeId}
+              onChange={e => setActiveId(e.target.value)}
+              disabled={running}
+              className="w-full px-3 py-2 rounded-md border border-gray-200 dark:border-white/10 bg-white dark:bg-gray-950 text-sm text-gray-900 dark:text-white"
+            >
+              {watchlists.map(w => (
+                <option key={w.id} value={w.id}>{w.name} ({w.symbols.length})</option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          <div className="flex-1 min-w-[200px]">
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Group ({adhocTickers.length} tickers)</label>
+            <div className="px-3 py-2 rounded-md border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-gray-950 text-xs text-gray-700 dark:text-gray-300 truncate">
+              {adhocTickers.join(", ")}
+            </div>
+          </div>
+        )}
+        <div className="min-w-[180px]">
+          <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Group name (optional)</label>
+          <input
+            value={groupName}
+            onChange={e => setGroupName(e.target.value)}
             disabled={running}
-            className="w-full px-3 py-2 rounded-md border border-gray-200 dark:border-white/10 bg-white dark:bg-gray-950 text-sm text-gray-900 dark:text-white"
-          >
-            {watchlists.map(w => (
-              <option key={w.id} value={w.id}>{w.name} ({w.symbols.length})</option>
-            ))}
-          </select>
+            placeholder="e.g. My banks"
+            className="w-full px-3 py-2 rounded-md border border-gray-200 dark:border-white/10 bg-white dark:bg-gray-950 text-sm text-gray-900 dark:text-white placeholder:text-gray-400"
+          />
         </div>
         <div className="text-xs text-gray-500 dark:text-gray-400">
           Quota: <span className="font-semibold text-gray-900 dark:text-white">{quota ? `${quota.remaining}/${quota.limit}` : "—"}</span> fresh runs left today
         </div>
         {!running ? (
           <button
-            onClick={start}
-            disabled={!active || !token}
+            onClick={() => start(false)}
+            disabled={effectiveSymbols.length === 0 || !token}
             title={quota?.remaining === 0
-              ? "Daily quota exhausted — cached reports will still be shown; uncached tickers will be marked skipped."
+              ? "Daily quota exhausted — saved reports will still be shown; un-saved tickers will be marked skipped."
               : undefined}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium"
           >
             <ListChecks className="w-4 h-4" />
-            Scan {active?.symbols.length ?? 0} stocks
+            Scan {effectiveSymbols.length} stocks
           </button>
         ) : (
           <button onClick={stop}
@@ -318,7 +498,7 @@ export default function AIAnalystScan() {
 
       {summary && (
         <div className="rounded-md border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-gray-900/40 p-3 text-sm text-gray-700 dark:text-gray-300 flex flex-wrap gap-x-4 gap-y-1">
-          <span><strong className="text-emerald-700 dark:text-emerald-400">{summary.cached}</strong> from cache</span>
+          <span><strong className="text-emerald-700 dark:text-emerald-400">{summary.cached}</strong> from saved</span>
           <span><strong className="text-emerald-700 dark:text-emerald-400">{summary.analyzed}</strong> freshly analyzed</span>
           {summary.skipped > 0 && (
             <span><strong className="text-amber-700 dark:text-amber-400">{summary.skipped}</strong> skipped (quota)</span>

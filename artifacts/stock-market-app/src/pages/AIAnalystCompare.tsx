@@ -1,6 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSearch, Link } from "wouter";
-import { Microscope, Loader2, AlertCircle, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import {
+  Microscope, Loader2, AlertCircle, TrendingUp, TrendingDown, Minus,
+  Bookmark, RotateCw,
+} from "lucide-react";
 import { useCustomAuth } from "@/context/CustomAuthContext";
 
 type Verdict = "BUY" | "HOLD" | "SELL";
@@ -72,23 +75,56 @@ export default function AIAnalystCompare() {
   const [running, setRunning] = useState(false);
   const [error, setError]     = useState<string | null>(null);
   const [data,  setData]      = useState<{ a: Report; b: Report } | null>(null);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const initRef = useRef(false);
 
+  // On mount: if we have both tickers, try to load the saved pair first.
+  // If found, render it instantly with a banner. Otherwise run the analysis.
+  // ?rerun=1 forces a fresh re-run that overwrites the saved pair.
   useEffect(() => {
-    if (a && b && !running && !data) void run();
+    if (initRef.current) return;
+    if (!token) return;
+    if (!a || !b) return;
+    initRef.current = true;
+    const wantRerun = (params.get("rerun") === "1");
+    (async () => {
+      if (!wantRerun) {
+        try {
+          const r = await fetch(
+            `/api/ai-analyst/saved/pair?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`,
+            { headers: { Authorization: `Bearer ${token}` } });
+          if (r.ok) {
+            const j = await r.json();
+            if (j?.report?.a && j?.report?.b) {
+              setData({ a: j.report.a, b: j.report.b });
+              setSavedAt(j.savedAt || null);
+              return;
+            }
+          }
+        } catch { /* fall through to a fresh run */ }
+      }
+      void run(wantRerun);
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [token]);
 
-  const run = async () => {
+  const run = async (force = false) => {
     if (!a.trim() || !b.trim()) { setError("Pick two tickers"); return; }
     if (!token) { setError("Please sign in"); return; }
-    setError(null); setData(null); setRunning(true);
+    setError(null); setData(null); setSavedAt(null); setRunning(true);
     try {
-      const res = await fetch(`/api/ai-analyst/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await fetch(
+        `/api/ai-analyst/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}&force=${force}`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
       if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
-      setData(await res.json());
+      const j = await res.json();
+      setData({ a: j.a, b: j.b });
+      // Newly persisted — surface the freshly-saved timestamp so the banner
+      // shows immediately on the next compare load (or page refresh).
+      if (j.saved) setSavedAt(new Date().toISOString());
     } catch (e: any) {
       setError(e.message || String(e));
     } finally {
@@ -98,14 +134,40 @@ export default function AIAnalystCompare() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <Microscope className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
         <h1 className="text-xl font-bold text-gray-900 dark:text-white">Compare two stocks</h1>
+        <Link href="/ai-analyst/saved"
+              className="ml-auto inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-gray-200 dark:border-white/10 text-indigo-600 dark:text-indigo-400 hover:bg-gray-50 dark:hover:bg-white/5">
+          <Bookmark className="w-3.5 h-3.5" /> Saved analyses
+        </Link>
         <Link href={`/ai-analyst/${a || ""}`}
-              className="ml-auto text-xs text-indigo-600 dark:text-indigo-400 hover:underline">
+              className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline">
           ← Single-stock view
         </Link>
       </div>
+
+      {savedAt && data && !running && (
+        <div className="rounded-md border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50 dark:bg-indigo-500/10 p-3 flex items-center gap-3 flex-wrap">
+          <Bookmark className="w-4 h-4 text-indigo-600 dark:text-indigo-400 flex-shrink-0" />
+          <p className="text-xs text-indigo-900 dark:text-indigo-100 flex-1 min-w-0">
+            Saved on{" "}
+            <strong>
+              {new Date(savedAt).toLocaleDateString("en-IN", {
+                day: "numeric", month: "short", year: "numeric",
+              })}
+            </strong>{" "}
+            · Re-run to refresh both stocks with the latest market data.
+          </p>
+          <button
+            onClick={() => run(true)}
+            disabled={running}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-semibold"
+          >
+            <RotateCw className="w-3.5 h-3.5" /> Re-run
+          </button>
+        </div>
+      )}
 
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-xl p-4 flex flex-wrap items-center gap-2">
         <input value={a} onChange={e => setA(e.target.value.toUpperCase())}
