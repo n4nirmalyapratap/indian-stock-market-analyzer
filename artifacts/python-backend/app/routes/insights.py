@@ -27,6 +27,7 @@ import asyncio
 import logging
 import time
 import os
+import re
 import json
 from typing import Any
 from concurrent.futures import ThreadPoolExecutor
@@ -1165,6 +1166,21 @@ async def get_mf_holdings(
     # Drop schemes without a NAV — they clutter the table without adding value.
     items = [x for x in items if x.get("nav") is not None]
 
+    # Enrich with AMC logo + scanx slug (for holdings drill-down).
+    catalog = await _load_scanx_catalog()
+    amc_by_norm = catalog.get("amcByNorm", {})
+    sig_map = catalog.get("schemeBySig", {})
+    enriched = []
+    for x in items[:limit]:
+        an = _norm_amc(x.get("amc") or "")
+        amc_id = amc_by_norm.get(an)
+        sig = an + "|" + _norm_scheme(x.get("schemeName") or "")
+        match = sig_map.get(sig)
+        x["amcLogo"] = DHAN_AMC_LOGO.format(aid=amc_id) if amc_id else ""
+        x["seo"] = match["seo"] if match else ""
+        enriched.append(x)
+    items = enriched
+
     # Facets for the UI (computed after openOnly so dropdowns reflect what's listable).
     base = [x for x in parsed if (not openOnly) or x.get("openEnded")]
     amcs = sorted({x["amc"] for x in base if x.get("amc")})
@@ -1185,7 +1201,7 @@ async def get_mf_holdings(
         "source": "AMFI NAVAll.txt",
         "totalSchemes": len(parsed),
         "matched": len(items),
-        "items": items[:limit],
+        "items": items,
         "amcs": amcs,
         "assetClasses": asset_classes,
         "subCategoriesByClass": sub_by_class,
@@ -1365,6 +1381,192 @@ def _downsample(series: list[dict], target: int = 240) -> list[dict]:
     return [series[int(i * step)] for i in range(target)] + [series[-1]]
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Scanx catalog (Dhan) — gives us per-scheme slugs + AMC logo IDs + stock logos
+# We parse their public master list page once a day; coverage is ~48% of
+# AMFI direct-growth schemes and 49/50 AMCs (logos). When matched, we can
+# scrape per-scheme holdings (stocks + month-by-month %) from the same site.
+# ────────────────────────────────────────────────────────────────────────────
+SCANX_LIST_URL   = "https://scanx.trade/insight/mf-holdings"
+SCANX_SCHEME_URL = "https://scanx.trade/insight/mf-holdings/{slug}-holdings"
+DHAN_STOCK_LOGO  = "https://images.dhan.co/symbol/{sym}.png"
+DHAN_AMC_LOGO    = "https://images.dhan.co/Mutual_Fund/amc_images/light/{aid}.png"
+
+_NORM_DROP_SCHEME = re.compile(
+    r"\b(direct|plan|growth|option|fund|scheme|the|of|an|idcw|reinvestment|payout|regular|and)\b",
+    re.I,
+)
+_NORM_DROP_AMC = re.compile(
+    r"\b(mutual|fund|asset|management|amc|limited|ltd|co|company)\b",
+    re.I,
+)
+
+
+def _norm_scheme(s: str) -> str:
+    s = (s or "").lower()
+    s = s.replace("&", " ")
+    s = re.sub(r"[()\-_.,'/]", " ", s)
+    s = _NORM_DROP_SCHEME.sub(" ", s)
+    return re.sub(r"\s+", "", s).strip()
+
+
+def _norm_amc(s: str) -> str:
+    s = (s or "").lower()
+    s = re.sub(r"[.\-_,&'()]", " ", s)
+    s = _NORM_DROP_AMC.sub(" ", s)
+    return re.sub(r"\s+", "", s).strip()
+
+
+_NG_STATE_RE = re.compile(
+    r'<script id="ng-state"[^>]*>(.*?)</script>', re.S,
+)
+
+
+def _parse_scanx_catalog(html: str) -> dict:
+    """From scanx /insight/mf-holdings page, build:
+        { 'amcByNorm': {normName: amcId},
+          'schemeBySig': {amcNorm + '|' + schemeNorm: {seo, amcId, name, amc}} }"""
+    m = _NG_STATE_RE.search(html)
+    if not m:
+        return {"amcByNorm": {}, "schemeBySig": {}}
+    try:
+        ng = json.loads(m.group(1))
+    except Exception:
+        return {"amcByNorm": {}, "schemeBySig": {}}
+    catalog = None
+    for v in ng.values():
+        d = (v or {}).get("b", {}).get("data") if isinstance(v, dict) else None
+        if isinstance(d, list) and d and isinstance(d[0], dict) and "amc" in d[0] and "scheme" in d[0]:
+            catalog = d
+            break
+    if not catalog:
+        return {"amcByNorm": {}, "schemeBySig": {}}
+    amc_by_norm: dict[str, int] = {}
+    scheme_by_sig: dict[str, dict] = {}
+    for amc in catalog:
+        an = _norm_amc(amc.get("amc", ""))
+        if an:
+            amc_by_norm[an] = amc.get("amc_id")
+        for s in amc.get("scheme", []) or []:
+            sig = an + "|" + _norm_scheme(s.get("name", ""))
+            scheme_by_sig[sig] = {
+                "seo": s.get("seo"),
+                "amcId": amc.get("amc_id"),
+                "amc":   amc.get("amc"),
+                "name":  s.get("name"),
+            }
+    return {"amcByNorm": amc_by_norm, "schemeBySig": scheme_by_sig}
+
+
+async def _load_scanx_catalog() -> dict:
+    cached = _cache_get("scanx:catalog", ttl=LONG_TTL * 4)  # 24 h
+    if cached is not None:
+        return cached
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True,
+                                      headers={"User-Agent": "Mozilla/5.0"}) as cli:
+            r = await cli.get(SCANX_LIST_URL)
+        r.raise_for_status()
+        parsed = _parse_scanx_catalog(r.text)
+        _cache_set("scanx:catalog", parsed)
+        return parsed
+    except Exception as e:
+        logger.warning("Scanx catalog fetch failed: %s", e)
+        return {"amcByNorm": {}, "schemeBySig": {}}
+
+
+def _match_scanx(catalog: dict, amfi_amc: str, scheme_name: str) -> dict | None:
+    sig = _norm_amc(amfi_amc) + "|" + _norm_scheme(scheme_name)
+    return catalog.get("schemeBySig", {}).get(sig)
+
+
+def _parse_scanx_holdings(html: str) -> dict:
+    """From a per-scheme scanx page, extract holdings for each category.
+    Returns: {months: [...newest-first YYYY-MM...],
+              categories: [{name, rows: [{symbol, name, isin, sector,
+                                          subSector, action, latestPct,
+                                          series: [pct,…], logo}]}]}"""
+    m = _NG_STATE_RE.search(html)
+    if not m:
+        return {"months": [], "categories": []}
+    try:
+        ng = json.loads(m.group(1))
+    except Exception:
+        return {"months": [], "categories": []}
+    bucket = None
+    for v in ng.values():
+        d = (v or {}).get("b", {}).get("data") if isinstance(v, dict) else None
+        if isinstance(d, dict) and ("Equity" in d or "Mutual Fund" in d or "Commercial Paper" in d):
+            bucket = d
+            break
+    if not bucket:
+        return {"months": [], "categories": []}
+
+    all_months: list[str] = []
+    categories: list[dict] = []
+    for cat_name in ["Equity", "Arbitrage", "Mutual Fund",
+                     "Certificate of Deposit", "Commercial Paper",
+                     "Government Securities", "Treasury Bill", "Bonds"]:
+        rows = bucket.get(cat_name) or []
+        if not rows:
+            continue
+        out_rows = []
+        for r in rows:
+            if not isinstance(r, list) or len(r) < 18:
+                continue
+            symbol = (r[0] or "").strip()
+            name = (r[1] or "").strip()
+            isin = (r[14] or "").strip() if len(r) > 14 else ""
+            pct_str = r[16] if len(r) > 16 else ""
+            mon_str = r[17] if len(r) > 17 else ""
+            sector = r[18] if len(r) > 18 else ""
+            sub_sector = r[19] if len(r) > 19 else ""
+            action = r[20] if len(r) > 20 else ""
+            try:
+                series = [float(x) for x in str(pct_str).split("|") if x.strip()]
+            except Exception:
+                series = []
+            months = [m for m in str(mon_str).split("|") if m]
+            if months and not all_months:
+                all_months = months
+            latest = series[0] if series else None
+            out_rows.append({
+                "symbol": symbol,
+                "name": name,
+                "isin": isin,
+                "sector": sector,
+                "subSector": sub_sector,
+                "action": action,
+                "latestPct": latest,
+                "series": series,
+                "months": months,
+                "logo": DHAN_STOCK_LOGO.format(sym=symbol) if symbol else "",
+            })
+        # Sort by latestPct desc within category.
+        out_rows.sort(key=lambda x: x["latestPct"] or 0, reverse=True)
+        categories.append({"name": cat_name, "rows": out_rows})
+    return {"months": all_months, "categories": categories}
+
+
+async def _fetch_scanx_holdings(slug: str) -> dict:
+    cache_key = f"scanx:holdings:{slug}"
+    cached = _cache_get(cache_key, ttl=LONG_TTL * 4)  # 24 h
+    if cached is not None:
+        return cached
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True,
+                                      headers={"User-Agent": "Mozilla/5.0"}) as cli:
+            r = await cli.get(SCANX_SCHEME_URL.format(slug=slug))
+        if r.status_code != 200:
+            return {"months": [], "categories": []}
+        parsed = _parse_scanx_holdings(r.text)
+        _cache_set(cache_key, parsed)
+        return parsed
+    except Exception as e:
+        logger.warning("Scanx holdings fetch failed (%s): %s", slug, e)
+        return {"months": [], "categories": []}
+
+
 def _amc_factsheet_search_url(amc: str, scheme_name: str) -> str:
     """Best-effort link to a search for the scheme's monthly factsheet PDF.
     AMC sites aren't standardised, so we route the user to a Google search
@@ -1448,6 +1650,19 @@ async def get_mf_scheme(code: str):
     amc = meta.get("fund_house") or ""
     scheme_name = meta.get("scheme_name") or ""
 
+    # Try to enrich with scanx holdings (stocks + month-by-month %).
+    catalog = await _load_scanx_catalog()
+    match = _match_scanx(catalog, amc, scheme_name)
+    holdings = {"months": [], "categories": []}
+    amc_logo = ""
+    if match:
+        holdings = await _fetch_scanx_holdings(match["seo"])
+        amc_logo = DHAN_AMC_LOGO.format(aid=match["amcId"]) if match.get("amcId") else ""
+    if not amc_logo:
+        amc_id = catalog.get("amcByNorm", {}).get(_norm_amc(amc))
+        if amc_id:
+            amc_logo = DHAN_AMC_LOGO.format(aid=amc_id)
+
     res = {
         "available": True,
         "schemeCode": str(code),
@@ -1469,10 +1684,9 @@ async def get_mf_scheme(code: str):
         "benchmarkChart": bench_chart,
         "benchmarkLabel": "Nifty 50" if bench_chart else None,
         "factsheetUrl": _amc_factsheet_search_url(amc, scheme_name),
-        "holdingsNote": (
-            "Stock-level holdings are only published in the AMC's monthly "
-            "factsheet PDF — no public live feed. Click 'View factsheet' for the latest."
-        ),
+        "amcLogo": amc_logo,
+        "holdings": holdings,  # {months, categories: [{name, rows: [...]}]}
+        "holdingsSource": "scanx" if (holdings.get("categories")) else None,
     }
     _cache_set(cache_key, res)
     return res
