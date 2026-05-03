@@ -1693,11 +1693,124 @@ async def get_mf_scheme(code: str):
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Bulk / Block Deals (scraped from scanx.trade — same ng-state JSON pattern
-# as MF holdings). NSE/BSE publish daily disclosures; scanx aggregates and
-# enriches with stock symbols + logos. Cached 30 min during market hours.
+# Bulk / Block Deals — multi-source with graceful fallback.
+#
+#   Primary  → NSE static archive CSVs (rolling 7 days, authoritative).
+#              Direct from the regulator, no scraping of a 3rd-party UI.
+#                bulk:  https://nsearchives.nseindia.com/content/equities/bulk.csv
+#                block: https://nsearchives.nseindia.com/content/equities/block.csv
+#   Fallback → scanx.trade (fills BSE coverage + earlier dates that have
+#              already rolled out of NSE's 7-day archive).
+#
+# Each source is cached independently so that a stale fallback can still
+# serve when the other source is down. Final list is de-duplicated by
+# (date, symbol, client, side, qty, avgPrice).
 # ────────────────────────────────────────────────────────────────────────────
-SCANX_DEALS_URL = "https://scanx.trade/insight/bulk-block-deals"
+SCANX_DEALS_URL  = "https://scanx.trade/insight/bulk-block-deals"
+NSE_BULK_CSV_URL  = "https://nsearchives.nseindia.com/content/equities/bulk.csv"
+NSE_BLOCK_CSV_URL = "https://nsearchives.nseindia.com/content/equities/block.csv"
+
+# CSV month abbreviations → 2-digit month
+_MON = {m: f"{i+1:02d}" for i, m in enumerate(
+    ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"])}
+
+
+def _nse_csv_date_to_iso(s: str) -> str:
+    """'30-APR-2026' → '2026-04-30'. Returns '' if unparseable."""
+    s = (s or "").strip()
+    parts = s.split("-")
+    if len(parts) != 3: return ""
+    dd, mon, yyyy = parts[0], parts[1].upper(), parts[2]
+    m = _MON.get(mon)
+    if not m or not dd.isdigit() or not yyyy.isdigit(): return ""
+    return f"{yyyy}-{m}-{int(dd):02d}"
+
+
+def _parse_nse_deals_csv(text: str, deal_type: str) -> list[dict]:
+    """Parse NSE rolling-7-day bulk.csv / block.csv into normalized rows.
+    Header: Date,Symbol,Security Name,Client Name,Buy/Sell,Quantity Traded,
+            Trade Price / Wght. Avg. Price[,Remarks]
+    Empty feeds emit a single 'NO RECORDS' row — handled."""
+    if not text or "NO RECORDS" in text.upper() and "," in text and "Date" in text and text.count("\n") <= 3:
+        # Header + a single placeholder row → treat as empty.
+        if "NO RECORDS" in text.upper():
+            return []
+    rows: list[dict] = []
+    import csv, io
+    try:
+        reader = csv.reader(io.StringIO(text))
+        header = next(reader, None)
+        if not header:
+            return []
+        for r in reader:
+            if not r or len(r) < 7:
+                continue
+            sym = (r[1] or "").strip().upper()
+            if not sym or "NO RECORDS" in (r[0] or "").upper():
+                continue
+            try:
+                qty = int(float((r[5] or "0").replace(",", "").strip()))
+                price = float((r[6] or "0").replace(",", "").strip())
+            except ValueError:
+                continue
+            side_raw = (r[4] or "").strip().upper()
+            rows.append({
+                "date":      _nse_csv_date_to_iso(r[0]),
+                "exchange":  "NSE",
+                "symbol":    sym,
+                "company":   (r[2] or "").strip() or sym,
+                "dealType":  deal_type,
+                "client":    (r[3] or "").strip(),
+                "side":      "BUY" if side_raw.startswith("B") else "SELL",
+                "qty":       qty,
+                "avgPrice":  price,
+                "valueRs":   qty * price,
+                "logo":      DHAN_STOCK_LOGO.format(sym=sym),
+                "source":    "NSE",
+            })
+    except Exception as exc:
+        logger.warning("NSE %s CSV parse failed: %s", deal_type, exc)
+        return []
+    return rows
+
+
+_NSE_CSV_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                  "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.nseindia.com/all-reports",
+}
+
+
+async def _fetch_nse_deals() -> list[dict]:
+    """Fetch both NSE bulk + block rolling-archive CSVs in parallel.
+    Cached 30 min. Returns [] only when BOTH endpoints fail."""
+    cache_key = "nse:bulk-block-deals"
+    cached = _cache_get(cache_key, ttl=60 * 30)
+    if cached is not None:
+        return cached
+    rows: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True,
+                                      headers=_NSE_CSV_HEADERS) as cli:
+            results = await asyncio.gather(
+                cli.get(NSE_BULK_CSV_URL),
+                cli.get(NSE_BLOCK_CSV_URL),
+                return_exceptions=True,
+            )
+        for resp, dtype in zip(results, ("BULK", "BLOCK")):
+            if isinstance(resp, Exception):
+                logger.warning("NSE %s deals fetch failed: %s", dtype, resp)
+                continue
+            if resp.status_code == 200 and resp.text:
+                rows.extend(_parse_nse_deals_csv(resp.text, dtype))
+            else:
+                logger.warning("NSE %s deals HTTP %s", dtype, resp.status_code)
+    except Exception as exc:
+        logger.warning("NSE deals fetch outer failure: %s", exc)
+    _cache_set(cache_key, rows)
+    return rows
 
 
 def _parse_scanx_deals(html: str) -> list[dict]:
@@ -1735,6 +1848,12 @@ def _parse_scanx_deals(html: str) -> list[dict]:
             if key in seen_keys:
                 continue
             seen_keys.add(key)
+            try:
+                qty   = int(d.get("qty") or 0)
+                price = float(d.get("avgprice") or 0.0)
+                value = float(d.get("val") or (qty * price))
+            except (TypeError, ValueError):
+                continue
             rows.append({
                 "date":      (d.get("date") or "").split(" ")[0],  # YYYY-MM-DD
                 "exchange":  (d.get("exch") or "").upper(),
@@ -1743,13 +1862,12 @@ def _parse_scanx_deals(html: str) -> list[dict]:
                 "dealType":  (d.get("deal") or "").upper(),  # BULK | BLOCK
                 "client":    (d.get("cname") or "").strip(),
                 "side":      "BUY" if (d.get("bs") or "").upper() == "B" else "SELL",
-                "qty":       int(d.get("qty") or 0),
-                "avgPrice":  float(d.get("avgprice") or 0.0),
-                "valueRs":   float(d.get("val") or 0.0),
+                "qty":       qty,
+                "avgPrice":  price,
+                "valueRs":   value,
                 "logo":      DHAN_STOCK_LOGO.format(sym=sym),
+                "source":    "SCANX",
             })
-    # Newest first, then by value desc within the same date.
-    rows.sort(key=lambda r: (r["date"], r["valueRs"]), reverse=True)
     return rows
 
 
@@ -1771,6 +1889,46 @@ async def _fetch_scanx_deals() -> list[dict]:
     return rows
 
 
+def _dedupe_deals(buckets: list[list[dict]]) -> list[dict]:
+    """Merge multiple deal-source lists, preferring the first bucket's row
+    when the same logical deal appears in more than one source.
+    Dedup key uses date, symbol, client, side, qty and rounded price so
+    minor float wobble between sources doesn't double-count."""
+    seen: set[tuple] = set()
+    merged: list[dict] = []
+    for bucket in buckets:
+        for r in bucket:
+            key = (
+                r.get("date", ""),
+                r.get("symbol", ""),
+                (r.get("client") or "").upper(),
+                r.get("side", ""),
+                r.get("qty", 0),
+                round(float(r.get("avgPrice") or 0.0), 2),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(r)
+    # Newest first, then by value desc within the same date.
+    merged.sort(key=lambda r: (r.get("date", ""), r.get("valueRs", 0.0)),
+                reverse=True)
+    return merged
+
+
+async def _load_all_deals() -> tuple[list[dict], list[str]]:
+    """Fan out to NSE direct + scanx in parallel, merge & de-dupe.
+    Returns (rows, list of source labels that contributed)."""
+    nse_rows, scanx_rows = await asyncio.gather(
+        _fetch_nse_deals(), _fetch_scanx_deals(),
+    )
+    sources: list[str] = []
+    if nse_rows:   sources.append("NSE")
+    if scanx_rows: sources.append("scanx.trade")
+    # NSE first → its (authoritative) rows win on collision.
+    return _dedupe_deals([nse_rows, scanx_rows]), sources
+
+
 @router.get("/bulk-block-deals")
 async def bulk_block_deals(
     side: str = "",         # "" | "BUY" | "SELL"
@@ -1780,7 +1938,7 @@ async def bulk_block_deals(
     end_date: str = "",     # YYYY-MM-DD
     limit: int = 500,
 ):
-    rows = await _fetch_scanx_deals()
+    rows, sources = await _load_all_deals()
     if not rows:
         return {
             "available": False,
@@ -1788,6 +1946,7 @@ async def bulk_block_deals(
             "items": [], "highlights": [],
             "totalDeals": 0, "matched": 0,
             "dateRange": {"from": None, "to": None},
+            "sources": sources,
         }
 
     side_u = side.upper().strip()
@@ -1822,6 +1981,7 @@ async def bulk_block_deals(
             "from": min(dates) if dates else None,
             "to":   max(dates) if dates else None,
         },
+        "sources": sources,
     }
 
 
