@@ -239,6 +239,39 @@ def test_matches_category_handles_slash_and_blob():
     assert not _matches_category({"category": "Result", "purpose": "Q4", "subject": ""}, "Dividend")
 
 
+def test_nse_shareholding_adapter():
+    from app.routes.insights import _adapt_nse_shareholding
+    sample = [{
+        "symbol": "360ONE", "name": "360 ONE WAM LIMITED",
+        "pr_and_prgrp": "6.24", "public_val": "93.76", "employeeTrusts": "0",
+        "date": "31-MAR-2026", "broadcastDate": "21-APR-2026 18:14:47",
+        "recordId": "210168",
+        "xbrl": "https://nsearchives.nseindia.com/corporate/xbrl/SHP_x.xml",
+    }]
+    items = _adapt_nse_shareholding(sample)
+    assert len(items) == 1
+    it = items[0]
+    assert it["exchange"] == "NSE"
+    assert it["category"] == "Shareholding Pattern"
+    assert it["symbol"] == "360ONE"
+    assert "Promoter 6.24%" in it["purpose"]
+    assert "Public 93.76%" in it["purpose"]
+    assert "31-MAR-2026" in it["purpose"]
+    assert it["date"] == "2026-04-21T18:14:47+05:30"
+    assert it["documentUrl"].endswith(".xml")
+    assert it["id"] == "nse-shp:210168"
+
+
+def test_nse_shareholding_handles_submission_date_only():
+    from app.routes.insights import _adapt_nse_shareholding
+    items = _adapt_nse_shareholding([{
+        "symbol": "X", "name": "X Ltd",
+        "pr_and_prgrp": "50", "public_val": "50",
+        "submissionDate": "03-APR-2026", "recordId": "1",
+    }])
+    assert items[0]["date"].startswith("2026-04-03T00:00:00")
+
+
 def test_bse_total_count_extracts_rowcnt():
     from app.routes.insights import _bse_total_count
     assert _bse_total_count({"Table1": [{"ROWCNT": 1500}]}) == 1500

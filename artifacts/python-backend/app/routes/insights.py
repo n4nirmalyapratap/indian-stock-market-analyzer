@@ -783,6 +783,94 @@ async def _fetch_nse_insider() -> tuple[list[dict], str]:
     return _adapt_nse_pit(data), ""
 
 
+def _adapt_nse_shareholding(payload: Any) -> list[dict]:
+    """Convert NSE corporate-share-holdings-master rows to our filing shape.
+    Each row is a quarterly Shareholding Pattern (SHP) submission with
+    promoter / public / employee-trust holding percentages and an XBRL link."""
+    rows = payload if isinstance(payload, list) else (payload or {}).get("data") or []
+    out: list[dict] = []
+    for idx, r in enumerate(rows):
+        if not isinstance(r, dict):
+            continue
+        sym = (r.get("symbol") or "").strip()
+        company = (r.get("name") or sym).strip()
+        promoter = (r.get("pr_and_prgrp") or "").strip()
+        public = (r.get("public_val") or "").strip()
+        emp_trust = (r.get("employeeTrusts") or "").strip()
+        period_end = (r.get("date") or "").strip()  # "31-MAR-2026"
+        broadcast = (r.get("broadcastDate") or r.get("submissionDate") or "").strip()
+        rec_id = (r.get("recordId") or str(idx)).strip()
+
+        bits: list[str] = []
+        if promoter:
+            bits.append(f"Promoter {promoter}%")
+        if public:
+            bits.append(f"Public {public}%")
+        if emp_trust and emp_trust != "0":
+            bits.append(f"Emp Trust {emp_trust}%")
+        if period_end:
+            bits.append(f"as of {period_end}")
+        purpose = " · ".join(bits) or "Shareholding Pattern filing"
+
+        # broadcastDate is "21-APR-2026 18:14:47"; submissionDate is "03-APR-2026" only.
+        iso_date = _parse_nse_broadcast_date(broadcast)
+
+        out.append({
+            "id": f"nse-shp:{rec_id}",
+            "exchange": "NSE",
+            "symbol": sym,
+            "company": company,
+            "category": "Shareholding Pattern",
+            "purpose": purpose,
+            "subject": purpose,
+            "date": iso_date,
+            "documentUrl": (r.get("xbrl") or "").strip(),
+        })
+    return out
+
+
+def _parse_nse_broadcast_date(s: str) -> str:
+    """Parse '21-APR-2026 18:14:47' or '03-APR-2026' → ISO+05:30."""
+    if not s:
+        return ""
+    try:
+        from datetime import datetime
+        for fmt in ("%d-%b-%Y %H:%M:%S", "%d-%B-%Y %H:%M:%S",
+                    "%d-%b-%Y", "%d-%B-%Y"):
+            try:
+                # NSE returns month codes in upper-case ("APR"); strptime wants
+                # title-case. Normalise the month token before parsing.
+                parts = s.split()
+                if parts and "-" in parts[0]:
+                    d, m, y = parts[0].split("-")
+                    parts[0] = f"{d}-{m.title()}-{y}"
+                    s_norm = " ".join(parts)
+                else:
+                    s_norm = s
+                dt = datetime.strptime(s_norm, fmt)
+                return dt.strftime("%Y-%m-%dT%H:%M:%S") + _IST_OFFSET
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    return _ist_isoformat(s)
+
+
+async def _fetch_nse_shareholding() -> tuple[list[dict], str]:
+    """Fetch NSE Shareholding Pattern master (latest filings across all equities)."""
+    data = await _nse.fetch_nse(
+        "/api/corporate-share-holdings-master?index=equities",
+        cache_key="nse-shp-master",
+        ttl=900,  # 15 min — quarterly data, low churn
+    )
+    if data is None:
+        return [], "NSE shareholding feed unavailable"
+    items = _adapt_nse_shareholding(data)
+    # Sort newest broadcast first (already done downstream, but pre-sort helps cap).
+    items.sort(key=lambda x: x.get("date") or "", reverse=True)
+    return items, ""
+
+
 @router.get("/company-filings")
 async def get_company_filings(
     request: Request,
@@ -800,21 +888,6 @@ async def get_company_filings(
     if cached is not None:
         return cached
 
-    # Shareholding-pattern feeds are gated/unstable on both exchanges right now.
-    if type_ == "shareholding":
-        res = {
-            "available": False,
-            "sources": [],
-            "items": [],
-            "total": 0,
-            "hasMore": False,
-            "page": page,
-            "message": "Shareholding-pattern feed is not currently available. Use the BSE/NSE corporate filings tab — companies file SHP under 'Company Update' there.",
-            "meta": _meta("BSE_NSE_FILINGS"),
-        }
-        _cache_set(cache_key, res)
-        return res
-
     tasks: list = []
     plan: list[str] = []  # parallel to tasks, identifies which fetcher
 
@@ -823,6 +896,12 @@ async def get_company_filings(
         if source in ("all", "nse"):
             tasks.append(_fetch_nse_insider())
             plan.append("nse-insider")
+    elif type_ == "shareholding":
+        # NSE corporate-share-holdings-master is the working SHP feed; BSE's
+        # ShareholdingPattern endpoint family was retired (302→error_Bse).
+        if source in ("all", "nse"):
+            tasks.append(_fetch_nse_shareholding())
+            plan.append("nse-shp")
     else:
         # type_ == "corporate" (default)
         if source in ("all", "bse"):
@@ -867,7 +946,11 @@ async def get_company_filings(
             rows, err = r  # type: ignore[misc]
             if rows:
                 items.extend(rows)
-                src_name = "NSE Insider" if label == "nse-insider" else "NSE Corporate"
+                src_name = {
+                    "nse-insider": "NSE Insider",
+                    "nse-shp":     "NSE Shareholding",
+                    "nse-corp":    "NSE Corporate",
+                }.get(label, "NSE")
                 if src_name not in sources_used:
                     sources_used.append(src_name)
             if err:
