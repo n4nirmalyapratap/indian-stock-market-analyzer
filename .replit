@@ -24,6 +24,10 @@ args = "Python Backend"
 task = "workflow.run"
 args = "Start application"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Admin Dashboard"
+
 [[workflows.workflow]]
 name = "Python Backend"
 author = "agent"
@@ -33,19 +37,31 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "bash -c 'cd artifacts/python-backend && PORT=8090 python3.11 run.py'"
+args = "bash -c 'cd artifacts/python-backend && PORT=8090 FEATURE_AI_ANALYST=on python3.11 run.py'"
 
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd artifacts/stock-market-app && PORT=5000 BASE_PATH=/ pnpm dev"
 waitForPort = 5000
 
+[[workflows.workflow]]
+name = "Admin Dashboard"
+author = "agent"
+
 [workflows.workflow.metadata]
-outputType = "webview"
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd artifacts/admin-dashboard && PORT=5173 BASE_PATH=/admin/ pnpm dev"
+waitForPort = 5173
 
 [agent]
 stack = "BEST_EFFORT_FALLBACK"
@@ -65,8 +81,8 @@ localPort = 5000
 externalPort = 80
 
 [[ports]]
-localPort = 5001
-externalPort = 3001
+localPort = 5173
+externalPort = 5173
 
 [[ports]]
 localPort = 8081
@@ -89,3 +105,6 @@ externalPort = 3002
 [userenv.shared]
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "Qwer!234"
+AI_INTEGRATIONS_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+AI_MODEL = "qwen/qwen3-next-80b-a3b-instruct:free"
+AI_FALLBACK_MODEL = "openai/gpt-oss-120b:free"
