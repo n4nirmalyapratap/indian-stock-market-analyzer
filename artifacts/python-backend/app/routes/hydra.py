@@ -146,7 +146,9 @@ async def hydra_status():
             "Supervisor Agent (NL intent routing to expert agents)",
         ],
         "fixes": ["FIX-1: Short PnL", "FIX-2: Sync event loop", "FIX-3: VaR weight normalisation",
-                  "FIX-4: Pydantic validation", "FIX-5: SQLite WAL", "FIX-6: OU degenerate guard"],
+                  "FIX-4: Pydantic validation", "FIX-5: SQLite WAL", "FIX-6: OU degenerate guard",
+                  "FIX-7: Adj/raw close split", "FIX-8: Recent vol window",
+                  "FIX-9: True EWM smoothing", "FIX-10: Pairs scan no early-break"],
     }
 
 # ── Supervisor (NL query) ──────────────────────────────────────────────────────

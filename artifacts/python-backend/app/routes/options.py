@@ -17,7 +17,7 @@ Endpoints:
 from __future__ import annotations
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, HTTPException
@@ -39,6 +39,9 @@ from ..services.options_service import (
 )
 from ..services.options_backtest_service import run_backtest, STRATEGIES, _to_yf_sym, _to_yf_sym_candidates
 from ..services.options_chatbot import chat_reply, _AI_FALLBACK_REPLY
+from ..services import sebi_registry
+from ..services.risk_free_service import get_india_risk_free_rate
+from ..services import nse_bhavcopy_service as _bhav
 
 router = APIRouter(prefix="/options", tags=["options"])
 logger = logging.getLogger("options_route")
@@ -99,7 +102,7 @@ def _fetch_spot_and_hv_sync(symbol: str) -> dict:
         "hv30_pct": round(hv30 * 100, 2),
         "lot_size": lot,
         "atm":      atm,
-        "source":   "yahoo",
+        "source":   f"yahoo:{used_sym}",
     }
 
 
@@ -447,6 +450,26 @@ async def calc_var(req: VaRReq):
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+# ── GET /options/bhavcopy/coverage ───────────────────────────────────────────
+
+@router.get("/bhavcopy/coverage")
+async def bhavcopy_coverage():
+    """Return NSE/BSE F&O bhavcopy cache statistics — date range, row count
+    per symbol, and last 20 ingest attempts.  Used by the Backtest UI to
+    show the user exactly which dates are backed by real settlement data."""
+    return await asyncio.to_thread(_bhav.get_coverage)
+
+
+@router.post("/bhavcopy/refresh")
+async def bhavcopy_refresh(days: int = 7):
+    """Manually pull the last `days` trading days into the cache.
+    Skips dates already marked 'ok'."""
+    if days < 1 or days > 90:
+        raise HTTPException(status_code=400, detail="days must be 1..90")
+    results = await asyncio.to_thread(_bhav.refresh_recent, days)
+    return {"requested_days": days, "results": results}
+
+
 # ── GET /options/strategies ───────────────────────────────────────────────────
 
 @router.get("/strategies")
@@ -641,3 +664,148 @@ async def list_sebi_reports(full: bool = False):
         result.append(entry)
 
     return {"reports": result, "total": len(result)}
+
+
+# ── GET /options/compliance (SEBI rule snapshot) ──────────────────────────────
+
+@router.get("/compliance")
+async def get_compliance(symbol: Optional[str] = None,
+                         on_date: Optional[str] = None,
+                         strategy: Optional[str] = None,
+                         lots: int = 1,
+                         spot: Optional[float] = None):
+    """Return the SEBI/exchange rule set effective on `on_date` (defaults to
+    today), plus the live India 10-yr risk-free rate from FRED.
+
+    Query params:
+        symbol    Canonical symbol (NIFTY, BANKNIFTY, …).
+                  If omitted every supported symbol is returned.
+        on_date   ISO date (YYYY-MM-DD).  Defaults to today.
+        strategy  Optional strategy id (e.g. ``bull_call_spread``,
+                  ``short_straddle``, ``iron_condor``); when provided the
+                  response gains ``per_leg_costs`` (STT/exchange/stamp/GST
+                  per leg per fill) and ``margin_estimate``.
+        lots      Number of lots per leg (used only when ``strategy`` is set).
+        spot      Optional spot override; otherwise pulled from the cached
+                  index quote.  Used for margin notional + ATM strikes.
+
+    The response is the user-facing source of truth for: lot size + circular
+    reference, monthly expiry weekday + applicable circular, weekly
+    availability per strategy, the realistic cost schedule
+    (STT/SEBI/exchange/stamp/GST/brokerage with circulars), the FRED
+    risk-free rate with ``asOf`` / ``source`` (no silent fallback), and the
+    estimated SEBI SPAN+ELM margin for the chosen strategy.
+    """
+    from datetime import date as _date
+
+    parsed: Optional[_date] = None
+    if on_date:
+        try:
+            parsed = datetime.strptime(on_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400,
+                                detail=f"on_date must be YYYY-MM-DD, got {on_date!r}")
+
+    snap = sebi_registry.compliance_snapshot(symbol=symbol, on_date=parsed)
+    rfr  = await get_india_risk_free_rate()
+    snap["risk_free_rate"] = rfr
+
+    # ─── Per-strategy enrichment ─────────────────────────────────────────
+    if strategy and symbol:
+        if lots < 1:
+            raise HTTPException(status_code=400,
+                                detail=f"lots must be >= 1, got {lots}")
+        canon = sebi_registry.canonical_symbol(symbol)
+        target_date = parsed or date.today()
+        lot_rule = sebi_registry.get_lot_size_on(canon, target_date)
+        lot_size = lot_rule.lot_size if lot_rule else 1
+
+        # Resolve spot — prefer caller-supplied override, else cached quote
+        spot_px = float(spot) if spot else None
+        if spot_px is None:
+            try:
+                quote = await _fetch_spot_and_hv(canon)
+                # `_fetch_spot_and_hv` returns {"spot": <float>, "hv30": ...};
+                # accept the legacy "S" key too as a defensive fallback.
+                spot_px = quote.get("spot") or quote.get("S")
+                spot_px = float(spot_px) if spot_px else None
+            except Exception:
+                spot_px = None
+
+        # Build a representative leg set from the strategy id
+        legs = _build_synthetic_legs(strategy, spot_px or 0.0, canon, lots)
+
+        snap["per_leg_costs"] = sebi_registry.estimate_strategy_costs(
+            legs, lot_size=lot_size, on_date=target_date,
+        )
+        snap["margin_estimate"] = sebi_registry.estimate_margin_inr(
+            legs, spot=spot_px or 0.0, lot_size=lot_size,
+        )
+        snap["strategy"] = {
+            "id": strategy,
+            "lots": lots,
+            "lot_size": lot_size,
+            "spot": spot_px,
+            "weekly_available_now": sebi_registry.is_weekly_available(canon, target_date),
+            "applicable_circulars": [
+                {"ref": ref, "url": sebi_registry.circular_url(ref)}
+                for ref in [
+                    lot_rule.circular_ref if lot_rule else None,
+                    snap["cost_schedule"]["circular_ref"],
+                ] if ref
+            ],
+        }
+
+    return snap
+
+
+def _build_synthetic_legs(strategy: str, spot: float, symbol: str,
+                          lots: int) -> list[dict]:
+    """Generate a representative ATM-anchored leg set for a named strategy
+    so the cost/margin estimator has something to compute on.  Premiums are
+    rough fractions of spot — fine for cost estimation (which scales linearly
+    with premium) but not pricing-exact."""
+    if not spot:
+        return []
+    step = sebi_registry.get_strike_step(symbol, spot)
+    atm  = round(spot / step) * step
+    s = strategy.lower()
+    # Default premium ≈ 1.5% of spot for ATM, 0.7% for OTM
+    p_atm = round(spot * 0.015, 2)
+    p_otm = round(spot * 0.007, 2)
+    if s in ("bull_call_spread", "bullcallspread"):
+        return [
+            {"action": "buy",  "type": "call", "strike": atm,        "premium": p_atm, "lots": lots},
+            {"action": "sell", "type": "call", "strike": atm + step, "premium": p_otm, "lots": lots},
+        ]
+    if s in ("bear_put_spread", "bearputspread"):
+        return [
+            {"action": "buy",  "type": "put",  "strike": atm,        "premium": p_atm, "lots": lots},
+            {"action": "sell", "type": "put",  "strike": atm - step, "premium": p_otm, "lots": lots},
+        ]
+    if s in ("short_straddle", "shortstraddle"):
+        return [
+            {"action": "sell", "type": "call", "strike": atm, "premium": p_atm, "lots": lots},
+            {"action": "sell", "type": "put",  "strike": atm, "premium": p_atm, "lots": lots},
+        ]
+    if s in ("long_straddle", "longstraddle"):
+        return [
+            {"action": "buy",  "type": "call", "strike": atm, "premium": p_atm, "lots": lots},
+            {"action": "buy",  "type": "put",  "strike": atm, "premium": p_atm, "lots": lots},
+        ]
+    if s in ("iron_condor", "ironcondor"):
+        return [
+            {"action": "sell", "type": "call", "strike": atm + step,     "premium": p_otm, "lots": lots},
+            {"action": "buy",  "type": "call", "strike": atm + 2 * step, "premium": p_otm * 0.5, "lots": lots},
+            {"action": "sell", "type": "put",  "strike": atm - step,     "premium": p_otm, "lots": lots},
+            {"action": "buy",  "type": "put",  "strike": atm - 2 * step, "premium": p_otm * 0.5, "lots": lots},
+        ]
+    if s in ("covered_call", "coveredcall"):
+        return [
+            {"action": "sell", "type": "call", "strike": atm + step, "premium": p_otm, "lots": lots},
+        ]
+    if s in ("long_call", "longcall"):
+        return [{"action": "buy", "type": "call", "strike": atm, "premium": p_atm, "lots": lots}]
+    if s in ("long_put", "longput"):
+        return [{"action": "buy", "type": "put",  "strike": atm, "premium": p_atm, "lots": lots}]
+    return []

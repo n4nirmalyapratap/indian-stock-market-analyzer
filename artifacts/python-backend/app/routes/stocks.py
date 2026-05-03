@@ -29,6 +29,39 @@ def _provenance() -> dict:
     }
 
 
+def _history_meta(chart: dict) -> dict:
+    """
+    Build meta for history endpoints.
+
+    `source`/`asOf`/`eodSealed`/`eodDate` describe the candle series itself —
+    on `/history` they are the history provenance. We *also* publish them
+    under `historySource` / `historyAsOf` / etc. so any consumer that uses the
+    unified `MarketDataMeta` shape (where quote-source and history-source can
+    differ — e.g. live NSE quote with disk-EOD bars) gets a single field name
+    to read across endpoints.
+    """
+    src        = chart.get("source")
+    as_of      = chart.get("asOf")
+    eod_sealed = chart.get("eodSealed")
+    eod_date   = chart.get("eodDate")
+    return {
+        "source":           src,
+        "asOf":             as_of,
+        "marketState":      chart.get("marketState"),
+        "eodSealed":        eod_sealed,
+        "eodDate":          eod_date,
+        "cacheVersion":     _disk.cache_version(),
+        # Aliased fields — on /history the candles ARE the payload, so the
+        # history-* fields just mirror source/asOf. The aliases exist so the
+        # frontend's MarketDataMeta interface works uniformly across
+        # /details (quote ≠ history) and /history (quote == history).
+        "historySource":    src,
+        "historyAsOf":      as_of,
+        "historyEodSealed": eod_sealed,
+        "historyEodDate":   eod_date,
+    }
+
+
 @router.get("/nifty100")
 async def get_nifty100():
     return await _service.get_nifty100_stocks()
@@ -46,9 +79,13 @@ async def get_smallcap():
 
 @router.get("/search")
 async def search_stocks(q: str = Query(default="")):
-    """Search ALL_SYMBOLS universe by ticker or company name. Returns up to 20 results."""
+    """Search ALL_SYMBOLS universe by ticker or company name. Returns up to 20 results.
+
+    Minimum 2 characters — single-character queries are too noisy to be useful
+    (e.g. 'A' returned 200+ matches and broke the dropdown UX).
+    """
     from ..lib.universe import ALL_SYMBOLS, COMPANY_MAP
-    if not q or len(q.strip()) < 1:
+    if not q or len(q.strip()) < 2:
         return {"results": []}
     q_upper = q.strip().upper()
     q_lower = q.strip().lower()
@@ -77,13 +114,22 @@ async def get_stock_history(
     Yahoo (NSE only exposes daily EOD).
     """
     symbol = symbol.upper()
-    if interval not in VALID_INTERVALS:
-        interval = "1d"
+    # Honest 4xx instead of silently coercing to defaults — caller asked for
+    # something we don't support; pretending we honoured it would just hand
+    # back the wrong chart with no signal that the request was malformed.
     if interval == "60m":
         interval = "1h"
+    if interval not in VALID_INTERVALS:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Invalid interval '{interval}'. Allowed: {sorted(VALID_INTERVALS)}"},
+        )
     use_range = bool(start and end)
     if not use_range and period not in VALID_PERIODS:
-        period = "1mo"
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Invalid period '{period}'. Allowed: {sorted(VALID_PERIODS)}"},
+        )
 
     # Custom start/end range → PriceService (single source of truth)
     if use_range:
@@ -97,14 +143,7 @@ async def get_stock_history(
             "companyName": chart.get("companyName") or symbol,
             "currency":    chart.get("currency", "INR"),
             "candles":     chart["candles"],
-            "meta": {
-                "source":       chart.get("source"),
-                "asOf":         chart.get("asOf"),
-                "marketState":  chart.get("marketState"),
-                "eodSealed":    chart.get("eodSealed"),
-                "eodDate":      chart.get("eodDate"),
-                "cacheVersion": _disk.cache_version(),
-            },
+            "meta": _history_meta(chart),
         }
 
     # Standard period+interval — go through PriceService
@@ -119,14 +158,7 @@ async def get_stock_history(
         "companyName": chart.get("companyName") or symbol,
         "currency":    chart.get("currency", "INR"),
         "candles":     chart["candles"],
-        "meta": {
-            "source":       chart.get("source"),
-            "asOf":         chart.get("asOf"),
-            "marketState":  chart.get("marketState"),
-            "eodSealed":    chart.get("eodSealed"),
-            "eodDate":      chart.get("eodDate"),
-            "cacheVersion": _disk.cache_version(),
-        },
+        "meta": _history_meta(chart),
     }
 
 
@@ -167,6 +199,9 @@ async def get_stock_financials(symbol: str):
         v = _safe(val)
         return None if v is None else round(float(v), decimals)
 
+    import logging as _logging
+    _flog = _logging.getLogger(__name__)
+
     def _df_to_list(df, row_map: dict, sort_asc=True):
         if df is None or df.empty:
             return []
@@ -177,7 +212,14 @@ async def get_stock_financials(symbol: str):
                 try:
                     val = df.loc[row_name, col] if row_name in df.index else None
                     entry[out_key] = fn(val)
-                except Exception:
+                except Exception as e:
+                    # Don't swallow silently — a row that's consistently broken
+                    # for every column is a Yahoo schema change we want to know
+                    # about, not a data point we can pretend doesn't exist.
+                    _flog.debug(
+                        "financials: failed extracting %s/%s for %s — %s: %s",
+                        out_key, row_name, symbol, type(e).__name__, e,
+                    )
                     entry[out_key] = None
             results.append(entry)
         if sort_asc:
@@ -296,6 +338,21 @@ async def get_stock_financials(symbol: str):
             "note":        "Fundamentals are quarterly/annual — not affected by intraday market state.",
         },
     }
+
+
+@router.get("/{symbol}/dcf")
+async def get_stock_dcf(symbol: str):
+    """
+    Two-stage DCF intrinsic-value snapshot for a single equity.
+
+    Same data source (Yahoo) and same calculation as the bot's `/dcf`
+    command — exposes them here so the web app shows identical numbers.
+    """
+    from ..services import dcf_service
+    res = await dcf_service.compute_dcf(symbol)
+    if res.get("error"):
+        return JSONResponse(status_code=404, content=res)
+    return res
 
 
 @router.get("/{symbol}/technical-summary")
@@ -488,8 +545,24 @@ async def get_technical_summary(symbol: str, interval: str = "1d"):
         ma_sell    = sum(1 for r in ma_rows if r["action"] == "SELL")
         ma_neutral = sum(1 for r in ma_rows if r["action"] == "NEUTRAL")
 
-        # ── Pivots (based on previous candle) ──────────────────────────────
-        prev = df.iloc[-2] if len(df) >= 2 else df.iloc[-1]
+        # ── Pivots (based on previous SEALED candle) ───────────────────────
+        # Pick the most recent SEALED daily bar:
+        #   • Market OPEN/PRE_OPEN: iloc[-1] is today's unsealed intraday
+        #     candle — step back to iloc[-2].
+        #   • Market CLOSED + eod_sealed: iloc[-1] IS today's sealed close,
+        #     use it directly.
+        #   • Market CLOSED + NOT eod_sealed (rare — intraday cache before
+        #     today's EOD lands): iloc[-1] is still unsealed, step back.
+        # Previously we always took iloc[-2], which silently turned
+        # "yesterday's pivots" into "two-days-ago's pivots" every EOD.
+        last_is_unsealed = (market_state in ("OPEN", "PRE_OPEN")) or (not eod_sealed)
+        if last_is_unsealed and len(df) >= 2:
+            prev = df.iloc[-2]
+        elif len(df) >= 1:
+            prev = df.iloc[-1]
+        else:
+            return JSONResponse(status_code=404,
+                content={"error": f"No price history for {symbol_upper}"})
         H, L, C = float(prev["High"]), float(prev["Low"]), float(prev["Close"])
         O_prev = float(prev["Open"])
 
