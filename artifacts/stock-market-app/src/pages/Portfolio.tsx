@@ -505,10 +505,17 @@ function AddTxModal({ pid, onClose }: { pid: string; onClose: () => void }) {
 function ImportCsvModal({ pid, onClose }: { pid: string; onClose: () => void }) {
   const qc = useQueryClient();
   const [csv, setCsv] = useState("");
+  const [pickedFile, setPickedFile] = useState<File | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const [result, setResult] = useState<PortfolioImportResult | null>(null);
+  const [result, setResult] = useState<(PortfolioImportResult & { source_filename?: string }) | null>(null);
+
+  // .xlsx is binary — must go via multipart upload.  CSV/TXT can either go
+  // via paste-textarea (legacy JSON path) or via file upload.  Routing on
+  // pickedFile preserves both flows.
   const mut = useMutation({
-    mutationFn: () => api.importPortfolioCsv(pid, csv),
+    mutationFn: () => pickedFile
+      ? api.importPortfolioFile(pid, pickedFile)
+      : api.importPortfolioCsv(pid, csv),
     onSuccess: (res) => {
       setResult(res);
       qc.invalidateQueries({ queryKey: ["portfolio-valuation", pid] });
@@ -517,33 +524,47 @@ function ImportCsvModal({ pid, onClose }: { pid: string; onClose: () => void }) 
   });
 
   const onFile = (f: File) => {
-    const r = new FileReader();
-    r.onload = (e) => setCsv(String(e.target?.result ?? ""));
-    r.readAsText(f);
+    setPickedFile(f);
+    // Binary spreadsheet formats — never try to read as text.  Match the
+    // backend allow-list (.xlsx, .xlsm) so .xlsm doesn't fall into the
+    // FileReader text path and arrive as garbled UTF-8.
+    const isBinarySheet = /\.(xlsx|xlsm)$/i.test(f.name);
+    if (isBinarySheet) {
+      setCsv(`[Excel file selected: ${f.name} — will be uploaded as-is]`);
+    } else {
+      const r = new FileReader();
+      r.onload = (e) => setCsv(String(e.target?.result ?? ""));
+      r.readAsText(f);
+    }
   };
 
   return (
-    <Modal onClose={onClose} title="Import tradebook CSV">
+    <Modal onClose={onClose} title="Import tradebook (CSV or Excel)">
       <div className="space-y-3">
         <p className="text-xs text-gray-500">
-          Drop in a Zerodha Console export, an Upstox tradebook, or any CSV with
+          Drop in a Zerodha Console export, an Upstox tradebook, or any
+          CSV/XLSX with
           <code className="mx-1 px-1 bg-gray-100 dark:bg-gray-800 rounded">symbol, side, qty, price, date</code>
           columns.
         </p>
-        <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden"
+        <input ref={fileRef} type="file"
+          accept=".csv,.xlsx,.xlsm,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          className="hidden"
           onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
         <button onClick={() => fileRef.current?.click()}
           className="w-full px-3 py-2 text-sm bg-gray-50 dark:bg-gray-800 border border-dashed border-gray-300 dark:border-white/15 rounded hover:bg-gray-100 dark:hover:bg-gray-800/70">
-          <Upload className="w-3.5 h-3.5 inline mr-1" /> Choose CSV file…
+          <Upload className="w-3.5 h-3.5 inline mr-1" />
+          {pickedFile ? `Selected: ${pickedFile.name}` : "Choose CSV or Excel file…"}
         </button>
         <textarea
-          value={csv} onChange={(e) => setCsv(e.target.value)}
+          value={csv} onChange={(e) => { setCsv(e.target.value); setPickedFile(null); }}
           placeholder="…or paste CSV content here"
           rows={8}
           className="w-full px-3 py-2 text-xs font-mono bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-white/10 rounded"
         />
         {result && (
           <div className="text-xs bg-gray-50 dark:bg-gray-800/40 border border-gray-200 dark:border-white/10 rounded p-2 space-y-1">
+            {result.source_filename && <p>File: <span className="font-medium">{result.source_filename}</span></p>}
             <p>Format detected: <span className="font-medium">{result.format}</span></p>
             <p>Rows parsed: <span className="font-medium">{result.rowsParsed}</span> · inserted: <span className="font-medium text-emerald-500">{result.rowsInserted}</span></p>
             {result.errors.length > 0 && (
@@ -557,7 +578,8 @@ function ImportCsvModal({ pid, onClose }: { pid: string; onClose: () => void }) 
           </div>
         )}
         <div className="flex gap-2">
-          <button onClick={() => mut.mutate()} disabled={!csv.trim() || mut.isPending}
+          <button onClick={() => mut.mutate()}
+            disabled={(!csv.trim() && !pickedFile) || mut.isPending}
             className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded">
             {mut.isPending ? <Loader2 className="w-4 h-4 animate-spin inline" /> : "Import"}
           </button>
@@ -939,7 +961,9 @@ function PerformanceTab({ pid }: { pid: string }) {
                 <Tooltip formatter={(v: any) => `₹${fmtINR(Number(v))}`} />
                 <Legend />
                 <Area type="monotone" dataKey="equity"    name="Portfolio" stroke="#6366f1" fill="url(#eqGrad)" />
-                <Line type="monotone" dataKey="benchmark" name={q.data?.benchmark ?? benchmark} stroke="#f59e0b" dot={false} strokeDasharray="4 4" />
+                <Line type="monotone" dataKey="benchmark" name={q.data?.benchmark ?? benchmark}
+                      stroke="#f59e0b" dot={false} strokeDasharray="4 4"
+                      connectNulls strokeWidth={2} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
