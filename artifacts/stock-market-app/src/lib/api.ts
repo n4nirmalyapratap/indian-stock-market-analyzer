@@ -975,6 +975,13 @@ export interface StockFinancials {
   cashFlow:        { annual: CashFlowRow[] };
   dividends:       DividendRow[];
   eps:             { annual: EpsRow[]; quarterly: EpsRow[] };
+  meta?: {
+    source?:       string;
+    asOf?:         string | null;
+    marketState?:  string | null;
+    note?:         string;
+    [k: string]:   unknown;
+  };
 }
 
 // ─── Portfolio Manager types ─────────────────────────────────────────────────
