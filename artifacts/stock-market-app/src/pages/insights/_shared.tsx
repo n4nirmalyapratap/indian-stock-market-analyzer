@@ -1,24 +1,19 @@
 import { ReactNode, ReactElement, cloneElement, isValidElement, useState, useRef, useEffect, useMemo } from "react";
 import { Info, Loader2, Lock, ExternalLink, ChevronDown, Check } from "lucide-react";
 import { createPortal } from "react-dom";
+import { useTheme } from "@/context/ThemeContext";
 
-/** Reactively detect dark mode (the app toggles `class="dark"` on <html>).
- *  Used by Recharts and any other consumers that need real hex colors,
- *  since recharts uses inline styles that Tailwind's `dark:` variant
- *  cannot reach. */
+/** Reactively detect dark mode.
+ *
+ *  Subscribes to ThemeContext (which is updated *synchronously* during the
+ *  theme-toggle View Transition) instead of using a MutationObserver on
+ *  `html.dark`. The MO approach fired async after commit, which meant
+ *  recharts and other inline-styled consumers were captured by the View
+ *  Transitions snapshot with stale colours — the ripple played but the
+ *  charts didn't actually change. Reading from context guarantees every
+ *  consumer re-renders with the new palette inside the same paint. */
 export function useIsDark(): boolean {
-  const [dark, setDark] = useState(() =>
-    typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
-  );
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const obs = new MutationObserver(() =>
-      setDark(document.documentElement.classList.contains("dark")),
-    );
-    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-    return () => obs.disconnect();
-  }, []);
-  return dark;
+  return useTheme().theme === "dark";
 }
 
 /** App-wide chart palette derived from Tailwind's gray/indigo scales so
