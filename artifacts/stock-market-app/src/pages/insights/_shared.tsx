@@ -186,20 +186,36 @@ export function MenuDropdown({
 
   useEffect(() => {
     if (!open) return;
-    const r = btnRef.current?.getBoundingClientRect();
-    if (!r) return;
-    const margin = 8;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const want = Math.max(r.width, 260);
-    const width = Math.min(want, vw - margin * 2);
-    const left = Math.max(margin, Math.min(r.left, vw - width - margin));
-    const spaceBelow = vh - r.bottom - margin;
-    const top = spaceBelow < 220 && r.top > spaceBelow
-      ? Math.max(margin, r.top - Math.min(420, r.top - margin) - 6)
-      : r.bottom + 6;
-    setPos({ top, left, width });
-  }, [open]);
+    const computePosition = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const margin = 8;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const want = Math.max(r.width, 260);
+      const width = Math.min(want, vw - margin * 2);
+      const left = Math.max(margin, Math.min(r.left, vw - width - margin));
+      const spaceBelow = vh - r.bottom - margin;
+      const flipUp = spaceBelow < 220 && r.top > spaceBelow;
+      let top: number;
+      if (flipUp) {
+        // Anchor the menu's BOTTOM 6px above the button. Use the menu's
+        // actual rendered height when available so a 5-item menu sits flush
+        // to the button instead of leaving the old "max 420px" gap.
+        const measured = menuRef.current?.getBoundingClientRect().height;
+        const h = measured && measured > 0 ? measured : Math.min(420, r.top - margin);
+        top = Math.max(margin, r.top - 6 - h);
+      } else {
+        top = r.bottom + 6;
+      }
+      setPos({ top, left, width });
+    };
+    computePosition();
+    // Re-measure once the menu has actually rendered so the upward flip
+    // snaps to the real height (first pass uses an estimate).
+    const raf = requestAnimationFrame(computePosition);
+    return () => cancelAnimationFrame(raf);
+  }, [open, baseOptions.length]);
 
   useEffect(() => {
     if (!open) return;
