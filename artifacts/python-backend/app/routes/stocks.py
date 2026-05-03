@@ -340,6 +340,21 @@ async def get_stock_financials(symbol: str):
     }
 
 
+@router.get("/{symbol}/dcf")
+async def get_stock_dcf(symbol: str):
+    """
+    Two-stage DCF intrinsic-value snapshot for a single equity.
+
+    Same data source (Yahoo) and same calculation as the bot's `/dcf`
+    command — exposes them here so the web app shows identical numbers.
+    """
+    from ..services import dcf_service
+    res = await dcf_service.compute_dcf(symbol)
+    if res.get("error"):
+        return JSONResponse(status_code=404, content=res)
+    return res
+
+
 @router.get("/{symbol}/technical-summary")
 async def get_technical_summary(symbol: str, interval: str = "1d"):
     """

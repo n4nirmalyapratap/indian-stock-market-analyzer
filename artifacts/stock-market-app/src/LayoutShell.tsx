@@ -6,7 +6,7 @@ import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
   Brain, TrendingUp, CandlestickChart,
   Settings, ChevronRight, ChevronLeft, Sun, Moon,
-  Newspaper, Gauge, Sparkles, Users, Briefcase,
+  Newspaper, Gauge, Sparkles, Users, Briefcase, Calculator,
 } from "lucide-react";
 
 export const MAIN_NAV = [
@@ -17,6 +17,7 @@ export const MAIN_NAV = [
   { path: "/sentiment",  label: "Sentiment",      icon: Gauge },
   { path: "/news",       label: "News Feed",      icon: Newspaper },
   { path: "/stocks",     label: "Stock Lookup",   icon: Search },
+  { path: "/dcf",        label: "DCF Value",      icon: Calculator },
   { path: "/agents",     label: "Investor Council", icon: Users },
   { path: "/patterns",   label: "Patterns",       icon: Scan },
   { path: "/scanners",   label: "Scanners",       icon: Filter },
