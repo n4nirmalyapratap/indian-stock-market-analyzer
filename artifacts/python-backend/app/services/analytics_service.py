@@ -4,6 +4,7 @@ All data is computed on-demand and cached in memory with TTLs.
 """
 from __future__ import annotations
 import asyncio
+import math
 import time
 from datetime import datetime
 from typing import Any, Optional
@@ -78,40 +79,53 @@ class AnalyticsService:
             return cached
 
         sector_data: dict[str, list[float]] = {}
+        fetch_errors: list[dict] = []
+        skipped_short: list[str] = []
 
         for name, ticker in SECTOR_YAHOO_TICKERS.items():
             try:
                 # ticker is e.g. "^NSEI" — YahooService now handles ^ prefix correctly
                 hist = await self.yahoo.get_historical_data(ticker, days)
                 if len(hist) < 5:
+                    skipped_short.append(name)
                     continue
                 closes = [d["close"] for d in hist if d.get("close")]
+                # Log returns are statistically additive and the standard input
+                # for return-correlation analysis. The previous simple-return
+                # implementation produced subtly biased correlations, especially
+                # on volatile sector indices.
                 returns = [
-                    (closes[i] - closes[i - 1]) / closes[i - 1] * 100
+                    math.log(closes[i] / closes[i - 1])
                     for i in range(1, len(closes))
+                    if closes[i - 1] > 0 and closes[i] > 0
                 ]
-                sector_data[name] = returns
+                if len(returns) >= 2:
+                    sector_data[name] = returns
+                else:
+                    skipped_short.append(name)
                 await asyncio.sleep(0.15)
-            except Exception:
-                pass
+            except Exception as e:
+                # Track per-sector failures honestly. The previous bare `pass`
+                # made provider outages indistinguishable from missing tickers.
+                fetch_errors.append({"sector": name, "error": f"{type(e).__name__}: {e}"})
 
-        if not sector_data:
-            # Fallback: use live sector pChange as single-point proxy
-            live = await self.sectors.get_all_sectors()
-            for s in live:
-                if s.get("pChange") is not None:
-                    sector_data[s["name"]] = [s["pChange"]]
+        # Single-point pChange fallback removed — it produced a "correlation"
+        # over a single day, which is mathematically meaningless. Returning
+        # `available: false` is more honest than fabricating a matrix.
 
         min_len = min(len(v) for v in sector_data.values()) if sector_data else 0
         if min_len < 2:
             result = {
+                "available": False,
                 "timestamp": datetime.utcnow().isoformat() + "Z",
                 "days": days,
                 "sectors": list(sector_data.keys()),
                 "correlationMatrix": [],
                 "topCorrelations": [],
                 "topDivergences": [],
-                "message": "Insufficient historical data; try again during market hours",
+                "fetchErrors":     fetch_errors,
+                "skippedSectors":  skipped_short,
+                "message": "Insufficient historical data for any sector; try again during market hours",
             }
             _set_cache(cache_key, result, 1800)
             return result
@@ -133,12 +147,17 @@ class AnalyticsService:
         pairs_sorted = sorted(pairs, key=lambda p: abs(p["correlation"]), reverse=True)
 
         result = {
+            "available": True,
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "days": days,
+            "returnsMethod":   "log",
+            "observationsPerSector": min_len,
             "sectors": sectors_list,
             "correlationMatrix": [[round(float(v), 3) for v in row] for row in matrix],
             "topCorrelations": [p for p in pairs_sorted if p["correlation"] >= 0.6][:10],
             "topDivergences":  [p for p in pairs_sorted if p["correlation"] <= -0.2][:5],
+            "fetchErrors":     fetch_errors,
+            "skippedSectors":  skipped_short,
         }
         _set_cache(cache_key, result, 3600)
         return result
@@ -189,14 +208,20 @@ class AnalyticsService:
                 else:
                     unchanged += 1
             total = advances + declines + unchanged
-            ad_ratio = advances / declines if declines > 0 else float(advances)
+            # When declines == 0 the ratio is undefined (division by zero).
+            # The old code returned `float(advances)` here, which silently
+            # mixed a *count* into a *ratio* — a 25-advance day looked like
+            # a "25:1" breadth ratio. Returning None and a separate flag
+            # is honest.
+            ad_ratio: Optional[float] = round(advances / declines, 2) if declines > 0 else None
             breadth_series.append({
                 "date": date,
                 "advances": advances,
                 "declines": declines,
                 "unchanged": unchanged,
                 "total": total,
-                "adRatio": round(ad_ratio, 2),
+                "adRatio": ad_ratio,
+                "oneSidedAdvance": declines == 0 and advances > 0,
                 "breadthScore": round(advances / total * 100, 1) if total > 0 else 0,
             })
 
@@ -219,6 +244,16 @@ class AnalyticsService:
 
     # ── Top movers ────────────────────────────────────────────────────────────
 
+    # Momentum-score weighting: 60% on |%change|, 40% on volume scaled to
+    # millions of shares. Tuned so a typical mid-cap +3% move on 2M volume
+    # scores ~2.6, comparable to a +2% move on 5M volume — i.e. the score
+    # ranks intensity of activity, not direction. The weights are surfaced
+    # in the API response so callers can show the formula and the user
+    # isn't left guessing at magic numbers.
+    _MOMENTUM_PRICE_W = 0.60
+    _MOMENTUM_VOL_W = 0.40
+    _MOMENTUM_VOL_DIVISOR = 1_000_000  # volume scaled to "millions of shares"
+
     async def get_top_movers(self) -> dict:
         cache_key = "top-movers"
         cached = _get_cache(cache_key)
@@ -234,6 +269,10 @@ class AnalyticsService:
                     pc = q.get("pChange") or 0
                     vol = q.get("volume") or 0
                     price = q.get("lastPrice") or 0
+                    score = (
+                        abs(pc) * self._MOMENTUM_PRICE_W
+                        + (vol / self._MOMENTUM_VOL_DIVISOR) * self._MOMENTUM_VOL_W
+                    )
                     movers.append({
                         "symbol": sym,
                         "companyName": q.get("companyName", sym),
@@ -241,7 +280,7 @@ class AnalyticsService:
                         "change": round(q.get("change") or 0, 2),
                         "pChange": round(pc, 2),
                         "volume": vol,
-                        "momentumScore": round(abs(pc) * 0.6 + (vol / 1_000_000) * 0.4, 2),
+                        "momentumScore": round(score, 2),
                     })
                 await asyncio.sleep(0.12)
             except Exception:
@@ -250,12 +289,19 @@ class AnalyticsService:
         gainers = sorted(movers, key=lambda s: s["pChange"], reverse=True)[:10]
         losers  = sorted(movers, key=lambda s: s["pChange"])[:10]
         most_active = sorted(movers, key=lambda s: s.get("volume") or 0, reverse=True)[:10]
+        momentum_meta = {
+            "priceWeight":     self._MOMENTUM_PRICE_W,
+            "volumeWeight":    self._MOMENTUM_VOL_W,
+            "volumeDivisor":   self._MOMENTUM_VOL_DIVISOR,
+            "formula":         "abs(pChange) * priceWeight + (volume / volumeDivisor) * volumeWeight",
+        }
         result = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "totalScanned": len(movers),
             "gainers": gainers,
             "losers": losers,
             "mostActive": most_active,
+            "momentumWeights": momentum_meta,
         }
         _set_cache(cache_key, result, 1800)
         return result

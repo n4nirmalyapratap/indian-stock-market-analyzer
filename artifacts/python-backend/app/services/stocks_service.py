@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 
 from .nse_service import NseService
 from .yahoo_service import YahooService
@@ -21,7 +22,8 @@ class StocksService:
         from . import market_cache_service as _disk
 
         upper = symbol.upper()
-        history = []
+        history: list[dict] = []
+        history_error: Optional[str] = None
 
         # CLOSE-TRANSITION CONSISTENCY: fetch & seal HISTORY first so that the
         # subsequent quote call sees an EOD-sealed snapshot and overlays the
@@ -30,11 +32,18 @@ class StocksService:
         # first request after market close.
         try:
             # PriceService: NSE primary → Yahoo fallback → disk cache when market closed
-            h = await self.price.get_historical_data(upper, 300)  # 300 days ≈ 210 trading days — enough for EMA 200
+            # 500 calendar days ≈ 350 trading days — comfortable head-room for
+            # EMA-200 plus the ~10 bars of look-back the entry-recommendation
+            # uses for crossover confirmation. 300 was the bare minimum and
+            # left no slack when Yahoo dropped a few non-trading days.
+            h = await self.price.get_historical_data(upper, 500)
             if h:
                 history = h
+            else:
+                history_error = "Provider returned no historical bars"
         except Exception as e:
             logger.warning("Historical data fetch failed for %s: %s", upper, e)
+            history_error = f"{type(e).__name__}: {e}"
 
         # Single source of truth for the quote (NSE primary, Yahoo fallback)
         quote_meta = await self.price.get_quote_with_meta(upper)
@@ -45,6 +54,26 @@ class StocksService:
         closes = [d["close"] for d in history if d.get("close")]
         analysis = self._analyze(history, closes) if len(closes) > 20 else None
 
+        # Honest analysis-availability surface. The previous payload silently
+        # collapsed "fetch failed" and "stock too new" into the same string —
+        # callers had no way to distinguish a transient provider outage from
+        # a structurally insufficient history.
+        if analysis is not None:
+            analysis_available  = True
+            analysis_error: Optional[str] = None
+            insight             = self._build_insight(quote_data, analysis)
+            entry_rec           = self._build_entry(quote_data, analysis)
+        else:
+            analysis_available  = False
+            if history_error:
+                analysis_error = f"Historical data fetch failed — {history_error}"
+            elif len(closes) <= 20:
+                analysis_error = f"Insufficient history ({len(closes)} bars; need >20 for EMA/RSI/MACD)"
+            else:
+                analysis_error = "Insufficient historical data"
+            insight   = analysis_error
+            entry_rec = None
+
         # Pull provenance from disk for the historical block
         hist_meta = _disk.load_with_meta(upper, 300) or {}
 
@@ -52,8 +81,10 @@ class StocksService:
             **quote_data,
             "symbol": upper,
             "technicalAnalysis": analysis,
-            "insight": self._build_insight(quote_data, analysis) if analysis else "Insufficient historical data",
-            "entryRecommendation": self._build_entry(quote_data, analysis) if analysis else None,
+            "analysisAvailable": analysis_available,
+            "analysisError":     analysis_error,
+            "insight": insight,
+            "entryRecommendation": entry_rec,
             "historicalData": history[-30:],
             "meta": {
                 "source":           quote_meta.get("source"),
@@ -116,16 +147,28 @@ class StocksService:
         else:
             bb_pos = "ABOVE_UPPER" if lc > lbu else "BELOW_LOWER" if lc < lbl else "INSIDE"
 
+        # RSI/MACD None-guards — when history is too short to compute the
+        # indicator we surface UNKNOWN instead of fabricating an OVERBOUGHT
+        # zone from a None comparison (Python 3 raises TypeError on None>70).
+        if lr is None:
+            rsi_zone = "UNKNOWN"
+        else:
+            rsi_zone = "OVERBOUGHT" if lr > 70 else "OVERSOLD" if lr < 30 else "NEUTRAL"
+        if lh is None:
+            macd_cross = "UNKNOWN"
+        else:
+            macd_cross = "BULLISH" if lh > 0 else "BEARISH"
+
         return {
             "currentPrice": lc,
             "ema": {"ema9": le9, "ema21": le21, "ema50": le50, "ema200": le200},
-            "rsi": lr,
-            "rsiZone": "OVERBOUGHT" if lr > 70 else "OVERSOLD" if lr < 30 else "NEUTRAL",
+            "rsi": round(lr, 2) if lr is not None else None,
+            "rsiZone": rsi_zone,
             "macd": {
-                "value": macd["macd"][-1] if macd["macd"] else 0,
-                "signal": macd["signal"][-1] if macd["signal"] else 0,
+                "value": macd["macd"][-1] if macd["macd"] else None,
+                "signal": macd["signal"][-1] if macd["signal"] else None,
                 "histogram": lh,
-                "crossover": "BULLISH" if lh > 0 else "BEARISH",
+                "crossover": macd_cross,
             },
             "bollingerBands": {
                 "upper": lbu, "middle": lbm, "lower": lbl,
@@ -150,8 +193,15 @@ class StocksService:
         }
         if analysis["trend"] in trend_map:
             parts.append(trend_map[analysis["trend"]])
-        parts.append(f"RSI at {analysis['rsi']:.1f} — {analysis['rsiZone']}")
-        parts.append(f"MACD {analysis['macd']['crossover'].lower()} momentum")
+        # Honest copy when the indicator couldn't be computed — say so instead
+        # of crashing with a NoneType format error or printing "RSI at None".
+        if analysis.get("rsi") is not None:
+            parts.append(f"RSI at {analysis['rsi']:.1f} — {analysis['rsiZone']}")
+        else:
+            parts.append("RSI unavailable (insufficient history)")
+        cross = analysis["macd"]["crossover"]
+        if cross != "UNKNOWN":
+            parts.append(f"MACD {cross.lower()} momentum")
         if analysis.get("nearestSupport"):
             parts.append(f"Support at ₹{analysis['nearestSupport']:.2f}")
         if analysis.get("nearestResistance"):
@@ -162,17 +212,23 @@ class StocksService:
         bull = bear = 0
         if "BULL" in analysis["trend"]:
             bull += 1
-        else:
+        elif "BEAR" in analysis["trend"]:
             bear += 1
-        if analysis["rsi"] < 50:
-            bull += 1
-        else:
-            bear += 1
+        # else NEUTRAL — score neither side rather than silently counting it as bearish
+
+        rsi_val = analysis.get("rsi")
+        if rsi_val is not None:
+            if rsi_val < 50:
+                bull += 1
+            else:
+                bear += 1
         if analysis["macd"]["crossover"] == "BULLISH":
             bull += 1
-        else:
+        elif analysis["macd"]["crossover"] == "BEARISH":
             bear += 1
         bb_pos = analysis["bollingerBands"]["position"]
+        # Bollinger contributes weight 2 — explicitly documented because its
+        # vote effectively double-counts vs the EMA / RSI / MACD legs above.
         if bb_pos == "BELOW_LOWER":
             bull += 2
         elif bb_pos == "ABOVE_UPPER":
@@ -183,16 +239,20 @@ class StocksService:
         confidence = abs(bull - bear) / total * 100 if total else 0
 
         entry_call = "WAIT"
-        if signal == "BULLISH" and confidence > 30 and analysis["rsiZone"] != "OVERBOUGHT":
+        if signal == "BULLISH" and confidence > 30 and analysis["rsiZone"] not in ("OVERBOUGHT", "UNKNOWN"):
             entry_call = "ENTRY_CALL"
-        elif signal == "BEARISH" and confidence > 30 and analysis["rsiZone"] != "OVERSOLD":
+        elif signal == "BEARISH" and confidence > 30 and analysis["rsiZone"] not in ("OVERSOLD", "UNKNOWN"):
             entry_call = "ENTRY_PUT"
 
         ns = analysis.get("nearestSupport")
         nr = analysis.get("nearestResistance")
         price = analysis["currentPrice"]
-        rr = None
-        if nr and ns and (price - ns) > 0:
+        rr: Optional[str] = None
+        # R/R is only meaningful when the resistance sits *above* the price AND
+        # the support sits *below* it. The previous guard only checked the
+        # support side, so a resistance that was already breached (nr ≤ price)
+        # would yield a zero or negative reward leg dressed up as a real ratio.
+        if nr is not None and ns is not None and nr > price > ns:
             rr = f"{(nr - price) / (price - ns):.2f}"
 
         return {

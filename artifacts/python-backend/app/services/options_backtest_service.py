@@ -20,10 +20,17 @@ from typing import Optional
 import numpy as np
 from scipy.stats import norm as _norm   # module-level import — not inside hot loop
 
+from .options_service import bs_price as _bs_price
+from . import sebi_registry as _sebi
+from . import nse_bhavcopy_service as _bhav
+
 logger = logging.getLogger("options_backtest")
 
-# ── Costs ─────────────────────────────────────────────────────────────────────
-COMMISSION_PER_LOT = 20.0   # INR — approx NSE transaction + brokerage per lot
+# ── Costs (legacy constants — retained for back-compat with tests/imports) ───
+# Realistic regulatory costs (STT/GST/stamp/SEBI/exchange) are now applied via
+# sebi_registry.compute_leg_costs(); these constants remain only for callers
+# that import them directly.
+COMMISSION_PER_LOT = 20.0   # INR — flat brokerage per lot (Zerodha-style)
 SLIPPAGE_PCT       = 0.003  # 0.3% of premium as bid-ask slippage
 
 # ── Strategy templates ────────────────────────────────────────────────────────
@@ -163,8 +170,15 @@ def _to_yf_sym_candidates(symbol: str) -> list[str]:
     return [_to_yf_sym(symbol)]
 
 
-def _strike_step(S: float) -> float:
-    """NSE standard strike increment."""
+def _strike_step(S: float, symbol: str = "") -> float:
+    """NSE standard strike increment (symbol-aware via SEBI registry).
+
+    When called without a symbol, falls back to the legacy spot-bucketed
+    ladder so older call sites keep working unchanged.
+    """
+    from .sebi_registry import get_strike_step
+    if symbol:
+        return get_strike_step(symbol, S)
     if S >= 10_000:
         return 100.0
     if S >= 2_000:
@@ -174,12 +188,13 @@ def _strike_step(S: float) -> float:
     return 5.0
 
 
-def _atm(S: float) -> float:
-    step = _strike_step(S)
+def _atm(S: float, symbol: str = "") -> float:
+    step = _strike_step(S, symbol)
     return round(S / step) * step
 
 
-def _build_legs(strategy: str, S: float, otm_pct: float) -> list[dict]:
+def _build_legs(strategy: str, S: float, otm_pct: float,
+                symbol: str = "") -> list[dict]:
     """
     Build raw leg definitions (strike, action, option_type) for a strategy.
     otm_pct: fraction of S used as OTM wing distance (e.g. 0.05 = 5%).
@@ -188,8 +203,8 @@ def _build_legs(strategy: str, S: float, otm_pct: float) -> list[dict]:
     valid option premium (i.e. non-negative intrinsic or enough time value).
     For spread strategies, the wing strike must be further OTM than the body.
     """
-    step    = _strike_step(S)
-    atm     = _atm(S)
+    step    = _strike_step(S, symbol)
+    atm     = _atm(S, symbol)
     otm_d   = max(step, round(S * otm_pct / step) * step)
     wide_d  = max(step * 2, otm_d * 2)
 
@@ -241,25 +256,12 @@ def _build_legs(strategy: str, S: float, otm_pct: float) -> list[dict]:
     raise ValueError(f"Unknown strategy: {strategy}")
 
 
+# Backwards-compat alias — previously a duplicated inline BS pricer; now
+# delegates to the canonical implementation in options_service so we do not
+# carry two copies that can drift apart.
 def _bs_price_fast(S: float, K: float, T: float, r: float, sigma: float,
                    opt_type: str) -> float:
-    """
-    Inline Black-Scholes pricer (avoids cross-module import overhead in backtest loop).
-    Uses module-level _norm import for performance.
-    """
-    if T <= 0:
-        return max(0.0, S - K) if opt_type == "call" else max(0.0, K - S)
-    if sigma <= 0:
-        return max(0.0, S - K) if opt_type == "call" else max(0.0, K - S)
-
-    sqrt_t = math.sqrt(T)
-    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * sqrt_t)
-    d2 = d1 - sigma * sqrt_t
-    exp_rt = math.exp(-r * T)
-
-    if opt_type == "call":
-        return max(0.0, S * _norm.cdf(d1) - K * exp_rt * _norm.cdf(d2))
-    return max(0.0, K * exp_rt * _norm.cdf(-d2) - S * _norm.cdf(-d1))
+    return _bs_price(S, K, T, r, sigma, opt_type)
 
 
 def _apply_slippage(price: float, action: str, is_entry: bool) -> float:
@@ -338,10 +340,18 @@ def _run_backtest_sync(
     hist["HV30"]    = hist["HV30"].clip(lower=0.05)
     hist["HV30"]    = hist["HV30"].ffill().bfill().fillna(0.20)
 
-    # ── Generate expiry cycle (correct weekday per symbol) ───────────────────
+    # ── Generate expiry cycle (correct weekday per symbol, holiday-aware) ────
+    # The legacy `_expiry_dates` helper is preserved for back-compat in tests,
+    # but the backtest loop uses the SEBI registry directly so that scheduled
+    # expiries falling on NSE holidays (e.g. Republic Day 26 Jan 2024 for
+    # SENSEX, Mahashivratri 26 Feb 2025 for BANKNIFTY) are shifted to the
+    # previous trading day, matching real-world settlement.
     start_dt = pd.to_datetime(start_date).date()
     end_dt   = pd.to_datetime(end_date).date()
-    expiries = _expiry_dates(start_dt, end_dt, symbol=symbol, use_weekly=use_weekly)
+    if use_weekly:
+        expiries = _sebi.weekly_expiries(symbol, start_dt, end_dt, holiday_adjust=True)
+    else:
+        expiries = _sebi.monthly_expiries(symbol, start_dt, end_dt, holiday_adjust=True)
 
     if not expiries:
         return {"error": "No expiry dates fall within the specified date range"}
@@ -357,6 +367,25 @@ def _run_backtest_sync(
     trades:       list[dict] = []
     equity_curve: list[dict] = []
     cum_pnl       = 0.0
+    # Premium-source accounting: every leg fill (entry + exit) is tagged with
+    # one of {'bhavcopy', 'synthetic_bs'}.  Aggregated into the result so the
+    # UI can show an honesty badge ("X% real / Y% synthetic").
+    # Three honest buckets:
+    #   bhavcopy            — fill price came from the NSE/BSE settlement archive
+    #   synthetic_bs        — bhavcopy cache miss; Black-Scholes fallback used
+    #   intrinsic_settlement— exit at T<=0; cash-settled at intrinsic value
+    #                          (not a quote at all, kept separate from "real")
+    premium_source_counter = {"bhavcopy": 0, "synthetic_bs": 0,
+                              "intrinsic_settlement": 0}
+
+    def _resolve_premium(opt_type: str, K: float, S_now: float, T_now: float,
+                         iv_now: float, on_date: date, exp_date: date) -> tuple[float, str]:
+        """Try real bhavcopy CLOSE first; on miss, fall back to Black-Scholes
+        and tag the source loudly."""
+        real = _bhav.lookup_premium(symbol, exp_date, K, opt_type, on_date)
+        if real is not None and real > 0:
+            return float(real), "bhavcopy"
+        return _bs_price_fast(S_now, K, T_now, risk_free, iv_now, opt_type), "synthetic_bs"
 
     for exp in expiries:
         entry_target = exp - timedelta(days=entry_dte)
@@ -386,13 +415,18 @@ def _run_backtest_sync(
         T_exit   = max(0.0, (exp - exit_ts.date()).days / 365.0)
 
         try:
-            raw_legs = _build_legs(strategy, S_entry, otm_pct)
+            raw_legs = _build_legs(strategy, S_entry, otm_pct, symbol)
         except ValueError as e:
             return {"error": str(e)}
 
-        # Commission is per lot: sum across legs respecting lots_mult (butterfly ATM = 2×).
-        total_lots_count = sum(int(leg.get("lots_mult", 1)) for leg in raw_legs) * lots
-        total_commission = COMMISSION_PER_LOT * total_lots_count * 2  # entry + exit
+        entry_costs_total = 0.0
+        exit_costs_total  = 0.0
+        cost_breakdown    = {
+            "brokerage": 0.0, "stt": 0.0, "exchange_charge": 0.0,
+            "sebi_charge": 0.0, "stamp_duty": 0.0, "gst": 0.0,
+        }
+        entry_date_obj = entry_ts.date() if hasattr(entry_ts, "date") else entry_ts
+        exit_date_obj  = exit_ts.date()  if hasattr(exit_ts,  "date") else exit_ts
 
         entry_credit = 0.0
         filled_legs: list[dict] = []
@@ -404,17 +438,30 @@ def _run_backtest_sync(
             # lots_mult > 1 for butterfly ATM sell (2 lots at ATM, not 4 separate legs)
             effective_lots = lots * int(leg.get("lots_mult", 1))
 
-            raw_price  = _bs_price_fast(S_entry, K, T_entry, risk_free, iv_entry, opt_type)
+            raw_price, src_entry = _resolve_premium(
+                opt_type, K, S_entry, T_entry, iv_entry, entry_date_obj, exp,
+            )
+            premium_source_counter[src_entry] += 1
             fill_price = _apply_slippage(raw_price, action, is_entry=True)
             fill_price = max(0.01, fill_price)
 
+            qty = effective_lots * lot_size
             if action == "sell":
-                entry_credit += fill_price * effective_lots * lot_size
+                entry_credit += fill_price * qty
             else:
-                entry_credit -= fill_price * effective_lots * lot_size
+                entry_credit -= fill_price * qty
+
+            entry_cb = _sebi.compute_leg_costs(
+                action=action, premium=fill_price, quantity=qty,
+                is_entry=True, on_date=entry_date_obj,
+            )
+            entry_costs_total += entry_cb.total
+            for k in cost_breakdown:
+                cost_breakdown[k] += getattr(entry_cb, k)
 
             filled_legs.append({**leg, "premium": fill_price, "lots": effective_lots,
-                                 "lot_size": lot_size, "iv": iv_entry})
+                                 "lot_size": lot_size, "iv": iv_entry,
+                                 "_entry_src": src_entry})
 
         exit_debit = 0.0
 
@@ -424,21 +471,75 @@ def _run_backtest_sync(
             action       = leg["action"]
             effective_lots = int(leg["lots"])  # already includes lots_mult from entry loop
 
-            if T_exit <= 0:
+            is_exercise_exit = (T_exit <= 0)
+            if is_exercise_exit:
+                # Cash settlement at expiry — intrinsic value is the truth,
+                # but it is NOT a quote.  Counted in its own bucket.
                 exit_price = max(0.0, S_exit - K) if opt_type == "call" else max(0.0, K - S_exit)
+                src_exit   = "intrinsic_settlement"
+                premium_source_counter["intrinsic_settlement"] += 1
             else:
-                raw_exit    = _bs_price_fast(S_exit, K, T_exit, risk_free, iv_exit, opt_type)
+                raw_exit, src_exit = _resolve_premium(
+                    opt_type, K, S_exit, T_exit, iv_exit, exit_date_obj, exp,
+                )
+                premium_source_counter[src_exit] += 1
                 exit_action = "sell" if action == "buy" else "buy"
                 exit_price  = _apply_slippage(raw_exit, exit_action, is_entry=False)
                 exit_price  = max(0.0, exit_price)
+            leg["_exit_src"] = src_exit
 
+            qty = effective_lots * lot_size
             if action == "buy":
-                exit_debit -= exit_price * effective_lots * lot_size
+                exit_debit -= exit_price * qty
             else:
-                exit_debit += exit_price * effective_lots * lot_size
+                exit_debit += exit_price * qty
 
-        trade_pnl = entry_credit - exit_debit - total_commission
+            exit_cb = _sebi.compute_leg_costs(
+                action=action, premium=exit_price, quantity=qty,
+                is_entry=False, on_date=exit_date_obj,
+                is_exercise=is_exercise_exit,
+            )
+            exit_costs_total += exit_cb.total
+            for k in cost_breakdown:
+                cost_breakdown[k] += getattr(exit_cb, k)
+
+        total_commission = entry_costs_total + exit_costs_total
+
+        # Covered-call honesty fix: option leg alone understates P&L because the
+        # short call is hedged by the assumed long underlying.  Track the
+        # underlying P&L explicitly so the user sees a complete picture.
+        underlying_pnl = 0.0
+        if strategy == "covered_call":
+            underlying_pnl = (S_exit - S_entry) * lots * lot_size
+
+        trade_pnl = entry_credit - exit_debit - total_commission + underlying_pnl
         cum_pnl  += trade_pnl
+
+        # Per-trade premium-source rollup: every leg fill gets its own
+        # entry+exit tag so an auditor can reconstruct exactly which prices
+        # came from real settlement data.
+        leg_sources = [
+            {"strike": float(l["strike"]), "option_type": l["option_type"],
+             "action": l["action"],
+             "entry_premium_source": l.get("_entry_src", "synthetic_bs"),
+             "exit_premium_source":  l.get("_exit_src",  "synthetic_bs")}
+            for l in filled_legs
+        ]
+        trade_counter = {"bhavcopy": 0, "synthetic_bs": 0,
+                         "intrinsic_settlement": 0}
+        for s in leg_sources:
+            trade_counter[s["entry_premium_source"]] += 1
+            trade_counter[s["exit_premium_source"]]  += 1
+        # Promote the dominant source to a single trade-level label so the
+        # trades table can show a one-glance honesty pill per row.
+        trade_premium_source = max(trade_counter, key=trade_counter.get)
+
+        # Strip internal _entry_src/_exit_src bookkeeping keys from filled_legs
+        # — they are surfaced via leg_premium_sources above and shouldn't
+        # leak into any downstream API consumer that touches filled_legs.
+        for l in filled_legs:
+            l.pop("_entry_src", None)
+            l.pop("_exit_src",  None)
 
         trades.append({
             "entry_date":     str(entry_ts.date()),
@@ -450,9 +551,15 @@ def _run_backtest_sync(
             "entry_credit":   round(entry_credit, 2),
             "exit_debit":     round(exit_debit, 2),
             "commission":     round(total_commission, 2),
+            "underlying_pnl": round(underlying_pnl, 2),
             "trade_pnl":      round(trade_pnl, 2),
             "cumulative_pnl": round(cum_pnl, 2),
+            "costs_breakdown": {k: round(v, 2) for k, v in cost_breakdown.items()},
             "strategy":       strategy,
+            # Honesty fields — see premium_source_breakdown for legend
+            "premium_source":            trade_premium_source,
+            "premium_source_breakdown":  trade_counter,
+            "leg_premium_sources":       leg_sources,
         })
         equity_curve.append({
             "date":           str(exit_ts.date()),
@@ -486,9 +593,36 @@ def _run_backtest_sync(
     down_std = float(np.std(neg_arr)) if len(neg_arr) > 1 else (abs(avg_loss) or 1.0)
     sortino  = float(np.mean(pnl_arr) / down_std * freq) if down_std > 0 else 0.0
 
+    total_fills        = sum(premium_source_counter.values()) or 1
+    bhav_n             = premium_source_counter["bhavcopy"]
+    synth_n            = premium_source_counter["synthetic_bs"]
+    intrinsic_n        = premium_source_counter["intrinsic_settlement"]
+    real_pct           = round(bhav_n / total_fills * 100, 1)
+    synth_pct          = round(synth_n / total_fills * 100, 1)
+    intrinsic_pct      = round(intrinsic_n / total_fills * 100, 1)
+    primary_source     = max(premium_source_counter, key=premium_source_counter.get)
+
     return {
         "trades":       trades,
         "equity_curve": equity_curve,
+        "premium_source_breakdown": {
+            "bhavcopy_fills":             bhav_n,
+            "synthetic_bs_fills":         synth_n,
+            "intrinsic_settlement_fills": intrinsic_n,
+            "total_fills":                total_fills,
+            "real_pct":                   real_pct,
+            "synthetic_pct":              synth_pct,
+            "intrinsic_settlement_pct":   intrinsic_pct,
+            "primary_source":             primary_source,
+            "note": (
+                "bhavcopy = NSE/BSE F&O daily settlement archive (real quote); "
+                "synthetic_bs = Black-Scholes fallback used when the exact "
+                "contract is missing from the cache; "
+                "intrinsic_settlement = exit at expiry (T<=0) settled at "
+                "intrinsic value — not a quote, tracked separately so the "
+                "real-data ratio is not inflated."
+            ),
+        },
         "metrics": {
             "symbol":        symbol,
             "strategy":      strategy,

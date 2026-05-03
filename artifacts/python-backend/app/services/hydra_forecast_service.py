@@ -160,13 +160,20 @@ def _linear_trend(closes: list[float], lookback: int = 20) -> float:
 
 
 def _ewm_forecast(closes: list[float], horizon: int, alpha: float = 0.3) -> list[float]:
-    """Exponential smoothing forecast."""
-    s = closes[-1]
-    preds = []
-    for _ in range(horizon):
-        s = alpha * closes[-1] + (1 - alpha) * s
-        preds.append(s)
-    return preds
+    """
+    Exponential smoothing forecast.
+
+    Smooth the full price history recursively (s_t = α·c_t + (1-α)·s_{t-1})
+    to obtain the current EWM level, then flat-extrapolate that level forward
+    over the horizon. This is the standard simple-exponential-smoothing
+    h-step forecast (Holt without trend term).
+    """
+    if not closes:
+        return []
+    s = closes[0]
+    for c in closes[1:]:
+        s = alpha * c + (1 - alpha) * s
+    return [s] * horizon
 
 
 def _momentum_forecast(closes: list[float], horizon: int) -> list[float]:
@@ -195,9 +202,12 @@ def _mean_reversion_forecast(closes: list[float], horizon: int, window: int = 60
 
 
 def _historical_volatility(closes: list[float], window: int = 20) -> float:
+    """Daily log-return std-dev computed over the most-recent `window` returns."""
     if len(closes) < 2:
         return 0.01
-    rets = [math.log(closes[i] / closes[i - 1]) for i in range(1, min(window + 1, len(closes)))]
+    # Use the LAST `window+1` closes so we get `window` recent returns.
+    recent = closes[-(window + 1):] if len(closes) > window else closes
+    rets = [math.log(recent[i] / recent[i - 1]) for i in range(1, len(recent))]
     return statistics.stdev(rets) if len(rets) > 1 else 0.01
 
 
@@ -257,13 +267,15 @@ def forecast(
         p50.append(round(pred, 2))
         p90.append(round(pred * math.exp(z_p90 * horizon_vol), 2))
 
-    # Feature importance (approximate contribution of each signal)
+    # Feature importance — three ensemble weights summing to 100%.
+    # Sentiment is reported separately as a multiplicative bias (±%) since it
+    # is not part of the ensemble blend.
     feature_importance = {
-        "EWM_Trend":       round(w_ewm * 100, 1),
-        "Momentum":        round(w_mom * 100, 1),
-        "Mean_Reversion":  round(w_mr * 100, 1),
-        "Sentiment_Adj":   round(abs(sentiment_bias) * 1000, 1),
+        "EWM_Trend":      round(w_ewm * 100, 1),
+        "Momentum":       round(w_mom * 100, 1),
+        "Mean_Reversion": round(w_mr * 100, 1),
     }
+    sentiment_multiplier_pct = round(sentiment_bias * 100, 4)  # signed, in %
 
     # Direction signal
     expected_return_5d = (p50[-1] - latest_price) / latest_price * 100
@@ -299,6 +311,7 @@ def forecast(
         "rsi":            round(latest_rsi, 1),
         "sentiment":      round(sentiment_score, 3),
         "featureImportance": feature_importance,
+        "sentimentMultiplierPct": sentiment_multiplier_pct,
         "ensembleWeights": {
             "ewm": w_ewm, "momentum": w_mom, "meanReversion": w_mr
         },

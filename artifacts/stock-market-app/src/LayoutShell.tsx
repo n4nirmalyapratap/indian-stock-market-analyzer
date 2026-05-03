@@ -4,9 +4,10 @@ import { useTheme } from "@/context/ThemeContext";
 import { BrandLogo } from "@/components/BrandLogo";
 import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
-  Brain, TrendingUp, CandlestickChart, Microscope,
-  Settings, ChevronRight, ChevronLeft, ChevronDown, Sun, Moon,
-  Newspaper, Gauge, Sparkles, Users, Briefcase,
+   Microscope,ChevronDown,
+  Brain, TrendingUp, CandlestickChart,
+  Settings, ChevronRight, ChevronLeft, Sun, Moon,
+  Newspaper, Gauge, Sparkles, Users, Briefcase, Calculator,
 } from "lucide-react";
 
 export const MAIN_NAV = [
@@ -17,6 +18,7 @@ export const MAIN_NAV = [
   { path: "/sentiment",  label: "Sentiment",      icon: Gauge },
   { path: "/news",       label: "News Feed",      icon: Newspaper },
   { path: "/stocks",     label: "Stock Lookup",   icon: Search },
+  { path: "/dcf",        label: "DCF Value",      icon: Calculator },
   { path: "/agents",     label: "Investor Council", icon: Users },
   { path: "/ai-analyst", label: "Deep AI Analyst", icon: Microscope },
   { path: "/patterns",   label: "Patterns",       icon: Scan },
@@ -25,9 +27,6 @@ export const MAIN_NAV = [
   { path: "/options",    label: "Options Tester", icon: TrendingUp },
   { path: "/portfolio",  label: "Portfolio",      icon: Briefcase },
 ];
-
-export const SETTINGS_NAV: { path: string; label: string; icon: ComponentType }[] = [];
-
 
 export function NavLink({ path, label, icon: Icon, open, indent = false }: {
   path: string; label: string; icon: ComponentType<{ className?: string }>; open: boolean; indent?: boolean;
@@ -81,14 +80,8 @@ export function LayoutShell({
 }) {
   const [loc]  = useLocation();
   const [open, setOpen] = useState(() => localStorage.getItem("sidebar-open") === "true");
-  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => { localStorage.setItem("sidebar-open", String(open)); }, [open]);
-  useEffect(() => {
-    if (SETTINGS_NAV.some(({ path }) => loc === path)) setSettingsOpen(true);
-  }, [loc]);
-
-  const inSettings = SETTINGS_NAV.some(({ path }) => loc === path) || loc === "/settings";
 
   return (
     <div className="h-screen bg-gray-50 dark:bg-gray-950 flex overflow-hidden">
@@ -114,31 +107,7 @@ export function LayoutShell({
         </nav>
 
         <div className="border-t border-gray-100 dark:border-white/[0.05] py-2 flex-shrink-0">
-          {open ? (
-            <div className="space-y-0.5">
-              <button
-                onClick={() => setSettingsOpen(s => !s)}
-                className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg mx-1.5 transition
-                  ${inSettings
-                    ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300"
-                    : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white"}
-                  w-[calc(100%-12px)]`}
-              >
-                <Settings className="w-[18px] h-[18px] flex-shrink-0" />
-                <span className="text-sm font-medium flex-1 text-left">Settings</span>
-                <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-150 ${settingsOpen ? "rotate-180" : ""}`} />
-              </button>
-              {settingsOpen && (
-                <div className="space-y-0.5 pb-0.5">
-                  {SETTINGS_NAV.map((item) => (
-                    <NavLink key={item.path} {...item} open={open} indent />
-                  ))}
-                </div>
-              )}
-            </div>
-          ) : (
-            <NavLink path="/settings" label="Settings" icon={Settings} open={false} />
-          )}
+          <NavLink path="/settings" label="Settings" icon={Settings} open={open} />
 
           <ThemeToggle open={open} />
           <ProfileComponent open={open} />

@@ -1242,7 +1242,7 @@ async def _get_nifty_history() -> list[tuple[str, float]] | None:
     cached = _cache_get(cache_key, ttl=LONG_TTL)
     if cached is not None:
         return cached
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     data = await loop.run_in_executor(None, _fetch_nifty_history_sync)
     if data:
         _cache_set(cache_key, data)
@@ -2154,7 +2154,7 @@ async def _fetch_index_history(code: str, period_days: int, period_yf: str) -> l
             logger.debug("index-valuation yfinance %s failed: %s", code, e)
             return []
 
-    return await asyncio.get_event_loop().run_in_executor(_executor, _yf_pull)
+    return await asyncio.get_running_loop().run_in_executor(_executor, _yf_pull)
 
 
 async def _index_valuation(codes: list[str], period: str, metric: str) -> dict:

@@ -7,6 +7,8 @@ import {
 import { api } from "@/lib/api";
 import type { IncomeRow, BalanceSheetRow, CashFlowRow, DividendRow, EpsRow } from "@/lib/api";
 import { TrendingUp, TrendingDown, Minus } from "lucide-react";
+import DataFreshness from "@/components/DataFreshness";
+import type { MarketDataMeta } from "@/lib/marketData";
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
@@ -164,7 +166,7 @@ function OverviewTab({ ov, income }: { ov: any; income: IncomeRow[] }) {
         <SectionHeader title="Profitability" />
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
           <MetricCard label="ROE"           value={fNum(ov.roe, "%")}
-            sub={ov.roe != null ? (ov.roe > 15 ? "Strong" : ov.roe > 8 ? "Moderate" : "Weak") : undefined}
+            sub={ov.roe != null ? (ov.roe > 15 ? "Strong" : ov.roe > 12 ? "Moderate" : "Weak") : undefined}
             positive={ov.roe != null ? ov.roe > 12 : undefined} />
           <MetricCard label="ROA"           value={fNum(ov.roa, "%")} />
           <MetricCard label="Gross Margin"  value={fNum(ov.grossMargin, "%")} positive={ov.grossMargin != null ? ov.grossMargin > 20 : undefined} />
@@ -376,7 +378,8 @@ function DividendsTab({ dividends, ov }: { dividends: DividendRow[]; ov: any }) 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <MetricCard label="Dividend Yield" value={fNum(ov.dividendYield, "%")} />
         <MetricCard label="Annual DPS"     value={ov.dividendRate != null ? `₹${fNum(ov.dividendRate)}` : "—"} />
-        <MetricCard label="Total Paid (All Time)" value={dividends.length > 0 ? `₹${dividends.reduce((s, d) => s + d.amount, 0).toFixed(0)}` : "—"} />
+        <MetricCard label="Total Paid (Reported)" value={dividends.length > 0 ? `₹${dividends.reduce((s, d) => s + d.amount, 0).toFixed(0)}` : "—"}
+          sub={dividends.length > 0 ? `Across ${dividends.length} payouts on record · split-adjusted` : undefined} />
       </div>
 
       {annualData.length > 0 && (
@@ -454,7 +457,7 @@ function EarningsTab({ annual, quarterly }: { annual: EpsRow[]; quarterly: EpsRo
             <tr className="border-b-2 border-gray-100">
               <th className="text-left py-2.5 text-xs text-gray-500 font-semibold uppercase pr-4">Period</th>
               <th className="text-right py-2.5 text-xs text-gray-500 font-semibold uppercase">EPS (₹)</th>
-              <th className="text-right py-2.5 text-xs text-gray-500 font-semibold uppercase">QoQ / YoY</th>
+              <th className="text-right py-2.5 text-xs text-gray-500 font-semibold uppercase">{period === "annual" ? "YoY" : "QoQ"}</th>
             </tr>
           </thead>
           <tbody>
@@ -612,9 +615,27 @@ export default function StockFinancials({ symbol }: { symbol: string }) {
   }
 
   const { overview: ov, incomeStatement, balanceSheet: _bs, cashFlow: _cf, dividends, eps } = data;
+  const freshnessMeta: MarketDataMeta | null = data.meta
+    ? {
+        source:      data.meta.source,
+        asOf:        data.meta.asOf ?? null,
+        marketState: (data.meta.marketState ?? undefined) as string | undefined,
+      }
+    : null;
 
   return (
     <div className="space-y-4" data-testid="stock-financials">
+      {/* Provenance pill — fundamentals are quarterly/annual so the
+          intraday/EOD distinction does not apply, but the user still
+          deserves to know the source and freshness. */}
+      {freshnessMeta && (
+        <DataFreshness
+          meta={freshnessMeta}
+          refreshKeys={["financials", symbol]}
+          label={`Fundamentals · ${freshnessMeta.source ?? "—"}`}
+        />
+      )}
+
       {/* Tab nav */}
       <div className="flex gap-1 overflow-x-auto border-b border-gray-100 pb-0">
         {TABS.map(t => (

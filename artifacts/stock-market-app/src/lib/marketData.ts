@@ -27,6 +27,19 @@ export interface MarketDataMeta {
   cacheVersion?:  number;
   eodSealed?:     boolean;
   eodDate?:       string | null;
+  // Stock Lookup carries a separate provenance for the historical-bars block —
+  // the quote can be live NSE while the candles came off disk EOD cache.
+  historySource?: string;
+  historyAsOf?:   string | null;
+  historyEodSealed?: boolean;
+  historyEodDate?:   string | null;
+  // Scanners universe freshness (only present on /scanners endpoints).
+  universe?: {
+    isLiveUniverse: boolean;
+    loadedAt:       string | null;
+    totalSymbols:   number;
+    totalSectors:   number;
+  };
   [key: string]:  unknown;
 }
 
