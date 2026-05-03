@@ -328,13 +328,17 @@ class TestSingleCandlePatterns:
         hits = [p for p in SVC._detect(SYM, h, NIFTY100) if p["pattern"] == "Shooting Star"]
         assert hits and hits[0]["confidence"] >= 72 - 15  # data-driven: was ==72
 
-    def test_shooting_star_has_stop_loss_no_target(self):
+    def test_shooting_star_has_atr_based_stop_and_target(self):
+        # PUT patterns now get ATR-based downside targets (target_r=2.0,
+        # stop_r=1.0 by default) — silently emitting a stop without a
+        # target was the original bug. Below the entry for a PUT.
         c0 = _c(106, 120, 104, 104)
         h  = _splice(_rising_bars(), c0)
         hits = [p for p in SVC._detect(SYM, h, NIFTY100) if p["pattern"] == "Shooting Star"]
         assert hits
         assert hits[0]["stopLoss"] is not None
-        assert hits[0]["targetPrice"] is None
+        assert hits[0]["targetPrice"] is not None
+        assert hits[0]["targetPrice"] < hits[0]["currentPrice"] < hits[0]["stopLoss"]
 
     # ── Hanging Man ───────────────────────────────────────────────────────────
     # Condition: _lower > 2*body, _upper < 0.5*body, RSI > 60, is_bear
