@@ -328,7 +328,12 @@ async def _fetch_vix() -> tuple[float, float]:
         from .market_cache_service import is_market_open
         import httpx
 
-        yahoo_ticker = "^NSEVIXY"
+        # Yahoo's official India VIX ticker. The previous "^NSEVIXY" symbol
+        # is delisted and silently returned the 15.0/0.0 fallback, which
+        # neutralised the entire VIX leg of the composite score. Verified
+        # 2026-05: ^INDIAVIX returns full historical chart data, ^NSEVIXY
+        # 404s with "No data found, symbol may be delisted".
+        yahoo_ticker = "^INDIAVIX"
         headers = {"User-Agent": "Mozilla/5.0"}
 
         async with httpx.AsyncClient(timeout=10.0) as client:
