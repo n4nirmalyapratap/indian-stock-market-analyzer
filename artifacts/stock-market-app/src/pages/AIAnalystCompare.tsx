@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useSearch, Link } from "wouter";
-import { Brain, Loader2, AlertCircle, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { Microscope, Loader2, AlertCircle, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { useCustomAuth } from "@/context/CustomAuthContext";
 
 type Verdict = "BUY" | "HOLD" | "SELL";
@@ -99,7 +99,7 @@ export default function AIAnalystCompare() {
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <div className="flex items-center gap-3">
-        <Brain className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
+        <Microscope className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
         <h1 className="text-xl font-bold text-gray-900 dark:text-white">Compare two stocks</h1>
         <Link href={`/ai-analyst/${a || ""}`}
               className="ml-auto text-xs text-indigo-600 dark:text-indigo-400 hover:underline">
@@ -117,7 +117,7 @@ export default function AIAnalystCompare() {
                className="flex-1 min-w-[160px] px-3 py-2 text-sm bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-white/10 rounded-lg" />
         <button onClick={() => run()} disabled={running}
                 className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg flex items-center gap-2">
-          {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
+          {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Microscope className="w-4 h-4" />}
           {running ? "Analysing…" : "Compare"}
         </button>
       </div>

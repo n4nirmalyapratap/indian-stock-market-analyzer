@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Link } from "wouter";
 import {
-  Brain, Loader2, AlertCircle, ListChecks, RotateCw,
+  Microscope, Loader2, AlertCircle, ListChecks, RotateCw,
   TrendingUp, TrendingDown, Minus, ArrowUpDown, Check, Clock, Ban,
 } from "lucide-react";
 import { useCustomAuth } from "@/context/CustomAuthContext";
@@ -251,7 +251,7 @@ export default function AIAnalystScan() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-            <Brain className="w-5 h-5 text-indigo-600" />
+            <Microscope className="w-5 h-5 text-indigo-600" />
             Scan watchlist with AI Analyst
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">
