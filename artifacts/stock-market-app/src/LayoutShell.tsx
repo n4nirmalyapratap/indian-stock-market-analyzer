@@ -4,7 +4,7 @@ import { useTheme } from "@/context/ThemeContext";
 import { BrandLogo } from "@/components/BrandLogo";
 import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
-  Brain, TrendingUp, CandlestickChart,
+  Brain, TrendingUp, CandlestickChart, Microscope,
   Settings, ChevronRight, ChevronLeft, ChevronDown, Sun, Moon,
   Newspaper, Gauge, Sparkles, Users, Briefcase,
 } from "lucide-react";
@@ -18,7 +18,7 @@ export const MAIN_NAV = [
   { path: "/news",       label: "News Feed",      icon: Newspaper },
   { path: "/stocks",     label: "Stock Lookup",   icon: Search },
   { path: "/agents",     label: "Investor Council", icon: Users },
-  { path: "/ai-analyst", label: "AI Analyst",     icon: Brain },
+  { path: "/ai-analyst", label: "Deep AI Analyst", icon: Microscope },
   { path: "/patterns",   label: "Patterns",       icon: Scan },
   { path: "/scanners",   label: "Scanners",       icon: Filter },
   { path: "/hydra",      label: "AI Analyzer",    icon: Brain },
