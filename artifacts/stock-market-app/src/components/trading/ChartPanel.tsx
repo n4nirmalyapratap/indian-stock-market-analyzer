@@ -1240,8 +1240,12 @@ export default function ChartPanel({
     const oscillatorDefs = selectedDefs.filter(d =>  d.paneOwn);
     const N_OSC = oscillatorDefs.length;
 
-    // ── Grid layout: dynamic — price + volume + N oscillator panes ────────
-    // Weighted heights that fill the available vertical space.
+    // ── Grid layout: FIXED slot count, dynamic heights ─────────────────────
+    // We always emit (2 + MAX_OSC_SLOTS) grids/axes so that ECharts can tween
+    // grid coordinates between renders — adding the first oscillator pane or
+    // removing the last one only resizes existing components rather than
+    // creating/destroying them, which preserves the animation.
+    const MAX_OSC_SLOTS = 5;
     const TOP_PCT = 4;
     const BOT_PCT = 4;
     const AVAIL   = 100 - TOP_PCT - BOT_PCT;
@@ -1249,47 +1253,65 @@ export default function ChartPanel({
     const VOL_W   = 1;
     const OSC_W   = 1.6;
     const totalW  = PRICE_W + VOL_W + N_OSC * OSC_W;
-    const heights = [PRICE_W * AVAIL / totalW, VOL_W * AVAIL / totalW, ...Array(N_OSC).fill(OSC_W * AVAIL / totalW)];
+    const usedHeights = [
+      PRICE_W * AVAIL / totalW,
+      VOL_W   * AVAIL / totalW,
+      ...Array(N_OSC).fill(OSC_W * AVAIL / totalW),
+    ];
+    // Pad remaining oscillator slots with zero-height (collapsed) grids.
+    const heights = [...usedHeights, ...Array(MAX_OSC_SLOTS - N_OSC).fill(0)];
     const tops: number[] = []; { let acc = TOP_PCT; for (const h of heights) { tops.push(acc); acc += h; } }
+    const totalGrids = 2 + MAX_OSC_SLOTS;
+    const lastUsedIdx = 1 + N_OSC; // bottom-most VISIBLE pane (vol when no osc, else last osc)
 
     // Prices on right side — narrow left margin, wider right margin for labels
     const GL = 8, GR = 70;
     const grids: object[] = heights.map((h, i) => ({
       top: `${tops[i].toFixed(2)}%`, left: GL, right: GR, height: `${h.toFixed(2)}%`,
+      show: i <= lastUsedIdx, // hide collapsed slots
     }));
 
-    // x-axis: labels ONLY on the bottom-most grid (volume if no oscillators, else last oscillator)
+    // x-axis: labels ONLY on the bottom-most VISIBLE grid
     const xBase = { axisLine: { lineStyle: { color: T.grid } }, axisTick: { show: false } };
-    const lastIdx = grids.length - 1;
-    const xAxes: object[] = grids.map((_, i) => ({
-      ...xBase, gridIndex: i, data: dates,
-      axisLabel: i === lastIdx
-        ? { color: T.text, fontSize: 9, margin: 6, formatter: (v: string) => fmtXLabel(v, showTime) }
-        : { show: false },
-      splitLine: i === 0 || i > 1 ? { lineStyle: { color: T.grid } } : { show: false },
-      axisPointer: i === lastIdx ? {} : { label: { show: false } },
-    }));
+    const xAxes: object[] = grids.map((_, i) => {
+      const used = i <= lastUsedIdx;
+      return {
+        ...xBase, gridIndex: i, data: dates,
+        show: used,
+        axisLabel: used && i === lastUsedIdx
+          ? { color: T.text, fontSize: 9, margin: 6, formatter: (v: string) => fmtXLabel(v, showTime) }
+          : { show: false },
+        splitLine: used && (i === 0 || i > 1) ? { lineStyle: { color: T.grid } } : { show: false },
+        axisPointer: used && i === lastUsedIdx ? {} : { label: { show: false } },
+      };
+    });
 
     // y-axis — all positioned on the RIGHT side
     const yBase = { axisLine: { show: false }, axisTick: { show: false }, position: "right" };
-    const yAxes: object[] = [
-      { ...yBase, gridIndex: 0, scale: true,
-        axisLabel: { color: T.text, fontSize: 10, margin: 6 },
-        splitLine: { lineStyle: { color: T.grid } } },
-      { ...yBase, gridIndex: 1, scale: true,
-        axisLabel: { show: true, color: T.text, fontSize: 9, margin: 6, formatter: (v: number) => fmtVol(v) },
-        splitLine: { show: false }, splitNumber: 2 },
-    ];
-    for (let i = 0; i < N_OSC; i++) {
-      const d = oscillatorDefs[i];
-      yAxes.push({
-        ...yBase, gridIndex: 2 + i, scale: true,
-        ...(d.yMin !== undefined ? { min: d.yMin } : {}),
-        ...(d.yMax !== undefined ? { max: d.yMax } : {}),
-        axisLabel: { color: T.text, fontSize: 9, margin: 6 },
-        splitLine: { lineStyle: { color: T.grid } },
-        splitNumber: 3,
-      });
+    const yAxes: object[] = [];
+    for (let i = 0; i < totalGrids; i++) {
+      if (i === 0) {
+        yAxes.push({ ...yBase, gridIndex: 0, scale: true,
+          axisLabel: { color: T.text, fontSize: 10, margin: 6 },
+          splitLine: { lineStyle: { color: T.grid } } });
+      } else if (i === 1) {
+        yAxes.push({ ...yBase, gridIndex: 1, scale: true,
+          axisLabel: { show: true, color: T.text, fontSize: 9, margin: 6, formatter: (v: number) => fmtVol(v) },
+          splitLine: { show: false }, splitNumber: 2 });
+      } else {
+        const oscIdx = i - 2;
+        const d = oscIdx < N_OSC ? oscillatorDefs[oscIdx] : null;
+        const used = !!d;
+        yAxes.push({
+          ...yBase, gridIndex: i, scale: true,
+          show: used,
+          ...(d?.yMin !== undefined ? { min: d.yMin } : {}),
+          ...(d?.yMax !== undefined ? { max: d.yMax } : {}),
+          axisLabel: used ? { color: T.text, fontSize: 9, margin: 6 } : { show: false },
+          splitLine: used ? { lineStyle: { color: T.grid } } : { show: false },
+          splitNumber: 3,
+        });
+      }
     }
 
     // ── Price series — varies by chart type ──────────────────────────────────
