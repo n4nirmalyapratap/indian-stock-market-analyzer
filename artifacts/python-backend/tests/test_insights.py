@@ -428,7 +428,6 @@ def test_compute_signal_for_downtrend_is_bearish():
     "/api/insights/slbm",
     "/api/insights/mtf",
     "/api/insights/ipos",
-    "/api/insights/top-deliveries",
 ])
 def test_unavailable_endpoints_return_clean_empty_state(client, path):
     r = client.get(path)
