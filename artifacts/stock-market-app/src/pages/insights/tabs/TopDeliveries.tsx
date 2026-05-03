@@ -7,7 +7,7 @@ import {
 import {
   Truck, Search, X, RefreshCw, ArrowUpRight, ArrowDownRight,
   TrendingUp, Package, Sparkles, IndianRupee, Layers,
-  ListFilter, ChevronDown, Check, Trophy,
+  ListFilter, ChevronDown, Check, Trophy, CalendarCheck,
 } from "lucide-react";
 
 interface DeliveryItem {
@@ -176,14 +176,20 @@ export default function TopDeliveries() {
             : "Stocks with the highest delivery percentage — institutional-conviction signal."
         }
         right={
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            {data?.available && data.tradeDate && (
+              <span
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30"
+                title={`Official NSE end-of-day data for ${fmtDate(data.tradeDate)}. Delivery numbers are published by NSE only after market close, so this is the freshest data available.`}>
+                <CalendarCheck className="w-3.5 h-3.5"/>
+                EOD · {fmtDate(data.tradeDate)}
+              </span>
+            )}
             {data?.available && (
               <span className="hidden md:inline text-[11px] text-gray-500 dark:text-gray-400">
                 <span className="font-semibold text-gray-900 dark:text-white">{data.matched.toLocaleString()}</span>
-                {" of "}
+                {" / "}
                 <span className="font-semibold text-gray-900 dark:text-white">{data.totalSymbols.toLocaleString()}</span>
-                {" stocks "}
-                <span className="hidden lg:inline">· {fmtDate(data.tradeDate)}</span>
               </span>
             )}
             <button
