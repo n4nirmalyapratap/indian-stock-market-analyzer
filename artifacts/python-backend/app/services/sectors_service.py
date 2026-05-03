@@ -1142,8 +1142,12 @@ class SectorsService:
                 **s,
                 "momentum": ms,
                 "focus":    self._focus_label(focus_tier) if focus_tier != "UNKNOWN" else "NO DATA",
+                # When declines == 0 the ratio is mathematically infinite.
+                # Returning the raw advances count silently changes units
+                # (a count is not a ratio), so surface None and let the UI
+                # render "∞" / "—".
                 "advanceDeclineRatio": (
-                    round(s["advances"] / s["declines"], 2) if s.get("declines") else s.get("advances", 0)
+                    round(s["advances"] / s["declines"], 2) if s.get("declines") else None
                 ),
             })
         # Sort: scored sectors (with composite) first by composite desc, then unknown
@@ -1234,10 +1238,12 @@ class SectorsService:
                 "declining":          declining,
                 "unchanged":          total - advancing - declining,
                 "total":              total,
-                "advanceDeclineRatio":round(advancing / declining, 2) if declining else advancing,
+                # See note above — None signals "undefined / infinite",
+                # the UI converts that to "∞".
+                "advanceDeclineRatio":round(advancing / declining, 2) if declining else None,
                 "breadthScore":       round((advancing / total) * 100, 1) if total else 0,
             },
-            "adRatio": round(advancing / declining, 2) if declining else advancing,
+            "adRatio": round(advancing / declining, 2) if declining else None,
         }
 
         # Canonical provenance contract — same shape as every other route's

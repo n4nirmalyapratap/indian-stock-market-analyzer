@@ -92,9 +92,13 @@ describe("formatPctChange", () => {
     expect(formatPctChange(0)).toBe("+0.00%");
   });
 
-  it("treats null/undefined as 0", () => {
-    expect(formatPctChange(null)).toBe("+0.00%");
-    expect(formatPctChange(undefined)).toBe("+0.00%");
+  it("renders null/undefined/NaN as '—' (not '+0.00%')", () => {
+    // Regression: previously this collapsed null to 0 with `?? 0`, which
+    // hid data-fetch failures behind a fake "+0.00%". Honest UX: show "—"
+    // so the user can tell "no data" from "actually flat".
+    expect(formatPctChange(null)).toBe("—");
+    expect(formatPctChange(undefined)).toBe("—");
+    expect(formatPctChange(NaN)).toBe("—");
   });
 
   it("always has 2 decimal places", () => {
