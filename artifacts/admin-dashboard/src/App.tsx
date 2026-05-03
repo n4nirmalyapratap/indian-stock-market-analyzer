@@ -15,9 +15,10 @@ import BugReportsPage from "@/pages/BugReportsPage";
 import SecretsPage from "@/pages/SecretsPage";
 import { getAdminToken, clearAdminToken } from "@/lib/api";
 import JobsPage from "@/pages/JobsPage";
+import AiAnalystPage from "@/pages/AiAnalystPage";
 import {
   Activity, Users, Terminal, MessageCircle, Send,
-  ChevronLeft, ChevronRight, LogOut, ShieldAlert, ShieldCheck, Bug, KeyRound, Layers,
+  ChevronLeft, ChevronRight, LogOut, ShieldAlert, ShieldCheck, Bug, KeyRound, Layers, Brain,
 } from "lucide-react";
 
 const queryClient = new QueryClient({
@@ -35,6 +36,7 @@ const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 const NAV = [
   { path: "/",          label: "App Status",   icon: Activity      },
   { path: "/jobs",      label: "Jobs",         icon: Layers        },
+  { path: "/ai-analyst",label: "AI Analyst",   icon: Brain         },
   { path: "/users",     label: "Users",        icon: Users         },
   { path: "/whatsapp",  label: "WhatsApp Bot", icon: MessageCircle },
   { path: "/telegram",  label: "Telegram Bot", icon: Send          },
@@ -154,6 +156,7 @@ function AppRoutes({ onSignOut }: { onSignOut: () => void }) {
       <Switch>
         <Route path="/"         component={AppStatus} />
         <Route path="/jobs"     component={JobsPage} />
+        <Route path="/ai-analyst" component={AiAnalystPage} />
         <Route path="/users"    component={UsersPage} />
         <Route path="/whatsapp" component={() => <WhatsAppBot />} />
         <Route path="/telegram" component={() => <TelegramBot />} />
