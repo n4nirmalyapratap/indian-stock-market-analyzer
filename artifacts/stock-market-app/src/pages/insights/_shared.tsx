@@ -286,8 +286,19 @@ export function MenuDropdown({
       {open && createPortal(
         <div
           ref={menuRef}
-          style={{ position: "fixed", top: pos.top, left: pos.left, width: pos.width, maxHeight: "min(420px, 60vh)" }}
-          className="z-[1000] rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-2xl overflow-hidden flex flex-col"
+          style={{
+            position: "fixed",
+            top: pos.top,
+            left: pos.left,
+            width: pos.width,
+            maxHeight: "min(420px, 60vh)",
+            // Inline backgroundColor so no portal/dark-mode/global rule can
+            // make the menu translucent. `colorScheme` lets the browser pick
+            // the right form-control colors automatically.
+            backgroundColor: document.documentElement.classList.contains("dark") ? "#1e293b" : "#ffffff",
+            colorScheme: document.documentElement.classList.contains("dark") ? "dark" : "light",
+          }}
+          className="z-[1000] rounded-xl border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white shadow-2xl overflow-hidden flex flex-col"
         >
           {showSearch && (
             <input
