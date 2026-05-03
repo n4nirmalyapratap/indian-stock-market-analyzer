@@ -244,6 +244,16 @@ class AnalyticsService:
 
     # ── Top movers ────────────────────────────────────────────────────────────
 
+    # Momentum-score weighting: 60% on |%change|, 40% on volume scaled to
+    # millions of shares. Tuned so a typical mid-cap +3% move on 2M volume
+    # scores ~2.6, comparable to a +2% move on 5M volume — i.e. the score
+    # ranks intensity of activity, not direction. The weights are surfaced
+    # in the API response so callers can show the formula and the user
+    # isn't left guessing at magic numbers.
+    _MOMENTUM_PRICE_W = 0.60
+    _MOMENTUM_VOL_W = 0.40
+    _MOMENTUM_VOL_DIVISOR = 1_000_000  # volume scaled to "millions of shares"
+
     async def get_top_movers(self) -> dict:
         cache_key = "top-movers"
         cached = _get_cache(cache_key)
@@ -259,6 +269,10 @@ class AnalyticsService:
                     pc = q.get("pChange") or 0
                     vol = q.get("volume") or 0
                     price = q.get("lastPrice") or 0
+                    score = (
+                        abs(pc) * self._MOMENTUM_PRICE_W
+                        + (vol / self._MOMENTUM_VOL_DIVISOR) * self._MOMENTUM_VOL_W
+                    )
                     movers.append({
                         "symbol": sym,
                         "companyName": q.get("companyName", sym),
@@ -266,7 +280,7 @@ class AnalyticsService:
                         "change": round(q.get("change") or 0, 2),
                         "pChange": round(pc, 2),
                         "volume": vol,
-                        "momentumScore": round(abs(pc) * 0.6 + (vol / 1_000_000) * 0.4, 2),
+                        "momentumScore": round(score, 2),
                     })
                 await asyncio.sleep(0.12)
             except Exception:
@@ -275,12 +289,19 @@ class AnalyticsService:
         gainers = sorted(movers, key=lambda s: s["pChange"], reverse=True)[:10]
         losers  = sorted(movers, key=lambda s: s["pChange"])[:10]
         most_active = sorted(movers, key=lambda s: s.get("volume") or 0, reverse=True)[:10]
+        momentum_meta = {
+            "priceWeight":     self._MOMENTUM_PRICE_W,
+            "volumeWeight":    self._MOMENTUM_VOL_W,
+            "volumeDivisor":   self._MOMENTUM_VOL_DIVISOR,
+            "formula":         "abs(pChange) * priceWeight + (volume / volumeDivisor) * volumeWeight",
+        }
         result = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "totalScanned": len(movers),
             "gainers": gainers,
             "losers": losers,
             "mostActive": most_active,
+            "momentumWeights": momentum_meta,
         }
         _set_cache(cache_key, result, 1800)
         return result

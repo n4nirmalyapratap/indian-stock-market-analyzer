@@ -13,6 +13,90 @@ _CACHE_VERSION = 0  # tracks the market-state version of the entries above
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
+# ── Retry + circuit breaker for Yahoo HTTP calls ──────────────────────────
+# Yahoo's chart endpoint occasionally returns 5xx or times out under load.
+# Two-attempt retry with 200 ms then 400 ms backoff smooths out transient
+# blips. A per-host circuit breaker prevents thundering-herd retries when
+# Yahoo is genuinely down: 5 consecutive failures within 60 s open the
+# breaker for 30 s, during which requests short-circuit to None instead
+# of stacking up against a dead host.
+_RETRY_ATTEMPTS = 2
+_RETRY_BACKOFF_MS = (200, 400)
+_BREAKER_THRESHOLD = 5            # consecutive failures to trip
+_BREAKER_WINDOW_S = 60            # within this rolling window
+_BREAKER_OPEN_S = 30              # stay open this long once tripped
+_breaker_state: dict[str, dict] = {
+    # host: {"failures": [ts,...], "opened_at": float|None}
+}
+
+
+def _breaker_is_open(host: str) -> bool:
+    s = _breaker_state.setdefault(host, {"failures": [], "opened_at": None})
+    if s["opened_at"] is None:
+        return False
+    if time.time() - s["opened_at"] > _BREAKER_OPEN_S:
+        # Cool-off elapsed — half-close: reset and let the next call try.
+        s["failures"] = []
+        s["opened_at"] = None
+        return False
+    return True
+
+
+def _breaker_record(host: str, ok: bool) -> None:
+    s = _breaker_state.setdefault(host, {"failures": [], "opened_at": None})
+    now = time.time()
+    if ok:
+        s["failures"] = []
+        s["opened_at"] = None
+        return
+    # Drop failures older than the window, append this one.
+    s["failures"] = [t for t in s["failures"] if now - t <= _BREAKER_WINDOW_S]
+    s["failures"].append(now)
+    if len(s["failures"]) >= _BREAKER_THRESHOLD and s["opened_at"] is None:
+        s["opened_at"] = now
+
+
+async def _yahoo_get(url: str, *, timeout: float = 10.0) -> Optional[httpx.Response]:
+    """GET with bounded retry + per-host circuit breaker.
+
+    Returns the Response on success (any status code — caller decides what
+    counts as success), or None when the breaker is open or all attempts
+    failed. Never raises — on irrecoverable failure the caller gets None.
+    """
+    try:
+        host = httpx.URL(url).host or "yahoo"
+    except Exception:
+        host = "yahoo"
+    if _breaker_is_open(host):
+        return None
+    last_exc: Optional[BaseException] = None
+    for attempt in range(_RETRY_ATTEMPTS + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(url, headers=HEADERS)
+            # Treat 5xx and 429 as retryable provider failures; 4xx (e.g.
+            # 404 for a bad ticker) is a *symbol-level* problem that won't
+            # get better on retry AND must NOT count against the provider
+            # circuit breaker — otherwise a burst of unknown symbols would
+            # trip the breaker and starve every other valid symbol of data.
+            if resp.status_code < 500 and resp.status_code != 429:
+                # Only a true success (2xx) clears prior failure history.
+                # Other 4xx don't count as failures, but also don't reset
+                # an already-accumulating provider-failure streak.
+                if 200 <= resp.status_code < 300:
+                    _breaker_record(host, ok=True)
+                return resp
+            last_exc = RuntimeError(f"HTTP {resp.status_code}")
+        except (httpx.TimeoutException, httpx.HTTPError, OSError) as e:
+            last_exc = e
+        # Backoff before the next retry (none after the final attempt)
+        if attempt < _RETRY_ATTEMPTS:
+            ms = _RETRY_BACKOFF_MS[min(attempt, len(_RETRY_BACKOFF_MS) - 1)]
+            await asyncio.sleep(ms / 1000.0)
+    # Reached only on transport error or 5xx/429 exhausted — provider fault.
+    _breaker_record(host, ok=False)
+    return None
+
 
 def _flush_if_state_changed() -> None:
     """Drop in-memory entries on every market-state transition.
@@ -88,10 +172,10 @@ class YahooService:
         async def _fetch():
             try:
                 url = f"https://query1.finance.yahoo.com/v8/finance/chart/{_to_yahoo(symbol)}?interval=1d&range=1d"
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.get(url, headers=HEADERS)
-                    if resp.status_code != 200:
-                        return None
+                resp = await _yahoo_get(url, timeout=10.0)
+                if resp is None or resp.status_code != 200:
+                    return None
+                if True:
                     result = resp.json()
                     meta = result.get("chart", {}).get("result", [None])[0]
                     if not meta:
@@ -178,10 +262,10 @@ class YahooService:
                 rng = "max"
             try:
                 url = f"https://query1.finance.yahoo.com/v8/finance/chart/{_to_yahoo(symbol)}?interval=1d&range={rng}"
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.get(url, headers=HEADERS)
-                    if resp.status_code != 200:
-                        return []
+                resp = await _yahoo_get(url, timeout=10.0)
+                if resp is None or resp.status_code != 200:
+                    return []
+                if True:
                     result = resp.json()
                     chart_result = result.get("chart", {}).get("result", [None])[0]
                     if not chart_result:
@@ -236,10 +320,10 @@ class YahooService:
                 f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
                 f"?interval={interval}&range={period}"
             )
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(url, headers=HEADERS)
-                if resp.status_code != 200:
-                    return {"candles": [], "source": "YAHOO_ERROR"}
+            resp = await _yahoo_get(url, timeout=15.0)
+            if resp is None or resp.status_code != 200:
+                return {"candles": [], "source": "YAHOO_ERROR"}
+            if True:
                 result = resp.json()
                 chart = result.get("chart", {}).get("result", [None])[0]
                 if not chart:
