@@ -152,6 +152,29 @@ def test_heatmap_preserves_legit_zero_change():
     assert row["change1w"] == 0.0
 
 
+def test_heatmap_returns_none_when_live_lastprice_pchange_missing():
+    """When the live sectors feed is missing `lastPrice` / `pChange`, the
+    heatmap row must surface None — NOT silently fabricate `0` (which would
+    render as "₹0" / "0.00%" and look like a real flat day)."""
+    svc = SectorAnalyticsService(yahoo=MagicMock(), price=None)
+    sectors_live = [{"symbol": "NIFTY BANK", "name": "Nifty Bank",
+                     "category": "Banks", "advances": 0, "declines": 0}]
+
+    async def _fake_history(*_a, **_kw):
+        # Non-empty so fallback path doesn't run.
+        return [{"date": f"2025-{(i%12)+1:02d}-01", "close": 100 + i} for i in range(60)]
+    async def _fake_constituent_pct(_c):
+        return {"change1w": None, "change1m": None, "change1y": None, "changeYTD": None}
+
+    with patch.object(sas, "_yf_history", side_effect=_fake_history), \
+         patch.object(sas, "_constituent_pct_changes", side_effect=_fake_constituent_pct):
+        out = asyncio.run(svc.get_heatmap(sectors_live))
+
+    row = next(r for r in out if r["symbol"] == "NIFTY BANK")
+    assert row["lastPrice"] is None
+    assert row["change1d"]  is None
+
+
 def test_heatmap_uses_fallback_when_history_unavailable():
     """When yfinance index history is empty, fallback values must be used."""
     svc = SectorAnalyticsService(yahoo=MagicMock(), price=None)
