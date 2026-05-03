@@ -46,9 +46,13 @@ async def get_smallcap():
 
 @router.get("/search")
 async def search_stocks(q: str = Query(default="")):
-    """Search ALL_SYMBOLS universe by ticker or company name. Returns up to 20 results."""
+    """Search ALL_SYMBOLS universe by ticker or company name. Returns up to 20 results.
+
+    Minimum 2 characters — single-character queries are too noisy to be useful
+    (e.g. 'A' returned 200+ matches and broke the dropdown UX).
+    """
     from ..lib.universe import ALL_SYMBOLS, COMPANY_MAP
-    if not q or len(q.strip()) < 1:
+    if not q or len(q.strip()) < 2:
         return {"results": []}
     q_upper = q.strip().upper()
     q_lower = q.strip().lower()
@@ -77,13 +81,22 @@ async def get_stock_history(
     Yahoo (NSE only exposes daily EOD).
     """
     symbol = symbol.upper()
-    if interval not in VALID_INTERVALS:
-        interval = "1d"
+    # Honest 4xx instead of silently coercing to defaults — caller asked for
+    # something we don't support; pretending we honoured it would just hand
+    # back the wrong chart with no signal that the request was malformed.
     if interval == "60m":
         interval = "1h"
+    if interval not in VALID_INTERVALS:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Invalid interval '{interval}'. Allowed: {sorted(VALID_INTERVALS)}"},
+        )
     use_range = bool(start and end)
     if not use_range and period not in VALID_PERIODS:
-        period = "1mo"
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Invalid period '{period}'. Allowed: {sorted(VALID_PERIODS)}"},
+        )
 
     # Custom start/end range → PriceService (single source of truth)
     if use_range:
@@ -167,6 +180,9 @@ async def get_stock_financials(symbol: str):
         v = _safe(val)
         return None if v is None else round(float(v), decimals)
 
+    import logging as _logging
+    _flog = _logging.getLogger(__name__)
+
     def _df_to_list(df, row_map: dict, sort_asc=True):
         if df is None or df.empty:
             return []
@@ -177,7 +193,14 @@ async def get_stock_financials(symbol: str):
                 try:
                     val = df.loc[row_name, col] if row_name in df.index else None
                     entry[out_key] = fn(val)
-                except Exception:
+                except Exception as e:
+                    # Don't swallow silently — a row that's consistently broken
+                    # for every column is a Yahoo schema change we want to know
+                    # about, not a data point we can pretend doesn't exist.
+                    _flog.debug(
+                        "financials: failed extracting %s/%s for %s — %s: %s",
+                        out_key, row_name, symbol, type(e).__name__, e,
+                    )
                     entry[out_key] = None
             results.append(entry)
         if sort_asc:
