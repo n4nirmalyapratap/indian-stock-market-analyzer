@@ -725,7 +725,11 @@ export interface NewsEvent {
 export interface NewsEventsResponse {
   events: NewsEvent[];
   total: number;
+  available: boolean;
+  error: string | null;
+  cached: boolean;
   refreshedAt: string;
+  fetchedAt: string;
 }
 
 export interface NewsStatsResponse {

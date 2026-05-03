@@ -4,7 +4,7 @@ import { Link } from "wouter";
 import {
   Newspaper, TrendingUp, TrendingDown, Minus, Search, RefreshCw,
   ExternalLink, Clock, Zap, BarChart2, ChevronDown, ChevronUp,
-  Tag, Radio, AlertTriangle, Building2, ArrowUpRight, ArrowDownRight,
+  Radio, Building2,
   Film, List, X,
 } from "lucide-react";
 import { api, NewsArticle } from "@/lib/api";
@@ -36,22 +36,11 @@ const SENTIMENT_ICONS: Record<string, React.ReactNode> = {
   neutral: <Minus       className="w-3 h-3" />,
 };
 
-const EVENT_TYPE_COLORS: Record<string, string> = {
-  dividend:     "#7c3aed",
-  results:      "#0891b2",
-  split:        "#ea580c",
-  meeting:      "#6b7280",
-  merger:       "#d97706",
-  announcement: "#6366f1",
-};
-
 const CATEGORY_META: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
-  all:       { label: "All News",       icon: <Newspaper className="w-3.5 h-3.5" />,  color: "#6366f1" },
-  market:    { label: "Market",         icon: <BarChart2 className="w-3.5 h-3.5" />,  color: "#0891b2" },
-  corporate: { label: "Companies",      icon: <Building2 className="w-3.5 h-3.5" />,  color: "#7c3aed" },
-  general:   { label: "General",        icon: <Zap       className="w-3.5 h-3.5" />,  color: "#ea580c" },
-  deals:     { label: "Bulk/Block Deals", icon: <Tag      className="w-3.5 h-3.5" />,  color: "#16a34a" },
-  events:    { label: "Corp. Events",   icon: <AlertTriangle className="w-3.5 h-3.5" />, color: "#d97706" },
+  all:       { label: "All News",  icon: <Newspaper className="w-3.5 h-3.5" />,  color: "#6366f1" },
+  market:    { label: "Market",    icon: <BarChart2 className="w-3.5 h-3.5" />,  color: "#0891b2" },
+  corporate: { label: "Companies", icon: <Building2 className="w-3.5 h-3.5" />,  color: "#7c3aed" },
+  general:   { label: "General",   icon: <Zap       className="w-3.5 h-3.5" />,  color: "#ea580c" },
 };
 
 // ── Ticker Banner ─────────────────────────────────────────────────────────────
@@ -223,147 +212,6 @@ function NewsCard({ article, isDark, index }: { article: NewsArticle; isDark: bo
   );
 }
 
-// ── Deals Table ───────────────────────────────────────────────────────────────
-
-function DealsSection({ isDark }: { isDark: boolean }) {
-  const { data, isLoading, isFetching } = useQuery({ queryKey: ["newsDeals"], queryFn: api.newsDeals, staleTime: 20 * 60 * 1000, placeholderData: keepPreviousData });
-  const [activeDealsTab, setActiveDealsTab] = useState<"bulk" | "block">("bulk");
-
-  const hdrTxt = isDark ? "#f1f5f9" : "#111827";
-  const muTxt = isDark ? "#94a3b8" : "#6b7280";
-  const borderCol = isDark ? "#334155" : "#e2e8f0";
-  const rowBg = isDark ? "#1e293b" : "#fff";
-
-  const deals = data ? (activeDealsTab === "bulk" ? data.bulk : data.block) : [];
-
-  if (isLoading && !data) return <LoadingCards isDark={isDark} />;
-
-  return (
-    <div className="relative space-y-4">
-      <SectionLoader active={isFetching && !isLoading} />
-      <div className="flex gap-2">
-        {(["bulk", "block"] as const).map(t => (
-          <button
-            key={t}
-            onClick={() => setActiveDealsTab(t)}
-            className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-all"
-            style={{
-              background: activeDealsTab === t ? "#6366f1" : isDark ? "#1e293b" : "#fff",
-              color: activeDealsTab === t ? "#fff" : muTxt,
-              border: `1px solid ${activeDealsTab === t ? "#6366f1" : borderCol}`,
-            }}
-          >
-            {t === "bulk" ? "Bulk Deals" : "Block Deals"}
-            {data && (
-              <span className="ml-1.5 text-xs opacity-70">
-                ({t === "bulk" ? data.bulk.length : data.block.length})
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {deals.length === 0 ? (
-        <div className="text-center py-10 text-sm" style={{ color: muTxt }}>
-          No {activeDealsTab} deals data available today
-        </div>
-      ) : (
-        <div className="rounded-xl border overflow-hidden" style={{ borderColor: borderCol }}>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs min-w-[600px]">
-              <thead>
-                <tr style={{ background: isDark ? "#0f172a" : "#f8fafc", borderBottom: `1px solid ${borderCol}` }}>
-                  {["Date", "Symbol", "Company", "Client", "Side", "Qty", "Price (₹)"].map(h => (
-                    <th key={h} className="text-left px-3 py-2.5 font-semibold" style={{ color: muTxt }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {deals.map((d, i) => (
-                  <tr
-                    key={i}
-                    style={{ background: rowBg, borderBottom: `1px solid ${borderCol}` }}
-                    className="hover:brightness-95 transition-all"
-                  >
-                    <td className="px-3 py-2.5 font-mono" style={{ color: muTxt }}>{d.date}</td>
-                    <td className="px-3 py-2.5">
-                      <span className="font-bold font-mono" style={{ color: "#6366f1" }}>{d.symbol}</span>
-                    </td>
-                    <td className="px-3 py-2.5 max-w-[160px] truncate" style={{ color: hdrTxt }}>{d.name}</td>
-                    <td className="px-3 py-2.5 max-w-[140px] truncate" style={{ color: muTxt }}>{d.client}</td>
-                    <td className="px-3 py-2.5">
-                      <span
-                        className="px-2 py-0.5 rounded-full text-xs font-bold"
-                        style={{
-                          background: d.side === "BUY" ? "#dcfce7" : "#fee2e2",
-                          color: d.side === "BUY" ? "#15803d" : "#b91c1c",
-                        }}
-                      >
-                        {d.side === "BUY" ? <span className="flex items-center gap-0.5"><ArrowUpRight className="w-3 h-3" />BUY</span> : <span className="flex items-center gap-0.5"><ArrowDownRight className="w-3 h-3" />SELL</span>}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 font-mono" style={{ color: hdrTxt }}>
-                      {d.quantity ? d.quantity.toLocaleString("en-IN") : "—"}
-                    </td>
-                    <td className="px-3 py-2.5 font-mono font-bold" style={{ color: hdrTxt }}>
-                      {d.price ? `₹${d.price.toLocaleString("en-IN")}` : "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Corporate Events ──────────────────────────────────────────────────────────
-
-function EventsSection({ isDark }: { isDark: boolean }) {
-  const { data, isLoading, isFetching } = useQuery({ queryKey: ["newsEvents"], queryFn: api.newsEvents, staleTime: 15 * 60 * 1000, placeholderData: keepPreviousData });
-  const muTxt = isDark ? "#94a3b8" : "#6b7280";
-  const borderCol = isDark ? "#334155" : "#e2e8f0";
-  const hdrTxt = isDark ? "#f1f5f9" : "#111827";
-
-  if (isLoading && !data) return <LoadingCards isDark={isDark} />;
-
-  const events = data?.events ?? [];
-  if (!events.length) {
-    return <div className="text-center py-10 text-sm" style={{ color: muTxt }}>No upcoming corporate events found</div>;
-  }
-
-  return (
-    <div className="relative space-y-2">
-      <SectionLoader active={isFetching && !isLoading} />
-      {events.map((ev, i) => (
-        <div
-          key={i}
-          className="flex items-center gap-3 rounded-xl border p-3.5 hover:brightness-95 transition-all"
-          style={{ background: isDark ? "#1e293b" : "#fff", borderColor: borderCol }}
-        >
-          <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-white text-xs font-bold"
-            style={{ background: EVENT_TYPE_COLORS[ev.type] ?? "#6366f1" }}
-          >
-            {ev.type.slice(0, 2).toUpperCase()}
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm font-bold" style={{ color: "#6366f1" }}>{ev.symbol}</span>
-              <span className="text-xs font-medium" style={{ color: hdrTxt }}>{ev.company}</span>
-            </div>
-            <p className="text-xs mt-0.5 truncate" style={{ color: muTxt }}>{ev.purpose}</p>
-          </div>
-          <div className="text-xs font-mono shrink-0 flex items-center gap-1" style={{ color: muTxt }}>
-            <Clock className="w-3 h-3" /> {ev.date || "TBA"}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 // ── Loading Skeletons ─────────────────────────────────────────────────────────
 
@@ -736,8 +584,11 @@ function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: ()
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Tab = "all" | "market" | "corporate" | "general" | "deals" | "events";
-const TABS: Tab[] = ["all", "market", "corporate", "general", "deals", "events"];
+// Bulk/Block Deals and Corp. Events used to live here as tabs but they're
+// analytical data — not headlines — so they were moved into the Insights
+// page (`/insights/bulk-block-deals` and `/insights/corp-events`).
+type Tab = "all" | "market" | "corporate" | "general";
+const TABS: Tab[] = ["all", "market", "corporate", "general"];
 
 export default function NewsFeed() {
   const { theme } = useTheme();
@@ -756,16 +607,11 @@ export default function NewsFeed() {
   const bg     = isDark ? "#0f172a" : "#f8fafc";
   const borderCol = isDark ? "#334155" : "#e2e8f0";
 
-  const feedCategory = (activeTab === "deals" || activeTab === "events") ? "all" : activeTab;
-
   const { data: feed, isLoading: feedLoading, isFetching: feedFetching } = useQuery(
     marketDataQueryOptions(
-      ["newsFeed", feedCategory, debouncedSearch],
-      () => api.newsFeed({ category: feedCategory, search: debouncedSearch, limit: 60 }),
-      {
-        placeholderData: keepPreviousData,
-        enabled: activeTab !== "deals" && activeTab !== "events",
-      },
+      ["newsFeed", activeTab, debouncedSearch],
+      () => api.newsFeed({ category: activeTab, search: debouncedSearch, limit: 60 }),
+      { placeholderData: keepPreviousData },
     ),
   );
 
@@ -786,8 +632,8 @@ export default function NewsFeed() {
       onSuccess: () => {
         qc.invalidateQueries({ queryKey: ["newsFeed"] });
         qc.invalidateQueries({ queryKey: ["newsStats"] });
-        qc.invalidateQueries({ queryKey: ["newsDeals"] });
-        qc.invalidateQueries({ queryKey: ["newsEvents"] });
+        // Deals + Events live in Insights now; their queries are owned by
+        // those tabs and aren't refreshed from this page.
         setCountdown(8 * 60);
       },
     });
@@ -927,9 +773,9 @@ export default function NewsFeed() {
         })}
       </div>
 
-      {/* Search + view toggle (only for news tabs, hidden in reels mode — the
-          reels overlay has its own "List" exit button) */}
-      {activeTab !== "deals" && activeTab !== "events" && !reelsMode && (
+      {/* Search + view toggle (hidden in reels mode — the reels overlay has
+          its own "List" exit button). */}
+      {!reelsMode && (
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: muTxt }} />
@@ -968,11 +814,7 @@ export default function NewsFeed() {
       )}
 
       {/* Content area */}
-      {activeTab === "deals" ? (
-        <DealsSection isDark={isDark} />
-      ) : activeTab === "events" ? (
-        <EventsSection isDark={isDark} />
-      ) : reelsMode && articles.length > 0 ? (
+      {reelsMode && articles.length > 0 ? (
         <ReelsView articles={articles} onClose={() => setReelsMode(false)} />
       ) : reelsMode && feedLoading ? (
         <div className="flex flex-col items-center justify-center py-24 gap-3" style={{ color: muTxt }}>

@@ -1,7 +1,7 @@
 import { useLocation } from "wouter";
 import {
   LayoutGrid, BarChart3, FileText, PieChart, Briefcase,
-  Ban, Truck, LineChart, Rocket,
+  Ban, Truck, LineChart, Rocket, CalendarClock,
   Globe, ArrowLeft, ChevronRight,
 } from "lucide-react";
 import HeatmapTab from "./tabs/Heatmap";
@@ -9,6 +9,7 @@ import FiiDiiTab from "./tabs/FiiDii";
 import CompanyFilingsTab from "./tabs/CompanyFilings";
 import MfHoldingsTab from "./tabs/MfHoldings";
 import BulkBlockDealsTab from "./tabs/BulkBlockDeals";
+import CorpEventsTab from "./tabs/CorpEvents";
 import FoBanTab from "./tabs/FoBan";
 import TopDeliveriesTab from "./tabs/TopDeliveries";
 import MarketValuationTab from "./tabs/MarketValuation";
@@ -78,6 +79,15 @@ const TABS = [
     Component: BulkBlockDealsTab,
     color: "text-indigo-500",
     bg: "bg-indigo-50 dark:bg-indigo-500/10"
+  },
+  {
+    slug: "corp-events",
+    label: "Corp. Events",
+    description: "Dividends, results, splits, board meetings and other scheduled corporate actions.",
+    icon: CalendarClock,
+    Component: CorpEventsTab,
+    color: "text-amber-500",
+    bg: "bg-amber-50 dark:bg-amber-500/10"
   },
   {
     slug: "fo-ban",
