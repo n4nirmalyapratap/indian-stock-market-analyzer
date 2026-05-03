@@ -68,7 +68,11 @@ compliance gate. ~5 LLM calls per run via existing `ai_client`.
 - Cache DB: `market_cache/ai_analyst.db` (committed, mirrors fii_dii pattern)
 - Quota: 3 runs/user/IST-day, atomic reservation closes the
   check-then-increment race for `/compare`'s parallel fan-out
-- Feature flag: `FEATURE_AI_ANALYST` env (defaults ON)
+- Feature flag: `FEATURE_AI_ANALYST` env (defaults **OFF** for staged
+  rollout — set to `on` / `1` / `true` to enable)
+- Compliance: every report carries a SEBI Investor Awareness link
+  (`https://investor.sebi.gov.in/`), models-used list, data-sources list
+  and run timestamp; backend scrubs advice language defence-in-depth
 - Frontend: `pages/AIAnalyst.tsx`, `pages/AIAnalystCompare.tsx`,
   `components/AIAnalystButton.tsx`, nav entry in LayoutShell
 
