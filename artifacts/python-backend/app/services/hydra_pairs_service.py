@@ -97,23 +97,19 @@ def _engle_granger_pvalue(closes_a: list[float], closes_b: list[float]) -> float
     Approximate Engle-Granger cointegration p-value.
     Uses the ADF test on the OLS residuals.
     """
+    # statsmodels is a hard requirement (pinned in requirements.txt) so this
+    # import is no longer wrapped in a silent try/except. If it ever goes
+    # missing again we want a loud failure, not a weaker fallback p-value
+    # quietly poisoning the pairs ranking.
+    from statsmodels.tsa.stattools import coint
     try:
-        from statsmodels.tsa.stattools import coint
         n = min(len(closes_a), len(closes_b))
         a = np.array(closes_a[-n:])
         b = np.array(closes_b[-n:])
         _, pvalue, _ = coint(a, b)
         return float(pvalue)
-    except ImportError:
-        # Fallback: compute correlation of differenced series (weaker test)
-        n = min(len(closes_a), len(closes_b))
-        a = np.diff(closes_a[-n:])
-        b = np.diff(closes_b[-n:])
-        if len(a) < 5 or len(b) < 5:
-            return 1.0
-        corr = float(np.corrcoef(a, b)[0, 1])
-        return 1.0 - abs(corr)
-    except Exception:
+    except Exception as e:
+        logger.warning("Engle-Granger coint failed: %s", e)
         return 1.0
 
 
