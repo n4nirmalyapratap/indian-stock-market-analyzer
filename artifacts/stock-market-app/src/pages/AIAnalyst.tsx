@@ -1,11 +1,15 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useParams, Link } from "wouter";
 import {
   Microscope, Loader2, AlertCircle, Sparkles, TrendingUp,
   TrendingDown, Minus, ChevronDown, ChevronUp, RotateCw,
   Newspaper, BarChart3, Activity, Building2,
+  Zap, Shield,
 } from "lucide-react";
 import { useCustomAuth } from "@/context/CustomAuthContext";
+import {
+  RadialBarChart, RadialBar, PolarAngleAxis,
+} from "recharts";
 
 type Verdict = "BUY" | "HOLD" | "SELL";
 type Confidence = "LOW" | "MEDIUM" | "HIGH";
@@ -67,24 +71,183 @@ function StatusPill({ status }: { status?: string }) {
   return <span className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Pending</span>;
 }
 
-function CollapsibleSection({ title, icon: Icon, body, defaultOpen = false }:
-    { title: string; icon: any; body: string; defaultOpen?: boolean }) {
-  const [open, setOpen] = useState(defaultOpen);
+// ── Sentiment heuristic ───────────────────────────────────────────────────────
+// Lightweight keyword-count classifier so each analyst section can show a
+// bull/neutral/bear chip without needing a structured score from the model.
+const BULL_WORDS = [
+  "bullish", "positive", "strong", "growth", "upside", "outperform",
+  "robust", "healthy", "expansion", "opportunity", "tailwind", "beat",
+  "momentum", "improving", "favourable", "favorable", "attractive",
+  "undervalued", "buy",
+];
+const BEAR_WORDS = [
+  "bearish", "negative", "weak", "decline", "downside", "underperform",
+  "concern", "risk", "headwind", "miss", "deteriorat", "overvalued",
+  "expensive", "slowdown", "contraction", "pressure", "stress", "loss",
+  "sell", "caution",
+];
+
+function analystSignal(text: string): { tone: "bull" | "bear" | "neutral"; score: number } {
+  if (!text) return { tone: "neutral", score: 50 };
+  const lower = text.toLowerCase();
+  let bull = 0, bear = 0;
+  for (const w of BULL_WORDS) bull += (lower.match(new RegExp(`\\b${w}`, "g")) || []).length;
+  for (const w of BEAR_WORDS) bear += (lower.match(new RegExp(`\\b${w}`, "g")) || []).length;
+  const total = bull + bear;
+  if (total === 0) return { tone: "neutral", score: 50 };
+  const score = Math.round((bull / total) * 100);
+  if (score >= 60) return { tone: "bull", score };
+  if (score <= 40) return { tone: "bear", score };
+  return { tone: "neutral", score };
+}
+
+const TONE_STYLE = {
+  bull:    { dot: "bg-green-500",  label: "Bullish lean",  text: "text-green-700 dark:text-green-300",  bg: "bg-green-50 dark:bg-green-500/10",  ring: "ring-green-500/30" },
+  bear:    { dot: "bg-red-500",    label: "Bearish lean",  text: "text-red-700 dark:text-red-300",      bg: "bg-red-50 dark:bg-red-500/10",      ring: "ring-red-500/30" },
+  neutral: { dot: "bg-gray-400",   label: "Mixed / neutral", text: "text-gray-700 dark:text-gray-300", bg: "bg-gray-50 dark:bg-gray-500/10",    ring: "ring-gray-400/30" },
+} as const;
+
+// Simple markdown-ish renderer: turn lines starting with "- " or "* " into a
+// bulleted list, and render **bold** segments inline. Keeps the rest as
+// paragraphs separated by blank lines. No external dependency.
+function PrettyText({ text }: { text: string }) {
+  if (!text || !text.trim()) {
+    return <p className="text-sm italic text-gray-400 dark:text-gray-500">(no content)</p>;
+  }
+  const blocks: { type: "para" | "list"; lines: string[] }[] = [];
+  const raw = text.replace(/\r\n/g, "\n").split("\n");
+  let cur: { type: "para" | "list"; lines: string[] } | null = null;
+  for (const ln of raw) {
+    const t = ln.trim();
+    if (!t) { if (cur) { blocks.push(cur); cur = null; } continue; }
+    const isBullet = /^[-*•]\s+/.test(t);
+    const wantType = isBullet ? "list" : "para";
+    if (!cur || cur.type !== wantType) {
+      if (cur) blocks.push(cur);
+      cur = { type: wantType, lines: [] };
+    }
+    cur.lines.push(isBullet ? t.replace(/^[-*•]\s+/, "") : t);
+  }
+  if (cur) blocks.push(cur);
+
+  const renderInline = (s: string) => {
+    // bold via **…**
+    const parts = s.split(/(\*\*[^*]+\*\*)/g);
+    return parts.map((p, i) =>
+      p.startsWith("**") && p.endsWith("**")
+        ? <strong key={i} className="font-semibold text-gray-900 dark:text-white">{p.slice(2, -2)}</strong>
+        : <span key={i}>{p}</span>
+    );
+  };
+
   return (
-    <div className="border border-gray-200 dark:border-white/10 rounded-lg overflow-hidden">
+    <div className="space-y-2 text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
+      {blocks.map((b, i) =>
+        b.type === "list" ? (
+          <ul key={i} className="list-disc pl-5 space-y-1">
+            {b.lines.map((ln, j) => <li key={j}>{renderInline(ln)}</li>)}
+          </ul>
+        ) : (
+          <p key={i}>{b.lines.map((ln, j) => <span key={j}>{renderInline(ln)}{j < b.lines.length - 1 ? " " : ""}</span>)}</p>
+        )
+      )}
+    </div>
+  );
+}
+
+function CollapsibleSection({ title, icon: Icon, body, defaultOpen = false, signal }:
+    { title: string; icon: any; body: string; defaultOpen?: boolean;
+      signal?: { tone: "bull" | "bear" | "neutral"; score: number } }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const tone = signal ? TONE_STYLE[signal.tone] : null;
+  return (
+    <div className="border border-gray-200 dark:border-white/10 rounded-lg overflow-hidden bg-white dark:bg-gray-900">
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-gray-50 dark:hover:bg-gray-900/50"
+        className="w-full flex items-center gap-2 px-3 py-3 hover:bg-gray-50 dark:hover:bg-gray-900/50"
       >
         <Icon className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
         <span className="text-sm font-medium text-gray-900 dark:text-white flex-1 text-left">{title}</span>
+        {tone && (
+          <span className={`hidden sm:inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wide font-semibold px-2 py-0.5 rounded-full ${tone.bg} ${tone.text}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
+            {tone.label}
+          </span>
+        )}
         {open ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
       </button>
       {open && (
-        <div className="px-3 py-3 bg-gray-50 dark:bg-gray-900/40 border-t border-gray-200 dark:border-white/10">
-          <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed">{body || "(no content)"}</p>
+        <div className="px-4 py-3 bg-gray-50 dark:bg-gray-900/40 border-t border-gray-200 dark:border-white/10">
+          <PrettyText text={body} />
         </div>
       )}
+    </div>
+  );
+}
+
+// Circular confidence gauge using recharts RadialBar
+function ConfidenceGauge({ confidence, verdict }: { confidence: Confidence; verdict: Verdict }) {
+  const pct = confidence === "HIGH" ? 92 : confidence === "MEDIUM" ? 62 : 32;
+  const color = verdict === "BUY" ? "#22c55e" : verdict === "SELL" ? "#ef4444" : "#f59e0b";
+  const data = [{ name: "c", value: pct, fill: color }];
+  return (
+    <div className="relative w-[140px] h-[140px] flex-shrink-0">
+      <RadialBarChart
+        width={140} height={140}
+        innerRadius={56} outerRadius={68}
+        data={data} startAngle={90} endAngle={-270}
+      >
+        <PolarAngleAxis type="number" domain={[0, 100]} angleAxisId={0} tick={false} />
+        <RadialBar background={{ fill: "rgba(148,163,184,0.18)" }} dataKey="value" cornerRadius={20} />
+      </RadialBarChart>
+      <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+        <span className="text-2xl font-bold" style={{ color }}>{pct}%</span>
+        <span className="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">
+          {confidence}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// Horizontal bull-vs-bear strength bar based on argument length
+function DebateBar({ bull, bear }: { bull: string; bear: string }) {
+  const bL = (bull || "").trim().length;
+  const rL = (bear || "").trim().length;
+  const total = Math.max(1, bL + rL);
+  const bullPct = Math.round((bL / total) * 100);
+  const bearPct = 100 - bullPct;
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between text-[11px] font-semibold">
+        <span className="text-green-600 dark:text-green-400 flex items-center gap-1">
+          <TrendingUp className="w-3 h-3" /> Bull case · {bullPct}%
+        </span>
+        <span className="text-red-600 dark:text-red-400 flex items-center gap-1">
+          {bearPct}% · Bear case <TrendingDown className="w-3 h-3" />
+        </span>
+      </div>
+      <div className="flex h-2.5 rounded-full overflow-hidden bg-gray-100 dark:bg-gray-800">
+        <div className="bg-gradient-to-r from-green-400 to-green-600" style={{ width: `${bullPct}%` }} />
+        <div className="bg-gradient-to-r from-red-600 to-red-400" style={{ width: `${bearPct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+// KPI tile for the snapshot ribbon
+function KPI({ label, value, hint, tone }:
+    { label: string; value: React.ReactNode; hint?: string; tone?: "up" | "down" | "neutral" }) {
+  const toneClass = tone === "up" ? "text-green-600 dark:text-green-400"
+                   : tone === "down" ? "text-red-600 dark:text-red-400"
+                   : "text-gray-900 dark:text-white";
+  return (
+    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-lg px-3 py-2.5">
+      <p className="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400 font-semibold">
+        {label}
+      </p>
+      <p className={`text-base font-bold mt-0.5 ${toneClass}`}>{value}</p>
+      {hint && <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">{hint}</p>}
     </div>
   );
 }
@@ -176,6 +339,19 @@ export default function AIAnalyst() {
   const verdict = report?.verdict ?? "HOLD";
   const Vstyle  = VERDICT_STYLE[verdict];
   const VIcon   = Vstyle.icon;
+
+  // Compute per-analyst sentiment chips once per report
+  const signals = useMemo(() => ({
+    fundamentals: analystSignal(report?.analysts.fundamentals || ""),
+    news:         analystSignal(report?.analysts.news || ""),
+    technicals:   analystSignal(report?.analysts.technicals || ""),
+    macro:        analystSignal(report?.analysts.macro || ""),
+  }), [report]);
+
+  const fmtPrice = (p?: number) =>
+    p == null ? "—" : `₹${p.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+  const pctTone = (p?: number): "up" | "down" | "neutral" =>
+    p == null ? "neutral" : p > 0 ? "up" : p < 0 ? "down" : "neutral";
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -294,85 +470,113 @@ export default function AIAnalyst() {
       {/* Final report */}
       {report && (
         <div className="space-y-4">
-          {/* Verdict card */}
+          {/* Hero verdict card with confidence gauge */}
           <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-xl overflow-hidden">
-            <div className={`px-5 py-4 ${Vstyle.bg} flex items-center gap-3`}>
-              <VIcon className={`w-7 h-7 ${Vstyle.fg}`} />
-              <div className="flex-1">
-                <p className="text-xs uppercase tracking-wider text-gray-600 dark:text-gray-300 font-semibold">
-                  {Vstyle.label} · {report.confidence} confidence · horizon {report.horizon}
+            <div className={`px-5 py-5 ${Vstyle.bg} flex flex-col sm:flex-row items-start sm:items-center gap-4`}>
+              <ConfidenceGauge confidence={report.confidence} verdict={report.verdict} />
+              <div className="flex-1 min-w-0">
+                <p className="text-[11px] uppercase tracking-wider text-gray-600 dark:text-gray-300 font-semibold">
+                  {Vstyle.label}
                 </p>
-                <p className={`text-2xl font-bold ${Vstyle.fg}`}>
-                  {report.verdict}
-                  {report.priceTarget && report.priceTarget !== "N/A" && (
-                    <span className="text-base font-medium ml-3 text-gray-700 dark:text-gray-200">
-                      Target: {report.priceTarget}
-                    </span>
-                  )}
+                <div className="flex items-baseline gap-3 flex-wrap">
+                  <span className={`text-4xl font-extrabold tracking-tight ${Vstyle.fg} flex items-center gap-2`}>
+                    <VIcon className="w-8 h-8" />
+                    {report.verdict}
+                  </span>
+                  <span className="text-lg font-semibold text-gray-900 dark:text-white">{report.name}</span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400">{report.ticker}</span>
+                </div>
+                <p className="text-sm text-gray-700 dark:text-gray-200 leading-relaxed mt-2">
+                  {report.headline}
                 </p>
               </div>
               {report.cached && (
-                <span className="text-[10px] uppercase tracking-wider bg-white/70 dark:bg-black/30 text-gray-700 dark:text-gray-200 px-2 py-1 rounded">
+                <span className="text-[10px] uppercase tracking-wider bg-white/70 dark:bg-black/30 text-gray-700 dark:text-gray-200 px-2 py-1 rounded self-start">
                   Cached {report.cachedAt ? new Date(report.cachedAt).toLocaleTimeString() : ""}
                 </span>
               )}
             </div>
-            <div className="px-5 py-4">
-              <p className="text-sm text-gray-700 dark:text-gray-200 leading-relaxed">
-                <span className="font-semibold text-gray-900 dark:text-white">{report.name}</span> — {report.headline}
-              </p>
-              {report.keyRisks?.length > 0 && (
-                <div className="mt-3">
-                  <p className="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400 font-semibold mb-1">
-                    Key risks
-                  </p>
-                  <ul className="text-xs text-gray-600 dark:text-gray-300 list-disc pl-5 space-y-0.5">
-                    {report.keyRisks.map((r, i) => <li key={i}>{r}</li>)}
-                  </ul>
-                </div>
-              )}
+
+            {/* KPI ribbon */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 p-3 border-t border-gray-200 dark:border-white/10 bg-gray-50/50 dark:bg-gray-950/40">
+              <KPI label="Last price"
+                   value={fmtPrice(report.snapshot.lastPrice)}
+                   tone={pctTone(report.snapshot.pChange)} />
+              <KPI label="Day change"
+                   value={report.snapshot.pChange != null
+                     ? `${report.snapshot.pChange > 0 ? "+" : ""}${report.snapshot.pChange.toFixed(2)}%`
+                     : "—"}
+                   tone={pctTone(report.snapshot.pChange)} />
+              <KPI label="Target" value={report.priceTarget || "—"} hint="research view" />
+              <KPI label="Horizon" value={report.horizon || "—"} />
+              <KPI label="Market"
+                   value={report.snapshot.marketState || "—"}
+                   hint={report.snapshot.asOfIst ? new Date(report.snapshot.asOfIst).toLocaleTimeString("en-IN") : undefined} />
+              <KPI label="Generated in"
+                   value={report.wallClockMs ? `${(report.wallClockMs / 1000).toFixed(1)}s` : "—"}
+                   hint={`${report.modelsUsed.length} model${report.modelsUsed.length === 1 ? "" : "s"}`} />
             </div>
+
+            {/* Key risks */}
+            {report.keyRisks?.length > 0 && (
+              <div className="px-5 py-4 border-t border-gray-200 dark:border-white/10">
+                <p className="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400 font-semibold mb-2 flex items-center gap-1.5">
+                  <Shield className="w-3 h-3" /> Key risks the analyst flagged
+                </p>
+                <ul className="grid sm:grid-cols-2 gap-x-6 gap-y-1 text-xs text-gray-700 dark:text-gray-300 list-disc pl-5">
+                  {report.keyRisks.map((r, i) => <li key={i}>{r}</li>)}
+                </ul>
+              </div>
+            )}
           </div>
 
-          {/* Analyst sections */}
+          {/* Bull vs Bear strength bar */}
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-xl p-4">
+            <p className="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400 font-semibold mb-3 flex items-center gap-1.5">
+              <Zap className="w-3 h-3" /> Bull vs Bear · argument balance
+            </p>
+            <DebateBar bull={report.debate.bull} bear={report.debate.bear} />
+          </div>
+
+          {/* Analyst sections with sentiment chips */}
           <div className="grid gap-3">
             <CollapsibleSection title="What the fundamentals say"
-                                icon={Building2} body={report.analysts.fundamentals} defaultOpen />
+                                icon={Building2} body={report.analysts.fundamentals}
+                                signal={signals.fundamentals} defaultOpen />
             <CollapsibleSection title="What the news & sentiment say"
-                                icon={Newspaper}  body={report.analysts.news} />
+                                icon={Newspaper}  body={report.analysts.news}
+                                signal={signals.news} />
             <CollapsibleSection title="What the charts say"
-                                icon={BarChart3}  body={report.analysts.technicals} />
+                                icon={BarChart3}  body={report.analysts.technicals}
+                                signal={signals.technicals} />
             <CollapsibleSection title="What the macro & flows say"
-                                icon={Activity}   body={report.analysts.macro} />
+                                icon={Activity}   body={report.analysts.macro}
+                                signal={signals.macro} />
           </div>
 
-          {/* Debate */}
+          {/* Full debate transcript */}
           <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-xl">
             <button onClick={() => setShowDebate(s => !s)}
                     className="w-full flex items-center gap-2 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-900/60">
               <Sparkles className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
               <span className="text-sm font-medium text-gray-900 dark:text-white flex-1 text-left">
-                Show the full Bull-vs-Bear debate transcript
+                Read the full Bull-vs-Bear debate
               </span>
               {showDebate ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
             </button>
             {showDebate && (
               <div className="px-4 pb-4 grid md:grid-cols-2 gap-4 border-t border-gray-200 dark:border-white/10 pt-4">
-                <div>
-                  <p className="text-xs font-bold text-green-600 dark:text-green-400 uppercase tracking-wider mb-2">
-                    Bull researcher
+                <div className="rounded-lg border border-green-200 dark:border-green-900/40 bg-green-50/40 dark:bg-green-500/5 p-3">
+                  <p className="text-xs font-bold text-green-700 dark:text-green-300 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                    <TrendingUp className="w-3.5 h-3.5" /> Bull researcher
                   </p>
-                  <p className="text-xs text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed">
-                    {report.debate.bull}
-                  </p>
+                  <PrettyText text={report.debate.bull} />
                 </div>
-                <div>
-                  <p className="text-xs font-bold text-red-600 dark:text-red-400 uppercase tracking-wider mb-2">
-                    Bear researcher
+                <div className="rounded-lg border border-red-200 dark:border-red-900/40 bg-red-50/40 dark:bg-red-500/5 p-3">
+                  <p className="text-xs font-bold text-red-700 dark:text-red-300 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                    <TrendingDown className="w-3.5 h-3.5" /> Bear researcher
                   </p>
-                  <p className="text-xs text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed">
-                    {report.debate.bear}
-                  </p>
+                  <PrettyText text={report.debate.bear} />
                 </div>
               </div>
             )}
