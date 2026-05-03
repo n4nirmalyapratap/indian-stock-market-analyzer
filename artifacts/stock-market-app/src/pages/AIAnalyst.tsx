@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, Link } from "wouter";
 import {
-  Brain, Loader2, AlertCircle, Sparkles, TrendingUp,
+  Microscope, Loader2, AlertCircle, Sparkles, TrendingUp,
   TrendingDown, Minus, ChevronDown, ChevronUp, RotateCw,
   Newspaper, BarChart3, Activity, Building2,
 } from "lucide-react";
@@ -182,7 +182,7 @@ export default function AIAnalyst() {
       {/* Header */}
       <div className="flex items-center gap-3">
         <div className="w-10 h-10 rounded-lg bg-indigo-100 dark:bg-indigo-500/20 flex items-center justify-center">
-          <Brain className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+          <Microscope className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
         </div>
         <div className="flex-1">
           <h1 className="text-xl font-bold text-gray-900 dark:text-white">Deep AI Analyst</h1>
