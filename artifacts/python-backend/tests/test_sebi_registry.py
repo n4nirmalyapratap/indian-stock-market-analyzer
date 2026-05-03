@@ -314,6 +314,31 @@ class TestSymbolAwareDefaults:
         # No symbol → legacy ladder preserved
         assert bt_step(12_000) == 100.0
 
+    def test_compliance_snapshot_carries_circular_urls(self):
+        """Lot size, cost schedule, and per-leg breakdown should all expose
+        a circular_url next to the circular_ref so the UI can link to the
+        original SEBI/Finance/NSE notice."""
+        snap = reg.compliance_snapshot(symbol="FINNIFTY",
+                                       on_date=date(2025, 6, 1))
+        assert snap["cost_schedule"]["circular_ref"]
+        # Cost schedule ref "Finance (No. 2) Act 2024 §163; NSE/FAOP/63450"
+        # may not be in the historical DB; lot ref "SEBI/HO/MRD/.../2024/113"
+        # IS in the DB and must resolve to a URL.
+        lot = snap["symbols"][0]["lot_size"]
+        assert lot["circular_ref"]
+        assert lot["circular_url"], (
+            f"Expected URL for lot ref {lot['circular_ref']!r}; got None — "
+            "did sebi_circulars_db.py drift?"
+        )
+        assert lot["circular_url"].startswith("http")
+
+    def test_circular_url_helper_resolves_known_ref(self):
+        url = reg.circular_url("SEBI/HO/MRD/MRD-PoD-2/P/CIR/2024/113")
+        assert url and url.startswith("http")
+        # Unknown refs return None — no silent fallback
+        assert reg.circular_url("NOT-A-REAL-CIRCULAR-12345") is None
+        assert reg.circular_url(None) is None
+
     def test_risk_free_rate_constant_comes_from_cache(self):
         from app.services import options_service, risk_free_service
         # The module-level constant should match the synchronous cache helper

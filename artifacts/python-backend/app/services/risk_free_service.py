@@ -164,10 +164,54 @@ def _stale_or_fallback(now: float, note: str) -> dict[str, Any]:
 def get_cached_rate_sync() -> float:
     """Synchronous accessor — returns the in-memory value if present, else
     the last-known disk value, else the hard fallback.  Safe to use as a
-    default for non-async callers (e.g. pricing helpers)."""
+    default for non-async callers (e.g. pricing helpers).
+
+    Logs *loudly* (WARNING) when the disk cache is missing and the boot
+    constant 0.07 is used, so the operator sees provenance — there is no
+    silent fallback.
+    """
     if _mem["value"] is not None:
         return float(_mem["value"]["value"])
     disk = _load_disk()
     if disk and disk.get("value") is not None:
+        logger.info(
+            "risk_free_service: using disk-cached India 10Y G-Sec yield %.4f%% "
+            "(asOf=%s, cached_at=%s)",
+            float(disk["value"]) * 100,
+            disk.get("asOf"), disk.get("cached_at"),
+        )
         return float(disk["value"])
+    logger.warning(
+        "risk_free_service: NO disk cache and no live FRED fetch yet — "
+        "falling back to HARD constant %.2f%%.  Pricing/backtest defaults "
+        "will use 7%% until refresh_risk_free_rate_on_startup() runs.",
+        HARD_FALLBACK * 100,
+    )
     return HARD_FALLBACK
+
+
+async def refresh_risk_free_rate_on_startup() -> dict[str, Any]:
+    """Force a live FRED refresh on application startup so the 24h memory
+    cache is warm before the first user request.  Falls back gracefully
+    via the standard resolution chain (disk → hard fallback) and logs the
+    result so operators can verify the daily refresh ran."""
+    try:
+        result = await get_india_risk_free_rate(force_refresh=True)
+        if result.get("success"):
+            logger.info(
+                "risk_free_service: startup refresh OK — India 10Y G-Sec %.4f%% "
+                "(asOf=%s, source=%s)",
+                float(result["value"]) * 100,
+                result.get("asOf"), result.get("source"),
+            )
+        else:
+            logger.warning(
+                "risk_free_service: startup refresh did NOT get a fresh FRED "
+                "value (%.4f%% from %s, note=%s)",
+                float(result["value"]) * 100,
+                result.get("source"), result.get("note"),
+            )
+        return result
+    except Exception as exc:
+        logger.error("risk_free_service: startup refresh raised: %s", exc)
+        return _hard_fallback(f"startup refresh raised: {exc}")
