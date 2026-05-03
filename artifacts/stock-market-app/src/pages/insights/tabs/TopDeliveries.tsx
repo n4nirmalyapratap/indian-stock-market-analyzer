@@ -274,6 +274,51 @@ export default function TopDeliveries() {
         />
       )}
 
+      {/* Sector detail panel — appears when a chip is selected */}
+      {sectorFilter && data?.sectors && (() => {
+        const s = data.sectors.find(x => x.sector === sectorFilter);
+        if (!s) return null;
+        const totalDV = data.stats?.totalDelivValue || 0;
+        const sharePct = totalDV > 0 ? (s.totalDelivValue / totalDV) * 100 : 0;
+        return (
+          <div className="mb-3 rounded-xl border border-violet-200 dark:border-violet-500/30 bg-gradient-to-br from-violet-50 to-white dark:from-violet-500/10 dark:to-gray-900/40 shadow-sm p-3">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-violet-600 text-white">
+                  <Layers className="w-3.5 h-3.5"/>
+                </span>
+                <div className="min-w-0">
+                  <div className="text-sm font-bold text-gray-900 dark:text-white truncate">{s.sector}</div>
+                  <div className="text-[11px] text-gray-500 dark:text-gray-400">
+                    {s.count} stocks · {sharePct.toFixed(1)}% of {data.indexLabel} delivered value
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setSectorFilter(null)}
+                className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded-md bg-white dark:bg-gray-800/60 text-violet-700 dark:text-violet-300 border border-violet-200 dark:border-violet-500/30 hover:bg-violet-100 dark:hover:bg-violet-500/15 transition flex-shrink-0">
+                <X className="w-2.5 h-2.5"/> Clear
+              </button>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+              <SectorMetric label="Avg deliv %"  value={`${s.avgDelivPct.toFixed(1)}%`} accent/>
+              <SectorMetric label="Deliv ratio"  value={`${s.delivRatio.toFixed(1)}%`}/>
+              <SectorMetric label="Delivered"    value={`₹${fmtIndianNum(s.totalDelivValue)}`}/>
+              <SectorMetric label="Turnover"     value={`₹${fmtIndianNum(s.totalTurnover)}`}/>
+            </div>
+            {s.topSymbol && (
+              <div className="mt-2 pt-2 border-t border-violet-200/60 dark:border-violet-500/20 flex items-center justify-between text-[11px]">
+                <span className="text-gray-500 dark:text-gray-400">Top stock in sector</span>
+                <span className="font-bold text-gray-900 dark:text-white">
+                  {s.topSymbol}
+                  <span className="ml-1.5 text-violet-600 dark:text-violet-400">{s.topDelivPct.toFixed(1)}%</span>
+                </span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Stock list — main content */}
       <div ref={stocksRef} className="scroll-mt-4">
       <div className="flex items-center justify-between gap-2 mb-2 px-0.5">
@@ -594,6 +639,17 @@ function DelivBar({ pct, className = "" }: { pct: number; className?: string }) 
       aria-label={`Delivery percentage ${pct.toFixed(1)}%`}
       className={`h-1.5 rounded-full bg-gray-200 dark:bg-gray-700/60 overflow-hidden ${className}`}>
       <div className={`h-full ${color} transition-all`} style={{ width: `${clamped}%` }}/>
+    </div>
+  );
+}
+
+function SectorMetric({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div className="rounded-lg bg-white/70 dark:bg-gray-900/40 border border-violet-200/60 dark:border-violet-500/20 px-2.5 py-1.5">
+      <div className="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">{label}</div>
+      <div className={`text-sm font-bold tabular-nums ${accent ? "text-violet-700 dark:text-violet-300" : "text-gray-900 dark:text-white"}`}>
+        {value}
+      </div>
     </div>
   );
 }
