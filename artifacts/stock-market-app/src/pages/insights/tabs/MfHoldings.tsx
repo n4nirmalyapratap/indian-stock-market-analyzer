@@ -10,7 +10,8 @@ import {
   ArrowUpRight, ArrowDownRight, Sparkles, Building2, Search, Layers, X,
 } from "lucide-react";
 import {
-  ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ResponsiveContainer, AreaChart, Area, XAxis, YAxis,
+  CartesianGrid, Tooltip, Legend,
 } from "recharts";
 
 interface Scheme {
@@ -435,9 +436,14 @@ function SchemeDetailPanel({ code, fallbackName }: { code: string; fallbackName:
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
       {/* Left: chart */}
-      <div className="lg:col-span-2">
-        <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">
-          NAV indexed to 100{data.benchmarkLabel ? ` vs ${data.benchmarkLabel}` : ""} · last 5 yrs
+      <div className="lg:col-span-2 rounded-xl border border-gray-200 dark:border-gray-700/60 bg-gradient-to-br from-white to-gray-50/40 dark:from-gray-900/40 dark:to-gray-800/30 p-3">
+        <div className="flex items-center justify-between mb-1.5">
+          <div className="text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 font-medium">
+            NAV history · 5 yrs
+          </div>
+          <div className="text-[11px] text-gray-500 dark:text-gray-400">
+            indexed to 100{data.benchmarkLabel ? ` vs ${data.benchmarkLabel}` : ""}
+          </div>
         </div>
         <NavChart nav={data.navChart || []} bench={data.benchmarkChart || []} benchLabel={data.benchmarkLabel || ""} />
       </div>
@@ -746,6 +752,9 @@ function NavChart({ nav, bench, benchLabel }: {
   benchLabel: string;
 }) {
   const palette = useChartPalette();
+  // Stable gradient ids per render so multiple charts on the page don't collide.
+  const gid = useMemo(() => `mfg-${Math.random().toString(36).slice(2, 8)}`, []);
+
   // Merge nav + benchmark on date (chart needs single series array).
   const merged = useMemo(() => {
     const map = new Map<string, { date: string; navIdx?: number; benchIdx?: number }>();
@@ -758,57 +767,104 @@ function NavChart({ nav, bench, benchLabel }: {
     return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
   }, [nav, bench]);
 
+  // Headline stats — first vs last NAV index gives the indexed return.
+  const stats = useMemo(() => {
+    const navs = merged.filter(m => m.navIdx != null);
+    if (navs.length < 2) return null;
+    const first = navs[0].navIdx!;
+    const last  = navs[navs.length - 1].navIdx!;
+    const pct   = ((last - first) / first) * 100;
+    return { first, last, pct };
+  }, [merged]);
+
   if (merged.length === 0) {
-    return <div className="text-xs text-gray-500 dark:text-gray-400 py-6">No NAV history available.</div>;
+    return (
+      <div className="h-56 flex items-center justify-center text-xs text-gray-500 dark:text-gray-400 italic">
+        No NAV history available.
+      </div>
+    );
   }
 
+  const positive = (stats?.pct ?? 0) >= 0;
+  const navColor = positive ? palette.pos : palette.neg;
+
   return (
-    <div className="h-56 w-full">
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={merged} margin={{ top: 4, right: 8, left: -10, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke={palette.border} />
-          <XAxis
-            dataKey="date"
-            tick={{ fontSize: 10, fill: palette.muted }}
-            stroke={palette.border}
-            interval="preserveStartEnd"
-            minTickGap={50}
-            tickFormatter={(d: string) => d.slice(0, 7)}
-          />
-          <YAxis
-            tick={{ fontSize: 10, fill: palette.muted }}
-            stroke={palette.border}
-            domain={["auto", "auto"]}
-          />
-          <Tooltip
-            contentStyle={{ background: palette.surf, border: `1px solid ${palette.border}`, fontSize: 11, color: palette.text }}
-            labelStyle={{ color: palette.muted }}
-            formatter={(v: number, name: string) => [v.toFixed(2), name]}
-          />
-          <Legend wrapperStyle={{ fontSize: 11 }} />
-          <Line
-            type="monotone"
-            dataKey="navIdx"
-            name="Scheme"
-            stroke={palette.accent}
-            strokeWidth={2}
-            dot={false}
-            isAnimationActive={false}
-          />
-          {bench.length > 0 && (
-            <Line
-              type="monotone"
-              dataKey="benchIdx"
-              name={benchLabel || "Benchmark"}
-              stroke={palette.line}
-              strokeWidth={1.5}
-              strokeDasharray="4 3"
-              dot={false}
-              isAnimationActive={false}
+    <div>
+      {stats && (
+        <div className="flex items-baseline gap-2 mb-1">
+          <div className="text-2xl font-bold text-gray-900 dark:text-white tabular-nums leading-none">
+            {stats.last.toFixed(2)}
+          </div>
+          <div className={`text-xs font-semibold tabular-nums ${positive ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+            {positive ? "▲" : "▼"} {Math.abs(stats.pct).toFixed(2)}%
+          </div>
+        </div>
+      )}
+      <div className="h-56 w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={merged} margin={{ top: 6, right: 8, left: -10, bottom: 0 }}>
+            <defs>
+              <linearGradient id={`${gid}-nav`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={navColor} stopOpacity={0.32}/>
+                <stop offset="100%" stopColor={navColor} stopOpacity={0}/>
+              </linearGradient>
+              <linearGradient id={`${gid}-bench`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={palette.line} stopOpacity={0.12}/>
+                <stop offset="100%" stopColor={palette.line} stopOpacity={0}/>
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke={palette.border} vertical={false}/>
+            <XAxis
+              dataKey="date"
+              tick={{ fontSize: 10, fill: palette.muted }}
+              stroke={palette.border}
+              interval="preserveStartEnd"
+              minTickGap={50}
+              tickFormatter={(d: string) => d.slice(0, 7)}
             />
-          )}
-        </LineChart>
-      </ResponsiveContainer>
+            <YAxis
+              tick={{ fontSize: 10, fill: palette.muted }}
+              stroke={palette.border}
+              domain={["auto", "auto"]}
+              width={40}
+            />
+            <Tooltip
+              contentStyle={{ background: palette.surf, border: `1px solid ${palette.border}`, borderRadius: 8, fontSize: 11, color: palette.text, boxShadow: "0 4px 12px rgba(0,0,0,0.08)" }}
+              labelStyle={{ color: palette.muted, marginBottom: 4 }}
+              formatter={(v: number, name: string) => [v.toFixed(2), name]}
+            />
+            <Legend wrapperStyle={{ fontSize: 11, paddingTop: 4 }} iconType="plainline"/>
+            {bench.length > 0 && (
+              <Area
+                type="monotone"
+                dataKey="benchIdx"
+                name={benchLabel || "Benchmark"}
+                stroke={palette.line}
+                strokeWidth={1.5}
+                strokeDasharray="4 3"
+                fill={`url(#${gid}-bench)`}
+                dot={false}
+                isAnimationActive
+                animationDuration={900}
+                animationEasing="ease-out"
+              />
+            )}
+            <Area
+              type="monotone"
+              dataKey="navIdx"
+              name="Scheme"
+              stroke={navColor}
+              strokeWidth={2.25}
+              fill={`url(#${gid}-nav)`}
+              dot={false}
+              activeDot={{ r: 4, strokeWidth: 2, stroke: palette.surf }}
+              isAnimationActive
+              animationDuration={1100}
+              animationEasing="ease-out"
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 }
