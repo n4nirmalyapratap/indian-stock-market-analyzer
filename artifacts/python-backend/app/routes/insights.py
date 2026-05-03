@@ -2715,10 +2715,50 @@ async def get_top_deliveries(
     avg_deliv_pct  = (sum((r.get("delivPct") or 0.0) for r in filtered) / len(filtered)
                       if filtered else 0.0)
 
+    # Sector-wise rollup over the filtered slice.
+    sector_buckets: dict[str, dict] = {}
+    for r in filtered:
+        sec = (r.get("sector") or "Unclassified").strip() or "Unclassified"
+        b = sector_buckets.setdefault(sec, {
+            "sector": sec, "count": 0,
+            "totalTraded": 0, "totalDeliv": 0,
+            "totalTurnover": 0.0, "totalDelivValue": 0.0,
+            "_pctSum": 0.0, "topSymbol": None, "topDelivPct": -1.0,
+        })
+        b["count"] += 1
+        b["totalTraded"]    += r.get("tradedQty") or 0
+        b["totalDeliv"]     += r.get("delivQty") or 0
+        b["totalTurnover"]  += r.get("turnover") or 0.0
+        b["totalDelivValue"] += r.get("delivValue") or 0.0
+        b["_pctSum"]        += r.get("delivPct") or 0.0
+        dp = r.get("delivPct") or 0.0
+        if dp > b["topDelivPct"]:
+            b["topDelivPct"] = dp
+            b["topSymbol"]   = r.get("symbol")
+
+    sectors = []
+    for b in sector_buckets.values():
+        cnt = b["count"] or 1
+        tt  = b["totalTraded"] or 0
+        sectors.append({
+            "sector": b["sector"],
+            "count": b["count"],
+            "totalTraded": b["totalTraded"],
+            "totalDeliv":  b["totalDeliv"],
+            "totalTurnover":   round(b["totalTurnover"], 2),
+            "totalDelivValue": round(b["totalDelivValue"], 2),
+            "avgDelivPct": round(b["_pctSum"] / cnt, 2),
+            "delivRatio": round((b["totalDeliv"] / tt * 100), 2) if tt else 0.0,
+            "topSymbol": b["topSymbol"],
+            "topDelivPct": round(b["topDelivPct"], 2) if b["topDelivPct"] >= 0 else 0.0,
+        })
+    sectors.sort(key=lambda s: s["totalDelivValue"], reverse=True)
+
     return {
         "available": True,
         "items": items,
         "highlights": highlights,
+        "sectors": sectors,
         "totalSymbols": len(primary_rows),
         "matched": len(filtered),
         "tradeDate": trade_date,
@@ -2732,6 +2772,7 @@ async def get_top_deliveries(
             "totalTurnover": total_turnover,
             "totalDelivValue": total_delivval,
             "delivRatio":   round((total_deliv / total_traded * 100), 2) if total_traded else 0.0,
+            "sectorCount":  len(sectors),
         },
     }
 
