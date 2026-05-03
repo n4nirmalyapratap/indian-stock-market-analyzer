@@ -46,20 +46,40 @@ class PriceService:
         When `force_refresh=True` the disk cache is bypassed (used by
         market_cache_service.seal_eod_for_today_if_overdue).
         """
+        from ..lib.symbol_map import is_index_symbol as _is_index
+        is_idx = _is_index(symbol)
+
+        # Minimum acceptable row count for a cached payload — only enforced
+        # for index symbols, because sectors_service writes a 2-row OHLC stub
+        # to the same canonical path for sector cards. Equities can have any
+        # row count (newly listed names may legitimately have <5 bars), so
+        # we don't gate them.
+        min_rows = max(5, min(days // 4, 20)) if (is_idx and days >= 10) else 1
+
         # 1. Disk cache — only when market is closed AND we have a sealed snapshot
         if not force_refresh and not _disk.is_market_open():
             payload = _disk.load_with_meta(symbol, days)
-            if payload and payload.get("eodSealed") and payload.get("data"):
-                return payload["data"]
+            cached_rows = payload.get("data") if payload else None
+            if (
+                payload
+                and payload.get("eodSealed")
+                and isinstance(cached_rows, list)
+                and len(cached_rows) >= min_rows
+            ):
+                return cached_rows
 
-        # 2. NSE India (primary — official exchange data via cookie method)
-        try:
-            nse_data = await self.nse.get_historical_data(symbol, days)
-            if nse_data and len(nse_data) >= 10:
-                _disk.save_to_disk(symbol, days, nse_data, source="NSE")
-                return nse_data
-        except Exception as e:
-            logger.debug("NSE historical fetch failed for %s: %s", symbol, e)
+        # 2. NSE India (primary — official exchange data via cookie method).
+        #    Skip for indices: NSE's `/api/historical/cm/equity` doesn't serve
+        #    them and would either return empty or a thin stub that poisons
+        #    the disk cache.
+        if not is_idx:
+            try:
+                nse_data = await self.nse.get_historical_data(symbol, days)
+                if nse_data and len(nse_data) >= 10:
+                    _disk.save_to_disk(symbol, days, nse_data, source="NSE")
+                    return nse_data
+            except Exception as e:
+                logger.debug("NSE historical fetch failed for %s: %s", symbol, e)
 
         # 3. Yahoo Finance (fallback)
         yahoo_data = await self.yahoo.get_historical_data(symbol, days)
