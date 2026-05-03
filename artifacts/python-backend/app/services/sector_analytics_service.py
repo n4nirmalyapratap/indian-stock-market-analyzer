@@ -21,6 +21,7 @@ import pandas as pd
 import yfinance as yf
 
 from .yahoo_service import YahooService
+from .sectors_service import SECTOR_INDICES
 
 logger = logging.getLogger(__name__)
 
@@ -564,9 +565,16 @@ class SectorAnalyticsService:
         if len(sector_hist) < 10 and constituents:
             sector_hist = await _synthetic_history(constituents, period)
 
+        # Use the canonical sector name from SECTOR_INDICES (e.g. "Nifty IT")
+        # instead of `sector_symbol.title()` which mangles acronyms ("Nifty It").
+        canonical_name = next(
+            (s["name"] for s in SECTOR_INDICES if s["symbol"] == sector_symbol),
+            sector_symbol.title(),
+        )
+
         result = {
             "symbol":       sector_symbol,
-            "name":         sector_symbol.title(),
+            "name":         canonical_name,
             "marketCap":    SECTOR_MARKET_CAP_PROXY.get(sector_symbol, 5.0),
             "relativeStrength": self._compute_rs_chart(sector_hist, nifty_hist),
             "performance":  self._compute_performance(sector_hist),
