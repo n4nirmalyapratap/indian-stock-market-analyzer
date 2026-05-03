@@ -155,6 +155,98 @@ def test_company_filings_handles_empty_response():
     assert _adapt_bse_announcements(None) == []
 
 
+def test_ist_isoformat_tags_naive_and_is_idempotent():
+    from app.routes.insights import _ist_isoformat
+    # Naive IST → +05:30 appended.
+    assert _ist_isoformat("2026-05-03T02:21:56") == "2026-05-03T02:21:56+05:30"
+    # Space separator normalised to T.
+    assert _ist_isoformat("2026-05-03 02:21:56") == "2026-05-03T02:21:56+05:30"
+    # Already +05:30 → unchanged (idempotent).
+    assert _ist_isoformat("2026-05-03T02:21:56+05:30") == "2026-05-03T02:21:56+05:30"
+    # Already Z → unchanged.
+    assert _ist_isoformat("2026-05-03T02:21:56Z") == "2026-05-03T02:21:56Z"
+    # Negative offset → unchanged (regression: earlier slice bug double-tagged this).
+    assert _ist_isoformat("2026-05-03T02:21:56-05:00") == "2026-05-03T02:21:56-05:00"
+    # Empty in → empty out.
+    assert _ist_isoformat("") == ""
+
+
+def test_company_filings_synthesises_id_when_blank():
+    from app.routes.insights import _adapt_bse_announcements
+    items = _adapt_bse_announcements({"Table": [
+        {"NEWSID": "", "SCRIP_CD": 500001, "NEWS_DT": "2026-05-03T02:00:00", "HEADLINE": "X"},
+        {"NEWSID": "",  "SCRIP_CD": 500001, "NEWS_DT": "2026-05-03T02:00:00", "HEADLINE": "Y"},
+    ]})
+    assert len({it["id"] for it in items}) == 2  # no key collision
+
+
+def test_nse_announcements_adapter():
+    from app.routes.insights import _adapt_nse_announcements
+    sample = [{
+        "symbol": "RAYMONDLSL", "sm_name": "Raymond Lifestyle Limited",
+        "desc": "Analysts/Institutional Investor Meet/Con. Call Updates",
+        "sort_date": "2026-05-02 23:58:27", "seq_id": "106607593",
+        "attchmntFile": "https://nsearchives.nseindia.com/x.pdf",
+        "attchmntText": "Schedule of meet",
+    }]
+    items = _adapt_nse_announcements(sample)
+    assert len(items) == 1
+    it = items[0]
+    assert it["exchange"] == "NSE"
+    assert it["symbol"] == "RAYMONDLSL"
+    assert it["company"] == "Raymond Lifestyle Limited"
+    assert it["category"] == "Investor Presentation"  # inferred from desc
+    assert it["date"] == "2026-05-02T23:58:27+05:30"
+    assert it["documentUrl"].startswith("https://nsearchives.nseindia.com/")
+    assert it["id"].startswith("nse:")
+
+
+def test_nse_pit_adapter_parses_date_and_purpose():
+    from app.routes.insights import _adapt_nse_pit
+    sample = {"data": [{
+        "symbol": "RELTD", "company": "Ravindra Energy Limited",
+        "acqName": "Shantanu Lath", "date": "02-May-2026 16:46",
+        "buyQuantity": "70000", "sellquantity": "0", "secAcq": "70000",
+        "secType": "Equity Shares", "pid": "1197873",
+    }]}
+    items = _adapt_nse_pit(sample)
+    assert len(items) == 1
+    it = items[0]
+    assert it["exchange"] == "NSE"
+    assert it["category"] == "Insider Trading"
+    assert "Shantanu Lath" in it["purpose"]
+    assert "70000" in it["purpose"]
+    assert it["date"] == "2026-05-02T16:46:00+05:30"
+    assert it["id"] == "nse-pit:1197873"
+
+
+def test_infer_category_maps_keywords():
+    from app.routes.insights import _infer_category
+    assert _infer_category("Quarterly Result for Q4") == "Result"
+    assert _infer_category("Interim Dividend Declared") == "Dividend"
+    assert _infer_category("AGM Notice") == "AGM/EGM"
+    assert _infer_category("Acquisition of subsidiary") == "Acquisition"
+    assert _infer_category("Concall transcript") == "Investor Presentation"
+    assert _infer_category("random press release blah") == "Company Update"
+    assert _infer_category("totally unrelated") == "Other"
+
+
+def test_matches_category_handles_slash_and_blob():
+    from app.routes.insights import _matches_category
+    item = {"category": "AGM/EGM", "purpose": "AGM notice", "subject": ""}
+    assert _matches_category(item, "AGM/EGM")
+    assert _matches_category(item, "all")
+    assert not _matches_category({"category": "Result", "purpose": "Q4", "subject": ""}, "Dividend")
+
+
+def test_bse_total_count_extracts_rowcnt():
+    from app.routes.insights import _bse_total_count
+    assert _bse_total_count({"Table1": [{"ROWCNT": 1500}]}) == 1500
+    assert _bse_total_count({"Table1": []}) == 0
+    assert _bse_total_count({}) == 0
+    assert _bse_total_count(None) == 0
+
+
 # ── MF holdings (AMFI parser) ───────────────────────────────────────────────
 
 AMFI_SAMPLE = """Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Net Asset Value;Date
