@@ -807,6 +807,8 @@ export interface ConstituentStock {
   evEbitda:     number | null;
   roe:          number | null;
   roa:          number | null;
+  earningsGrowth: number | null;
+  revenueGrowth:  number | null;
   debtToEquity: number | null;
   dividendYield: number | null;
   beta:         number | null;
