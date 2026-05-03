@@ -85,7 +85,7 @@ export default function DataFreshness({
         <button
           type="button"
           onClick={() => refresh(refreshKeys)}
-          className="ml-1 inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300 dark:hover:bg-slate-800 active:scale-95 transition"
+          className="ml-1 inline-flex cursor-pointer items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-slate-600 shadow-sm hover:bg-slate-50 hover:border-slate-300 hover:text-slate-900 hover:shadow dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:border-slate-600 dark:hover:text-white active:scale-95 transition"
           aria-label="Refresh data"
         >
           <RefreshCw className="h-3 w-3" /> Refresh
