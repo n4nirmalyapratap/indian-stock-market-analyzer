@@ -42,6 +42,7 @@ from ..services.nse_service    import NseService
 from ..services.yahoo_service  import YahooService
 from ..services.price_service  import PriceService
 from ..services.macro_service  import MacroService
+from ..services.ipo_service    import IpoService
 
 logger = logging.getLogger("insights")
 router = APIRouter(prefix="/insights", tags=["insights"])
@@ -53,6 +54,7 @@ _nse   = NseService()
 _yahoo = YahooService()
 _price = PriceService(_nse, _yahoo)
 _macro = MacroService(_yahoo)
+_ipo   = IpoService(_nse)
 
 
 def _closes_from_history(rows: list[dict]) -> list[float]:
@@ -2876,11 +2878,20 @@ async def get_mtf():
 
 
 @router.get("/ipos")
-async def get_ipos(status: str = Query("open")):
-    return {"available": False,
-            "message": ("Live IPO calendar requires the BSE/NSE IPO endpoint which is rate-limited "
-                        "from cloud IPs. We're integrating Chittorgarh as a follow-up."),
-            "items": []}
+async def get_ipos():
+    """Live IPO calendar — open + upcoming mainboard/SME issues from NSE.
+
+    Each OPEN issue carries live subscription multiples (QIB / NII / Retail /
+    Total) so the UI can show progress bars without a second round-trip.
+    Recently-listed history is not yet wired (NSE has no public endpoint and
+    chittorgarh scraping is fragile)."""
+    try:
+        data = await _ipo.get_calendar()
+    except Exception as e:
+        logger.warning("ipo calendar failed: %s", str(e)[:160])
+        data = {"available": False, "message": "IPO feed temporarily unavailable.",
+                "open": [], "upcoming": []}
+    return {**data, "meta": _meta(served_from="IPO_CALENDAR")}
 
 
 # ── Macro Pulse (Phase 3) ────────────────────────────────────────────────────

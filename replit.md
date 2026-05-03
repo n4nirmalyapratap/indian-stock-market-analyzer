@@ -96,7 +96,8 @@ This Replit container can reach **yfinance**, **api.bseindia.com**, and **portal
   - **Equity** — `fetch_equity_snapshot()` hits NSE's `/api/fiidiiTradeReact` (the only public NSE endpoint that returns equity FII/DII). NSE does not expose bulk historical equity FII/DII anywhere, so the equity tab is a snapshot accumulator: each day's snapshot is appended on-demand and history grows over time.
   - Cache lives at `artifacts/python-backend/market_cache/fii_dii_cache.db` and is committed to git (`.gitignore` exception). Date columns are persisted as ISO strings and parsed strictly with `format=ISO8601` on read.
   - Response payload: `{ rows[], summary: { daily, weekly, monthly (=trailing 30 sessions), ytd (calendar Jan 1 → today) }, monthly[] (per-calendar-month buckets with mini-rows), totalDays, rangeDays }`.
-- **SLBM, MTF, IPOs, Top Deliveries** — return `{available:false, message}` with the source restriction explained, since these feeds live behind NSE / Chittorgarh which are blocked from cloud IPs.
+- **SLBM, MTF, Top Deliveries** — return `{available:false, message}` with the source restriction explained, since these feeds live behind NSE / Chittorgarh which are blocked from cloud IPs.
+- **IPO Center** — live from NSE `/api/all-upcoming-issues?category=ipo` + `/api/ipo-detail` (open + upcoming with subscription multiples). Wrapped in `services/ipo_service.py`. "Recently Listed" tab is intentionally empty (no public NSE endpoint; chittorgarh scrape deferred).
 
 #### Caching & resilience
 - In-process TTL cache: 5 min for yfinance (`DEFAULT_TTL`), 6 h for AMFI/BSE EOD (`LONG_TTL`).
