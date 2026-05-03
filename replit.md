@@ -74,7 +74,11 @@ compliance gate. ~5 LLM calls per run via existing `ai_client`.
   (`https://investor.sebi.gov.in/`), models-used list, data-sources list
   and run timestamp; backend scrubs advice language defence-in-depth
 - Frontend: `pages/AIAnalyst.tsx`, `pages/AIAnalystCompare.tsx`,
+  `pages/AIAnalystScan.tsx` (watchlist scan, sortable verdict table),
   `components/AIAnalystButton.tsx`, nav entry in LayoutShell
+- Watchlist scan endpoint `POST /api/ai-analyst/scan` (SSE; serves
+  cached reports free, runs fresh analyses sequentially against the
+  daily quota, marks the rest `skipped` when out of quota)
 
 ### Famous-Investor AI Council (added 2026-05, Phase 1 of FinceptTerminal-inspired roadmap)
 A `/agents` and `/agents/:symbol` page that runs eight legendary investor personas (Buffett, Graham, Lynch, Munger, Klarman, Marks, Dalio, Burry) against any NSE stock, scores their documented checklists deterministically, aggregates a council verdict (`STRONG_BUY` / `BUY` / `HOLD` / `AVOID` / `STRONG_AVOID`), and writes a one-paragraph thesis in each investor's voice via `ai_client.ask()` (gracefully degrades when OpenRouter isn't connected).
