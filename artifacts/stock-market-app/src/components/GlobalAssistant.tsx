@@ -13,6 +13,21 @@ async function optionsChat(messages: { role: string; content: string }[]): Promi
   return d.reply ?? "Sorry, I couldn't get a response.";
 }
 
+// ── Smart fallback — when KB doesn't match, ask the backend assistant
+async function smartFallback(question: string): Promise<string | null> {
+  try {
+    const d = await fetchApi<{ reply?: string }>("/assistant/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: question }),
+    });
+    const reply = (d.reply || "").trim();
+    return reply || null;
+  } catch {
+    return null;
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Knowledge base — market concepts + every app feature, in plain English
 // ─────────────────────────────────────────────────────────────────────────────
@@ -829,6 +844,38 @@ Before Budget day or RBI policy announcement → IV spikes because nobody knows 
   📅 Think long-term — the best returns come from holding quality stocks for years`,
     related: ["stock-market", "market-cap", "rsi", "what-sector"],
   },
+
+  // ── Market Breadth ───────────────────────────────────────────────────────
+  {
+    id: "ad-ratio",
+    title: "What is the Advance/Decline (AD) ratio?",
+    keywords: [
+      "ad ratio", "a/d ratio", "ad line", "advance decline", "advance/decline",
+      "advances", "declines", "advancing", "declining", "market breadth", "breadth",
+      "adv dec", "adv/dec", "ad", "a d ratio",
+    ],
+    answer: `The **Advance/Decline (AD) Ratio** — sometimes called *market breadth* — tells you how many stocks went UP today versus how many went DOWN.
+
+**Formula:**
+\`AD Ratio = Number of advancing stocks ÷ Number of declining stocks\`
+
+**How to read it:**
+
+📗 **AD Ratio > 1** → More stocks are rising than falling. The rally is broad and healthy.
+  • > 2 = very strong, broad-based buying
+  • 1 – 2 = mildly positive
+
+⚖️ **AD Ratio ≈ 1** → Mixed market. Roughly equal winners and losers — no clear direction.
+
+📕 **AD Ratio < 1** → More stocks are falling than rising. Selling pressure is widespread.
+  • < 0.5 = broad-based fear
+
+**Why it matters:**
+The Nifty 50 can go up because just 5 big stocks rallied — that looks bullish on the surface but is actually weak. The AD Ratio cuts through the noise: if the index is up 1% but only 30% of stocks advanced, the rally is **narrow and fragile**.
+
+**In this app:** The Dashboard shows advancing vs declining sector counts. Open the Dashboard or ask me *"Which sectors are up today?"* to see live breadth data.`,
+    related: ["dashboard", "sector-rotation", "volume", "market-phase"],
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -886,22 +933,124 @@ const CATEGORIES = [
 // ─────────────────────────────────────────────────────────────────────────────
 // Knowledge base lookup
 // ─────────────────────────────────────────────────────────────────────────────
-function findAnswer(question: string): Entry | null {
-  const q = question.toLowerCase();
-  let best: Entry | null = null;
-  let bestScore = 0;
+// Normalise: lowercase, strip punctuation, collapse whitespace.
+function _norm(s: string): string {
+  return s.toLowerCase().replace(/[^\w\s/&]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// Tokenise into words, filtering very short stop-words.
+const STOP = new Set([
+  "the", "a", "an", "is", "are", "of", "for", "to", "in", "on", "at",
+  "what", "how", "why", "when", "do", "does", "i", "me", "my", "and",
+  "or", "but", "with", "about", "this", "that", "it", "its",
+]);
+function _tokens(s: string): string[] {
+  return _norm(s).split(/\s+|\//).filter(t => t && !STOP.has(t));
+}
+
+// Levenshtein distance — small/cheap, used only for short single-word checks.
+function _dist(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const m = a.length, n = b.length;
+  const prev = new Array(n + 1).fill(0);
+  const cur = new Array(n + 1).fill(0);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    cur[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    for (let j = 0; j <= n; j++) prev[j] = cur[j];
+  }
+  return prev[n];
+}
+
+// Check if any query token is "close enough" to any keyword token.
+function _tokenMatches(qTokens: string[], kwTokens: string[]): number {
+  let hits = 0;
+  for (const kt of kwTokens) {
+    for (const qt of qTokens) {
+      if (qt === kt) { hits++; break; }
+      // partial / typo tolerance for words >= 4 chars
+      if (kt.length >= 4 && qt.length >= 4) {
+        if (qt.startsWith(kt) || kt.startsWith(qt) ||
+            qt.endsWith(kt)   || kt.endsWith(qt)) {
+          hits += 0.8;
+          break;
+        }
+        const tol = kt.length >= 6 ? 2 : 1;
+        if (_dist(qt, kt) <= tol) { hits += 0.6; break; }
+      }
+    }
+  }
+  return hits;
+}
+
+function findAnswer(question: string): { entry: Entry | null; score: number; suggestions: Entry[] } {
+  const qNorm = _norm(question);
+  const qTokens = _tokens(question);
+  if (!qTokens.length) return { entry: null, score: 0, suggestions: [] };
+
+  type Scored = { entry: Entry; score: number };
+  const scored: Scored[] = [];
 
   for (const entry of KB) {
     let score = 0;
+
+    // Phrase-substring match (existing behaviour, hardened with word boundaries
+    // for short keywords so e.g. "ad" doesn't match inside "dashboard").
     for (const kw of entry.keywords) {
-      if (q.includes(kw)) score += kw.split(" ").length * 2; // longer match = more points
+      const k = kw.toLowerCase();
+      const hasShortToken = k.split(/\s+|\//).some(t => t.length > 0 && t.length < 4);
+      if (hasShortToken) {
+        // Require word-boundary match
+        const escaped = k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const re = new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`);
+        if (re.test(qNorm)) score += k.split(" ").length * 3;
+      } else {
+        if (qNorm.includes(k)) score += k.split(" ").length * 3;
+      }
     }
+
+    // Token-level matching (new) — covers typos, partial words
+    for (const kw of entry.keywords) {
+      const kwTokens = _tokens(kw);
+      if (!kwTokens.length) continue;
+      const hits = _tokenMatches(qTokens, kwTokens);
+      if (hits > 0) {
+        // Reward higher coverage of the keyword's tokens
+        const coverage = hits / kwTokens.length;
+        score += coverage * (kwTokens.length + 1);
+      }
+    }
+
     // Exact title match bonus
-    if (q.includes(entry.title.toLowerCase())) score += 10;
-    if (score > bestScore) { bestScore = score; best = entry; }
+    if (qNorm.includes(_norm(entry.title))) score += 12;
+
+    // Title token coverage
+    const titleTokens = _tokens(entry.title);
+    if (titleTokens.length) {
+      const titleHits = _tokenMatches(qTokens, titleTokens);
+      score += (titleHits / titleTokens.length) * 2;
+    }
+
+    if (score > 0) scored.push({ entry, score });
   }
 
-  return bestScore > 0 ? best : null;
+  scored.sort((a, b) => b.score - a.score);
+  const top = scored[0];
+  const suggestions = scored.slice(1, 4).map(s => s.entry);
+
+  // Confidence threshold — below this we treat as "no good match".
+  // Kept low so typos like "ration" → "ratio" still resolve.
+  const CONFIDENT = 2;
+  if (!top || top.score < CONFIDENT) {
+    return { entry: null, score: top?.score ?? 0, suggestions: scored.slice(0, 3).map(s => s.entry) };
+  }
+  return { entry: top.entry, score: top.score, suggestions };
 }
 
 function getById(id: string) { return KB.find(e => e.id === id) ?? null; }
@@ -1102,9 +1251,19 @@ function AiRichText({ text }: { text: string }) {
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 interface Msg {
+  id: string;
   role: "user" | "bot";
   text: string;
   entry?: Entry;
+  suggestions?: Entry[];
+  loading?: boolean;
+  source?: "kb" | "ai" | "fallback";
+}
+
+let _msgSeq = 0;
+function _newMsgId(): string {
+  _msgSeq += 1;
+  return `m_${Date.now().toString(36)}_${_msgSeq}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1178,20 +1337,55 @@ export default function GlobalAssistant() {
     return () => window.removeEventListener("keydown", h);
   }, []);
 
-  function ask(question: string, entryId?: string) {
+  async function ask(question: string, entryId?: string) {
     const q = question.trim();
     if (!q) return;
-    const entry = entryId ? getById(entryId) : findAnswer(q);
-    const botText = entry
-      ? entry.answer
-      : "I don't have a specific answer for that yet, but you can try rephrasing — for example: \"What is RSI?\", \"How does the Dashboard work?\", or \"What is an Iron Condor?\"\n\nYou can also browse topics using the category buttons above.";
 
+    // Direct ID-based ask (from clickable suggestions)
+    if (entryId) {
+      const entry = getById(entryId);
+      setMsgs(prev => [
+        ...prev,
+        { id: _newMsgId(), role: "user", text: q },
+        { id: _newMsgId(), role: "bot", text: entry?.answer ?? "Topic not found.", entry: entry ?? undefined, source: "kb" },
+      ]);
+      setInput("");
+      return;
+    }
+
+    // KB lookup with confidence
+    const { entry, suggestions } = findAnswer(q);
+    setInput("");
+
+    if (entry) {
+      setMsgs(prev => [
+        ...prev,
+        { id: _newMsgId(), role: "user", text: q },
+        { id: _newMsgId(), role: "bot", text: entry.answer, entry, source: "kb" },
+      ]);
+      return;
+    }
+
+    // No good match — show typing indicator and ask the backend assistant
+    const placeholderId = _newMsgId();
     setMsgs(prev => [
       ...prev,
-      { role: "user", text: q },
-      { role: "bot", text: botText, entry: entry ?? undefined },
+      { id: _newMsgId(), role: "user", text: q },
+      { id: placeholderId, role: "bot", text: "", loading: true, source: "ai" },
     ]);
-    setInput("");
+
+    const aiReply = await smartFallback(q);
+
+    setMsgs(prev => prev.map(m => {
+      if (m.id !== placeholderId) return m;
+      if (aiReply) {
+        return { ...m, text: aiReply, loading: false, source: "ai", suggestions };
+      }
+      const hint = suggestions.length
+        ? `I couldn't find a perfect match for "${q}". Did you mean one of these?`
+        : `I don't have an answer for "${q}" yet. Try rephrasing — for example: *"What is RSI?"*, *"How does the Dashboard work?"*, or *"What is an Iron Condor?"*\n\nYou can also browse topics using the category buttons above.`;
+      return { ...m, text: hint, loading: false, source: "fallback", suggestions };
+    }));
   }
 
   function handleRelated(id: string) {
@@ -1199,8 +1393,8 @@ export default function GlobalAssistant() {
     if (!e) return;
     setMsgs(prev => [
       ...prev,
-      { role: "user", text: e.title },
-      { role: "bot", text: e.answer, entry: e },
+      { id: _newMsgId(), role: "user", text: e.title },
+      { id: _newMsgId(), role: "bot", text: e.answer, entry: e, source: "kb" },
     ]);
   }
 
@@ -1627,8 +1821,8 @@ export default function GlobalAssistant() {
               </div>
             )}
 
-            {msgs.map((m, i) => (
-              <div key={i} className={`flex gap-2.5 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+            {msgs.map((m) => (
+              <div key={m.id} className={`flex gap-2.5 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                 {m.role === "bot" && (
                   <div className="w-7 h-7 rounded-lg bg-indigo-100 dark:bg-indigo-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
                     <BookOpen className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
@@ -1646,21 +1840,37 @@ export default function GlobalAssistant() {
                   `}>
                     {m.role === "user"
                       ? <p>{m.text}</p>
-                      : (
+                      : m.loading
+                        ? (
+                          <div className="flex items-center gap-1.5 py-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" />
+                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: "120ms" }} />
+                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: "240ms" }} />
+                            <span className="text-[11px] text-gray-500 dark:text-gray-400 ml-1">Looking that up…</span>
+                          </div>
+                        )
+                        : (
                         <>
                           {m.entry && (
                             <p className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 mb-2 uppercase tracking-wide">
                               {m.entry.title}
                             </p>
                           )}
-                          <RichText text={m.text} />
+                          {m.source === "ai"
+                            ? <AiRichText text={m.text} />
+                            : <RichText text={m.text} />}
+                          {m.source === "ai" && (
+                            <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-2 italic">
+                              Live answer · powered by the in-app assistant
+                            </p>
+                          )}
                         </>
                       )
                     }
                   </div>
 
                   {/* Related topics */}
-                  {m.role === "bot" && m.entry?.related && m.entry.related.length > 0 && (
+                  {m.role === "bot" && !m.loading && m.entry?.related && m.entry.related.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
                       <span className="text-[10px] text-gray-400 dark:text-gray-600 self-center">Related:</span>
                       {m.entry.related.slice(0, 4).map(id => {
@@ -1681,6 +1891,27 @@ export default function GlobalAssistant() {
                           </button>
                         );
                       })}
+                    </div>
+                  )}
+
+                  {/* "Did you mean" suggestions for low-confidence / fallback replies */}
+                  {m.role === "bot" && !m.loading && m.suggestions && m.suggestions.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      <span className="text-[10px] text-gray-400 dark:text-gray-600 self-center">Did you mean:</span>
+                      {m.suggestions.slice(0, 3).map(s => (
+                        <button
+                          key={s.id}
+                          onClick={() => handleRelated(s.id)}
+                          className="text-[11px] px-2 py-0.5 rounded-full
+                            bg-amber-50 dark:bg-amber-900/20
+                            text-amber-700 dark:text-amber-300
+                            border border-amber-200 dark:border-amber-700/40
+                            hover:bg-amber-100 dark:hover:bg-amber-800/30
+                            transition"
+                        >
+                          {s.title.replace("What is ", "").replace("What are ", "").replace("How do I use ", "")}
+                        </button>
+                      ))}
                     </div>
                   )}
                 </div>
