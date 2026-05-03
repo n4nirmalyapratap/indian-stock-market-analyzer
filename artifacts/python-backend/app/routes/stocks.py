@@ -29,6 +29,39 @@ def _provenance() -> dict:
     }
 
 
+def _history_meta(chart: dict) -> dict:
+    """
+    Build meta for history endpoints.
+
+    `source`/`asOf`/`eodSealed`/`eodDate` describe the candle series itself —
+    on `/history` they are the history provenance. We *also* publish them
+    under `historySource` / `historyAsOf` / etc. so any consumer that uses the
+    unified `MarketDataMeta` shape (where quote-source and history-source can
+    differ — e.g. live NSE quote with disk-EOD bars) gets a single field name
+    to read across endpoints.
+    """
+    src        = chart.get("source")
+    as_of      = chart.get("asOf")
+    eod_sealed = chart.get("eodSealed")
+    eod_date   = chart.get("eodDate")
+    return {
+        "source":           src,
+        "asOf":             as_of,
+        "marketState":      chart.get("marketState"),
+        "eodSealed":        eod_sealed,
+        "eodDate":          eod_date,
+        "cacheVersion":     _disk.cache_version(),
+        # Aliased fields — on /history the candles ARE the payload, so the
+        # history-* fields just mirror source/asOf. The aliases exist so the
+        # frontend's MarketDataMeta interface works uniformly across
+        # /details (quote ≠ history) and /history (quote == history).
+        "historySource":    src,
+        "historyAsOf":      as_of,
+        "historyEodSealed": eod_sealed,
+        "historyEodDate":   eod_date,
+    }
+
+
 @router.get("/nifty100")
 async def get_nifty100():
     return await _service.get_nifty100_stocks()
@@ -110,14 +143,7 @@ async def get_stock_history(
             "companyName": chart.get("companyName") or symbol,
             "currency":    chart.get("currency", "INR"),
             "candles":     chart["candles"],
-            "meta": {
-                "source":       chart.get("source"),
-                "asOf":         chart.get("asOf"),
-                "marketState":  chart.get("marketState"),
-                "eodSealed":    chart.get("eodSealed"),
-                "eodDate":      chart.get("eodDate"),
-                "cacheVersion": _disk.cache_version(),
-            },
+            "meta": _history_meta(chart),
         }
 
     # Standard period+interval — go through PriceService
@@ -132,14 +158,7 @@ async def get_stock_history(
         "companyName": chart.get("companyName") or symbol,
         "currency":    chart.get("currency", "INR"),
         "candles":     chart["candles"],
-        "meta": {
-            "source":       chart.get("source"),
-            "asOf":         chart.get("asOf"),
-            "marketState":  chart.get("marketState"),
-            "eodSealed":    chart.get("eodSealed"),
-            "eodDate":      chart.get("eodDate"),
-            "cacheVersion": _disk.cache_version(),
-        },
+        "meta": _history_meta(chart),
     }
 
 
