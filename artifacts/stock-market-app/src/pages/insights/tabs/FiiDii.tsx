@@ -306,54 +306,85 @@ function Body({
         </p>
       </Card>
 
-      {/* Combined view (chart + table or one of them) */}
+      {/* Combined view (chart + table or one of them) — both are deferred so the
+          toolbar/hero cards reflow instantly on segment switch and the heavy
+          chart/table mount in the next idle frame. */}
       {(view === "chart" || view === "both") && (
-        <FiiDiiChart rows={rows} segment={data.segment} reduced={reduced} />
+        <IdleMount deps={[data.segment, range]} placeholder={<ChartSkeleton />}>
+          <FiiDiiChart rows={rows} segment={data.segment} />
+        </IdleMount>
       )}
       {(view === "table" || view === "both") && (
-        <FiiDiiTable rows={rows} segment={data.segment} />
+        <IdleMount deps={[data.segment, range]} placeholder={<TableSkeleton />}>
+          <FiiDiiTable rows={rows} segment={data.segment} />
+        </IdleMount>
       )}
 
       {/* Month-wise breakdown — deferred so the heaviest part of the page
           (~13 mini-charts) doesn't block first paint when switching tabs. */}
-      <DeferredMonthly months={monthly} isContracts={isContracts} reduced={reduced} />
+      <IdleMount deps={[data.segment, range]} placeholder={<MonthlySkeleton months={monthly.length} />}>
+        {monthly.length > 0 && <MonthlyBreakdown months={monthly} isContracts={isContracts} reduced={reduced} />}
+      </IdleMount>
     </div>
   );
 }
 
-/** Renders MonthlyBreakdown only after the browser is idle, so segment
- *  switches feel instantaneous instead of stalling on chart layout. */
-function DeferredMonthly({ months, isContracts, reduced }: {
-  months: MonthBucket[]; isContracts: boolean; reduced: boolean;
+/** Generic "mount on next idle frame" boundary. Re-defers whenever any
+ *  dependency in `deps` changes, so segment / range switches show the
+ *  skeleton for ~1 frame instead of stalling on heavy chart layout. */
+function IdleMount({ deps, placeholder, children }: {
+  deps: unknown[]; placeholder: React.ReactNode; children: React.ReactNode;
 }) {
   const [ready, setReady] = useState(false);
   useEffect(() => {
     setReady(false);
     const ric = (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }).requestIdleCallback;
     if (ric) {
-      const id = ric(() => setReady(true), { timeout: 400 });
+      const id = ric(() => setReady(true), { timeout: 250 });
       return () => (window as Window & { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback?.(id);
     }
-    const t = setTimeout(() => setReady(true), 120);
+    const t = setTimeout(() => setReady(true), 60);
     return () => clearTimeout(t);
-  }, [months]);
-  if (!months.length) return null;
-  if (!ready) {
-    return (
-      <div className="space-y-3">
-        <div className="flex items-center gap-2 mt-2">
-          <Calendar className="w-4 h-4 text-indigo-500 dark:text-indigo-400" />
-          <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Month-wise Breakdown</h3>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {months.slice(0, 4).map((m) => (
-            <div key={m.key} className="h-40 rounded-xl border border-gray-100 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-800/40 animate-pulse" />
-          ))}
-        </div>
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return <>{ready ? children : placeholder}</>;
+}
+
+function ChartSkeleton() {
+  return (
+    <div className="rounded-xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
+      <div className="h-4 w-40 rounded bg-gray-100 dark:bg-gray-700/50 animate-pulse mb-3" />
+      <div className="h-72 md:h-80 rounded-lg bg-gray-50/80 dark:bg-gray-800/40 animate-pulse" />
+    </div>
+  );
+}
+function TableSkeleton() {
+  return (
+    <div className="rounded-xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800">
+      <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700 h-12 animate-pulse" />
+      <div className="p-4 space-y-2">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="h-7 rounded bg-gray-50/80 dark:bg-gray-800/40 animate-pulse" />
+        ))}
       </div>
-    );
-  }
-  return <MonthlyBreakdown months={months} isContracts={isContracts} reduced={reduced} />;
+    </div>
+  );
+}
+function MonthlySkeleton({ months }: { months: number }) {
+  if (!months) return null;
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 mt-2">
+        <Calendar className="w-4 h-4 text-indigo-500 dark:text-indigo-400" />
+        <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Month-wise Breakdown</h3>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {Array.from({ length: Math.min(4, months) }).map((_, i) => (
+          <div key={i} className="h-40 rounded-xl border border-gray-100 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-800/40 animate-pulse" />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function ViewBtn({ current, value, onClick, icon, label }: {
@@ -382,7 +413,8 @@ function daysWindowLabel(rows: Row[]): string {
 }
 
 /* ── Hero summary card with sparkline + green/red day count ─────────── */
-function HeroCard({
+const HeroCard = memo(_HeroCard);
+function _HeroCard({
   title, icon, cell, isContracts, rowsForSpark, subtitle, delay, reduced,
 }: {
   title: string;
@@ -459,9 +491,9 @@ function HeroCard({
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={sparkData} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
                 <ReferenceLine y={0} stroke={palette.border} strokeWidth={1} />
-                <Bar dataKey="fii" fill={palette.fii} opacity={0.55} maxBarSize={4} />
-                <Bar dataKey="dii" fill={palette.dii} opacity={0.55} maxBarSize={4} />
-                <Line type="monotone" dataKey="total" stroke={palette.line} strokeWidth={1.5} dot={false} />
+                <Bar dataKey="fii" fill={palette.fii} opacity={0.55} maxBarSize={4} isAnimationActive={false} />
+                <Bar dataKey="dii" fill={palette.dii} opacity={0.55} maxBarSize={4} isAnimationActive={false} />
+                <Line type="monotone" dataKey="total" stroke={palette.line} strokeWidth={1.5} dot={false} isAnimationActive={false} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -477,7 +509,7 @@ function HeroCard({
 }
 
 /* ── Main chart ─────────────────────────────────────────────────────── */
-function FiiDiiChart({ rows, segment, reduced }: { rows: Row[]; segment: string; reduced: boolean }) {
+const FiiDiiChart = memo(function FiiDiiChart({ rows, segment }: { rows: Row[]; segment: string }) {
   const palette = useChartPalette();
   const isContracts = segment !== "equity";
   const data = useMemo(() => [...rows].reverse().map(r => ({
@@ -491,11 +523,7 @@ function FiiDiiChart({ rows, segment, reduced }: { rows: Row[]; segment: string;
   }
 
   return (
-    <motion.div
-      initial={reduced ? { opacity: 0 } : { opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay: 0.05 }}
-    >
+    <div>
       <Card className="p-4">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
@@ -526,8 +554,8 @@ function FiiDiiChart({ rows, segment, reduced }: { rows: Row[]; segment: string;
                 formatter={(value: number, name: string) => [fmtCr(value, isContracts), name === "fii" ? "FII Net" : "DII Net"]}
               />
               <ReferenceLine y={0} stroke={palette.muted} strokeWidth={1} />
-              <Bar dataKey="fii" name="fii" fill={palette.fii} radius={[3, 3, 0, 0]} maxBarSize={22} />
-              <Bar dataKey="dii" name="dii" fill={palette.dii} radius={[3, 3, 0, 0]} maxBarSize={22} />
+              <Bar dataKey="fii" name="fii" fill={palette.fii} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
+              <Bar dataKey="dii" name="dii" fill={palette.dii} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -535,9 +563,9 @@ function FiiDiiChart({ rows, segment, reduced }: { rows: Row[]; segment: string;
           {isContracts ? "Net flows in contracts (Long − Short)." : "Net flows in ₹ Cr (Buy − Sell)."} Positive bars indicate net buying, negative bars indicate net selling.
         </p>
       </Card>
-    </motion.div>
+    </div>
   );
-}
+});
 
 function LegendChip({ kind, color }: { kind: "fii" | "dii"; color: string }) {
   return (
@@ -549,18 +577,26 @@ function LegendChip({ kind, color }: { kind: "fii" | "dii"; color: string }) {
 }
 
 /* ── Table ──────────────────────────────────────────────────────────── */
-function FiiDiiTable({ rows, segment }: { rows: Row[]; segment: string }) {
+const TABLE_INITIAL_ROWS = 80;
+const FiiDiiTable = memo(function FiiDiiTable({ rows, segment }: { rows: Row[]; segment: string }) {
   const isContracts = segment !== "equity";
+  const [showAll, setShowAll] = useState(false);
+  // Reset paging when the underlying dataset shape changes.
+  useEffect(() => { setShowAll(false); }, [segment, rows.length]);
   if (!rows.length) {
     return <EmptyState title="No rows in this range" message="Try a wider time range." icon={<TableIcon className="w-6 h-6" />} />;
   }
+  const visible = showAll ? rows : rows.slice(0, TABLE_INITIAL_ROWS);
+  const hidden = rows.length - visible.length;
   return (
     <Card className="p-0 overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gray-50/60 dark:bg-gray-900/30">
         <h3 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
           <TableIcon className="w-4 h-4 text-indigo-500 dark:text-indigo-400" /> Daily Activity
         </h3>
-        <span className="text-[11px] text-gray-500 dark:text-gray-400">{rows.length} sessions</span>
+        <span className="text-[11px] text-gray-500 dark:text-gray-400">
+          {showAll ? `${rows.length} sessions` : `${visible.length} of ${rows.length} sessions`}
+        </span>
       </div>
       <div className="overflow-x-auto max-h-[520px]">
         <table className="w-full text-sm">
@@ -576,8 +612,8 @@ function FiiDiiTable({ rows, segment }: { rows: Row[]; segment: string }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-700/60">
-            {rows.map(r => (
-              <tr key={r.date} className="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition">
+            {visible.map(r => (
+              <tr key={r.date} className="hover:bg-gray-50 dark:hover:bg-gray-700/30">
                 <td className="px-4 py-2 font-medium text-gray-900 dark:text-white whitespace-nowrap">{r.displayDate || r.date}</td>
                 <td className="px-3 py-2 text-right tabular-nums text-gray-700 dark:text-gray-300">{fmtNumCell(r.fiiBuy)}</td>
                 <td className="px-3 py-2 text-right tabular-nums text-gray-700 dark:text-gray-300">{fmtNumCell(r.fiiSell)}</td>
@@ -590,9 +626,20 @@ function FiiDiiTable({ rows, segment }: { rows: Row[]; segment: string }) {
           </tbody>
         </table>
       </div>
+      {hidden > 0 && (
+        <div className="px-4 py-2.5 border-t border-gray-100 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-900/30 flex items-center justify-center">
+          <button
+            type="button"
+            onClick={() => setShowAll(true)}
+            className="text-xs font-medium text-indigo-600 dark:text-indigo-300 hover:text-indigo-700 dark:hover:text-indigo-200"
+          >
+            Show all {rows.length} sessions ({hidden} more)
+          </button>
+        </div>
+      )}
     </Card>
   );
-}
+});
 
 function fmtNumCell(n: number | null | undefined) {
   if (n == null || isNaN(n)) return "—";
@@ -694,8 +741,8 @@ const MonthCard = memo(function MonthCard({ month, isContracts, reduced }: {
                   cursor={{ fill: palette.border, opacity: 0.2 }}
                   formatter={(v: number, n: string) => [fmtCr(v, isContracts), n === "fii" ? "FII" : "DII"]}
                 />
-                <Bar dataKey="fii" fill={palette.fii} maxBarSize={6} />
-                <Bar dataKey="dii" fill={palette.dii} maxBarSize={6} />
+                <Bar dataKey="fii" fill={palette.fii} maxBarSize={6} isAnimationActive={false} />
+                <Bar dataKey="dii" fill={palette.dii} maxBarSize={6} isAnimationActive={false} />
               </BarChart>
             </ResponsiveContainer>
           </div>
