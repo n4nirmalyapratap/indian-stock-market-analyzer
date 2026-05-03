@@ -160,16 +160,47 @@ async def _yf_info(ticker: str) -> dict:
     if cached is not None:
         return cached
 
+    def _empty(reason: Exception | None = None) -> dict:
+        """Failure / missing-data shape — every numeric is None so the UI
+        renders '—' instead of '₹0' / '0.00%' and rankings exclude it."""
+        if reason is not None:
+            logger.warning("yf.info failed for %s: %s", ticker, reason)
+        return {
+            "symbol":         ticker,
+            "name":           ticker,
+            "price":          None,
+            "change1d":       None,
+            "marketCap":      None,
+            "pe":             None,
+            "pb":             None,
+            "ps":             None,
+            "evEbitda":       None,
+            "roe":            None,
+            "roa":            None,
+            "earningsGrowth": None,
+            "revenueGrowth":  None,
+            "debtToEquity":   None,
+            "netMargin":      None,
+            "dividendYield":  None,
+            "beta":           None,
+            "sector":         None,
+            "industry":       None,
+        }
+
     def _fetch():
         try:
             t = yf.Ticker(ticker)
             info = t.info or {}
+            # Yahoo Finance reports debtToEquity as a *percentage* (e.g. 50 = 50% = 0.5×).
+            # Normalise to a true ratio so the UI can render it as "0.50×".
+            de_raw = info.get("debtToEquity")
+            de_ratio = (de_raw / 100.0) if isinstance(de_raw, (int, float)) else None
             return {
                 "symbol":        ticker,
                 "name":          info.get("longName") or info.get("shortName") or ticker,
-                "price":         info.get("currentPrice") or info.get("regularMarketPrice") or 0,
-                "change1d":      info.get("regularMarketChangePercent") or 0,
-                "marketCap":     info.get("marketCap") or 0,
+                "price":         info.get("currentPrice") or info.get("regularMarketPrice"),
+                "change1d":      info.get("regularMarketChangePercent"),
+                "marketCap":     info.get("marketCap"),
                 "pe":            info.get("trailingPE"),
                 "pb":            info.get("priceToBook"),
                 "ps":            info.get("priceToSalesTrailingTwelveMonths"),
@@ -178,7 +209,7 @@ async def _yf_info(ticker: str) -> dict:
                 "roa":            info.get("returnOnAssets"),
                 "earningsGrowth": info.get("earningsGrowth"),
                 "revenueGrowth":  info.get("revenueGrowth"),
-                "debtToEquity":  info.get("debtToEquity"),
+                "debtToEquity":  de_ratio,
                 "netMargin":     info.get("profitMargins"),
                 "dividendYield": info.get("dividendYield"),
                 "beta":          info.get("beta"),
@@ -186,8 +217,7 @@ async def _yf_info(ticker: str) -> dict:
                 "industry":      info.get("industry"),
             }
         except Exception as e:
-            logger.warning("yf.info failed for %s: %s", ticker, e)
-            return {"symbol": ticker, "price": 0, "marketCap": 0}
+            return _empty(e)
 
     data = await asyncio.to_thread(_fetch)
     _cache_set(f"yfi:{ticker}", data, 4 * 3600)
@@ -367,8 +397,13 @@ def _ytd_change(history: list[dict]) -> Optional[float]:
 # ── Main service class ────────────────────────────────────────────────────────
 
 class SectorAnalyticsService:
-    def __init__(self, yahoo: YahooService):
+    def __init__(self, yahoo: YahooService, price=None):
+        """price: optional PriceService used to overlay the canonical
+        NSE/EOD price/change/previousClose onto each constituent stock,
+        so the sector-detail table matches Stock Lookup / Charts / Portfolio.
+        """
         self.yahoo = yahoo
+        self.price = price
 
     # ── Heatmap ───────────────────────────────────────────────────────────────
 
@@ -421,18 +456,23 @@ class SectorAnalyticsService:
             hist = hist_results[i] if not isinstance(hist_results[i], Exception) else []
             fb   = fallback_map.get(i, {})
 
+            # Use explicit None checks for fallback (NOT `or`) — a legit 0.0%
+            # change must NOT be replaced by the constituent-average fallback.
+            def _pref(primary: Optional[float], fallback: Optional[float]) -> Optional[float]:
+                return primary if primary is not None else fallback
+
             result.append({
                 "symbol":    nse_sym,
                 "name":      live.get("name", nse_sym),
                 "category":  live.get("category", ""),
                 "lastPrice": live.get("lastPrice", 0),
                 "change1d":  round(live.get("pChange", 0), 2),
-                "change1w":  _pct_change_from_history(hist, 5)   or fb.get("change1w"),
-                "change1m":  _pct_change_from_history(hist, 21)  or fb.get("change1m"),
+                "change1w":  _pref(_pct_change_from_history(hist, 5),   fb.get("change1w")),
+                "change1m":  _pref(_pct_change_from_history(hist, 21),  fb.get("change1m")),
                 "change3m":  _pct_change_from_history(hist, 63),
                 "change6m":  _pct_change_from_history(hist, 126),
-                "change1y":  _pct_change_from_history(hist, 252) or fb.get("change1y"),
-                "changeYTD": _ytd_change(hist)                   or fb.get("changeYTD"),
+                "change1y":  _pref(_pct_change_from_history(hist, 252), fb.get("change1y")),
+                "changeYTD": _pref(_ytd_change(hist),                   fb.get("changeYTD")),
                 "marketCap": SECTOR_MARKET_CAP_PROXY.get(nse_sym, 5.0),
                 "advances":  live.get("advances", 0),
                 "declines":  live.get("declines", 0),
@@ -474,20 +514,50 @@ class SectorAnalyticsService:
         constituents = SECTOR_CONSTITUENTS.get(sector_symbol, [])
 
         # Fetch everything in parallel
+        top_constituents = constituents[:10]
         sector_hist_task = _yf_history(yahoo_ticker, period)
         nifty_hist_task  = _yf_history("^NSEI", period)
-        stock_info_tasks = [_yf_info(s) for s in constituents[:10]]
+        stock_info_tasks = [_yf_info(s) for s in top_constituents]
+        # Canonical NSE/EOD overlay — bare symbol (no .NS) for PriceService
+        canonical_tasks = (
+            [self.price.get_quote_with_meta(s.replace(".NS", "")) for s in top_constituents]
+            if self.price else []
+        )
 
-        sector_hist, nifty_hist, *stock_infos = await asyncio.gather(
-            sector_hist_task, nifty_hist_task, *stock_info_tasks,
+        n = len(top_constituents)
+        gathered = await asyncio.gather(
+            sector_hist_task, nifty_hist_task,
+            *stock_info_tasks, *canonical_tasks,
             return_exceptions=True,
         )
+        sector_hist, nifty_hist = gathered[0], gathered[1]
+        stock_infos = list(gathered[2 : 2 + n])
+        canonicals  = list(gathered[2 + n : 2 + 2 * n]) if canonical_tasks else [None] * n
 
         if isinstance(sector_hist, Exception):
             sector_hist = []
         if isinstance(nifty_hist, Exception):
             nifty_hist = []
-        stock_infos = [s for s in stock_infos if not isinstance(s, Exception)]
+        stock_infos = [s if not isinstance(s, Exception) else {} for s in stock_infos]
+
+        # Overlay canonical NSE quote onto each constituent so the sector-detail
+        # table never contradicts Stock Lookup / Charts / Portfolio. Only
+        # overwrite a yfinance value when the canonical source actually
+        # provides one — never replace a real number with None.
+        for info, canon in zip(stock_infos, canonicals):
+            if isinstance(canon, Exception) or not canon:
+                continue
+            q = (canon or {}).get("quote") or {}
+            if q.get("lastPrice") is not None:
+                info["price"] = q.get("lastPrice")
+                if q.get("pChange") is not None:
+                    info["change1d"] = q.get("pChange")
+                if q.get("previousClose") is not None:
+                    info["previousClose"] = q.get("previousClose")
+                info["_priceSource"]  = canon.get("source")
+
+        # Drop empty fundamentals shells so they don't pollute aggregates / sorting.
+        stock_infos = [s for s in stock_infos if s and s.get("symbol")]
 
         # If Yahoo Finance has no index history for this sector, synthesize
         # a price series from constituent stocks (normalised equal-weight avg).
@@ -561,28 +631,34 @@ class SectorAnalyticsService:
         """Market-cap-weighted aggregate valuation ratios."""
         total_cap = sum(s.get("marketCap", 0) or 0 for s in stocks)
         if total_cap <= 0:
-            return {"pe": None, "pb": None, "ps": None, "evEbitda": None, "method": "cap_weighted"}
+            return {"pe": None, "pb": None, "ps": None, "evEbitda": None,
+                    "method": "cap_weighted", "sampleSize": 0}
 
-        def w_avg(field: str) -> Optional[float]:
+        def w_avg(field: str) -> tuple[Optional[float], int]:
             num = denom = 0.0
+            n = 0
             for s in stocks:
                 cap = s.get("marketCap") or 0
                 val = s.get(field)
                 if cap > 0 and val and val > 0:
                     num   += cap * val
                     denom += cap
-            return round(num / denom, 2) if denom > 0 else None
+                    n     += 1
+            return (round(num / denom, 2) if denom > 0 else None), n
 
-        pe       = w_avg("pe")
-        pb       = w_avg("pb")
-        ps       = w_avg("ps")
-        evEbitda = w_avg("evEbitda")
+        pe,       pe_n  = w_avg("pe")
+        pb,       pb_n  = w_avg("pb")
+        ps,       ps_n  = w_avg("ps")
+        evEbitda, ev_n  = w_avg("evEbitda")
 
         # Equal-weighted for comparison
         def e_avg(field: str) -> Optional[float]:
             vals = [s.get(field) for s in stocks if s.get(field) and s[field] > 0]
             return round(sum(vals) / len(vals), 2) if vals else None
 
+        # Headline sampleSize uses the strongest contributor (P/E) so the
+        # frontend "Based on N constituents" reflects actual coverage, not
+        # the total number of stocks pulled.
         return {
             "pe":           pe,
             "pb":           pb,
@@ -593,7 +669,11 @@ class SectorAnalyticsService:
             "ps_equal":     e_avg("ps"),
             "evEbitda_equal": e_avg("evEbitda"),
             "method":       "cap_weighted",
-            "sampleSize":   len(stocks),
+            "sampleSize":   pe_n,
+            "peSampleSize":       pe_n,
+            "pbSampleSize":       pb_n,
+            "psSampleSize":       ps_n,
+            "evEbitdaSampleSize": ev_n,
         }
 
     def _compute_profitability(self, stocks: list[dict]) -> dict:
@@ -657,5 +737,6 @@ class SectorAnalyticsService:
                 "dividendYield": s.get("dividendYield"),
                 "beta":          s.get("beta"),
                 "industry":      s.get("industry"),
+                "priceSource":   s.get("_priceSource"),
             })
         return sorted(rows, key=lambda r: r.get("marketCap") or 0, reverse=True)
