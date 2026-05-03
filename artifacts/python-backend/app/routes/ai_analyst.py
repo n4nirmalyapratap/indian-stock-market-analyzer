@@ -20,7 +20,7 @@ from typing import AsyncGenerator, List, Optional
 
 from fastapi import APIRouter, Request, Query, HTTPException, Body
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..services import ai_analyst_service as svc
 
@@ -60,10 +60,10 @@ async def quota(request: Request):
 
 @router.get("/report/{ticker}")
 async def report(ticker: str, request: Request):
-    rpt = svc.get_cached_report(ticker, _user_id(request))
+    rpt = svc.get_saved_single(ticker, _user_id(request))
     if not rpt:
         return JSONResponse(status_code=404,
-                            content={"error": "no cached report for today"})
+                            content={"error": "no saved report for this ticker"})
     return rpt
 
 
@@ -121,19 +121,24 @@ async def run_path(ticker: str, request: Request,
 
 @router.post("/compare")
 async def compare(request: Request,
-                  a: str = Query(...), b: str = Query(...)):
-    """Run two analyses in parallel. Reuses cached reports when present."""
+                  a: str = Query(...), b: str = Query(...),
+                  force: bool = Query(False)):
+    """Run two analyses in parallel. Serves the per-user saved single
+    report when present; ``force=true`` re-runs both. The combined pair
+    is also persisted as a saved entry under the sorted scope key
+    ``A|B`` so the user can re-open it from Saved Analyses."""
     if not svc.feature_enabled():
         raise HTTPException(503, "AI Analyst feature is disabled")
     user = _user_id(request)
 
     async def _one(t: str) -> dict:
-        cached = svc.get_cached_report(t, user)
-        if cached:
-            return cached
+        if not force:
+            saved = svc.get_saved_single(t, user)
+            if saved:
+                return saved
         # Drain the generator into the final report
         final = None
-        async for ev in svc.run_analysis(t, user, force_refresh=False):
+        async for ev in svc.run_analysis(t, user, force_refresh=force):
             if ev.get("phase") == "done":
                 final = ev.get("report")
             elif ev.get("phase") == "error":
@@ -142,12 +147,31 @@ async def compare(request: Request,
         return final or {"ticker": t.upper(), "error": "no report produced"}
 
     a_rpt, b_rpt = await asyncio.gather(_one(a), _one(b))
-    return {"a": a_rpt, "b": b_rpt, "quota": svc.get_quota(user)}
+    saved_meta = None
+    if not (a_rpt.get("error") or b_rpt.get("error")):
+        try:
+            saved_meta = svc.save_pair(user, a_rpt, b_rpt)
+        except Exception as e:  # pragma: no cover
+            logger.warning("save_pair failed: %s", e)
+    return {"a": a_rpt, "b": b_rpt,
+            "quota": svc.get_quota(user),
+            "saved": saved_meta}
+
+
+@router.get("/saved/pair")
+async def saved_pair(request: Request,
+                     a: str = Query(...), b: str = Query(...)):
+    rpt = svc.get_saved_pair(a, b, _user_id(request))
+    if not rpt:
+        return JSONResponse(status_code=404,
+                            content={"error": "no saved pair analysis"})
+    return rpt
 
 
 class ScanPayload(BaseModel):
     tickers: List[str]
     force: Optional[bool] = False
+    name: Optional[str] = Field(default=None, max_length=80)
 
 
 _MAX_SCAN = 50  # accommodates the default Nifty 50 watchlist in one scan
@@ -156,8 +180,9 @@ _MAX_SCAN = 50  # accommodates the default Nifty 50 watchlist in one scan
 @router.post("/scan")
 async def scan(request: Request, payload: ScanPayload = Body(...)):
     """SSE stream — sequentially scan a watchlist of tickers.
-    Cached reports are served free; fresh runs respect the daily quota and
-    the rest are reported as `skipped` once the quota is exhausted."""
+    Saved reports are served free; fresh runs respect the daily quota and
+    the rest are reported as ``skipped`` once the quota is exhausted.
+    The full group is persisted as a saved entry on completion."""
     if not svc.feature_enabled():
         raise HTTPException(503, "AI Analyst feature is disabled")
     if not payload.tickers:
@@ -167,8 +192,48 @@ async def scan(request: Request, payload: ScanPayload = Body(...)):
             400, f"too many tickers — max {_MAX_SCAN} per scan")
     return _stream_response(
         svc.scan_watchlist(payload.tickers, _user_id(request),
-                           force_refresh=bool(payload.force))
+                           force_refresh=bool(payload.force),
+                           group_name=payload.name)
     )
+
+
+@router.get("/saved/group")
+async def saved_group(request: Request, tickers: str = Query(...)):
+    """Fetch the saved scan/group for the given comma-separated ticker set."""
+    parts = [t for t in (tickers or "").split(",") if t.strip()]
+    if not parts:
+        raise HTTPException(400, "tickers required")
+    rpt = svc.get_saved_group(parts, _user_id(request))
+    if not rpt:
+        return JSONResponse(status_code=404,
+                            content={"error": "no saved group analysis"})
+    return rpt
+
+
+@router.get("/saved")
+async def saved_list(request: Request,
+                     scope: Optional[str] = Query(None),
+                     q: Optional[str] = Query(None),
+                     limit: int = Query(50, ge=1, le=200),
+                     offset: int = Query(0, ge=0)):
+    return svc.list_saved(_user_id(request), scope=scope, q=q,
+                          limit=limit, offset=offset)
+
+
+@router.get("/saved/{sid}")
+async def saved_get(sid: int, request: Request):
+    rpt = svc.get_saved_by_id(_user_id(request), sid)
+    if not rpt:
+        raise HTTPException(404, "saved analysis not found")
+    return rpt
+
+
+@router.delete("/saved/{sid}")
+async def saved_delete(sid: int, request: Request):
+    ok = svc.delete_saved(_user_id(request), sid)
+    if not ok:
+        raise HTTPException(404, "saved analysis not found")
+    return {"deleted": sid}
 
 
 @router.get("/admin/stats")
