@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from .nse_service import NseService
+from . import gmp_service
 
 logger = logging.getLogger("ipo")
 
@@ -155,14 +156,23 @@ class IpoService:
 
     async def get_calendar(self) -> dict:
         """Fetch the combined open+upcoming list, then enrich every OPEN
-        issue with its live subscription multiples (parallel fetches)."""
-        raw = await self._nse.fetch_nse(
-            "/api/all-upcoming-issues?category=ipo",
-            "ipo-upcoming-issues",
-            ttl=OPEN_TTL_SEC,
+        issue with its live subscription multiples and tag both open and
+        upcoming issues with grey-market-premium data when available
+        (parallel fetches for everything)."""
+        # NSE list + GMP scrape concurrently — neither depends on the other.
+        raw, gmp_table = await asyncio.gather(
+            self._nse.fetch_nse(
+                "/api/all-upcoming-issues?category=ipo",
+                "ipo-upcoming-issues",
+                ttl=OPEN_TTL_SEC,
+            ),
+            gmp_service.fetch_gmp_table(),
+            return_exceptions=True,
         )
-        if not isinstance(raw, list):
+        if isinstance(raw, Exception) or not isinstance(raw, list):
             return {"available": False, "message": "NSE IPO feed unavailable.", "open": [], "upcoming": []}
+        if isinstance(gmp_table, Exception):
+            gmp_table = {"byName": {}, "fetchedAt": None}
 
         items = [_normalise_issue(it) for it in raw if isinstance(it, dict) and it.get("symbol")]
 
@@ -180,6 +190,20 @@ class IpoService:
                 else:
                     it["subscription"] = {"qib": None, "nii": None, "retail": None, "total": None}
 
+        # Tag every issue (open + upcoming) with GMP data when we can match.
+        for it in items:
+            match = gmp_service.find_gmp(gmp_table, it["companyName"], it["symbol"])
+            if match:
+                it["gmp"] = {
+                    "premium":     match.get("gmp"),
+                    "estListing":  match.get("estListing"),
+                    "estGainPct":  match.get("estGainPct"),
+                    "lastUpdated": match.get("lastUpdated"),
+                    "matchedName": match.get("name"),
+                }
+            else:
+                it["gmp"] = None
+
         # Sort: open by closeDate ascending (closing soonest first), upcoming
         # by openDate ascending (next to launch first).
         open_items.sort(key=lambda x: x.get("closeDate") or "9999")
@@ -190,6 +214,10 @@ class IpoService:
             "open":      open_items,
             "upcoming":  upcoming,
             "fetchedAt": datetime.utcnow().isoformat() + "Z",
+            "gmpSource": {
+                "url":       (gmp_table or {}).get("sourceUrl"),
+                "fetchedAt": (gmp_table or {}).get("fetchedAt"),
+            },
         }
 
     async def _fetch_detail(self, symbol: str) -> Optional[dict]:
