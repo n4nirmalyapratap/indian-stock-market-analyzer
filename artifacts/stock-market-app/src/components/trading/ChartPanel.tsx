@@ -143,7 +143,7 @@ function fmtPrice(v: number): string {
 }
 
 // ── Heikin Ashi transform ─────────────────────────────────────────────────────
-function computeHA(cs: Candle[]): Candle[] {
+export function computeHA(cs: Candle[]): Candle[] {
   const out: Candle[] = [];
   for (let i = 0; i < cs.length; i++) {
     const c = cs[i];
@@ -186,7 +186,7 @@ function getGridBounds(chart: echarts.ECharts, candles: Candle[]) {
 }
 
 // Extend a ray (px,py) in direction (nx,ny) until it hits the box boundary [x0,y0,x1,y1]
-function extendRay(px: number, py: number, nx: number, ny: number, x0: number, y0: number, x1: number, y1: number): [number, number] {
+export function extendRay(px: number, py: number, nx: number, ny: number, x0: number, y0: number, x1: number, y1: number): [number, number] {
   let tMin = 1e9;
   if (nx > 0)  tMin = Math.min(tMin, (x1 - px) / nx);
   if (nx < 0)  tMin = Math.min(tMin, (x0 - px) / nx);
@@ -498,7 +498,7 @@ function shapeToPixels(
 
 // ── Eraser hit-testing ────────────────────────────────────────────────────────
 
-function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+export function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
   const dx = x2 - x1, dy = y2 - y1;
   const len2 = dx * dx + dy * dy;
   if (len2 === 0) return Math.hypot(px - x1, py - y1);
@@ -506,7 +506,7 @@ function distToSegment(px: number, py: number, x1: number, y1: number, x2: numbe
   return Math.hypot(px - x1 - t * dx, py - y1 - t * dy);
 }
 
-function distToRect(px: number, py: number, rx: number, ry: number, rw: number, rh: number): number {
+export function distToRect(px: number, py: number, rx: number, ry: number, rw: number, rh: number): number {
   const insideX = px >= rx && px <= rx + rw;
   const insideY = py >= ry && py <= ry + rh;
   if (insideX && insideY) return Math.min(px - rx, rx + rw - px, py - ry, ry + rh - py);
