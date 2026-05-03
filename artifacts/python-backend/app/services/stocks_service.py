@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 
 from .nse_service import NseService
 from .yahoo_service import YahooService
@@ -21,7 +22,8 @@ class StocksService:
         from . import market_cache_service as _disk
 
         upper = symbol.upper()
-        history = []
+        history: list[dict] = []
+        history_error: Optional[str] = None
 
         # CLOSE-TRANSITION CONSISTENCY: fetch & seal HISTORY first so that the
         # subsequent quote call sees an EOD-sealed snapshot and overlays the
@@ -33,8 +35,11 @@ class StocksService:
             h = await self.price.get_historical_data(upper, 300)  # 300 days ≈ 210 trading days — enough for EMA 200
             if h:
                 history = h
+            else:
+                history_error = "Provider returned no historical bars"
         except Exception as e:
             logger.warning("Historical data fetch failed for %s: %s", upper, e)
+            history_error = f"{type(e).__name__}: {e}"
 
         # Single source of truth for the quote (NSE primary, Yahoo fallback)
         quote_meta = await self.price.get_quote_with_meta(upper)
@@ -45,6 +50,26 @@ class StocksService:
         closes = [d["close"] for d in history if d.get("close")]
         analysis = self._analyze(history, closes) if len(closes) > 20 else None
 
+        # Honest analysis-availability surface. The previous payload silently
+        # collapsed "fetch failed" and "stock too new" into the same string —
+        # callers had no way to distinguish a transient provider outage from
+        # a structurally insufficient history.
+        if analysis is not None:
+            analysis_available  = True
+            analysis_error: Optional[str] = None
+            insight             = self._build_insight(quote_data, analysis)
+            entry_rec           = self._build_entry(quote_data, analysis)
+        else:
+            analysis_available  = False
+            if history_error:
+                analysis_error = f"Historical data fetch failed — {history_error}"
+            elif len(closes) <= 20:
+                analysis_error = f"Insufficient history ({len(closes)} bars; need >20 for EMA/RSI/MACD)"
+            else:
+                analysis_error = "Insufficient historical data"
+            insight   = analysis_error
+            entry_rec = None
+
         # Pull provenance from disk for the historical block
         hist_meta = _disk.load_with_meta(upper, 300) or {}
 
@@ -52,8 +77,10 @@ class StocksService:
             **quote_data,
             "symbol": upper,
             "technicalAnalysis": analysis,
-            "insight": self._build_insight(quote_data, analysis) if analysis else "Insufficient historical data",
-            "entryRecommendation": self._build_entry(quote_data, analysis) if analysis else None,
+            "analysisAvailable": analysis_available,
+            "analysisError":     analysis_error,
+            "insight": insight,
+            "entryRecommendation": entry_rec,
             "historicalData": history[-30:],
             "meta": {
                 "source":           quote_meta.get("source"),
@@ -191,8 +218,12 @@ class StocksService:
         ns = analysis.get("nearestSupport")
         nr = analysis.get("nearestResistance")
         price = analysis["currentPrice"]
-        rr = None
-        if nr and ns and (price - ns) > 0:
+        rr: Optional[str] = None
+        # R/R is only meaningful when the resistance sits *above* the price AND
+        # the support sits *below* it. The previous guard only checked the
+        # support side, so a resistance that was already breached (nr ≤ price)
+        # would yield a zero or negative reward leg dressed up as a real ratio.
+        if nr is not None and ns is not None and nr > price > ns:
             rr = f"{(nr - price) / (price - ns):.2f}"
 
         return {

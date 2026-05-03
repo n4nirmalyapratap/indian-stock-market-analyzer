@@ -4,6 +4,7 @@ All data is computed on-demand and cached in memory with TTLs.
 """
 from __future__ import annotations
 import asyncio
+import math
 import time
 from datetime import datetime
 from typing import Any, Optional
@@ -78,40 +79,53 @@ class AnalyticsService:
             return cached
 
         sector_data: dict[str, list[float]] = {}
+        fetch_errors: list[dict] = []
+        skipped_short: list[str] = []
 
         for name, ticker in SECTOR_YAHOO_TICKERS.items():
             try:
                 # ticker is e.g. "^NSEI" — YahooService now handles ^ prefix correctly
                 hist = await self.yahoo.get_historical_data(ticker, days)
                 if len(hist) < 5:
+                    skipped_short.append(name)
                     continue
                 closes = [d["close"] for d in hist if d.get("close")]
+                # Log returns are statistically additive and the standard input
+                # for return-correlation analysis. The previous simple-return
+                # implementation produced subtly biased correlations, especially
+                # on volatile sector indices.
                 returns = [
-                    (closes[i] - closes[i - 1]) / closes[i - 1] * 100
+                    math.log(closes[i] / closes[i - 1])
                     for i in range(1, len(closes))
+                    if closes[i - 1] > 0 and closes[i] > 0
                 ]
-                sector_data[name] = returns
+                if len(returns) >= 2:
+                    sector_data[name] = returns
+                else:
+                    skipped_short.append(name)
                 await asyncio.sleep(0.15)
-            except Exception:
-                pass
+            except Exception as e:
+                # Track per-sector failures honestly. The previous bare `pass`
+                # made provider outages indistinguishable from missing tickers.
+                fetch_errors.append({"sector": name, "error": f"{type(e).__name__}: {e}"})
 
-        if not sector_data:
-            # Fallback: use live sector pChange as single-point proxy
-            live = await self.sectors.get_all_sectors()
-            for s in live:
-                if s.get("pChange") is not None:
-                    sector_data[s["name"]] = [s["pChange"]]
+        # Single-point pChange fallback removed — it produced a "correlation"
+        # over a single day, which is mathematically meaningless. Returning
+        # `available: false` is more honest than fabricating a matrix.
 
         min_len = min(len(v) for v in sector_data.values()) if sector_data else 0
         if min_len < 2:
             result = {
+                "available": False,
                 "timestamp": datetime.utcnow().isoformat() + "Z",
                 "days": days,
                 "sectors": list(sector_data.keys()),
                 "correlationMatrix": [],
                 "topCorrelations": [],
                 "topDivergences": [],
-                "message": "Insufficient historical data; try again during market hours",
+                "fetchErrors":     fetch_errors,
+                "skippedSectors":  skipped_short,
+                "message": "Insufficient historical data for any sector; try again during market hours",
             }
             _set_cache(cache_key, result, 1800)
             return result
@@ -133,12 +147,17 @@ class AnalyticsService:
         pairs_sorted = sorted(pairs, key=lambda p: abs(p["correlation"]), reverse=True)
 
         result = {
+            "available": True,
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "days": days,
+            "returnsMethod":   "log",
+            "observationsPerSector": min_len,
             "sectors": sectors_list,
             "correlationMatrix": [[round(float(v), 3) for v in row] for row in matrix],
             "topCorrelations": [p for p in pairs_sorted if p["correlation"] >= 0.6][:10],
             "topDivergences":  [p for p in pairs_sorted if p["correlation"] <= -0.2][:5],
+            "fetchErrors":     fetch_errors,
+            "skippedSectors":  skipped_short,
         }
         _set_cache(cache_key, result, 3600)
         return result
@@ -189,14 +208,20 @@ class AnalyticsService:
                 else:
                     unchanged += 1
             total = advances + declines + unchanged
-            ad_ratio = advances / declines if declines > 0 else float(advances)
+            # When declines == 0 the ratio is undefined (division by zero).
+            # The old code returned `float(advances)` here, which silently
+            # mixed a *count* into a *ratio* — a 25-advance day looked like
+            # a "25:1" breadth ratio. Returning None and a separate flag
+            # is honest.
+            ad_ratio: Optional[float] = round(advances / declines, 2) if declines > 0 else None
             breadth_series.append({
                 "date": date,
                 "advances": advances,
                 "declines": declines,
                 "unchanged": unchanged,
                 "total": total,
-                "adRatio": round(ad_ratio, 2),
+                "adRatio": ad_ratio,
+                "oneSidedAdvance": declines == 0 and advances > 0,
                 "breadthScore": round(advances / total * 100, 1) if total > 0 else 0,
             })
 
