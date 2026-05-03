@@ -1,20 +1,21 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
-import { PageHeader, PillTabs, Card, Loading, EmptyState, MenuDropdown, ErrorState, useChartPalette } from "../_shared";
-import { LineChart as LCIcon, X } from "lucide-react";
+import { PageHeader, PillTabs, Card, Loading, EmptyState, MenuDropdown, useChartPalette } from "../_shared";
+import { LineChart as LCIcon, X, Info } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, Legend, CartesianGrid } from "recharts";
 import DataFreshness from "@/components/DataFreshness";
 import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 type Period = "1m" | "6m" | "1y" | "5y" | "10y";
-type Metric = "pe" | "pb" | "dy";
+type Metric = "price" | "indexed" | "change";
 
 interface PointBag { date: string; [key: string]: number | string; }
 
 interface ValuationResponse {
   available: boolean;
   message?: string;
+  metric?: Metric;
   series: PointBag[];
   indices: { code: string; label: string; lastPrice?: number; change?: number; changePct?: number; }[];
 }
@@ -44,34 +45,37 @@ const ALL_INDEX_OPTIONS = [
 
 // Distinct, accessible chart colors that work in both themes.
 const CHART_COLORS = [
-  "#6366f1", // indigo
-  "#10b981", // emerald
-  "#f59e0b", // amber
-  "#ec4899", // pink
-  "#06b6d4", // cyan
-  "#a855f7", // purple
-  "#ef4444", // rose
-  "#84cc16", // lime
-  "#3b82f6", // blue
-  "#f97316", // orange
+  "#6366f1", "#10b981", "#f59e0b", "#ec4899", "#06b6d4",
+  "#a855f7", "#ef4444", "#84cc16", "#3b82f6", "#f97316",
 ];
+
+const METRIC_OPTIONS: { value: Metric; label: string }[] = [
+  { value: "indexed", label: "Indexed (100)" },
+  { value: "price",   label: "Price" },
+  { value: "change",  label: "% Change" },
+];
+
+const formatValue = (v: number | string | undefined, metric: Metric) => {
+  if (v === undefined || v === null || v === "") return "—";
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return "—";
+  if (metric === "change") return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
+  if (metric === "price")  return n.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+  return n.toFixed(2); // indexed → 100-based
+};
 
 export default function MarketValuation() {
   const [period, setPeriod] = useState<Period>("5y");
-  const [metric, setMetric] = useState<Metric>("pe");
+  const [metric, setMetric] = useState<Metric>("indexed");
   const [selected, setSelected] = useState<string[]>(["^NSEI", "^NSEBANK"]);
   const [adding, setAdding] = useState("");
 
   const codes = selected.join(",");
 
   const palette = useChartPalette();
-  const cBorder = palette.border;
-  const cMuted  = palette.muted;
-  const cText   = palette.text;
-  const cSurf   = palette.surf;
-  const cAccent = palette.accent;
+  const { border: cBorder, muted: cMuted, text: cText, surf: cSurf, accent: cAccent } = palette;
 
-  const { data, isLoading, error } = useQuery<ValuationResponse>(
+  const { data, isLoading } = useQuery<ValuationResponse>(
     marketDataQueryOptions<ValuationResponse, { enabled: boolean }>(
       ["insights/index-valuation", codes, period, metric],
       () => fetchApi(`/insights/index-valuation?indices=${encodeURIComponent(codes)}&period=${period}&metric=${metric}`),
@@ -95,16 +99,20 @@ export default function MarketValuation() {
   const labelFor = (code: string) =>
     ALL_INDEX_OPTIONS.find(o => o.code === code)?.label || code;
 
+  const subtitle =
+    metric === "indexed" ? "Compare relative performance of NSE indices, rebased to 100 at the start of the window."
+    : metric === "price" ? "Daily closing levels of selected NSE indices."
+    : "Percent change of each index from the start of the window.";
+
   return (
     <div>
-      <PageHeader title="Market Valuation"
-        info="Historical price levels of selected indices. Add or remove sectors to compare."/>
+      <PageHeader title="Index Comparison" info={subtitle}/>
 
       <div className="mb-3">
         <DataFreshness meta={valuationMeta} refreshKeys={[["insights/index-valuation", codes, period, metric]]} />
       </div>
 
-      {/* Selected sector cards */}
+      {/* Selected index cards */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
         {selected.map((code, i) => {
           const meta = data?.indices?.find(x => x.code === code);
@@ -118,7 +126,9 @@ export default function MarketValuation() {
                 </p>
                 {meta?.lastPrice != null && (
                   <p className="text-[11px] tabular-nums leading-tight">
-                    <span className="font-semibold text-gray-900 dark:text-white">{meta.lastPrice?.toFixed(2)}</span>
+                    <span className="font-semibold text-gray-900 dark:text-white">
+                      {meta.lastPrice.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                    </span>
                     <span className={`ml-1 ${(meta.change ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-500"}`}>
                       {(meta.change ?? 0) >= 0 ? "+" : ""}{meta.changePct?.toFixed(2)}%
                     </span>
@@ -136,14 +146,14 @@ export default function MarketValuation() {
           );
         })}
 
-        {/* Add another sector */}
+        {/* Add another index */}
         {addable.length > 0 && selected.length < 6 && (
           <MenuDropdown
             label="+ Add"
             value={adding as string}
             onChange={(v) => add(v as string)}
             options={addable.map(o => ({ value: o.code, label: o.label }))}
-            placeholder="Pick a sector"
+            placeholder="Pick an index"
             minButtonWidth={150}
             maxButtonWidth={240}
           />
@@ -155,17 +165,15 @@ export default function MarketValuation() {
         <PillTabs value={period} onChange={(v) => setPeriod(v as Period)} options={[
           {value:"1m",label:"1M"},{value:"6m",label:"6M"},{value:"1y",label:"1Y"},{value:"5y",label:"5Y"},{value:"10y",label:"10Y"},
         ]}/>
-        <PillTabs value={metric} onChange={(v) => setMetric(v as Metric)} options={[
-          {value:"pe",label:"Price"},{value:"pb",label:"Normalized"},{value:"dy",label:"% Change"},
-        ]}/>
+        <PillTabs value={metric} onChange={(v) => setMetric(v as Metric)} options={METRIC_OPTIONS}/>
       </div>
 
       {isLoading && <Loading />}
       {!isLoading && data && data.series.length === 0 && (
         <EmptyState
           icon={<LCIcon className="w-10 h-10" />}
-          title="No valuation history"
-          message={data.message || "Index valuation history not currently available."}
+          title="No history available"
+          message={data.message || "Index history not currently available."}
         />
       )}
 
@@ -185,6 +193,8 @@ export default function MarketValuation() {
                   tick={{ fontSize: 11, fill: cMuted }}
                   stroke={cBorder}
                   width={56}
+                  tickFormatter={(v) => formatValue(v, metric)}
+                  domain={metric === "change" ? ["auto", "auto"] : ["auto", "auto"]}
                 />
                 <Tooltip
                   contentStyle={{
@@ -196,23 +206,31 @@ export default function MarketValuation() {
                   }}
                   labelStyle={{ color: cMuted, marginBottom: 4 }}
                   cursor={{ stroke: cAccent, strokeOpacity: 0.3 }}
+                  formatter={(value: number | string, name: string) => [formatValue(value, metric), labelFor(name)]}
                 />
-                <Legend wrapperStyle={{ fontSize: 12, color: cText }} />
-                {selected.map((code, i) => {
-                  const lbl = labelFor(code);
-                  return (
-                    <Line key={code}
-                          type="monotone"
-                          dataKey={lbl}
-                          stroke={CHART_COLORS[i % CHART_COLORS.length]}
-                          dot={false}
-                          strokeWidth={2}
-                          connectNulls />
-                  );
-                })}
+                <Legend
+                  wrapperStyle={{ fontSize: 12, color: cText }}
+                  formatter={(value: string) => labelFor(value)}
+                />
+                {selected.map((code, i) => (
+                  <Line key={code}
+                        type="monotone"
+                        dataKey={code}
+                        name={code}
+                        stroke={CHART_COLORS[i % CHART_COLORS.length]}
+                        dot={false}
+                        strokeWidth={2}
+                        connectNulls />
+                ))}
               </LineChart>
             </ResponsiveContainer>
           </div>
+          {data.message && (
+            <p className="mt-3 flex items-start gap-1.5 text-[11px] text-gray-500 dark:text-gray-400">
+              <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+              <span>{data.message}</span>
+            </p>
+          )}
         </Card>
       )}
     </div>
