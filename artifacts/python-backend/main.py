@@ -234,15 +234,40 @@ async def lifespan(app: FastAPI):
     warmup_task     = asyncio.create_task(_cache_warmup_task())
     transition_task = asyncio.create_task(_market_state_transition_loop())
     fixer_task      = asyncio.create_task(_bug_fixer_loop())
+    rfr_task        = asyncio.create_task(_risk_free_rate_scheduler())
     try:
         yield
     finally:
-        for t in (poll_task, universe_task, warmup_task, transition_task, fixer_task):
+        for t in (poll_task, universe_task, warmup_task, transition_task,
+                  fixer_task, rfr_task):
             t.cancel()
             try:
                 await t
             except asyncio.CancelledError:
                 pass
+
+
+async def _risk_free_rate_scheduler() -> None:
+    """Refresh the FRED India 10Y G-Sec yield on startup, then once a day.
+
+    Loud-fallback design: every refresh logs at INFO on success and WARNING
+    on stale/hard-fallback so operators see exactly which value the pricing
+    layer is using.  Never raises — falls back via the standard chain.
+    """
+    from app.services.risk_free_service import refresh_risk_free_rate_on_startup
+    # Brief delay so the rest of the startup logging is grouped first
+    await asyncio.sleep(2)
+    while True:
+        try:
+            await refresh_risk_free_rate_on_startup()
+        except Exception as exc:
+            logger.warning("risk-free scheduler tick failed: %s", exc)
+        # 24h refresh — matches the in-memory cache TTL
+        try:
+            await asyncio.sleep(24 * 3600)
+        except asyncio.CancelledError:
+            logger.info("Risk-free scheduler stopped.")
+            break
 
 
 async def _universe_scheduler() -> None:

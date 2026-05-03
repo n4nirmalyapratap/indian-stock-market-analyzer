@@ -727,10 +727,11 @@ async def get_compliance(symbol: Optional[str] = None,
             "spot": spot_px,
             "weekly_available_now": sebi_registry.is_weekly_available(canon, target_date),
             "applicable_circulars": [
-                c for c in [
+                {"ref": ref, "url": sebi_registry.circular_url(ref)}
+                for ref in [
                     lot_rule.circular_ref if lot_rule else None,
                     snap["cost_schedule"]["circular_ref"],
-                ] if c
+                ] if ref
             ],
         }
 

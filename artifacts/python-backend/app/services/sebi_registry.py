@@ -429,6 +429,57 @@ COST_SCHEDULES: list[CostSchedule] = [
 ]
 
 
+# ── Circular URL lookup ───────────────────────────────────────────────────────
+# Maps the `circular_ref` strings stored in this registry to a real URL from
+# the historical SEBI / Finance / NSE circular database.  Lazy-loaded so the
+# heavy database import only happens when the compliance endpoint is hit.
+
+_CIRCULAR_URL_INDEX: dict[str, str] | None = None
+
+
+def _build_circular_url_index() -> dict[str, str]:
+    """Index every known circular by its number → url, plus a few short-form
+    aliases used in this file (e.g. 'SEBI/HO/MRD/MRD-PoD-2/P/CIR/2024/113')."""
+    try:
+        from scripts.sebi_circulars_db import HISTORICAL_CIRCULARS
+    except Exception:
+        return {}
+    idx: dict[str, str] = {}
+    for c in HISTORICAL_CIRCULARS:
+        num = str(c.get("circular_number") or "").strip()
+        url = str(c.get("url") or "").strip()
+        if num and url:
+            idx[num] = url
+    return idx
+
+
+def circular_url(circular_ref: Optional[str]) -> Optional[str]:
+    """Return the canonical URL for a `circular_ref` string, or None.
+
+    The match is substring-based so refs like
+    ``"Finance (No. 2) Act 2024 §163; NSE/FAOP/63450"`` still resolve when
+    one of the comma/semicolon-separated tokens is in the URL index.
+    """
+    global _CIRCULAR_URL_INDEX
+    if _CIRCULAR_URL_INDEX is None:
+        _CIRCULAR_URL_INDEX = _build_circular_url_index()
+    if not circular_ref or not _CIRCULAR_URL_INDEX:
+        return None
+    # Exact match first
+    if circular_ref in _CIRCULAR_URL_INDEX:
+        return _CIRCULAR_URL_INDEX[circular_ref]
+    # Then try each semicolon-separated token
+    for tok in circular_ref.replace(",", ";").split(";"):
+        tok = tok.strip()
+        if tok and tok in _CIRCULAR_URL_INDEX:
+            return _CIRCULAR_URL_INDEX[tok]
+    # Last resort: substring match on full ref (e.g. "SEBI/...2024/113")
+    for num, url in _CIRCULAR_URL_INDEX.items():
+        if num and num in circular_ref:
+            return url
+    return None
+
+
 def get_cost_schedule(on_date: Optional[date] = None) -> CostSchedule:
     target = on_date or date.today()
     matching = [c for c in COST_SCHEDULES if c.effective_from <= target]
@@ -527,6 +578,7 @@ def compliance_snapshot(symbol: Optional[str] = None,
                 "value": lot.lot_size if lot else None,
                 "effective_from": lot.effective_from.isoformat() if lot else None,
                 "circular_ref": lot.circular_ref if lot else None,
+                "circular_url": circular_url(lot.circular_ref) if lot else None,
                 "notes": lot.notes if lot else "",
             },
             "expiry_weekday": {
@@ -557,6 +609,7 @@ def compliance_snapshot(symbol: Optional[str] = None,
             "gst_pct": sched.gst_pct,
             "brokerage_per_order": sched.brokerage_per_order,
             "circular_ref": sched.circular_ref,
+            "circular_url": circular_url(sched.circular_ref),
         },
         "holidays_this_year": sorted(
             d.isoformat() for d in NSE_HOLIDAYS.get(target.year, set())
@@ -651,4 +704,5 @@ def estimate_strategy_costs(
         "total":   round(grand_total, 2),
         "schedule_effective_from": sched.effective_from.isoformat(),
         "circular_ref": sched.circular_ref,
+        "circular_url": circular_url(sched.circular_ref),
     }
