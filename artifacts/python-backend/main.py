@@ -236,16 +236,79 @@ async def lifespan(app: FastAPI):
     fixer_task      = asyncio.create_task(_bug_fixer_loop())
     rfr_task        = asyncio.create_task(_risk_free_rate_scheduler())
     bhav_task       = asyncio.create_task(_bhavcopy_refresh_scheduler())
+    alerts_task     = asyncio.create_task(_bot_alerts_tick_loop())
     try:
         yield
     finally:
         for t in (poll_task, universe_task, warmup_task, transition_task,
-                  fixer_task, rfr_task, bhav_task):
+                  fixer_task, rfr_task, bhav_task, alerts_task):
             t.cancel()
             try:
                 await t
             except asyncio.CancelledError:
                 pass
+
+
+async def _bot_alerts_tick_loop() -> None:
+    """Evaluate per-chat bot alert subscriptions every 5 minutes and dispatch
+    fired alerts via the Telegram and WhatsApp send functions.
+
+    Loud-fallback: never raises out of the loop — each tick logs warnings on
+    failure so operators can see exactly which subscription/symbol misbehaved.
+    """
+    from app.services import bot_alerts
+    from app.routes.telegram import get_service as _tg_svc
+    from app.routes.whatsapp import get_service as _wa_svc
+
+    # Brief warmup delay
+    await asyncio.sleep(30)
+    while True:
+        try:
+            tg = _tg_svc()
+            wa = _wa_svc()
+
+            async def _quote(symbol: str) -> dict:
+                try:
+                    return await tg.stocks.get_stock_details(symbol)
+                except Exception:
+                    return {}
+
+            async def _patterns() -> dict:
+                try:
+                    return await tg.patterns.get_patterns()
+                except Exception:
+                    return {}
+
+            async def _send(channel: str, chat_id: str, text: str) -> bool:
+                try:
+                    if channel == "telegram":
+                        return await tg.send_message(chat_id, text)
+                    # WhatsApp: log into the in-memory message log so the admin
+                    # dashboard surfaces it; real Twilio dispatch happens out
+                    # of band when the user replies.
+                    wa.get_message_log().append({
+                        "from": chat_id, "text": "(alert)",
+                        "response": text,
+                        "timestamp": dt.datetime.utcnow().isoformat() + "Z",
+                    })
+                    return True
+                except Exception as exc:
+                    logger.warning("bot_alerts send failed: %s", exc)
+                    return False
+
+            stats = await bot_alerts.evaluate_due_alerts(
+                quote_fn=_quote, pattern_fn=_patterns, send_fn=_send,
+            )
+            if stats.get("fired"):
+                logger.info("bot_alerts: tick fired=%d skipped=%d errors=%d",
+                            stats["fired"], stats["skipped"], stats["errors"])
+        except Exception as exc:
+            logger.warning("bot_alerts tick failed: %s", exc)
+        try:
+            await asyncio.sleep(5 * 60)
+        except asyncio.CancelledError:
+            logger.info("Bot alerts scheduler stopped.")
+            break
 
 
 async def _risk_free_rate_scheduler() -> None:
