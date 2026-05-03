@@ -250,7 +250,7 @@ export default function Heatmap() {
   }, [items, sortBy, containerW, containerH]);
 
   return (
-    <div className="h-full min-h-0 flex flex-col overflow-hidden relative bg-slate-950">
+    <div className="h-full min-h-0 flex flex-col overflow-hidden relative bg-slate-100 dark:bg-slate-950">
       {/* Dynamic Background Glow — drifts slowly + tints with market mood.
           Continuous motion is disabled when the user prefers reduced motion. */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
@@ -294,63 +294,63 @@ export default function Heatmap() {
       </div>
 
       {/* Unified Aesthetic Command Center */}
-      <div className="absolute top-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 p-1 bg-black/40 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl transition-all hover:bg-black/60">
+      <div className="absolute top-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 p-1 bg-white/80 dark:bg-black/40 backdrop-blur-2xl border border-slate-200 dark:border-white/10 rounded-2xl shadow-2xl transition-all hover:bg-white dark:hover:bg-black/60">
         
         {/* Integrated Back Button */}
         <button
           onClick={() => navigate("/insights")}
-          className="p-2 hover:bg-white/10 rounded-xl text-white/40 hover:text-white transition-all group/back"
+          className="p-2 hover:bg-slate-100 dark:hover:bg-white/10 rounded-xl text-slate-500 dark:text-white/40 hover:text-slate-900 dark:hover:text-white transition-all group/back"
           title="Back to insights"
         >
           <ArrowLeft className="w-4 h-4 group-hover/back:-translate-x-0.5 transition-transform" />
         </button>
 
-        <div className="w-[1px] h-6 bg-white/10 mx-1" />
+        <div className="w-[1px] h-6 bg-slate-200 dark:bg-white/10 mx-1" />
         
         {/* Market Status Section */}
         {data?.indexPrice != null && (
           <div className="pl-4 pr-3 flex items-center gap-3">
             <div className="flex flex-col">
-              <span className="text-[9px] uppercase tracking-tighter text-white/40 font-black leading-none">{data.label || "Market"}</span>
-              <span className="text-sm font-black text-white tracking-tighter">{data.indexPrice.toLocaleString()}</span>
+              <span className="text-[9px] uppercase tracking-tighter text-slate-500 dark:text-white/40 font-black leading-none">{data.label || "Market"}</span>
+              <span className="text-sm font-black text-slate-900 dark:text-white tracking-tighter">{data.indexPrice.toLocaleString()}</span>
             </div>
-            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-lg shadow-sm ${(data.indexChange ?? 0) >= 0 ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/20 text-red-400"}`}>
+            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-lg shadow-sm ${(data.indexChange ?? 0) >= 0 ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-400" : "bg-red-500/20 text-red-700 dark:text-red-400"}`}>
               {(data.indexChangePct ?? 0).toFixed(2)}%
             </span>
           </div>
         )}
 
-        <div className="w-[1px] h-6 bg-white/10 mx-1" />
+        <div className="w-[1px] h-6 bg-slate-200 dark:bg-white/10 mx-1" />
 
         {/* Index Selector */}
         <MenuDropdown label="" value={index} onChange={setIndex} options={indexOptions.length ? indexOptions : [{ value: "NIFTY50", label: "Nifty 50" }]} 
-          customButton={<button className="px-3 py-1.5 text-xs font-bold text-white/70 hover:text-white transition-colors flex items-center gap-2 group/btn">
-            <LayoutGrid className="w-3.5 h-3.5 text-indigo-400 group-hover/btn:scale-110 transition-transform" /> {indexOptions.find(o => o.value === index)?.label || "Select Index"}
+          customButton={<button className="px-3 py-1.5 text-xs font-bold text-slate-700 dark:text-white/70 hover:text-slate-900 dark:hover:text-white transition-colors flex items-center gap-2 group/btn">
+            <LayoutGrid className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400 group-hover/btn:scale-110 transition-transform" /> {indexOptions.find(o => o.value === index)?.label || "Select Index"}
           </button>}
         />
 
-        <div className="w-[1px] h-4 bg-white/5" />
+        <div className="w-[1px] h-4 bg-slate-200 dark:bg-white/5" />
 
         {/* Timeframe Scroller */}
-        <div className="flex bg-white/5 rounded-xl p-0.5">
+        <div className="flex bg-slate-100 dark:bg-white/5 rounded-xl p-0.5">
           {PERF_OPTIONS.map(o => (
             <button key={o.value} onClick={() => setPerf(o.value)} 
-              className={`px-3 py-1 text-[10px] font-black rounded-lg transition-all ${perf === o.value ? "bg-white/10 text-white shadow-lg" : "text-white/30 hover:text-white/50"}`}>
+              className={`px-3 py-1 text-[10px] font-black rounded-lg transition-all ${perf === o.value ? "bg-white dark:bg-white/10 text-slate-900 dark:text-white shadow-lg" : "text-slate-500 dark:text-white/30 hover:text-slate-700 dark:hover:text-white/50"}`}>
               {o.label}
             </button>
           ))}
         </div>
 
-        <div className="w-[1px] h-4 bg-white/5" />
+        <div className="w-[1px] h-4 bg-slate-200 dark:bg-white/5" />
 
         {/* Sort & Logic Tooltip */}
         <div className="relative group/sort">
           <MenuDropdown label="" value={sortBy} onChange={(v) => setSortBy(v as SortBy)} options={SORT_OPTIONS}
-            customButton={<button className="px-3 py-1.5 text-xs font-bold text-white/70 hover:text-white transition-colors flex items-center gap-2">
-              <Zap className="w-3.5 h-3.5 text-amber-400" /> {SORT_OPTIONS.find(o => o.value === sortBy)?.label}
+            customButton={<button className="px-3 py-1.5 text-xs font-bold text-slate-700 dark:text-white/70 hover:text-slate-900 dark:hover:text-white transition-colors flex items-center gap-2">
+              <Zap className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400" /> {SORT_OPTIONS.find(o => o.value === sortBy)?.label}
             </button>}
           />
-          <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 px-2 py-1 bg-black/80 backdrop-blur-md rounded-lg text-[9px] text-white/40 whitespace-nowrap opacity-0 group-hover/sort:opacity-100 transition-opacity pointer-events-none border border-white/5">
+          <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 px-2 py-1 bg-slate-900/90 dark:bg-black/80 backdrop-blur-md rounded-lg text-[9px] text-white/70 dark:text-white/40 whitespace-nowrap opacity-0 group-hover/sort:opacity-100 transition-opacity pointer-events-none border border-white/10 dark:border-white/5">
             Tile size: {sortBy === "marketCap" ? "Weighted Cap" : sortBy === "change" ? "Volatility" : "Uniform"}
           </div>
         </div>
@@ -360,8 +360,13 @@ export default function Heatmap() {
       {error && <ErrorState message={(error as Error).message} />}
 
       {/* The Heatmap Canvas */}
-      <div ref={containerRef} className="flex-1 min-h-0 relative m-2 md:m-4 rounded-3xl overflow-hidden border border-white/5 shadow-2xl bg-black/20">
-        <AnimatePresence mode="popLayout">
+      <div ref={containerRef} className="flex-1 min-h-0 relative m-2 md:m-4 rounded-3xl overflow-hidden border border-slate-200 dark:border-white/5 shadow-2xl bg-white/40 dark:bg-black/20">
+        {/* Keying the AnimatePresence by index+perf forces every tile to
+            unmount/remount when the user switches index or timeframe, so
+            the wave-stagger entrance animation always replays — even when
+            data comes back instantly from cache. Sort changes keep the
+            same key so tiles re-flow smoothly without re-entering. */}
+        <AnimatePresence mode="popLayout" key={`${index}-${perf}`}>
           {rects?.map(({ x, y, w, h, item }, idx) => {
             const style = bucket(item.changePct);
             const isSmall = w < 70 || h < 50;
@@ -369,31 +374,54 @@ export default function Heatmap() {
             const cleanSymbol = item.symbol.split(".")[0];
             const isTopMover = topMovers.has(item.symbol);
             const isClicked = clicked === item.symbol;
-            // Wave-stagger: tiles flow in diagonally from top-left to bottom-right.
-            // Skipped entirely when reduced motion is preferred.
-            const diag = reduced ? 0 : (containerW && containerH)
-              ? (x / containerW + y / containerH) * 0.25
-              : Math.min(idx * 0.005, 0.4);
+            // SUPERNOVA entrance — every tile literally flies from the
+            // top-left corner of the canvas to its final spot. Stagger is
+            // ordered by Manhattan distance from the corner, so the grid
+            // unfurls outward like a shockwave. Tiles closer to the corner
+            // land first; the farthest tile is delayed by ~280ms.
+            const dist = (x + y);
+            const maxDist = (containerW + containerH) || 1;
+            const fanDelay = reduced ? 0 : (dist / maxDist) * 0.28;
 
             return (
               <motion.div
                 key={item.symbol}
-                initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, filter: "blur(14px)" }}
+                // Position via inline style (paint-only) — animating
+                // left/top/width/height triggers per-frame layout on every
+                // tile and is what makes big grids feel laggy.
+                style={{ left: x, top: y, width: w - 1, height: h - 1, willChange: "transform, opacity" }}
+                // The tile starts translated by -(x,y) — i.e. visually
+                // sitting in the top-left corner — slightly shrunk and
+                // rotated. Then it shoots out to its destination on a
+                // critically-damped spring (no wobble, single soft landing).
+                // Only `transform` + `opacity` animate, both compositor-only,
+                // so even Nifty 500 stays at 60fps.
+                initial={reduced
+                  ? { opacity: 0 }
+                  : { opacity: 0, x: -x, y: -y, scale: 0.45, rotate: -10 }}
                 animate={{
                   opacity: 1,
+                  x: 0,
+                  y: 0,
+                  rotate: 0,
                   scale: isClicked && !reduced ? [1, 1.08, 1] : 1,
-                  filter: "blur(0px)",
-                  left: x, top: y, width: w - 1, height: h - 1,
                 }}
-                exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 1.15, filter: "blur(20px)" }}
+                exit={reduced
+                  ? { opacity: 0 }
+                  : { opacity: 0, scale: 0.6, x: -x * 0.5, y: -y * 0.5, rotate: -6 }}
                 transition={reduced
-                  ? { duration: 0.15, delay: 0 }
+                  ? { duration: 0.12, delay: 0 }
                   : {
                       type: "spring",
                       stiffness: 240,
-                      damping: 26,
+                      damping: 30,
                       mass: 0.7,
-                      delay: diag,
+                      delay: fanDelay,
+                      // Opacity races ahead of the spring so tiles become
+                      // visible the moment they leave the corner — that's
+                      // what gives the "shooting" feel.
+                      opacity: { duration: 0.22, ease: [0.22, 1, 0.36, 1], delay: fanDelay },
+                      rotate: { type: "spring", stiffness: 220, damping: 28, delay: fanDelay },
                       scale: isClicked ? { duration: 0.35, ease: "easeOut" } : undefined,
                     }
                 }
@@ -488,7 +516,7 @@ export default function Heatmap() {
                       <motion.div
                         initial={reduced ? { opacity: 0 } : { opacity: 0, y: 4 }}
                         animate={{ opacity: 0.95, y: 0 }}
-                        transition={reduced ? { duration: 0.15 } : { delay: diag + 0.15, duration: 0.4 }}
+                        transition={reduced ? { duration: 0.15 } : { delay: fanDelay + 0.15, duration: 0.4 }}
                         className={`font-bold flex items-center gap-1 ${style.text}`}
                         style={{ fontSize: Math.max(8, Math.min(12, Math.floor(Math.min(w, h) / 8))) }}
                       >
@@ -517,7 +545,7 @@ export default function Heatmap() {
               animate={reduced ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
               exit={reduced ? { opacity: 0, transition: { duration: 0.1 } } : { opacity: 0, scale: 0.95, y: 2, transition: { duration: 0.12 } }}
               transition={reduced ? { duration: 0.12 } : { type: "spring", stiffness: 500, damping: 32, mass: 0.6 }}
-              className="fixed z-[100] pointer-events-none bg-black/90 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl px-3 py-2.5 text-white origin-top-left"
+              className="fixed z-[100] pointer-events-none bg-slate-900/95 dark:bg-black/90 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl px-3 py-2.5 text-white origin-top-left"
               style={{ width: TOOLTIP_W, left: tipLeft, top: tipTop }}
             >
               {/* Glowing top accent that matches the tile's mood */}
@@ -559,7 +587,7 @@ export default function Heatmap() {
       </AnimatePresence>
 
       {data?.available === false && (
-        <div className="absolute inset-0 flex items-center justify-center z-40 bg-slate-950/80 backdrop-blur-md">
+        <div className="absolute inset-0 flex items-center justify-center z-40 bg-slate-100/80 dark:bg-slate-950/80 backdrop-blur-md">
           <EmptyState title="Index unavailable" message={data.message || "This index doesn't support heatmap visualization yet."} icon={<LayoutGrid className="w-10 h-10 text-indigo-500/50"/>} />
         </div>
       )}

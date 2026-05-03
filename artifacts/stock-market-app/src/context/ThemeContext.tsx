@@ -58,6 +58,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     (document as Document & { startViewTransition: (cb: () => void) => unknown })
       .startViewTransition(() => {
         flushSync(() => {
+          // Toggle the html.dark class *inside* the synchronous render so any
+          // dark-mode-aware code (chart palettes, recharts inline styles, etc.)
+          // sees the new theme during this same paint. Otherwise the useEffect
+          // that flips the class runs after the View Transitions snapshot,
+          // and heavy chart-laden tabs get captured with stale colours — the
+          // ripple plays but the underlying paint never changes.
+          if (next === "dark") root.classList.add("dark");
+          else root.classList.remove("dark");
           setThemeState(next);
         });
       });
