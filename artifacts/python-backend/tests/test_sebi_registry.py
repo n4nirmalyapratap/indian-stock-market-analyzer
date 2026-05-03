@@ -293,3 +293,31 @@ class TestStrategyEstimators:
         costs = reg.estimate_strategy_costs(legs, lot_size=75)
         assert costs["per_leg"] == []
         assert costs["total"] == 0
+
+
+class TestSymbolAwareDefaults:
+
+    def test_options_service_strike_step_uses_symbol(self):
+        from app.services.options_service import _strike_step, atm_strike
+        # Symbol-aware: BANKNIFTY @ 50_000 → 100 step (matches legacy too)
+        assert _strike_step(50_000, "BANKNIFTY") == 100.0
+        # Symbol-aware: MIDCPNIFTY @ 12_000 → 25 step (legacy would return 100)
+        assert _strike_step(12_000, "MIDCPNIFTY") == 25.0
+        assert atm_strike(12_017, "MIDCPNIFTY") == 12_025
+        # No-symbol path preserves legacy spot-bucketed ladder
+        assert _strike_step(12_000) == 100.0
+
+    def test_backtest_strike_step_uses_symbol(self):
+        from app.services.options_backtest_service import _strike_step as bt_step
+        assert bt_step(12_000, "MIDCPNIFTY") == 25.0
+        assert bt_step(22_000, "NIFTY") == 50.0
+        # No symbol → legacy ladder preserved
+        assert bt_step(12_000) == 100.0
+
+    def test_risk_free_rate_constant_comes_from_cache(self):
+        from app.services import options_service, risk_free_service
+        # The module-level constant should match the synchronous cache helper
+        assert options_service.RISK_FREE_RATE == risk_free_service.get_cached_rate_sync()
+        # Refreshing the helper updates the constant
+        new = options_service.get_default_risk_free_rate()
+        assert options_service.RISK_FREE_RATE == new
