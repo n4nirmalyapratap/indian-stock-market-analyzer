@@ -530,10 +530,16 @@ def _run_backtest_sync(
         for s in leg_sources:
             trade_counter[s["entry_premium_source"]] += 1
             trade_counter[s["exit_premium_source"]]  += 1
-        trade_total = sum(trade_counter.values()) or 1
         # Promote the dominant source to a single trade-level label so the
         # trades table can show a one-glance honesty pill per row.
         trade_premium_source = max(trade_counter, key=trade_counter.get)
+
+        # Strip internal _entry_src/_exit_src bookkeeping keys from filled_legs
+        # — they are surfaced via leg_premium_sources above and shouldn't
+        # leak into any downstream API consumer that touches filled_legs.
+        for l in filled_legs:
+            l.pop("_entry_src", None)
+            l.pop("_exit_src",  None)
 
         trades.append({
             "entry_date":     str(entry_ts.date()),
