@@ -143,13 +143,30 @@ class PriceService:
             if nse_quote and nse_quote.get("priceInfo"):
                 p    = nse_quote["priceInfo"]
                 info = nse_quote.get("info") or nse_quote.get("metadata") or {}
+                # NSE exposes the *real* sector classification in
+                # `industryInfo.sector` — `info.sector` is almost always blank.
+                # Falling through gives "Unknown" which makes sector
+                # concentration meaningless, so prefer the rich source.
+                ind_info = nse_quote.get("industryInfo") or {}
+                sec_info = nse_quote.get("securityInfo") or {}
                 week_high = p.get("weekHighLow", {}) or {}
+                # Market cap = issuedSize (shares outstanding) × lastPrice.
+                # NSE doesn't ship marketCap directly but issuedSize is the
+                # exact same authoritative number that nseindia.com uses.
+                last_price = p.get("lastPrice") or 0
+                issued = sec_info.get("issuedSize") or 0
+                derived_mcap = (
+                    float(issued) * float(last_price)
+                    if issued and last_price else None
+                )
                 quote = {
                     "symbol":         sym,
                     "companyName":    info.get("companyName", sym),
-                    "industry":       info.get("industry"),
-                    "sector":         info.get("sector"),
-                    "lastPrice":      p.get("lastPrice"),
+                    "industry":       ind_info.get("industry") or info.get("industry"),
+                    "sector":         ind_info.get("sector") or info.get("sector"),
+                    "macroSector":    ind_info.get("macro"),
+                    "basicIndustry":  ind_info.get("basicIndustry"),
+                    "lastPrice":      last_price,
                     "change":         p.get("change"),
                     "pChange":        p.get("pChange"),
                     "open":           p.get("open"),
@@ -159,6 +176,8 @@ class PriceService:
                     "volume":         p.get("totalTradedVolume"),
                     "fiftyTwoWeekHigh": week_high.get("max"),
                     "fiftyTwoWeekLow":  week_high.get("min"),
+                    "marketCap":      derived_mcap,
+                    "issuedSize":     float(issued) if issued else None,
                     "source":         "NSE",
                 }
                 snap = {
