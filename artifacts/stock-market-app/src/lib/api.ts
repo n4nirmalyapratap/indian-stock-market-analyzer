@@ -666,6 +666,15 @@ export const api = {
       method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ csv }),
     }),
 
+  importPortfolioFile: (pid: string, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return fetchApi<PortfolioImportResult & { source_filename?: string }>(
+      `/portfolio/${encodeURIComponent(pid)}/import-file`,
+      { method: "POST", body: fd },  // browser sets multipart boundary
+    );
+  },
+
   portfolioRisk: (pid: string, params: PortfolioRiskParams = {}) =>
     fetchApi<PortfolioRiskResult>(`/portfolio/${encodeURIComponent(pid)}/risk`, {
       method: "POST", headers: JSON_HEADERS, body: JSON.stringify(params),

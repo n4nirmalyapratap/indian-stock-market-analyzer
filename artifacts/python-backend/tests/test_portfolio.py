@@ -180,3 +180,80 @@ def test_sortino_extension():
     dd = hv.max_drawdown(closes)
     assert dd["maxDrawdownPct"] <= 0
     assert dd["peakIndex"] <= dd["troughIndex"]
+
+
+def test_xlsx_import_endpoint(client):
+    """Excel upload via /import-file must reach the same import pipeline as CSV."""
+    from io import BytesIO  # noqa: PLC0415
+    from openpyxl import Workbook  # noqa: PLC0415
+
+    # Build a tiny workbook in memory
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["symbol", "side", "qty", "price", "date"])
+    ws.append(["RELIANCE", "BUY",  10, 2500.0, "2024-03-01"])
+    ws.append(["TCS",      "BUY",   5, 3500.0, "2024-04-01"])
+    ws.append(["RELIANCE", "SELL",  3, 2700.0, "2024-05-01"])
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    # Create a portfolio
+    pid = client.post("/api/portfolio", json={"name": "XLSX-Test", "cash": 100_000}).json()["id"]
+    try:
+        r = client.post(
+            f"/api/portfolio/{pid}/import-file",
+            files={"file": ("trades.xlsx", buf.getvalue(),
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["rowsParsed"] == 3
+        assert body["rowsInserted"] == 3
+        assert body.get("source_filename") == "trades.xlsx"
+
+        # Verify transactions actually landed
+        txs = client.get(f"/api/portfolio/{pid}/transactions").json()["transactions"]
+        assert len(txs) == 3
+        assert {t["symbol"] for t in txs} == {"RELIANCE", "TCS"}
+    finally:
+        client.delete(f"/api/portfolio/{pid}")
+
+
+def test_xlsx_helper_neutralises_formula_injection():
+    """=,+,-,@ at cell start must be quoted so downstream Excel opens
+    don't auto-execute formulas (CWE-1236).
+    We bypass the helper's openpyxl reader by feeding ``_safe_cell_str``
+    directly — that's the unit under test for sanitisation."""
+    from app.services import portfolio_service as ps  # noqa: PLC0415
+
+    assert ps._safe_cell_str("=cmd|'/c calc'!A0").startswith("'=")
+    assert ps._safe_cell_str("+1+1").startswith("'+")
+    assert ps._safe_cell_str("-2+3").startswith("'-")
+    assert ps._safe_cell_str("@SUM(A1:A2)").startswith("'@")
+    # Benign strings must pass through unchanged
+    assert ps._safe_cell_str("RELIANCE") == "RELIANCE"
+    assert ps._safe_cell_str(None) == ""
+    assert ps._safe_cell_str(42) == "42"
+
+
+def test_xlsx_helper_rejects_oversize_blob():
+    """Compressed-size cap must trip before openpyxl parses the bytes."""
+    from app.services import portfolio_service as ps  # noqa: PLC0415
+    blob = b"\x00" * (ps.XLSX_MAX_RAW_BYTES + 1)
+    import pytest as _pt  # noqa: PLC0415
+    with _pt.raises(ValueError, match="too large"):
+        ps.xlsx_bytes_to_csv(blob)
+
+
+def test_xlsx_import_endpoint_rejects_bad_file(client):
+    """A non-spreadsheet file must be refused with a clean 4xx, not crash."""
+    pid = client.post("/api/portfolio", json={"name": "XLSX-Bad", "cash": 0}).json()["id"]
+    try:
+        r = client.post(
+            f"/api/portfolio/{pid}/import-file",
+            files={"file": ("junk.bin", b"not a workbook", "application/octet-stream")},
+        )
+        assert r.status_code in (400, 422), r.text
+    finally:
+        client.delete(f"/api/portfolio/{pid}")

@@ -673,6 +673,95 @@ def parse_tradebook_csv(text: str) -> dict:
     return {"format": fmt, "transactions": txs, "errors": errors}
 
 
+# Hard limits for arbitrary-Excel uploads — protects against zip-bombs,
+# multi-million-row sparse sheets, and DoS-by-decompression.  Tradebooks
+# realistically contain a few thousand rows; anything beyond these caps is
+# almost certainly malicious or accidentally exported with junk.
+XLSX_MAX_RAW_BYTES        = 5 * 1024 * 1024     # 5 MB compressed cap
+XLSX_MAX_DECOMPRESSED     = 50 * 1024 * 1024    # 50 MB uncompressed cap
+XLSX_MAX_ROWS             = 50_000
+XLSX_MAX_COLS             = 64
+FORMULA_INJECTION_PREFIX  = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _safe_cell_str(c) -> str:
+    """Stringify a cell + neutralise CSV-formula-injection vectors."""
+    if c is None:
+        return ""
+    s = str(c)
+    # Excel/LibreOffice/Google Sheets treat leading =,+,-,@ as formula start.
+    # Prefix with a single quote to make the cell render as text everywhere.
+    if s and s[0] in FORMULA_INJECTION_PREFIX:
+        return "'" + s
+    return s
+
+
+def xlsx_bytes_to_csv(xlsx_bytes: bytes) -> str:
+    """Convert the first sheet of an .xlsx workbook to CSV text.
+
+    Hardened against hostile uploads:
+      * Compressed-size cap (XLSX_MAX_RAW_BYTES) — early reject.
+      * Decompressed-size cap (XLSX_MAX_DECOMPRESSED) — defeats zip bombs.
+      * Row/column caps — protects against megasheets.
+      * Formula-injection neutralisation — leading =/+/-/@ is text-quoted.
+
+    Honesty:
+      * Reads only the first worksheet — multi-sheet uploads should be
+        flattened by the user.
+      * Empty cells become empty strings so `parse_tradebook_csv` can
+        reject them with a row-level error rather than silently dropping
+        the row.
+    """
+    import io as _io
+    import csv as _csv
+    import zipfile as _zip
+    from openpyxl import load_workbook
+
+    if len(xlsx_bytes) > XLSX_MAX_RAW_BYTES:
+        raise ValueError(
+            f"XLSX file too large ({len(xlsx_bytes):,} bytes; "
+            f"limit {XLSX_MAX_RAW_BYTES:,})"
+        )
+    # Zip-bomb guard: openpyxl uses zipfile internally, so we can pre-check
+    # the declared uncompressed sizes before handing it the full bytes.
+    try:
+        with _zip.ZipFile(_io.BytesIO(xlsx_bytes)) as zf:
+            total_uncompressed = sum(zi.file_size for zi in zf.infolist())
+            if total_uncompressed > XLSX_MAX_DECOMPRESSED:
+                raise ValueError(
+                    f"XLSX uncompressed payload too large "
+                    f"({total_uncompressed:,} bytes; "
+                    f"limit {XLSX_MAX_DECOMPRESSED:,})"
+                )
+    except _zip.BadZipFile as exc:
+        raise ValueError(f"Not a valid .xlsx file: {exc}") from exc
+
+    wb = load_workbook(filename=_io.BytesIO(xlsx_bytes), read_only=True,
+                       data_only=True)
+    ws = wb.active
+    buf = _io.StringIO()
+    w = _csv.writer(buf)
+    rows_written = 0
+    try:
+        for row in ws.iter_rows(values_only=True):
+            # Skip blank rows (openpyxl emits trailing all-None rows for
+            # sparse sheets); keep partial rows so the parser can complain.
+            if all(c is None or (isinstance(c, str) and not c.strip())
+                   for c in row):
+                continue
+            row_clipped = row[:XLSX_MAX_COLS]
+            w.writerow([_safe_cell_str(c) for c in row_clipped])
+            rows_written += 1
+            if rows_written > XLSX_MAX_ROWS:
+                raise ValueError(
+                    f"XLSX has more than {XLSX_MAX_ROWS:,} non-blank rows; "
+                    "split the file before re-uploading"
+                )
+    finally:
+        wb.close()
+    return buf.getvalue()
+
+
 def import_transactions(user_id: str, portfolio_id: str, csv_text: str) -> dict:
     """Parse a tradebook CSV and import every valid row.
 
