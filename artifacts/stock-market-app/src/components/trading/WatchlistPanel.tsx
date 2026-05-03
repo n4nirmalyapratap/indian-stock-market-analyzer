@@ -159,11 +159,13 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd, theme }, r
 
   const fetchSingle = useCallback(async (sym: string, gen: number) => {
     try {
-      const data = await fetchApi<Record<string, unknown>>(`/stocks/${sym}`);
+      const data = await fetchApi<Partial<StockDetail> & { lastPrice?: number; currentPrice?: number; pChange?: number; companyName?: string }>(`/stocks/${encodeURIComponent(sym)}`);
       if (fetchGenRef.current !== gen) return;
+      const price = data.lastPrice ?? data.currentPrice ?? 0;
+      const pChange = data.pChange ?? 0;
       setPrices(prev => ({
         ...prev,
-        [sym]: { symbol: sym, price: data.lastPrice ?? data.currentPrice, pChange: data.pChange, company: data.companyName ?? sym },
+        [sym]: { symbol: sym, price, pChange, company: data.companyName ?? sym },
       }));
     } catch {}
   }, []);
