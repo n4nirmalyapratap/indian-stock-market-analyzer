@@ -27,10 +27,12 @@ export function shortSectorName(name: string): string {
 }
 
 /** Format a percentage change, falling through gracefully when null/undefined.
- * Uses ?? (not ||) so a legitimate 0.00% does not get rewritten to "0". */
+ * Renders "—" when the value is genuinely missing (null/undefined) so a
+ * data-fetch failure isn't displayed as "+0.00%". A legitimate 0.0%
+ * still renders as "+0.00%". */
 export function formatPctChange(p: number | null | undefined): string {
-  const v = p ?? 0;
-  return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+  if (p === null || p === undefined || Number.isNaN(p)) return "—";
+  return `${p >= 0 ? "+" : ""}${p.toFixed(2)}%`;
 }
 
 function CardLoader() {
