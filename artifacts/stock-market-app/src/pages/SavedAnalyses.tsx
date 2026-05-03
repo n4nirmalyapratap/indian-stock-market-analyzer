@@ -43,6 +43,40 @@ function VerdictBadge({ v }: { v: Verdict | null }) {
   );
 }
 
+async function _friendlyError(r: Response): Promise<string> {
+  let raw = "";
+  try { raw = await r.text(); } catch { /* ignore */ }
+  let detail = "";
+  try {
+    const j = JSON.parse(raw);
+    detail = String(j?.detail || j?.error || j?.message || "").trim();
+  } catch { detail = raw.trim(); }
+  if (r.status === 401 || r.status === 403) return "You're signed out. Please sign in again to view your saved analyses.";
+  if (r.status === 404) return "We couldn't find that saved analysis — it may have been deleted or re-run.";
+  if (r.status === 429) return "You've hit today's limit. Please try again later.";
+  if (r.status >= 500) return "Our server hit a snag. Please try again in a moment.";
+  if (detail && !/^not found$/i.test(detail)) return detail;
+  return `Something went wrong (HTTP ${r.status}). Please try again.`;
+}
+
+function _friendlyMessage(e: any): string {
+  const m = String(e?.message || e || "").trim();
+  if (!m) return "Something went wrong. Please try again.";
+  if (/failed to fetch|network|load failed/i.test(m)) {
+    return "Can't reach the server right now. Check your connection and try again.";
+  }
+  // Avoid leaking raw JSON like {"detail":"Not Found"} into the UI.
+  if (m.startsWith("{") || m.startsWith("[")) {
+    try {
+      const j = JSON.parse(m);
+      const d = String(j?.detail || j?.error || j?.message || "").trim();
+      if (d && !/^not found$/i.test(d)) return d;
+    } catch { /* fall through */ }
+    return "Something went wrong. Please try again.";
+  }
+  return m;
+}
+
 function fmtDate(iso: string): string {
   try {
     const d = new Date(iso);
@@ -92,11 +126,13 @@ export default function SavedAnalyses() {
     try {
       const url = `/api/ai-analyst/saved?scope=${tab}&q=${encodeURIComponent(q)}&limit=100`;
       const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`);
+      // 404 from this endpoint means "nothing saved yet" — treat as empty list.
+      if (r.status === 404) { setItems([]); return; }
+      if (!r.ok) throw new Error(await _friendlyError(r));
       const j = await r.json();
       setItems(j.items || []);
     } catch (e: any) {
-      setErr(e.message || String(e));
+      setErr(_friendlyMessage(e));
     } finally {
       setLoading(false);
     }
@@ -114,10 +150,10 @@ export default function SavedAnalyses() {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`);
+      if (!r.ok) throw new Error(await _friendlyError(r));
       setItems(prev => prev.filter(x => x.id !== row.id));
     } catch (e: any) {
-      setErr(e.message || String(e));
+      setErr(_friendlyMessage(e));
     } finally {
       setBusyId(null);
     }
@@ -207,9 +243,14 @@ export default function SavedAnalyses() {
       </div>
 
       {err && (
-        <div className="rounded-md border border-red-200 dark:border-red-900/40 bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-700 dark:text-red-300 flex items-start gap-2">
+        <div role="alert" aria-live="polite"
+             className="rounded-md border border-red-200 dark:border-red-900/40 bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-700 dark:text-red-300 flex items-start gap-2">
           <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-          <span>{err}</span>
+          <span className="flex-1">{err}</span>
+          <button onClick={() => { setErr(null); void load(); }}
+                  className="text-xs font-medium underline hover:no-underline">
+            Retry
+          </button>
         </div>
       )}
 
@@ -219,12 +260,29 @@ export default function SavedAnalyses() {
         </div>
       ) : items.length === 0 ? (
         <div className="text-center py-16 border border-dashed border-gray-200 dark:border-white/10 rounded-xl">
-          <p className="text-sm font-medium text-gray-700 dark:text-gray-200">{empty.title}</p>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-md mx-auto">{empty.body}</p>
-          <Link href={empty.cta.href}
-                className="inline-block mt-4 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
-            {empty.cta.label}
-          </Link>
+          {q.trim() ? (
+            <>
+              <p className="text-sm font-medium text-gray-700 dark:text-gray-200">
+                No matches for "{q.trim()}"
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-md mx-auto">
+                Try a different ticker or clear the filter to see all your saved {empty.title.toLowerCase().replace(/^no saved /, "").replace(/ yet$/, "")}.
+              </p>
+              <button onClick={() => setQ("")}
+                      className="inline-block mt-4 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
+                Clear filter
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-medium text-gray-700 dark:text-gray-200">{empty.title}</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-md mx-auto">{empty.body}</p>
+              <Link href={empty.cta.href}
+                    className="inline-block mt-4 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
+                {empty.cta.label}
+              </Link>
+            </>
+          )}
         </div>
       ) : (
         <ul className="space-y-2">
