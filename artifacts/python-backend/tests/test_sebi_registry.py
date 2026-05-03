@@ -104,14 +104,26 @@ class TestHolidaysAndExpiryShift:
 
 class TestStrikeStep:
 
-    def test_step_for_nifty_range(self):
-        assert reg.get_strike_step("NIFTY", 22_000) == 100.0
+    def test_step_for_nifty(self):
+        # NIFTY contract spec is 50-point strikes regardless of spot
+        assert reg.get_strike_step("NIFTY", 22_000) == 50.0
+        assert reg.get_strike_step("NIFTY", 18_000) == 50.0
 
-    def test_step_for_midcap_range(self):
-        assert reg.get_strike_step("MIDCPNIFTY", 12_000) == 100.0
+    def test_step_for_banknifty_and_sensex(self):
+        assert reg.get_strike_step("BANKNIFTY", 50_000) == 100.0
+        assert reg.get_strike_step("SENSEX", 80_000) == 100.0
 
-    def test_step_for_individual_stock_range(self):
+    def test_step_for_midcap(self):
+        # MIDCPNIFTY contract spec is 25-point strikes
+        assert reg.get_strike_step("MIDCPNIFTY", 12_000) == 25.0
+
+    def test_step_for_finnifty(self):
+        assert reg.get_strike_step("FINNIFTY", 21_000) == 50.0
+
+    def test_step_for_unknown_symbol_falls_back_to_legacy_ladder(self):
+        # Legacy spot-bucketed ladder preserved for non-index symbols
         assert reg.get_strike_step("RELIANCE", 1_500) == 20.0
+        assert reg.get_strike_step("", 600) == 10.0
 
 
 # ─── Cost calculator ─────────────────────────────────────────────────────────
@@ -119,13 +131,13 @@ class TestStrikeStep:
 class TestCostCalculator:
 
     def test_sell_premium_charges_stt(self):
-        """Selling options premium is hit with STT @ 0.10% post-Oct 2024."""
+        """Selling options premium is hit with STT @ 0.05% post-Oct 2024."""
         cb = reg.compute_leg_costs(
             action="sell", premium=100.0, quantity=75,
             is_entry=True, on_date=date(2025, 6, 1),
         )
-        # STT = 100 * 75 * 0.001 = 7.5
-        assert cb.stt == pytest.approx(7.5, abs=0.01)
+        # STT = 100 * 75 * 0.0005 = 3.75
+        assert cb.stt == pytest.approx(3.75, abs=0.01)
         assert cb.stamp_duty == 0.0  # no stamp on sell
         assert cb.brokerage > 0
         assert cb.total > cb.stt
@@ -232,9 +244,52 @@ class TestComplianceSnapshot:
     def test_snapshot_includes_cost_schedule(self):
         snap = reg.compliance_snapshot(on_date=date(2025, 6, 1))
         cs = snap["cost_schedule"]
-        assert cs["stt_sell_premium_pct"] == 0.0010
+        assert cs["stt_sell_premium_pct"] == 0.0005
+        assert cs["stt_exercise_pct"] == 0.00125
         assert cs["gst_pct"] == 0.18
 
     def test_snapshot_lists_holidays(self):
         snap = reg.compliance_snapshot(on_date=date(2025, 6, 1))
         assert "2025-02-26" in snap["holidays_this_year"]
+
+
+# ─── Strategy cost + margin estimators (drives /options/compliance) ──────────
+
+class TestStrategyEstimators:
+
+    def test_iron_condor_costs_and_margin(self):
+        """4-leg iron condor on NIFTY @ 22000 should produce 4 cost rows and
+        a non-zero margin estimate."""
+        from app.routes.options import _build_synthetic_legs
+        legs = _build_synthetic_legs("iron_condor", spot=22_000, symbol="NIFTY", lots=2)
+        assert len(legs) == 4
+        # Strikes are 50-spaced (NIFTY contract spec)
+        strikes = sorted({l["strike"] for l in legs})
+        assert all(s % 50 == 0 for s in strikes)
+
+        costs = reg.estimate_strategy_costs(legs, lot_size=75, on_date=date(2025, 6, 1))
+        assert len(costs["per_leg"]) == 4
+        for row in costs["per_leg"]:
+            assert row["entry"]["total"] > 0  # brokerage at minimum
+            assert row["leg_total"] > 0
+        assert costs["total"] > 0
+        assert "Finance" in costs["circular_ref"]
+
+        margin = reg.estimate_margin_inr(legs, spot=22_000, lot_size=75)
+        assert margin["value"] > 0
+        assert "SPAN" in margin["note"]
+
+    def test_short_straddle_margin_uses_naked_band(self):
+        from app.routes.options import _build_synthetic_legs
+        legs = _build_synthetic_legs("short_straddle", spot=22_000, symbol="NIFTY", lots=1)
+        margin = reg.estimate_margin_inr(legs, spot=22_000, lot_size=75)
+        # 2 naked shorts: 12% × 22000 × 75 × 2 ≈ 3,96,000
+        assert margin["value"] > 300_000
+
+    def test_long_call_no_legs_when_zero_spot(self):
+        from app.routes.options import _build_synthetic_legs
+        legs = _build_synthetic_legs("long_call", spot=0.0, symbol="NIFTY", lots=1)
+        assert legs == []
+        costs = reg.estimate_strategy_costs(legs, lot_size=75)
+        assert costs["per_leg"] == []
+        assert costs["total"] == 0

@@ -185,18 +185,37 @@ def is_weekly_available(symbol: str, on_date: Optional[date] = None) -> bool:
     return target < discontinued
 
 
-# ── Strike step (NSE convention) ─────────────────────────────────────────────
-# Same step ladder as the legacy options_service._strike_step helper —
-# kept here so the registry is the single source of truth.
+# ── Strike step (NSE / BSE convention) ───────────────────────────────────────
+# Per-symbol strike intervals are fixed by the exchange contract specs and
+# do NOT change with spot price.  The spot-bucketed ladder below is only
+# used as a fallback for non-index symbols.
+
+STRIKE_STEPS_BY_SYMBOL: dict[str, float] = {
+    "NIFTY":      50.0,    # NSE F&O contract spec
+    "FINNIFTY":   50.0,
+    "BANKNIFTY": 100.0,
+    "MIDCPNIFTY": 25.0,
+    "NIFTYNXT50": 100.0,
+    "SENSEX":    100.0,    # BSE
+    "BANKEX":    100.0,    # BSE
+}
+
 
 def get_strike_step(symbol: str, S: float) -> float:
-    """Return NSE strike increment for a given spot price."""
-    if S >= 20_000:
-        return 100.0
+    """Return the exchange-specified strike increment for a symbol.
+
+    For listed index derivatives this is symbol-specific (BANKNIFTY=100,
+    NIFTY/FINNIFTY=50, MIDCPNIFTY=25, SENSEX=100).  For unrecognised
+    underlyings (single-stock options) we fall back to a spot-price ladder
+    that approximates NSE's per-stock convention.
+    """
+    canon = canonical_symbol(symbol) if symbol else ""
+    if canon in STRIKE_STEPS_BY_SYMBOL:
+        return STRIKE_STEPS_BY_SYMBOL[canon]
+    # Spot-bucketed fallback for stock options (legacy ladder — preserved
+    # so callers without a known symbol get the same behaviour as before).
     if S >= 10_000:
         return 100.0
-    if S >= 5_000:
-        return 50.0
     if S >= 2_000:
         return 50.0
     if S >= 1_000:
@@ -387,8 +406,8 @@ class CostSchedule:
 COST_SCHEDULES: list[CostSchedule] = [
     CostSchedule(
         effective_from=date(2024, 10,  1),
-        stt_sell_premium_pct=0.0010,    # 0.10%
-        stt_exercise_pct=0.00125,       # 0.125%
+        stt_sell_premium_pct=0.0005,    # 0.05% — per task spec
+        stt_exercise_pct=0.00125,       # 0.125% on intrinsic at exercise
         exchange_charge_pct=0.000035,
         sebi_charge_pct=0.000001,
         stamp_duty_pct=0.00003,
@@ -542,4 +561,94 @@ def compliance_snapshot(symbol: Optional[str] = None,
         "holidays_this_year": sorted(
             d.isoformat() for d in NSE_HOLIDAYS.get(target.year, set())
         ),
+    }
+
+
+# ── Margin & per-leg cost estimator (used by /options/compliance) ────────────
+
+# SEBI/NSE SPAN+ELM rules are simulation-heavy.  We approximate the initial
+# margin per the broad NSE published bands so callers get a useful order-of-
+# magnitude figure with explicit `note` provenance.
+
+MARGIN_NOTE = (
+    "Approximation of NSE SPAN + Exposure margin per leg; uses 12% of notional "
+    "for naked short options, max-loss for debit spreads, and net of credit for "
+    "credit spreads.  Replace with broker-supplied SPAN figures for live trading."
+)
+
+_NAKED_SHORT_MARGIN_PCT = 0.12  # ~SPAN+ELM combined band for index options
+
+
+def estimate_margin_inr(legs: list[dict], spot: float, lot_size: int) -> dict:
+    """Return {value, note}.  `legs` list[{action, type, strike, premium, lots}]."""
+    if not legs:
+        return {"value": 0.0, "note": MARGIN_NOTE}
+    total = 0.0
+    short_legs = [l for l in legs if l.get("action") == "sell"]
+    long_legs  = [l for l in legs if l.get("action") == "buy"]
+    # Net debit / credit per lot
+    for sl in short_legs:
+        prem = float(sl.get("premium") or 0.0)
+        lots = int(sl.get("lots") or 1)
+        notional = spot * lot_size * lots
+        margin   = _NAKED_SHORT_MARGIN_PCT * notional
+        # Hedged short: subtract long premium credit
+        for ll in long_legs:
+            if ll.get("type") == sl.get("type") and int(ll.get("lots") or 1) >= lots:
+                margin = max(margin * 0.25,  # spread margin floor
+                             abs(float(sl.get("strike") or 0)
+                                 - float(ll.get("strike") or 0))
+                             * lot_size * lots
+                             - prem * lot_size * lots)
+                break
+        total += margin
+    # Pure long position margin = premium debit
+    for ll in long_legs:
+        if not any(sl.get("type") == ll.get("type") for sl in short_legs):
+            total += float(ll.get("premium") or 0.0) * lot_size * int(ll.get("lots") or 1)
+    return {"value": round(total, 2), "note": MARGIN_NOTE}
+
+
+def estimate_strategy_costs(
+    legs: list[dict],
+    *,
+    lot_size: int,
+    on_date: Optional[date] = None,
+) -> dict:
+    """Return per-leg entry+exit cost breakdown plus totals.
+
+    `legs`: list[{action, type, strike, premium, lots}] — premium is the
+    per-unit option price at entry.  Exit is modelled as a closing trade
+    at the same premium (the caller can rescale).
+    """
+    target = on_date or date.today()
+    sched = get_cost_schedule(target)
+    rows: list[dict] = []
+    grand_total = 0.0
+    for i, leg in enumerate(legs or []):
+        prem = float(leg.get("premium") or 0.0)
+        lots = int(leg.get("lots") or 1)
+        qty  = lots * lot_size
+        action = leg.get("action") or "buy"
+        entry = compute_leg_costs(action=action, premium=prem, quantity=qty,
+                                  is_entry=True,  on_date=target)
+        exit_ = compute_leg_costs(action=action, premium=prem, quantity=qty,
+                                  is_entry=False, on_date=target)
+        leg_total = entry.total + exit_.total
+        grand_total += leg_total
+        rows.append({
+            "leg_index": i,
+            "action": action,
+            "type":   leg.get("type"),
+            "strike": leg.get("strike"),
+            "lots":   lots,
+            "entry":  entry.__dict__,
+            "exit":   exit_.__dict__,
+            "leg_total": round(leg_total, 4),
+        })
+    return {
+        "per_leg": rows,
+        "total":   round(grand_total, 2),
+        "schedule_effective_from": sched.effective_from.isoformat(),
+        "circular_ref": sched.circular_ref,
     }
