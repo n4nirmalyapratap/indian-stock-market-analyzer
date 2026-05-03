@@ -21,7 +21,21 @@ from scipy.stats import norm
 logger = logging.getLogger("options_service")
 
 # ── Indian market constants ────────────────────────────────────────────────────
-RISK_FREE_RATE = 0.07  # 7% India 10-year G-Sec approx
+# RISK_FREE_RATE is populated from the FRED-backed cache at import time, with
+# the disk cache (last-known good FRED observation) used when offline.  The
+# 0.07 hardcode applies only on the very first cold boot with no disk cache.
+# Callers that want the live value should call get_default_risk_free_rate().
+from .risk_free_service import get_cached_rate_sync as _rfr_cached
+RISK_FREE_RATE: float = _rfr_cached()
+
+
+def get_default_risk_free_rate() -> float:
+    """Return the latest cached India 10Y G-Sec rate (decimal).  Refreshes
+    the module-level RISK_FREE_RATE so subsequent default-arg captures get
+    the freshest value when re-imported."""
+    global RISK_FREE_RATE
+    RISK_FREE_RATE = _rfr_cached()
+    return RISK_FREE_RATE
 
 # NSE lot sizes (current as of 2024-25)
 LOT_SIZES: dict[str, int] = {
@@ -42,13 +56,14 @@ LOT_SIZES: dict[str, int] = {
 }
 DEFAULT_LOT_SIZE = 100
 
-# Strike step sizes (NSE rounds strikes to these multiples).  The actual
-# ladder lives in sebi_registry as the single source of truth; this wrapper
-# preserves the legacy module-level signature used across the codebase.
-def _strike_step(S: float) -> float:
-    """Return the standard strike increment for a given spot price."""
+# Strike step sizes — symbol-aware via the SEBI registry.  Index futures have
+# fixed strike increments (NIFTY/FINNIFTY=50, BANKNIFTY/SENSEX=100,
+# MIDCPNIFTY=25); the legacy spot-bucketed ladder is only used when the
+# caller does not supply a symbol (back-compat with old call sites).
+def _strike_step(S: float, symbol: str = "") -> float:
+    """Return the standard strike increment for a symbol+spot."""
     from .sebi_registry import get_strike_step
-    return get_strike_step("", S)
+    return get_strike_step(symbol, S)
 
 
 def get_lot_size(symbol: str) -> int:
@@ -72,9 +87,9 @@ def get_lot_size(symbol: str) -> int:
     return DEFAULT_LOT_SIZE
 
 
-def atm_strike(S: float) -> float:
-    """Round spot price to nearest ATM strike."""
-    step = _strike_step(S)
+def atm_strike(S: float, symbol: str = "") -> float:
+    """Round spot price to nearest ATM strike (symbol-aware when provided)."""
+    step = _strike_step(S, symbol)
     return round(S / step) * step
 
 
