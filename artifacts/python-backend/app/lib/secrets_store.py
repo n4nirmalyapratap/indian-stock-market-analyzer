@@ -74,6 +74,11 @@ KNOWN_SECRETS: list[dict] = [
         "description": "Fallback OpenRouter model ID (default: qwen/qwen3-next-80b-a3b-instruct:free)",
         "masked":      False,
     },
+    {
+        "key":         "AI_ANALYST_DAILY_QUOTA",
+        "description": "Deep AI Analyst: max fresh analyses per user per IST day (default: 3). Cached reports don't count.",
+        "masked":      False,
+    },
 ]
 
 _KNOWN_MAP = {s["key"]: s for s in KNOWN_SECRETS}
