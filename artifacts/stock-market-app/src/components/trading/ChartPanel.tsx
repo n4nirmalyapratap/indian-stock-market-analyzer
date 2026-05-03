@@ -1268,7 +1268,8 @@ export default function ChartPanel({
     const GL = 8, GR = 70;
     const grids: object[] = heights.map((h, i) => ({
       top: `${tops[i].toFixed(2)}%`, left: GL, right: GR, height: `${h.toFixed(2)}%`,
-      show: i <= lastUsedIdx, // hide collapsed slots
+      // No `show: true` — ECharts would draw a visible border around the pane.
+      // Zero-height padding slots are already invisible.
     }));
 
     // x-axis: labels ONLY on the bottom-most VISIBLE grid
