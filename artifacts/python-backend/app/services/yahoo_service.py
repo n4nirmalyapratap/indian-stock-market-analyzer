@@ -168,8 +168,14 @@ class YahooService:
                 rng = "6mo"
             elif days <= 400:
                 rng = "1y"
-            else:
+            elif days <= 800:
                 rng = "2y"
+            elif days <= 2000:
+                rng = "5y"
+            elif days <= 4000:
+                rng = "10y"
+            else:
+                rng = "max"
             try:
                 url = f"https://query1.finance.yahoo.com/v8/finance/chart/{_to_yahoo(symbol)}?interval=1d&range={rng}"
                 async with httpx.AsyncClient(timeout=10.0) as client:
