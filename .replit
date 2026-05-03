@@ -33,7 +33,7 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "bash -c 'cd artifacts/python-backend && PORT=8090 python3.11 run.py'"
+args = "bash -c 'cd artifacts/python-backend && PORT=8090 FEATURE_AI_ANALYST=on python3.11 run.py'"
 
 [[workflows.workflow]]
 name = "Start application"
