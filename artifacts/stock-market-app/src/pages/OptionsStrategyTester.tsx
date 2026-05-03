@@ -84,7 +84,15 @@ const STRATEGY_GROUPS = [
  * risk-free rate for the currently selected symbol.  Pure additive UI;
  * does not affect any existing inputs or analytics.
  */
-function SEBIComplianceCard({ symbol }: { symbol: string }) {
+function SEBIComplianceCard({
+  symbol,
+  strategy,
+  lots,
+}: {
+  symbol: string;
+  strategy?: string | null;
+  lots?: number;
+}) {
   const [data, setData] = useState<any>(null);
   const [open, setOpen] = useState(false);
   const [err,  setErr]  = useState("");
@@ -93,11 +101,14 @@ function SEBIComplianceCard({ symbol }: { symbol: string }) {
     let cancel = false;
     setErr("");
     setData(null);
-    fetchApi<any>(`/options/compliance?symbol=${encodeURIComponent(symbol)}`)
+    const params = new URLSearchParams({ symbol });
+    if (strategy) params.set("strategy", strategy);
+    if (lots && lots > 0) params.set("lots", String(lots));
+    fetchApi<any>(`/options/compliance?${params.toString()}`)
       .then((d) => { if (!cancel) setData(d); })
       .catch((e) => { if (!cancel) setErr(String(e?.message || e)); });
     return () => { cancel = true; };
-  }, [symbol]);
+  }, [symbol, strategy, lots]);
 
   if (err) {
     return (
@@ -113,6 +124,23 @@ function SEBIComplianceCard({ symbol }: { symbol: string }) {
   const rfr  = data.risk_free_rate;
   const lot  = sym?.lot_size;
   const wd   = sym?.expiry_weekday?.weekday_name;
+  const strat = data.strategy;             // populated when strategy was sent
+  const perLeg = data.per_leg_costs;       // {per_leg:[…], total, circular_ref}
+  const margin = data.margin_estimate;     // {value, note}
+
+  // Helper: render a circular reference as a hyperlink when URL is known
+  const refLink = (ref?: string | null, url?: string | null) => {
+    if (!ref) return <>—</>;
+    if (!url) return <span className="break-words">{ref}</span>;
+    return (
+      <a href={url} target="_blank" rel="noopener noreferrer"
+         className="text-indigo-600 hover:underline break-words">
+        {ref} ↗
+      </a>
+    );
+  };
+  const fmtINR = (n: number) =>
+    "₹" + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 });
 
   return (
     <div className="bg-indigo-50/40 border border-indigo-200 rounded-xl px-4 py-3">
@@ -152,7 +180,7 @@ function SEBIComplianceCard({ symbol }: { symbol: string }) {
               Effective from {lot?.effective_from ?? "—"}
             </div>
             <div className="text-gray-500 mt-1 break-words">
-              Ref: {lot?.circular_ref ?? "—"}
+              Ref: {refLink(lot?.circular_ref, lot?.circular_url)}
             </div>
             {lot?.notes && (
               <div className="text-gray-500 mt-1 italic">{lot.notes}</div>
@@ -173,9 +201,91 @@ function SEBIComplianceCard({ symbol }: { symbol: string }) {
               <li>Brokerage: <b>₹{cs?.brokerage_per_order}</b> per executed order</li>
             </ul>
             <div className="text-gray-500 mt-1 break-words">
-              Ref: {cs?.circular_ref}
+              Ref: {refLink(cs?.circular_ref, cs?.circular_url)}
             </div>
           </div>
+
+          {/* Per-strategy enrichment — only when ?strategy was sent */}
+          {strat && perLeg?.per_leg?.length > 0 && (
+            <div className="bg-white border border-gray-200 rounded-lg p-3 md:col-span-2">
+              <div className="font-semibold text-gray-700 mb-1">
+                Per-leg cost breakdown — {strat.id} × {strat.lots} lot
+                {strat.lots !== 1 ? "s" : ""} (lot size {strat.lot_size})
+              </div>
+              {!strat.weekly_available_now && (
+                <div className="text-amber-600 text-xs mb-2">
+                  ⚠ Weekly contracts are not available for {sym?.symbol} on this
+                  date (SEBI Nov-2024 framework) — backtests must use the
+                  monthly expiry cycle.
+                </div>
+              )}
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="text-gray-500">
+                    <tr className="border-b border-gray-100">
+                      <th className="text-left py-1 pr-2">#</th>
+                      <th className="text-left py-1 pr-2">Side</th>
+                      <th className="text-right py-1 pr-2">Strike</th>
+                      <th className="text-right py-1 pr-2">Brokerage</th>
+                      <th className="text-right py-1 pr-2">STT</th>
+                      <th className="text-right py-1 pr-2">Exch+SEBI</th>
+                      <th className="text-right py-1 pr-2">Stamp</th>
+                      <th className="text-right py-1 pr-2">GST</th>
+                      <th className="text-right py-1">Leg total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {perLeg.per_leg.map((row: any) => {
+                      const e = row.entry, x = row.exit;
+                      return (
+                        <tr key={row.leg_index} className="border-b border-gray-50">
+                          <td className="py-1 pr-2 text-gray-500">{row.leg_index + 1}</td>
+                          <td className="py-1 pr-2">
+                            {row.action} {row.type}
+                          </td>
+                          <td className="py-1 pr-2 text-right">{row.strike}</td>
+                          <td className="py-1 pr-2 text-right">{fmtINR(e.brokerage + x.brokerage)}</td>
+                          <td className="py-1 pr-2 text-right">{fmtINR(e.stt + x.stt)}</td>
+                          <td className="py-1 pr-2 text-right">
+                            {fmtINR(e.exchange_charge + x.exchange_charge
+                                    + e.sebi_charge + x.sebi_charge)}
+                          </td>
+                          <td className="py-1 pr-2 text-right">{fmtINR(e.stamp_duty + x.stamp_duty)}</td>
+                          <td className="py-1 pr-2 text-right">{fmtINR(e.gst + x.gst)}</td>
+                          <td className="py-1 text-right font-semibold">{fmtINR(row.leg_total)}</td>
+                        </tr>
+                      );
+                    })}
+                    <tr>
+                      <td colSpan={8} className="py-1 pr-2 text-right text-gray-500">
+                        Round-trip total
+                      </td>
+                      <td className="py-1 text-right font-bold text-indigo-700">
+                        {fmtINR(perLeg.total)}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              {margin && (
+                <div className="mt-2 text-gray-600">
+                  Estimated SPAN+ELM margin: <b>{fmtINR(margin.value)}</b>
+                  <span className="ml-2 text-gray-400 italic">{margin.note}</span>
+                </div>
+              )}
+              {strat.applicable_circulars?.length > 0 && (
+                <div className="mt-2 text-gray-500 text-xs">
+                  Applicable circulars:{" "}
+                  {strat.applicable_circulars.map((c: any, i: number) => (
+                    <span key={i} className="mr-2">
+                      {refLink(c.ref, c.url)}
+                      {i < strat.applicable_circulars.length - 1 ? " · " : ""}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="bg-white border border-gray-200 rounded-lg p-3 md:col-span-2">
             <div className="font-semibold text-gray-700 mb-1">
@@ -1480,7 +1590,12 @@ export default function OptionsStrategyTester() {
       })()}
 
       {/* SEBI Compliance card — live rule snapshot from backend registry */}
-      <SEBIComplianceCard symbol={symbol} />
+      <SEBIComplianceCard
+        symbol={symbol}
+        strategy={strategyName}
+        lots={legs.reduce((m, l) => Math.max(m, Number(l.lots) || 0), 0) || 1}
+      />
+
 
       {/* Tabs */}
       <div className="border-b border-gray-200">
