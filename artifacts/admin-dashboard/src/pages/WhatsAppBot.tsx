@@ -70,12 +70,57 @@ export default function WhatsAppBot({ embedded = false }: { embedded?: boolean }
             <p className="text-xs text-gray-500">Messages</p>
           </div>
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-3 text-center">
+            <p className="text-lg font-bold text-gray-900">{status.totalCommands ?? status.commands?.length ?? 0}</p>
+            <p className="text-xs text-gray-500">Commands</p>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-3 text-center">
+            <p className="text-lg font-bold text-gray-900">
+              {Object.values(status.invocationCounts ?? {}).reduce(
+                (a: number, b: any) => a + (Number(b) || 0), 0,
+              )}
+            </p>
+            <p className="text-xs text-gray-500">Invocations</p>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-3 text-center">
             <p className="text-lg font-bold text-gray-900">{status.capabilities?.length || 0}</p>
             <p className="text-xs text-gray-500">Capabilities</p>
           </div>
-          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-3 text-center col-span-2">
-            <p className="text-xs font-medium text-gray-600 mb-1">Bot Commands</p>
-            <p className="text-xs text-gray-500">{status.commands?.join(" • ")}</p>
+        </div>
+      )}
+
+      {status?.commandRegistry?.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-sm font-semibold text-gray-700">Bot Command Reference</p>
+            <p className="text-xs text-gray-400">
+              Both `!command` and natural language work. Inline holdings:{" "}
+              <code className="bg-gray-100 px-1 rounded">RELIANCE:10@2400</code>
+            </p>
+          </div>
+          <div className="space-y-3">
+            {Object.entries(
+              (status.commandRegistry as any[]).reduce((acc: any, c: any) => {
+                (acc[c.category] = acc[c.category] || []).push(c);
+                return acc;
+              }, {}),
+            ).map(([cat, items]: any) => (
+              <div key={cat}>
+                <p className="text-xs font-semibold text-gray-500 uppercase mb-1.5">{cat}</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
+                  {(items as any[]).map((c: any) => (
+                    <div key={c.name} className="flex items-start gap-2 text-sm">
+                      <code className="bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded text-xs font-mono flex-shrink-0 min-w-[7rem]">
+                        !{c.name}
+                      </code>
+                      <span className="text-gray-500 text-xs flex-1">{c.summary}</span>
+                      <span className="text-xs text-green-700 tabular-nums font-medium">
+                        {c.invocations ?? 0}×
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
