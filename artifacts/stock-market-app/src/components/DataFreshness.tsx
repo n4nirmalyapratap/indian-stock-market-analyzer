@@ -31,11 +31,11 @@ function relTime(iso?: string | null): string {
 
 function stateLabel(state?: string): { label: string; cls: string; Icon: typeof Wifi } {
   switch (state) {
-    case "OPEN":     return { label: "Live",       cls: "text-green-700 bg-green-50 border-green-200",   Icon: Wifi };
-    case "PRE_OPEN": return { label: "Pre-Open",   cls: "text-amber-700 bg-amber-50 border-amber-200",   Icon: WifiOff };
-    case "WEEKEND":  return { label: "Weekend",    cls: "text-slate-600 bg-slate-50 border-slate-200",   Icon: WifiOff };
-    case "CLOSED":   return { label: "Closed",     cls: "text-slate-700 bg-slate-50 border-slate-200",   Icon: WifiOff };
-    default:         return { label: state || "—", cls: "text-slate-500 bg-slate-50 border-slate-200",   Icon: WifiOff };
+    case "OPEN":     return { label: "Live",       cls: "text-green-700 bg-green-50 border-green-200 dark:text-green-300 dark:bg-green-900/30 dark:border-green-800",       Icon: Wifi };
+    case "PRE_OPEN": return { label: "Pre-Open",   cls: "text-amber-700 bg-amber-50 border-amber-200 dark:text-amber-300 dark:bg-amber-900/30 dark:border-amber-800",       Icon: WifiOff };
+    case "WEEKEND":  return { label: "Weekend",    cls: "text-slate-600 bg-slate-50 border-slate-200 dark:text-slate-300 dark:bg-slate-800/60 dark:border-slate-700",       Icon: WifiOff };
+    case "CLOSED":   return { label: "Closed",     cls: "text-slate-700 bg-slate-50 border-slate-200 dark:text-slate-300 dark:bg-slate-800/60 dark:border-slate-700",       Icon: WifiOff };
+    default:         return { label: state || "—", cls: "text-slate-500 bg-slate-50 border-slate-200 dark:text-slate-400 dark:bg-slate-800/60 dark:border-slate-700",       Icon: WifiOff };
   }
 }
 
@@ -64,18 +64,18 @@ export default function DataFreshness({
       data-testid="data-freshness"
       className={`flex flex-wrap items-center gap-2 text-xs ${className}`}
     >
-      <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-slate-700">
+      <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-slate-700 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200">
         <span className="font-medium">{sourceText}</span>
       </span>
-      <span className="text-slate-400">•</span>
-      <span className="text-slate-500" title={meta.asOf ?? ""}>{ageText}</span>
-      <span className="text-slate-400">•</span>
+      <span className="text-slate-400 dark:text-slate-500">•</span>
+      <span className="text-slate-500 dark:text-slate-400" title={meta.asOf ?? ""}>{ageText}</span>
+      <span className="text-slate-400 dark:text-slate-500">•</span>
       <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${stateCls}`}>
         <Icon className="h-3 w-3" /> {stateText}
       </span>
       {sealed && (
         <span
-          className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700"
+          className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
           title={meta.eodDate ? `Official close for ${meta.eodDate}` : "Official EOD close"}
         >
           <CheckCircle2 className="h-3 w-3" /> EOD
@@ -85,7 +85,7 @@ export default function DataFreshness({
         <button
           type="button"
           onClick={() => refresh(refreshKeys)}
-          className="ml-1 inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-slate-600 hover:bg-slate-50 active:scale-95 transition"
+          className="ml-1 inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300 dark:hover:bg-slate-800 active:scale-95 transition"
           aria-label="Refresh data"
         >
           <RefreshCw className="h-3 w-3" /> Refresh
