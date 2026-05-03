@@ -2120,8 +2120,10 @@ export default function OptionsStrategyTester() {
               {/* Premium-source honesty badge */}
               {btResult.premium_source_breakdown && (() => {
                 const ps = btResult.premium_source_breakdown;
-                const real = ps.real_pct ?? 0;
-                const isReal = ps.primary_source === "bhavcopy" && real >= 50;
+                const real     = ps.real_pct ?? 0;
+                const synth    = ps.synthetic_pct ?? 0;
+                const settled  = ps.intrinsic_settlement_pct ?? 0;
+                const isReal   = ps.primary_source === "bhavcopy" && real >= 50;
                 const tone = isReal
                   ? "bg-emerald-50 border-emerald-200 text-emerald-800"
                   : "bg-amber-50 border-amber-200 text-amber-800";
@@ -2132,12 +2134,15 @@ export default function OptionsStrategyTester() {
                     <span className={`inline-block w-2 h-2 rounded-full ${dot}`} />
                     <span className="font-semibold">Premium source</span>
                     <span>
-                      <b>{real.toFixed(1)}%</b> real (NSE/BSE bhavcopy archive)
+                      <b>{real.toFixed(1)}%</b> real (NSE/BSE bhavcopy)
                       {" · "}
-                      <b>{(ps.synthetic_pct ?? 0).toFixed(1)}%</b> synthetic (Black–Scholes fallback)
+                      <b>{synth.toFixed(1)}%</b> synthetic (Black–Scholes)
+                      {" · "}
+                      <b>{settled.toFixed(1)}%</b> intrinsic settlement
                     </span>
                     <span className="text-[11px] opacity-70">
-                      {ps.bhavcopy_fills}/{ps.total_fills} fills resolved from cached settlement data
+                      {ps.bhavcopy_fills} real / {ps.synthetic_bs_fills} synthetic
+                      {" / "}{ps.intrinsic_settlement_fills} settled (of {ps.total_fills} fills)
                     </span>
                   </div>
                 );
