@@ -6,7 +6,7 @@ import {
   PillTabs, useChartPalette,
 } from "../_shared";
 import {
-  PieChart, ChevronDown, ExternalLink, RefreshCw, TrendingUp, TrendingDown,
+  PieChart, ChevronDown, ExternalLink, RefreshCw,
   ArrowUpRight, ArrowDownRight, Sparkles, Building2, Search, Layers, X,
 } from "lucide-react";
 import {
@@ -448,54 +448,45 @@ function SchemeDetailPanel({ code, fallbackName }: { code: string; fallbackName:
         <NavChart nav={data.navChart || []} bench={data.benchmarkChart || []} benchLabel={data.benchmarkLabel || ""} />
       </div>
 
-      {/* Right: meta + returns + risk */}
-      <div className="space-y-3">
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500">Scheme</div>
-          <div className="text-sm font-semibold text-gray-900 dark:text-white leading-tight">
-            {data.meta?.schemeName || fallbackName}
+      {/* Right: returns + risk — clean, borderless rows */}
+      <div className="space-y-4">
+        {/* Returns */}
+        <section>
+          <div className="flex items-baseline justify-between mb-2">
+            <h4 className="text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 font-medium">Returns</h4>
+            <span className="text-[10px] text-gray-400 dark:text-gray-500">CAGR ≥ 3Y</span>
           </div>
-          <div className="text-xs text-gray-500 dark:text-gray-400">
-            {data.meta?.fundHouse} · {data.meta?.schemeCategory}
-          </div>
-          {data.latest && (
-            <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              NAV ₹<span className="font-semibold text-gray-900 dark:text-white">{data.latest.nav.toFixed(4)}</span>
-              <span className="ml-1">as of {data.latest.date}</span>
-            </div>
-          )}
-        </div>
-
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1.5">Returns</div>
-          <div className="grid grid-cols-4 gap-1.5">
+          <div className="grid grid-cols-4 gap-x-2 gap-y-2.5">
             {returnEntries.map(r => {
               const v = ret[r.key] as number | null | undefined;
               return (
-                <div key={r.key}
-                  className="rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-1.5 py-1 text-center">
-                  <div className="text-[10px] text-gray-500 dark:text-gray-400">
-                    {r.label}{r.isCagr && v != null ? <span className="text-[9px] opacity-70"> CAGR</span> : ""}
-                  </div>
-                  <div className={`text-xs font-semibold tabular-nums ${pctClass(v)}`}>
+                <div key={r.key} className="text-center">
+                  <div className="text-[10px] text-gray-400 dark:text-gray-500 font-medium">{r.label}</div>
+                  <div className={`text-sm font-bold tabular-nums leading-tight ${pctClass(v)}`}>
                     {fmtPct(v, 1)}
                   </div>
                 </div>
               );
             })}
           </div>
-        </div>
+        </section>
 
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1.5">Risk (3-yr daily, vs Nifty 50)</div>
-          <div className="grid grid-cols-2 gap-1.5">
-            <RiskBadge label="Alpha"     value={fmtPct(risk.alpha, 2)} positive={(risk.alpha ?? 0) >= 0} />
-            <RiskBadge label="Beta"      value={fmtNum(risk.beta, 2)} />
-            <RiskBadge label="Std Dev"   value={fmtPct(risk.stdDev, 2)} />
-            <RiskBadge label="Sharpe"    value={fmtNum(risk.sharpe, 2)} positive={(risk.sharpe ?? 0) >= 1} />
-            <RiskBadge label="Max DD" value={fmtPct(risk.maxDrawdown, 1)} negative className="col-span-2" />
+        <div className="border-t border-gray-200/70 dark:border-gray-700/50"/>
+
+        {/* Risk */}
+        <section>
+          <div className="flex items-baseline justify-between mb-2">
+            <h4 className="text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500 font-medium">Risk</h4>
+            <span className="text-[10px] text-gray-400 dark:text-gray-500">3-yr daily vs Nifty 50</span>
           </div>
-        </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+            <RiskRow label="Alpha"   value={fmtPct(risk.alpha, 2)}       positive={(risk.alpha ?? 0) >= 0} />
+            <RiskRow label="Beta"    value={fmtNum(risk.beta, 2)} />
+            <RiskRow label="Std Dev" value={fmtPct(risk.stdDev, 2)} />
+            <RiskRow label="Sharpe"  value={fmtNum(risk.sharpe, 2)}      positive={(risk.sharpe ?? 0) >= 1} />
+            <RiskRow label="Max Drawdown" value={fmtPct(risk.maxDrawdown, 1)} negative className="col-span-2"/>
+          </div>
+        </section>
 
         {data.factsheetUrl && (
           <div className="pt-1">
@@ -724,7 +715,8 @@ function AmcAvatar({ logo, name, size = 28 }: { logo?: string; name: string; siz
   );
 }
 
-function RiskBadge({ label, value, positive, negative, className = "" }: {
+/* Borderless risk metric row — label on top, big colored value below.  */
+function RiskRow({ label, value, positive, negative, className = "" }: {
   label: string; value: string; positive?: boolean; negative?: boolean; className?: string;
 }) {
   const tone = negative
@@ -734,12 +726,10 @@ function RiskBadge({ label, value, positive, negative, className = "" }: {
       : positive === false
         ? "text-rose-600 dark:text-rose-400"
         : "text-gray-900 dark:text-white";
-  const Icon = positive === true ? TrendingUp : positive === false ? TrendingDown : null;
   return (
-    <div className={`rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1.5 ${className}`}>
-      <div className="text-[10px] text-gray-500 dark:text-gray-400 leading-none">{label}</div>
-      <div className={`text-sm font-semibold tabular-nums leading-tight inline-flex items-center gap-1 ${tone}`}>
-        {Icon && <Icon className="w-3 h-3"/>}
+    <div className={className}>
+      <div className="text-[10px] text-gray-400 dark:text-gray-500 font-medium uppercase tracking-wide leading-none">{label}</div>
+      <div className={`text-base font-bold tabular-nums leading-tight mt-0.5 ${tone}`}>
         {value}
       </div>
     </div>
@@ -844,6 +834,7 @@ function NavChart({ nav, bench, benchLabel }: {
                 strokeDasharray="4 3"
                 fill={`url(#${gid}-bench)`}
                 dot={false}
+                connectNulls
                 isAnimationActive
                 animationDuration={900}
                 animationEasing="ease-out"
@@ -858,6 +849,7 @@ function NavChart({ nav, bench, benchLabel }: {
               fill={`url(#${gid}-nav)`}
               dot={false}
               activeDot={{ r: 4, strokeWidth: 2, stroke: palette.surf }}
+              connectNulls
               isAnimationActive
               animationDuration={1100}
               animationEasing="ease-out"
