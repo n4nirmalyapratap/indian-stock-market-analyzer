@@ -1558,7 +1558,9 @@ class TestGetPatternsFiltering:
     MOCK_PATTERNS = _make_mock_patterns()
 
     def _run_with_cache(self, universe=None, signal=None, category=None):
-        with patch.object(_ps_mod, "_cached_patterns", self.MOCK_PATTERNS):
+        import time as _time
+        with patch.object(_ps_mod, "_cached_patterns", self.MOCK_PATTERNS), \
+             patch.object(_ps_mod, "_last_scan_monotonic", _time.monotonic()):
             return _run(SVC.get_patterns(universe, signal, category))
 
     # ── No filter ─────────────────────────────────────────────────────────────
