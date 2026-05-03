@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, Request, Body
+from fastapi import APIRouter, Request, Body, UploadFile, File
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -160,6 +160,35 @@ async def import_csv(pid: str, req: ImportReq, request: Request):
     res = ps.import_transactions(_user_id(request), pid, req.csv)
     if res.get("error"):
         return JSONResponse(status_code=404, content=res)
+    return res
+
+
+@router.post("/{pid}/import-file")
+async def import_file(pid: str, request: Request, file: UploadFile = File(...)):
+    """Upload a tradebook as a file — accepts .csv or .xlsx.
+    Excel workbooks are flattened to CSV (first sheet only) before parsing
+    so the same column conventions apply (Zerodha / Upstox / generic
+    symbol,side,qty,price,date)."""
+    raw = await file.read()
+    if not raw:
+        return JSONResponse(status_code=400, content={"error": "Empty file"})
+    name = (file.filename or "").lower()
+    try:
+        if name.endswith(".xlsx") or name.endswith(".xlsm"):
+            csv_text = ps.xlsx_bytes_to_csv(raw)
+        elif name.endswith(".csv") or name.endswith(".txt") or not name:
+            csv_text = raw.decode("utf-8", errors="replace")
+        else:
+            return JSONResponse(status_code=400,
+                content={"error": f"Unsupported file type: {file.filename!r}. "
+                                  "Upload a .csv or .xlsx tradebook."})
+    except Exception as exc:
+        return JSONResponse(status_code=400,
+            content={"error": f"Could not read file: {exc}"})
+    res = ps.import_transactions(_user_id(request), pid, csv_text)
+    if res.get("error"):
+        return JSONResponse(status_code=404, content=res)
+    res["source_filename"] = file.filename
     return res
 
 
