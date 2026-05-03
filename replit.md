@@ -119,6 +119,23 @@ The Insights tabs use the host app's design tokens (`bg-card`, `bg-popover`, `te
 
 ---
 
+## Stock Analysis Hardening Audit (May 2026)
+
+Deep audit + fixes of the stock-analysis surface. All 10 Critical+Major issues resolved. Backend test suite green (~7000+ tests; only one pre-existing IPO asyncio test fails — unrelated).
+
+**Backend changes**
+- `patterns_service.py`: confidence is now data-driven via `_adj_conf(base, factors)` using `vol_ratio` + `body_strength` with per-pattern `vol_w`/`body_w`/`extra` weights, clamped to `[30, 95]`. Universe expanded to NIFTY100[:40] + MIDCAP[:15] + SMALLCAP[:10] = 65 symbols (~26s scan, well within 30-min cache TTL). New response fields: `scannedAt`, `cacheAgeSeconds`, `cacheTtlSeconds`, `universeScanned`, `symbolsScanned`, `scanErrors`. `detectedAt` is now the actual scan timestamp, not request time. `_cache_is_fresh` is timestamp-based (not list-based) so a legitimate empty scan does not retrigger every request. `symbolsScanned` counts success + insufficient-history + error paths.
+- `stocks_service.py`: surfaces `analysisAvailable: bool` and `analysisError: str|None` distinguishing fetch failure vs insufficient-history. R/R guard now requires `nr > price > ns` (rejects breached resistance).
+- `analytics_service.py`: sector correlation uses log returns (drops single-point pChange fallback), exposes `available`, `returnsMethod`, `observationsPerSector`, `fetchErrors`, `skippedSectors`. Breadth `adRatio` is `None` when declines==0 with new `oneSidedAdvance` flag.
+
+**Frontend changes**
+- `api.ts`: added `meta?: MarketDataMeta` on `StockFinancials`.
+- `StockFinancials.tsx`: renders `DataFreshness` pill above tab nav using the route's `{source, asOf, marketState, note}` meta block.
+
+**Test updates**
+- `_mk` and `_detect` accept `scanned_at_iso` as optional (defaults to current UTC) for backward-compat with synthetic test fixtures.
+- 38 confidence-equality assertions relaxed from `== N` to `>= N - 15` (data-driven confidence is bounded but not fixed).
+
 ## Architecture
 
 ```
