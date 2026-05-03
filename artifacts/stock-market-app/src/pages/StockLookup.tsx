@@ -125,8 +125,17 @@ export default function StockLookup() {
               </Link>
               <AIAnalystButton symbol={data.symbol} />
             </div>
-            <div className="mt-3">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <DataFreshness meta={pickMeta(data)} refreshKeys={["stock", symbol]} />
+              {/* History provenance pill — quote can be live NSE while
+                  candles came off disk EOD; surface that distinction so
+                  "EMA50 below price" reads honestly when the bars are stale. */}
+              {pickMeta(data)?.historySource && pickMeta(data)?.historySource !== pickMeta(data)?.source && (
+                <span className="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-200" title="Historical-bars source (used for EMA / RSI / MACD)">
+                  History: {String(pickMeta(data)?.historySource)}
+                  {pickMeta(data)?.historyEodDate ? ` · ${pickMeta(data)?.historyEodDate}` : ""}
+                </span>
+              )}
             </div>
           </div>
 
@@ -162,7 +171,7 @@ export default function StockLookup() {
 
       {data?.error && (
         <div className="flex items-center gap-2 text-amber-600 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm">
-          <AlertCircle className="w-4 h-4" /> {data.error}
+          <AlertCircle className="w-4 h-4" /> {(error as Error).message}
         </div>
       )}
     </div>

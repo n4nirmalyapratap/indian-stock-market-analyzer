@@ -21,7 +21,21 @@ from scipy.stats import norm
 logger = logging.getLogger("options_service")
 
 # ── Indian market constants ────────────────────────────────────────────────────
-RISK_FREE_RATE = 0.07  # 7% India 10-year G-Sec approx
+# RISK_FREE_RATE is populated from the FRED-backed cache at import time, with
+# the disk cache (last-known good FRED observation) used when offline.  The
+# 0.07 hardcode applies only on the very first cold boot with no disk cache.
+# Callers that want the live value should call get_default_risk_free_rate().
+from .risk_free_service import get_cached_rate_sync as _rfr_cached
+RISK_FREE_RATE: float = _rfr_cached()
+
+
+def get_default_risk_free_rate() -> float:
+    """Return the latest cached India 10Y G-Sec rate (decimal).  Refreshes
+    the module-level RISK_FREE_RATE so subsequent default-arg captures get
+    the freshest value when re-imported."""
+    global RISK_FREE_RATE
+    RISK_FREE_RATE = _rfr_cached()
+    return RISK_FREE_RATE
 
 # NSE lot sizes (current as of 2024-25)
 LOT_SIZES: dict[str, int] = {
@@ -42,39 +56,40 @@ LOT_SIZES: dict[str, int] = {
 }
 DEFAULT_LOT_SIZE = 100
 
-# Strike step sizes (NSE rounds strikes to these multiples)
-def _strike_step(S: float) -> float:
-    """Return the standard strike increment for a given spot price."""
-    if S >= 20_000:
-        return 100.0
-    if S >= 10_000:
-        return 100.0
-    if S >= 5_000:
-        return 50.0
-    if S >= 2_000:
-        return 50.0
-    if S >= 1_000:
-        return 20.0
-    if S >= 500:
-        return 10.0
-    return 5.0
+# Strike step sizes — symbol-aware via the SEBI registry.  Index futures have
+# fixed strike increments (NIFTY/FINNIFTY=50, BANKNIFTY/SENSEX=100,
+# MIDCPNIFTY=25); the legacy spot-bucketed ladder is only used when the
+# caller does not supply a symbol (back-compat with old call sites).
+def _strike_step(S: float, symbol: str = "") -> float:
+    """Return the standard strike increment for a symbol+spot."""
+    from .sebi_registry import get_strike_step
+    return get_strike_step(symbol, S)
 
 
 def get_lot_size(symbol: str) -> int:
+    """Return current lot size for a symbol.
+
+    Delegates to the SEBI registry (single source of truth); the legacy
+    LOT_SIZES dict above is retained only so external imports of the
+    constant keep working.  When the registry has no rule for the symbol
+    we fall back to the substring-match against LOT_SIZES, then DEFAULT.
+    """
+    from .sebi_registry import get_lot_size_on
+    rule = get_lot_size_on(symbol)
+    if rule is not None:
+        return rule.lot_size
     upper = symbol.upper()
-    # Exact match first
     if upper in LOT_SIZES:
         return LOT_SIZES[upper]
-    # Substring match — longest key wins to avoid "NIFTY" matching inside "BANKNIFTY"
     matches = [(k, v) for k, v in LOT_SIZES.items() if k in upper]
     if matches:
         return max(matches, key=lambda x: len(x[0]))[1]
     return DEFAULT_LOT_SIZE
 
 
-def atm_strike(S: float) -> float:
-    """Round spot price to nearest ATM strike."""
-    step = _strike_step(S)
+def atm_strike(S: float, symbol: str = "") -> float:
+    """Round spot price to nearest ATM strike (symbol-aware when provided)."""
+    step = _strike_step(S, symbol)
     return round(S / step) * step
 
 

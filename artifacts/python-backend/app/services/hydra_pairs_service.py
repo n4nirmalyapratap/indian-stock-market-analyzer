@@ -214,6 +214,8 @@ def scan_pairs(
     # Bonferroni-corrected threshold
     corrected_threshold = min(p_threshold, 0.05 / max(total_tests, 1))
 
+    # Evaluate ALL pairs so the final sort returns the globally best ones.
+    # 105 OLS regressions for 15 symbols (default) is cheap; do not short-circuit.
     results = []
     for i in range(n):
         for j in range(i + 1, n):
@@ -224,8 +226,7 @@ def scan_pairs(
                 continue
             pvalue = _engle_granger_pvalue(ca, cb)
             if pvalue <= p_threshold:
-                _, beta = _compute_spread(ca, cb)
-                spread, _ = _compute_spread(ca, cb)
+                spread, beta = _compute_spread(ca, cb)
                 ou = calibrate_ou(spread)
                 sig = generate_signal(ou) if "error" not in ou else {"signal": "UNKNOWN"}
                 results.append({
@@ -238,7 +239,5 @@ def scan_pairs(
                     "zScore": ou.get("zScore", 0.0),
                     "halfLife": ou.get("halfLife", 0.0),
                 })
-        if len(results) >= max_pairs:
-            break
 
     return sorted(results, key=lambda r: r["pValue"])[:max_pairs]

@@ -394,7 +394,7 @@ async def _fetch_all_feeds() -> dict:
     """Fetches all sources in parallel and returns:
       { 'articles': [...], 'sources': [{'name','short','ok','count','error'}, ...] }
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     rss_tasks = [
         loop.run_in_executor(None, _fetch_one_feed, src) for src in RSS_SOURCES
     ]
@@ -558,7 +558,7 @@ async def _fetch_deals() -> dict:
 
         return {"deals": deals, "errors": errors}
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _do)
 
 
@@ -618,7 +618,7 @@ async def _fetch_nse_events() -> dict:
             err = str(e)
         return {"events": events, "error": err}
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _do)
 
 

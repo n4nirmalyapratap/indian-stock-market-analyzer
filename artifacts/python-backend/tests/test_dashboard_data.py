@@ -482,9 +482,9 @@ class TestIpoServiceFailureModes:
         monkeypatch.setattr(gmp, "fetch_gmp_table", fake_gmp)
 
         svc = ipo.IpoService(_FakeNse(raise_=RuntimeError("boom")))
-        out = asyncio.get_event_loop().run_until_complete(svc.get_calendar()) \
-              if not asyncio.get_event_loop().is_closed() \
-              else asyncio.run(svc.get_calendar())
+        # Use asyncio.run() directly — the deprecated get_event_loop() pattern
+        # raises "no current event loop" on Python 3.12+ when no loop exists.
+        out = asyncio.run(svc.get_calendar())
         assert out["available"] is False
         assert "open" in out and out["open"] == []
         assert "upcoming" in out and out["upcoming"] == []
