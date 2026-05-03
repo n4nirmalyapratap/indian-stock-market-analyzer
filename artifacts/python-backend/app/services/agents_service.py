@@ -237,6 +237,26 @@ def build_context(stock_detail: dict) -> dict:
     mkt_cap  = _safe_num(merged.get("marketCap"))
     fcf_yld  = (free_cf / mkt_cap * 100) if (free_cf and mkt_cap) else None
 
+    # Audit fix: yfinance flipped `dividendYield` to a percentage (e.g. 2.5
+    # for 2.5%) in late 2024, but our checklists were written when it was a
+    # fraction (0.025).  Normalise back to a fraction so thresholds like
+    # ">= 0.02" behave correctly across both representations.
+    div_yld = _safe_num(merged.get("dividendYield"))
+    if div_yld is not None and div_yld > 1:
+        div_yld = div_yld / 100.0
+
+    # ROCE proxy — Yahoo doesn't always expose it.  Derive from EBIT and
+    # invested capital when possible so Indian personas (Agrawal, Khanna,
+    # Damani RK) don't silently score zero on their headline metric.
+    roce = _safe_num(merged.get("returnOnCapitalEmployed"))
+    if roce is None:
+        ebit = _safe_num(merged.get("ebit"))
+        debt_v   = _safe_num(merged.get("totalDebt")) or 0.0
+        equity_v = (_safe_num(merged.get("totalStockholderEquity"))
+                    or _safe_num(merged.get("bookValue")))
+        if ebit and equity_v and (equity_v + debt_v) > 0:
+            roce = ebit / (equity_v + debt_v)
+
     return {
         "symbol":       (stock_detail.get("symbol") or "").upper(),
         "name":         merged.get("longName") or merged.get("shortName") or merged.get("companyName"),
@@ -272,7 +292,8 @@ def build_context(stock_detail: dict) -> dict:
         "freeCashflow":       free_cf,
         "operatingCashflow":  _safe_num(merged.get("operatingCashflow")),
         "fcfYield":           fcf_yld,
-        "dividendYield":      _safe_num(merged.get("dividendYield")),
+        "dividendYield":      div_yld,
+        "roce":               roce,
         "payoutRatio":        _safe_num(merged.get("payoutRatio")),
         "trailingEps":        _safe_num(merged.get("trailingEps")),
         # Ownership / risk
@@ -469,6 +490,198 @@ def _evaluate_burry(c: dict) -> dict:
     return {"score": score, "verdict": verdict, "checklist": checklist}
 
 
+# ── Indian persona evaluators ─────────────────────────────────────────────────
+# Each Indian legend gets 6 deterministic checks mapped to their well-documented
+# public philosophy.  Only fields already exposed by `build_context` are used,
+# so personas degrade gracefully (None → not-passed) instead of erroring.
+#
+# Indian market-cap buckets (₹):  Large > ₹20,000 Cr (2e11), Mid ₹5,000–20,000 Cr
+# (5e10–2e11), Small < ₹5,000 Cr (5e10).  Used by Kedia / Veliyath / Khanna /
+# Kacholia who hunt outside the large-cap herd.
+
+def _evaluate_jhunjhunwala(c: dict) -> dict:
+    # "Big Bull" — bet big on scalable Indian consumption stories with quality
+    # management.  Conviction sizing demands strong ROE, growing earnings, low
+    # leverage and a sane PEG.
+    peg = c["pegRatio"]
+    if peg is None and c["trailingPE"] and c["earningsGrowth"] and c["earningsGrowth"] > 0:
+        peg = c["trailingPE"] / (c["earningsGrowth"] * 100.0)
+    checklist = [
+        _check("ROE > 18% (capital efficiency)", c["returnOnEquity"],  ">=", 0.18, 1.5,
+               "Rakesh wanted scalable businesses earning real returns on capital."),
+        _check("Earnings growth > 15%",          c["earningsGrowth"],  ">=", 0.15, 1.5,
+               "The India growth story needs visible compounding."),
+        _check("Revenue growth > 12%",           c["revenueGrowth"],   ">=", 0.12, 1.0,
+               "Profit growth without sales growth is a red flag."),
+        _check("Debt-to-equity < 60",            c["debtToEquity"],    "<",  60.0, 1.0,
+               "Big Bull avoided heavily-levered businesses."),
+        _check("PEG < 1.5 (growth at sane price)", peg,                "<",  1.5,  1.0,
+               "Conviction sizing only when growth isn't ridiculously priced."),
+        _check("Operating margin > 12%",         c["operatingMargin"], ">=", 0.12, 1.0,
+               "Pricing power is non-negotiable for a scalable bet."),
+    ]
+    score, verdict = _aggregate(checklist)
+    return {"score": score, "verdict": verdict, "checklist": checklist}
+
+
+def _evaluate_damani_rk(c: dict) -> dict:
+    # Radhakishan Damani (DMart founder) — frugal compounder hunter.  Loves
+    # debt-free retail/consumer businesses with steady cash and clean books.
+    cash_to_debt = None
+    if c["totalCash"] is not None and c["totalDebt"] is not None and c["totalDebt"] > 0:
+        cash_to_debt = c["totalCash"] / c["totalDebt"]
+    elif c["totalCash"] and (c["totalDebt"] in (None, 0)):
+        cash_to_debt = 10.0  # effectively net-cash
+    checklist = [
+        _check("Debt-to-equity < 30 (lean balance sheet)", c["debtToEquity"], "<", 30.0, 2.0,
+               "RK Damani loathes leverage — DMart was built debt-light."),
+        _check("ROCE > 18%",                 c["roce"],            ">=", 0.18, 1.5,
+               "Capital must work hard — DMart's ROCE was the litmus test."),
+        _check("Free cash flow positive",    c["freeCashflow"],    ">",  0.0,  1.5,
+               "Frugal compounders self-fund their growth."),
+        _check("Operating margin > 8% (retail-friendly)", c["operatingMargin"], ">=", 0.08, 1.0,
+               "Even thin-margin retail must show consistent profitability."),
+        _check("Cash > Debt (net-cash bias)", cash_to_debt,        ">=", 1.0,  1.0,
+               "A net-cash position protects through any cycle."),
+        _check("Earnings growth > 10%",      c["earningsGrowth"],  ">=", 0.10, 1.0,
+               "Compounders must keep compounding — slow but steady."),
+    ]
+    score, verdict = _aggregate(checklist)
+    return {"score": score, "verdict": verdict, "checklist": checklist}
+
+
+def _evaluate_agrawal(c: dict) -> dict:
+    # Raamdeo Agrawal (Motilal Oswal) — QGLP framework: Quality (high ROE),
+    # Growth (earnings), Longevity (durability proxy via margins/FCF), Price
+    # (PEG / P/E sanity).
+    peg = c["pegRatio"]
+    if peg is None and c["trailingPE"] and c["earningsGrowth"] and c["earningsGrowth"] > 0:
+        peg = c["trailingPE"] / (c["earningsGrowth"] * 100.0)
+    checklist = [
+        _check("Q — ROE > 20%",              c["returnOnEquity"],  ">=", 0.20, 1.5,
+               "Quality gate: only businesses earning 20%+ on equity."),
+        _check("Q — ROCE > 18%",             c["roce"],            ">=", 0.18, 1.0,
+               "Capital efficiency confirms the quality."),
+        _check("G — Earnings growth > 15%",  c["earningsGrowth"],  ">=", 0.15, 1.5,
+               "Growth must be visible and sustained — QGLP's middle pillar."),
+        _check("L — Operating margin > 15% (durability)", c["operatingMargin"], ">=", 0.15, 1.0,
+               "Wide margins suggest the moat will outlast the cycle."),
+        _check("L — Free cash flow positive", c["freeCashflow"],   ">",  0.0,  1.0,
+               "Real cash, not accruals — the longevity sanity check."),
+        _check("P — PEG < 1.2",              peg,                  "<",  1.2,  1.5,
+               "Price discipline: don't overpay even for quality growth."),
+    ]
+    score, verdict = _aggregate(checklist)
+    return {"score": score, "verdict": verdict, "checklist": checklist}
+
+
+def _evaluate_kedia(c: dict) -> dict:
+    # Vijay Kedia's SMILE: Small in size, Medium in experience, Large in
+    # aspiration, Extra-large in market potential.  Translates to small/mid
+    # cap with strong recent growth and improving fundamentals.
+    checklist = [
+        _check("S — Small/mid cap (< ₹20,000 Cr)", c["marketCap"],  "<",  2e11, 1.5,
+               "SMILE starts with companies still small enough to compound 10×."),
+        _check("M — Established (mkt cap > ₹500 Cr)", c["marketCap"], ">=", 5e9, 1.0,
+               "Some operating history — not a stub or shell."),
+        _check("L — Earnings growth > 20% (large aspiration)", c["earningsGrowth"], ">=", 0.20, 1.5,
+               "Aspirational growth — Kedia hunts multibaggers, not laggards."),
+        _check("L — Revenue growth > 15%",   c["revenueGrowth"],   ">=", 0.15, 1.5,
+               "Real demand absorption, not just margin engineering."),
+        _check("Operating margin > 10% (operating leverage)", c["operatingMargin"], ">=", 0.10, 1.0,
+               "Margins biting as scale grows — the SMILE turns up."),
+        _check("Debt-to-equity < 70",        c["debtToEquity"],    "<",  70.0, 1.0,
+               "Survives the dry spells until the market potential plays out."),
+    ]
+    score, verdict = _aggregate(checklist)
+    return {"score": score, "verdict": verdict, "checklist": checklist}
+
+
+def _evaluate_veliyath(c: dict) -> dict:
+    # Porinju Veliyath — contrarian small/mid-cap turnaround hunter.  Loves
+    # beaten-down, under-owned, low-P/B names where the market overreacted.
+    checklist = [
+        _check("Small/mid cap (< ₹15,000 Cr)", c["marketCap"],     "<",  1.5e11, 1.5,
+               "Porinju fishes outside the large-cap herd."),
+        _check("Down 25%+ from 52w high",    c["pctOffHigh"],      "<=", -25.0, 2.0,
+               "The contrarian setup needs a meaningful drawdown first."),
+        _check("Price-to-book < 2",          c["priceToBook"],     "<",  2.0,   1.5,
+               "Tangible-asset support for the turnaround thesis."),
+        _check("Institutional holding < 40%", c["heldPercentInstitutions"], "<", 0.40, 1.0,
+               "Under-owned — the rerating happens when institutions wake up."),
+        _check("Debt-to-equity < 100",       c["debtToEquity"],    "<",  100.0, 1.0,
+               "Survivable balance sheet — most turnarounds die of leverage."),
+        _check("Positive operating cash flow", c["operatingCashflow"], ">", 0.0,   1.0,
+               "The business must still generate cash through the slump."),
+    ]
+    score, verdict = _aggregate(checklist)
+    return {"score": score, "verdict": verdict, "checklist": checklist}
+
+
+def _evaluate_damani_ramesh(c: dict) -> dict:
+    # Ramesh Damani — long-horizon "buy and forget" investor riding India's
+    # structural shifts (IT in '90s, capex now).  Wants quality large-caps with
+    # bulletproof balance sheets and persistent profitability.
+    checklist = [
+        _check("Large cap (> ₹20,000 Cr)",   c["marketCap"],       ">=", 2e11, 1.5,
+               "Ramesh buys India's structural winners — usually large caps."),
+        _check("ROE > 15% (durable returns)", c["returnOnEquity"], ">=", 0.15, 1.5,
+               "Buy-and-forget needs returns that hold up over decades."),
+        _check("Debt-to-equity < 50",        c["debtToEquity"],    "<",  50.0, 1.5,
+               "Long-horizon names must survive every cycle without dilution."),
+        _check("Operating margin > 15%",     c["operatingMargin"], ">=", 0.15, 1.0,
+               "Pricing power is what lets you 'forget' a position."),
+        _check("Pays a dividend",            c["dividendYield"],   ">",  0.0,  1.0,
+               "Cash returns confirm the long-term promise is real."),
+        _check("Free cash flow positive",    c["freeCashflow"],    ">",  0.0,  1.0,
+               "Self-funded compounding is the bedrock of buy-and-forget."),
+    ]
+    score, verdict = _aggregate(checklist)
+    return {"score": score, "verdict": verdict, "checklist": checklist}
+
+
+def _evaluate_kacholia(c: dict) -> dict:
+    # Ashish Kacholia — high-growth mid/small caps with operating leverage.
+    # Hunts businesses where margins and revenues are both expanding fast.
+    checklist = [
+        _check("Mid/small cap (< ₹25,000 Cr)", c["marketCap"],     "<",  2.5e11, 1.0,
+               "Kacholia rarely chases mega caps — leverage lives in mid/small."),
+        _check("Revenue growth > 18%",       c["revenueGrowth"],   ">=", 0.18, 1.5,
+               "Top-line momentum is the headline signal."),
+        _check("Earnings growth > 25% (operating leverage)", c["earningsGrowth"], ">=", 0.25, 2.0,
+               "Profits growing faster than sales = operating leverage at work."),
+        _check("Operating margin > 12%",     c["operatingMargin"], ">=", 0.12, 1.0,
+               "The leverage is real, not just one-off accounting."),
+        _check("ROE > 15%",                  c["returnOnEquity"],  ">=", 0.15, 1.0,
+               "Growth must come with capital efficiency."),
+        _check("Debt-to-equity < 80",        c["debtToEquity"],    "<",  80.0, 1.0,
+               "Some leverage acceptable, but balance-sheet risk capped."),
+    ]
+    score, verdict = _aggregate(checklist)
+    return {"score": score, "verdict": verdict, "checklist": checklist}
+
+
+def _evaluate_khanna(c: dict) -> dict:
+    # Dolly Khanna — under-the-radar manufacturing/chemicals with rising ROCE.
+    # Picks ignored small-cap industrial names before institutions arrive.
+    checklist = [
+        _check("Small cap (< ₹10,000 Cr)",   c["marketCap"],       "<",  1e11, 1.5,
+               "Dolly's signature: small caps the Street hasn't found yet."),
+        _check("Institutional holding < 25%", c["heldPercentInstitutions"], "<", 0.25, 1.5,
+               "Under-the-radar means under-owned by mutual funds & FIIs."),
+        _check("ROCE > 15% (rising returns)", c["roce"],           ">=", 0.15, 1.5,
+               "Khanna's edge is spotting capital efficiency before the rerating."),
+        _check("P/E < 25 (still cheap)",     c["trailingPE"],      "<",  25.0, 1.0,
+               "Bought before the multiple expansion."),
+        _check("Earnings growth > 15%",      c["earningsGrowth"],  ">=", 0.15, 1.0,
+               "The catalyst that drags institutions in eventually."),
+        _check("Debt-to-equity < 70",        c["debtToEquity"],    "<",  70.0, 1.0,
+               "Industrial small caps need sane leverage to survive cycles."),
+    ]
+    score, verdict = _aggregate(checklist)
+    return {"score": score, "verdict": verdict, "checklist": checklist}
+
+
 # ── Persona registry ──────────────────────────────────────────────────────────
 
 PERSONAS: list[dict] = [
@@ -528,7 +741,77 @@ PERSONAS: list[dict] = [
         "signature": "The fundamentals are clear and ugly; the question is when, not if.",
         "evaluate": _evaluate_burry,
     },
+    # ── Indian legends ────────────────────────────────────────────────────────
+    {
+        "id": "jhunjhunwala", "name": "Rakesh Jhunjhunwala", "firm": "Rare Enterprises",
+        "era": "1985–2022", "region": "India",
+        "philosophy": "Bet big on scalable Indian consumption — conviction sizing on quality compounders.",
+        "signature": "Markets are like women — always commanding, mysterious, unpredictable and volatile.",
+        "voice": "Speak as the Big Bull of Dalal Street — bullish on India's long-term consumption story, candid and conviction-driven. Reference 'India growth story', 'scalable bet', 'conviction sizing' where natural.",
+        "evaluate": _evaluate_jhunjhunwala,
+    },
+    {
+        "id": "damani_rk", "name": "Radhakishan Damani", "firm": "DMart / Bright Star Investments",
+        "era": "1990–present", "region": "India",
+        "philosophy": "Frugal compounders — debt-free retail and consumer businesses with patient cash generation.",
+        "signature": "Buy companies that can survive without raising capital.",
+        "voice": "Speak as the famously terse, frugal investor behind DMart — short sentences, allergic to leverage, obsessed with capital efficiency and balance-sheet purity.",
+        "evaluate": _evaluate_damani_rk,
+    },
+    {
+        "id": "agrawal", "name": "Raamdeo Agrawal", "firm": "Motilal Oswal Financial Services",
+        "era": "1987–present", "region": "India",
+        "philosophy": "QGLP — Quality, Growth, Longevity, Price — the four-pillar test for compounders.",
+        "signature": "Buy right, sit tight.",
+        "voice": "Speak in the QGLP framework explicitly — call out which of Q, G, L or P passes/fails. Calm, methodical, evidence-based.",
+        "evaluate": _evaluate_agrawal,
+    },
+    {
+        "id": "kedia", "name": "Vijay Kedia", "firm": "Kedia Securities",
+        "era": "1989–present", "region": "India",
+        "philosophy": "SMILE — Small in size, Medium in experience, Large in aspiration, Extra-large market potential.",
+        "signature": "Invest in small companies with large dreams.",
+        "voice": "Speak with Kedia's signature SMILE acronym — energetic, story-driven, on the lookout for the next 10× multibagger. Mention 'aspiration' and 'market potential' where natural.",
+        "evaluate": _evaluate_kedia,
+    },
+    {
+        "id": "veliyath", "name": "Porinju Veliyath", "firm": "Equity Intelligence India",
+        "era": "1994–present", "region": "India",
+        "philosophy": "Contrarian small/mid-cap turnarounds — buy what the market has thrown away.",
+        "signature": "Investing in stocks that nobody talks about is often the most rewarding.",
+        "voice": "Speak as the contrarian small-cap hunter — punchy, opinionated, explicit about being early when nobody else is interested.",
+        "evaluate": _evaluate_veliyath,
+    },
+    {
+        "id": "damani_ramesh", "name": "Ramesh Damani", "firm": "Ramesh S. Damani Finance",
+        "era": "1989–present", "region": "India",
+        "philosophy": "Long-horizon 'buy and forget' — own India's structural winners through every cycle.",
+        "signature": "The big money is made in the big swings of the market, but you have to sit through them.",
+        "voice": "Speak as the BSE veteran with a multi-decade horizon — cite India's structural shifts (IT in '90s, capex now), patient and philosophical.",
+        "evaluate": _evaluate_damani_ramesh,
+    },
+    {
+        "id": "kacholia", "name": "Ashish Kacholia", "firm": "Lucky Investment Managers",
+        "era": "1993–present", "region": "India",
+        "philosophy": "High-growth mid/small caps with operating leverage — earnings expansion is the alpha.",
+        "signature": "Invest where earnings grow faster than the headline.",
+        "voice": "Speak as the operating-leverage hunter — fast, energetic, fixated on the gap between earnings growth and revenue growth.",
+        "evaluate": _evaluate_kacholia,
+    },
+    {
+        "id": "khanna", "name": "Dolly Khanna", "firm": "Khanna Family Portfolio",
+        "era": "1996–present", "region": "India",
+        "philosophy": "Under-the-radar Indian manufacturing/chemicals with rising ROCE — buy before institutions arrive.",
+        "signature": "The best ideas are hidden in plain sight, in factories nobody visits.",
+        "voice": "Speak as the quiet, methodical small-cap hunter — focused on the manufacturing/chemicals shop floor, capital efficiency, and getting in before mutual funds do.",
+        "evaluate": _evaluate_khanna,
+    },
 ]
+
+# Default region for the original 8 (Global) so downstream code can group /
+# filter cleanly without each persona declaring it explicitly.
+for _p in PERSONAS:
+    _p.setdefault("region", "Global")
 
 
 PERSONA_BY_ID = {p["id"]: p for p in PERSONAS}
@@ -572,18 +855,22 @@ def run_council(stock_detail: dict, external: Optional[dict] = None) -> dict:
             "checklist":  outcome["checklist"],
         })
 
-    # Aggregate council verdict
-    avg_score = sum(r["score"] for r in results) / len(results)
+    # Aggregate council verdict — thresholds are now ratio-based so they scale
+    # cleanly when the council grows (we went from 8 → 16 personas after
+    # adding the Indian legends).
+    n         = len(results) or 1
+    avg_score = sum(r["score"] for r in results) / n
     buys      = sum(1 for r in results if r["verdict"] in ("BUY", "STRONG_BUY"))
     avoids    = sum(1 for r in results if r["verdict"] in ("AVOID", "STRONG_AVOID"))
-    # Order matters: evaluate the strongest verdicts FIRST so e.g. 6 avoids
-    # don't get downgraded to plain AVOID. Mutually exclusive in practice
-    # because the buy/avoid counts are disjoint.
+    buy_r     = buys   / n
+    avoid_r   = avoids / n
+    # Order matters: evaluate the strongest verdicts FIRST so a near-unanimous
+    # avoid doesn't get downgraded to a plain AVOID.
     council_verdict = (
-        "STRONG_BUY"   if buys   >= 6 and avoids == 0 else
-        "STRONG_AVOID" if avoids >= 6 and buys   == 0 else
-        "BUY"          if buys   >= 5 and avoids <= 1 else
-        "AVOID"        if avoids >= 5 and buys   <= 1 else
+        "STRONG_BUY"   if buy_r   >= 0.75  and avoids == 0 else
+        "STRONG_AVOID" if avoid_r >= 0.75  and buys   == 0 else
+        "BUY"          if buy_r   >= 0.625 and avoid_r <= 0.15 else
+        "AVOID"        if avoid_r >= 0.625 and buy_r   <= 0.15 else
         "HOLD"
     )
 
@@ -622,6 +909,8 @@ def run_council(stock_detail: dict, external: Optional[dict] = None) -> dict:
 # ── LLM thesis writer ────────────────────────────────────────────────────────
 
 def _persona_system_prompt(persona: dict) -> str:
+    voice = persona.get("voice")
+    voice_block = f" {voice}" if voice else ""
     return (
         f"You are channelling the documented public investing philosophy of "
         f"{persona['name']} ({persona['firm']}, {persona['era']}). "
@@ -630,7 +919,7 @@ def _persona_system_prompt(persona: dict) -> str:
         f"how this investor's PUBLIC checklist would view a given Indian stock. "
         f"Always end with the explicit disclaimer: "
         f"\"This is educational only and not personalised investment advice.\" "
-        f"Stay in character — use this investor's voice and metaphors. "
+        f"Stay in character — use this investor's voice and metaphors.{voice_block} "
         f"Be specific about numbers from the checklist provided."
     )
 
