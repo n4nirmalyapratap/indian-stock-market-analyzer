@@ -164,6 +164,11 @@ function OverviewTab({
             <p className="text-xs mt-0.5" style={{ color: isDark ? "#94a3b8" : "#6b7280" }}>
               Above 100 = outperforming · Below 100 = underperforming
             </p>
+            {data.historySynthetic && (
+              <p className="text-[11px] mt-1" style={{ color: isDark ? "#fbbf24" : "#b45309" }}>
+                ⓘ Sector index history unavailable — reconstructed from equal-weighted constituents (approximate).
+              </p>
+            )}
           </div>
           <div className="flex gap-1">
             {(["3mo","6mo","1y","5y"] as const).map(p => (
