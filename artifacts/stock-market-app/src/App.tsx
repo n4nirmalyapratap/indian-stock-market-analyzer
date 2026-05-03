@@ -14,6 +14,7 @@ import InvestorCouncil from "@/pages/InvestorCouncil";
 import OptionsStrategyTester from "@/pages/OptionsStrategyTester";
 import SettingsPage from "@/pages/SettingsPage";
 import Portfolio from "@/pages/Portfolio";
+import DCF from "@/pages/DCF";
 import NotFound from "@/pages/not-found";
 import TradingPlatform from "@/pages/TradingPlatform";
 import SectorDetail from "@/pages/SectorDetail";
@@ -121,6 +122,7 @@ function AppRoutes() {
         <Route path="/ai-analyst"      component={AIAnalyst} />
         <Route path="/options"         component={OptionsStrategyTester} />
         <Route path="/portfolio"       component={Portfolio} />
+        <Route path="/dcf"             component={DCF} />
         <Route path="/settings"        component={SettingsPage} />
         <Route path="/chart/:symbol"   component={ChartView} />
         <Route component={NotFound} />

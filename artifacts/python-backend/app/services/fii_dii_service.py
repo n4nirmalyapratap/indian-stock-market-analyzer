@@ -249,7 +249,7 @@ class FiiDiiService:
 
         # Persist EVERY segment we fetched (not just the requested one) so the
         # cache fills up in a single pass instead of needing 4 separate runs.
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         for seg, rows in all_per_segment.items():
             if not rows:
                 continue
@@ -354,7 +354,7 @@ class FiiDiiService:
 
     async def get_historical(self, segment: str, start: datetime, end: datetime) -> pd.DataFrame:
         table = f"fii_dii_{segment}"
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         
         cached_min, cached_max = await loop.run_in_executor(None, get_cached_date_range, table)
         

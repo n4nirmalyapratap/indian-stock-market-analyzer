@@ -55,7 +55,9 @@ def clear_macro_cache():
 
 def _run(coro):
     """Run an async coroutine to completion in the test thread."""
-    return asyncio.new_event_loop().run_until_complete(coro)
+    # asyncio.run() creates and properly closes a fresh loop per call;
+    # new_event_loop().run_until_complete() leaks the loop.
+    return asyncio.run(coro)
 
 
 # ── FRED CSV parsing ────────────────────────────────────────────────────────

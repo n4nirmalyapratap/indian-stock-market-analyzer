@@ -1,5 +1,17 @@
 """
 Technical indicator calculations using pandas_ta.
+
+KNOWN DRIFT vs TradingView (~0.1% on EMA-derived series):
+The local `pandas_ta` shim wraps the `ta` library, which uses Wilder's
+smoothing seeded from the SMA of the first `length` bars (e.g. EMA(9)
+seeds from the SMA of bars 1-9, then applies the recursive smoother).
+TradingView seeds the EMA from the first single bar's close. Over a
+multi-year series the two converge, but the most recent values can drift
+by ~0.05-0.15% — most visible on Bollinger Bands middle line, MACD
+fast/slow EMAs, and ADX. This is intentional: matching TradingView would
+require a private patched copy of `ta`, and the drift is well below the
+noise of intraday quote latency. Treat indicators here as Wilder-style,
+not TV-style.
 """
 import sys
 import os
