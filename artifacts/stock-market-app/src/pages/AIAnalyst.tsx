@@ -231,6 +231,10 @@ export default function AIAnalyst() {
               className="px-3 py-2 text-sm border border-gray-200 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg text-gray-600 dark:text-gray-300">
           Compare two stocks →
         </Link>
+        <Link href="/ai-analyst/scan"
+              className="px-3 py-2 text-sm border border-gray-200 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg text-gray-600 dark:text-gray-300">
+          Scan a watchlist →
+        </Link>
       </div>
 
       {/* Error */}
