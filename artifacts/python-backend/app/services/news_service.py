@@ -572,18 +572,47 @@ async def _fetch_nse_events() -> dict:
         try:
             from nsepython import nse_events
             data = nse_events()
+            # nsepython 2.97 returns a pandas DataFrame, not a list — earlier
+            # code only handled `list`, so 365 real events were being silently
+            # dropped on the floor. Normalise both shapes to a list of dicts.
+            rows: list[dict]
             if isinstance(data, list):
-                for ev in data[:30]:
-                    sym = ev.get("symbol", "")
-                    purpose = ev.get("purpose", ev.get("subject", ""))
-                    date = ev.get("date", ev.get("bfDate", ""))
+                rows = data
+            elif hasattr(data, "to_dict"):
+                rows = data.to_dict(orient="records")  # pandas DataFrame
+            else:
+                rows = []
+            def _s(v) -> str:
+                # pandas rows can carry NaN/None/numeric; coerce to a safe
+                # string so a single malformed row can't blow up the whole
+                # fetch (which would mark the entire feed unavailable).
+                if v is None:
+                    return ""
+                try:
+                    if isinstance(v, float) and v != v:  # NaN check
+                        return ""
+                except Exception:
+                    pass
+                return str(v)
+
+            for ev in rows[:30]:
+                try:
+                    sym     = _s(ev.get("symbol", ""))
+                    purpose = _s(ev.get("purpose", ev.get("subject", "")))
+                    date    = _s(ev.get("date", ev.get("bfDate", "")))
+                    company = _s(ev.get("company", ev.get("companyName", sym)))
+                    if not sym and not purpose:
+                        continue  # empty row — skip silently
                     events.append({
                         "symbol":  sym,
-                        "company": ev.get("company", ev.get("companyName", sym)),
+                        "company": company,
                         "purpose": purpose,
                         "date":    date,
                         "type":    _classify_event(purpose),
                     })
+                except Exception as row_err:
+                    logger.warning("NSE events row skipped: %s", row_err)
+                    continue
         except Exception as e:
             logger.warning("NSE events error: %s", e)
             err = str(e)

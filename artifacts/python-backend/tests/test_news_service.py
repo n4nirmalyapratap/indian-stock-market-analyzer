@@ -10,7 +10,9 @@ Tests for the news service after the 2026-05 data-honesty audit:
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
+import types
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
@@ -308,6 +310,63 @@ def test_get_corporate_events_marks_unavailable_on_error():
     assert r["available"] is False
     assert r["error"] == "nse blocked"
     assert r["events"] == []
+
+
+def test_fetch_nse_events_handles_dataframe_shape():
+    """nsepython.nse_events() returns a pandas DataFrame, not a list. The
+    converter must normalise it; otherwise rows get silently dropped."""
+    ns._CACHE.pop("events", None)
+
+    class _FakeDF:
+        def to_dict(self, orient="records"):
+            assert orient == "records"
+            return [
+                {"symbol": "RELIANCE", "company": "Reliance Industries",
+                 "purpose": "Dividend", "date": "10-May-2026"},
+                {"symbol": "TCS", "company": "Tata Consultancy",
+                 "purpose": "Quarterly Results", "date": "12-May-2026"},
+            ]
+
+    fake_mod = types.SimpleNamespace(nse_events=lambda: _FakeDF())
+    with patch.dict(sys.modules, {"nsepython": fake_mod}):
+        r = _run(ns._fetch_nse_events())
+    assert r["error"] is None
+    assert len(r["events"]) == 2
+    assert r["events"][0]["symbol"] == "RELIANCE"
+    assert r["events"][0]["type"] == "dividend"
+    assert r["events"][1]["type"] == "results"
+
+
+def test_fetch_nse_events_tolerates_nan_rows():
+    """A single malformed/NaN row must not nuke the whole feed — pandas
+    happily emits NaN for missing values and `.lower()` on a float blows
+    up. The fetcher should coerce safely and skip empty rows."""
+    ns._CACHE.pop("events", None)
+    nan = float("nan")
+
+    class _FakeDF:
+        def to_dict(self, orient="records"):
+            return [
+                # NaN purpose — must not crash _classify_event
+                {"symbol": "INFY", "company": "Infosys",
+                 "purpose": nan, "date": "15-May-2026"},
+                # totally empty row — should be skipped
+                {"symbol": "", "company": "", "purpose": "", "date": ""},
+                # good row that must still come through
+                {"symbol": "HDFCBANK", "company": "HDFC Bank",
+                 "purpose": "AGM", "date": "20-May-2026"},
+            ]
+
+    fake_mod = types.SimpleNamespace(nse_events=lambda: _FakeDF())
+    with patch.dict(sys.modules, {"nsepython": fake_mod}):
+        r = _run(ns._fetch_nse_events())
+    assert r["error"] is None
+    syms = [e["symbol"] for e in r["events"]]
+    assert "INFY" in syms and "HDFCBANK" in syms
+    assert "" not in syms  # empty row dropped
+    infy = next(e for e in r["events"] if e["symbol"] == "INFY")
+    assert infy["purpose"] == ""  # NaN coerced to empty string
+    assert infy["type"] == "announcement"  # _classify_event default bucket
 
 
 # ─── 10. /news/feed route surfaces honest meta.source ────────────────────────
