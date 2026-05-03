@@ -411,6 +411,16 @@ async def _fetch_sector_sentiments() -> list[dict]:
     from .hydra_sentiment_service import price_action_sentiment
     import httpx
 
+    # Audit 2026-05: tickers below were probed against Yahoo's chart endpoint.
+    #   - `^CNXFIN` is reachable but only returns 1 close (Yahoo no longer
+    #     serves history for it). Replaced with `NIFTY_FIN_SERVICE.NS`
+    #     which returns full daily history.
+    #   - `^CNXHEALTH` and `^CNXOILGAS` (and their `.NS` and `^NIFTY_*`
+    #     variants) all return either 404 or a single close — Yahoo does
+    #     not serve daily history for these indices. They were rendered as
+    #     "Unavailable" on every refresh, which is noisier than helpful.
+    #     Dropped: Nifty Pharma already covers healthcare, Nifty Energy
+    #     already covers oil & gas (heavy constituent overlap).
     SECTOR_TICKERS = [
         ("Nifty Bank",       "^NSEBANK"),
         ("Nifty IT",         "^CNXIT"),
@@ -420,10 +430,8 @@ async def _fetch_sector_sentiments() -> list[dict]:
         ("Nifty Metal",      "^CNXMETAL"),
         ("Nifty Realty",     "^CNXREALTY"),
         ("Nifty Energy",     "^CNXENERGY"),
-        ("Nifty Financial",  "^CNXFIN"),
+        ("Nifty Financial",  "NIFTY_FIN_SERVICE.NS"),
         ("Nifty PSU Bank",   "^CNXPSUBANK"),
-        ("Nifty Healthcare", "^CNXHEALTH"),
-        ("Nifty Oil & Gas",  "^CNXOILGAS"),
     ]
 
     headers = {"User-Agent": "Mozilla/5.0"}
