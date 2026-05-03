@@ -443,6 +443,20 @@ export default function Scanners() {
         </div>
       </div>
 
+      {/* Stale-universe banner — surfaces honestly when the AMFI cache failed
+          to load and we're scanning a hardcoded fallback list that may be
+          months out of date. Silent fallback is exactly the kind of thing
+          users rightly hate; flag it. */}
+      {scannersMeta?.universe && scannersMeta.universe.isLiveUniverse === false && (
+        <div className="mb-4 flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 text-xs">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">Scanning fallback universe ({scannersMeta.universe.totalSymbols} symbols)</p>
+            <p className="opacity-80">Live NSE/AMFI membership cache is unavailable — recently listed or delisted stocks may be missing. Re-running the universe builder will refresh this list.</p>
+          </div>
+        </div>
+      )}
+
       {/* Split layout */}
       <div className="flex gap-5 flex-1 min-h-0">
 
@@ -661,6 +675,31 @@ export default function Scanners() {
                   </div>
                 </div>
               </div>
+
+              {/* Scan errors — surface per-symbol failures so a 0-match result
+                  can be distinguished from a failed scan. Honest data labels
+                  trump quietly hiding broken provider responses. */}
+              {Array.isArray((result as any).scanErrors) && (result as any).scanErrors.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                  <div className="flex items-center gap-2 text-amber-800">
+                    <AlertCircle className="w-4 h-4" />
+                    <p className="text-sm font-semibold">
+                      {(result as any).scanErrors.length} symbol{(result as any).scanErrors.length !== 1 ? "s" : ""} skipped due to data errors
+                    </p>
+                  </div>
+                  <details className="mt-2">
+                    <summary className="text-xs text-amber-700 cursor-pointer">Show details</summary>
+                    <ul className="mt-2 text-xs text-amber-700 space-y-0.5 max-h-40 overflow-y-auto font-mono">
+                      {(result as any).scanErrors.slice(0, 50).map((e: any, i: number) => (
+                        <li key={i}>{e.symbol ?? "?"}: {e.error ?? e.message ?? "unknown"}</li>
+                      ))}
+                      {(result as any).scanErrors.length > 50 && (
+                        <li className="opacity-70">…and {(result as any).scanErrors.length - 50} more</li>
+                      )}
+                    </ul>
+                  </details>
+                </div>
+              )}
 
               {/* No results */}
               {result.results?.length === 0 && (
