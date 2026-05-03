@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import AsyncGenerator, List, Optional
 
 from fastapi import APIRouter, Request, Query, HTTPException, Body
@@ -101,8 +102,9 @@ async def run_body(request: Request, payload: RunPayload = Body(...)):
     """SSE stream — ticker provided in JSON body (per task spec)."""
     if not svc.feature_enabled():
         raise HTTPException(503, "AI Analyst feature is disabled")
+    ticker = _validate_ticker(payload.ticker)
     return _stream_response(
-        svc.run_analysis(payload.ticker, _user_id(request),
+        svc.run_analysis(ticker, _user_id(request),
                          force_refresh=bool(payload.force))
     )
 
@@ -114,9 +116,21 @@ async def run_path(ticker: str, request: Request,
     frontend's path-style URLs)."""
     if not svc.feature_enabled():
         raise HTTPException(503, "AI Analyst feature is disabled")
+    ticker = _validate_ticker(ticker)
     return _stream_response(
         svc.run_analysis(ticker, _user_id(request), force_refresh=force)
     )
+
+
+_TICKER_RX = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,19}$")
+
+
+def _validate_ticker(t: str) -> str:
+    """Reject empty or unsafe tickers before they reach the prompt/DB layer."""
+    u = (t or "").strip().upper()
+    if not _TICKER_RX.match(u):
+        raise HTTPException(400, f"invalid ticker: {t!r}")
+    return u
 
 
 @router.post("/compare")
@@ -129,7 +143,25 @@ async def compare(request: Request,
     ``A|B`` so the user can re-open it from Saved Analyses."""
     if not svc.feature_enabled():
         raise HTTPException(503, "AI Analyst feature is disabled")
+    a = _validate_ticker(a)
+    b = _validate_ticker(b)
     user = _user_id(request)
+
+    # Pre-check quota: if both sides need a fresh run, ensure we have at
+    # least 2 slots so a parallel fan-out can't push the user to -1.
+    if force or not svc.get_saved_single(a, user) or not svc.get_saved_single(b, user):
+        need = 0
+        if force or not svc.get_saved_single(a, user):
+            need += 1
+        if force or not svc.get_saved_single(b, user):
+            need += 1
+        q = svc.get_quota(user)
+        if q.get("remaining", 0) < need:
+            raise HTTPException(
+                429,
+                f"daily AI Analyst quota exhausted — need {need} run(s), "
+                f"have {q.get('remaining', 0)} of {q.get('limit', 0)} left",
+            )
 
     async def _one(t: str) -> dict:
         if not force:
@@ -190,8 +222,9 @@ async def scan(request: Request, payload: ScanPayload = Body(...)):
     if len(payload.tickers) > _MAX_SCAN:
         raise HTTPException(
             400, f"too many tickers — max {_MAX_SCAN} per scan")
+    cleaned = [_validate_ticker(t) for t in payload.tickers]
     return _stream_response(
-        svc.scan_watchlist(payload.tickers, _user_id(request),
+        svc.scan_watchlist(cleaned, _user_id(request),
                            force_refresh=bool(payload.force),
                            group_name=payload.name)
     )
