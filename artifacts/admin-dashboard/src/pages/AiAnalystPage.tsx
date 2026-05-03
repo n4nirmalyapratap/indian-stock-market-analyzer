@@ -1,8 +1,9 @@
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchAdmin } from "@/lib/api";
 import {
   Brain, RefreshCw, Trash2, Loader2, Activity,
-  CalendarDays, Timer, TrendingUp,
+  CalendarDays, Timer, TrendingUp, Save,
 } from "lucide-react";
 
 function errMsg(e: unknown): string {
@@ -17,6 +18,7 @@ type AdminStats = {
   avgWallClockMs: number;
   topTickers: Array<{ ticker: string; runs: number }>;
   quotaPerUserDay: number;
+  quotaDefault?: number;
 };
 
 function StatCard({
@@ -63,6 +65,38 @@ export default function AiAnalystPage() {
       queryFn: () => fetchAdmin("/ai-analyst/admin/stats"),
       refetchInterval: 15000,
     });
+
+  const [quotaDraft, setQuotaDraft] = useState<string>("");
+  useEffect(() => {
+    if (data?.quotaPerUserDay != null) {
+      setQuotaDraft(String(data.quotaPerUserDay));
+    }
+  }, [data?.quotaPerUserDay]);
+
+  const quotaMut = useMutation({
+    mutationFn: (limit: number) =>
+      fetchAdmin<AdminStats>("/ai-analyst/admin/quota", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit }),
+      }),
+    onSuccess: (res) => {
+      qc.setQueryData(["ai-analyst-admin-stats"], res);
+      qc.invalidateQueries({ queryKey: ["ai-analyst-admin-stats"] });
+    },
+    onError: (e: unknown) => {
+      alert(`Failed to update quota: ${errMsg(e)}`);
+    },
+  });
+
+  const saveQuota = () => {
+    const n = Number.parseInt(quotaDraft, 10);
+    if (!Number.isFinite(n) || n < 1 || n > 1000) {
+      alert("Quota must be a whole number between 1 and 1000.");
+      return;
+    }
+    quotaMut.mutate(n);
+  };
 
   const flushMut = useMutation({
     mutationFn: () =>
@@ -155,6 +189,52 @@ export default function AiAnalystPage() {
               value={String(stats.quotaPerUserDay)}
               color="bg-green-50 text-green-700"
             />
+          </div>
+
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div className="min-w-0">
+                <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-green-600" />
+                  Daily quota per user
+                </h2>
+                <p className="text-xs text-gray-500 mt-1 max-w-xl">
+                  Maximum fresh AI analyses each user may run per IST day.
+                  Cached reports don't count. Resets at midnight IST.
+                  Default is <span className="font-mono">{stats.quotaDefault ?? 3}</span>.
+                  Higher values may hit free-tier rate limits.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={1000}
+                  value={quotaDraft}
+                  onChange={(e) => setQuotaDraft(e.target.value)}
+                  disabled={quotaMut.isPending}
+                  className="w-24 px-3 py-2 text-sm font-mono font-semibold text-gray-900 bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-400 disabled:opacity-50"
+                />
+                <button
+                  onClick={saveQuota}
+                  disabled={
+                    quotaMut.isPending ||
+                    quotaDraft === String(stats.quotaPerUserDay)
+                  }
+                  className="flex items-center gap-2 text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-200 disabled:text-gray-400 text-white rounded-lg px-3 py-2 transition-all"
+                >
+                  {quotaMut.isPending
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
+                    : <><Save className="w-4 h-4" /> Save</>}
+                </button>
+              </div>
+            </div>
+            <p className="text-[11px] text-gray-400 mt-3">
+              Suggested: <span className="font-mono">3</span> (free tier safe) ·
+              <span className="font-mono"> 10</span> (power users) ·
+              <span className="font-mono"> 25+</span> (requires paid OpenRouter key).
+              Applies immediately to new runs — already-used quota for today is preserved.
+            </p>
           </div>
 
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
