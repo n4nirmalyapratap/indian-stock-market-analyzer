@@ -140,6 +140,21 @@ def to_yahoo_ticker(symbol: str) -> str:
     return f"{sym}.NS"
 
 
+def is_index_symbol(symbol: str) -> bool:
+    """True for NSE/BSE indices (which NSE's equity-history API can't serve).
+
+    Used by PriceService to skip the NSE-equity path for indices and go
+    straight to Yahoo, which has full OHLCV history for `^...` tickers.
+    """
+    if not symbol:
+        return False
+    sym = symbol.strip().upper()
+    if sym.startswith("^"):
+        return True
+    mapped = SYMBOL_MAP.get(sym)
+    return bool(mapped and mapped.startswith("^"))
+
+
 def yahoo_candidates(symbol: str) -> list[str]:
     """Return ordered Yahoo ticker candidates for fallback lookup."""
     sym = (symbol or "").strip().upper()

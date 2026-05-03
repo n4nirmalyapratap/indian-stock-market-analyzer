@@ -131,11 +131,23 @@ class YahooService:
 
         # --- Disk cache: when market is closed AND we have an EOD-sealed snapshot,
         #     serve from disk. Intraday-only snapshots may need refreshing.
+        #     For indices only, reject thin payloads — sectors_service writes a
+        #     2-row OHLC stub to the same canonical path for sector cards, and
+        #     we don't want the chart to serve it. Equities (incl. new listings
+        #     with very short history) are not gated.
+        from ..lib.symbol_map import is_index_symbol as _is_index
+        min_rows = max(5, min(days // 4, 20)) if (_is_index(symbol) and days >= 10) else 1
         if not _disk.is_market_open():
             payload = _disk.load_with_meta(symbol, days)
-            if payload and payload.get("eodSealed") and payload.get("data"):
-                _set_cache(cache_key, payload["data"], _hist_ttl())
-                return payload["data"]
+            cached = payload.get("data") if payload else None
+            if (
+                payload
+                and payload.get("eodSealed")
+                and isinstance(cached, list)
+                and len(cached) >= min_rows
+            ):
+                _set_cache(cache_key, cached, _hist_ttl())
+                return cached
 
         cached = _get_cache(cache_key)
         if cached is not None:
