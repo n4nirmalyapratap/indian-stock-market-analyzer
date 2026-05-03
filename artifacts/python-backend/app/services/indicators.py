@@ -75,7 +75,11 @@ def calculate_vwap(ohlcv: list[dict]) -> list[float]:
     cum_vol = 0.0
     for d in ohlcv:
         tp = (d["high"] + d["low"] + d["close"]) / 3
-        vol = d["volume"] or 0
+        # `.get` so a missing key doesn't KeyError; coerce None → 0 so the
+        # bar contributes nothing rather than poisoning the running sum.
+        # When *every* bar lacks volume, `cum_vol` stays 0 and we fall back
+        # to typical price — which is the documented degenerate case.
+        vol = d.get("volume") or 0
         cum_tp_vol += tp * vol
         cum_vol += vol
         vwap.append(cum_tp_vol / cum_vol if cum_vol > 0 else tp)
