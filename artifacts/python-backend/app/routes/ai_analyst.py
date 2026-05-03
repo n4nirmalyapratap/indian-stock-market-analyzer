@@ -7,6 +7,7 @@ Endpoints (all behind JWT, like every other /api route):
   GET  /api/ai-analyst/report/{ticker}         — cached report or 404
   GET  /api/ai-analyst/quota                   — remaining quota for caller
   POST /api/ai-analyst/compare?a=…&b=…         — run two analyses in parallel (JSON)
+  POST /api/ai-analyst/scan                    — SSE scan of a watchlist (JSON body)
   GET  /api/ai-analyst/admin/stats             — admin-only (strict X-Admin-Token)
   POST /api/ai-analyst/admin/flush             — admin-only (strict X-Admin-Token)
 """
@@ -15,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, List, Optional
 
 from fastapi import APIRouter, Request, Query, HTTPException, Body
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -142,6 +143,32 @@ async def compare(request: Request,
 
     a_rpt, b_rpt = await asyncio.gather(_one(a), _one(b))
     return {"a": a_rpt, "b": b_rpt, "quota": svc.get_quota(user)}
+
+
+class ScanPayload(BaseModel):
+    tickers: List[str]
+    force: Optional[bool] = False
+
+
+_MAX_SCAN = 25  # generous upper bound for any reasonable watchlist
+
+
+@router.post("/scan")
+async def scan(request: Request, payload: ScanPayload = Body(...)):
+    """SSE stream — sequentially scan a watchlist of tickers.
+    Cached reports are served free; fresh runs respect the daily quota and
+    the rest are reported as `skipped` once the quota is exhausted."""
+    if not svc.feature_enabled():
+        raise HTTPException(503, "AI Analyst feature is disabled")
+    if not payload.tickers:
+        raise HTTPException(400, "tickers required")
+    if len(payload.tickers) > _MAX_SCAN:
+        raise HTTPException(
+            400, f"too many tickers — max {_MAX_SCAN} per scan")
+    return _stream_response(
+        svc.scan_watchlist(payload.tickers, _user_id(request),
+                           force_refresh=bool(payload.force))
+    )
 
 
 @router.get("/admin/stats")
