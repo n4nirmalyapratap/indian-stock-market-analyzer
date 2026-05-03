@@ -800,6 +800,8 @@ export default function ChartPanel({
     px0: number; py0: number; px1: number; py1: number;
   } | null>(null);
   const indicatorDataRef = useRef<Record<string, (number | null)[]>>({});
+  const renderChartRef   = useRef<(() => void) | null>(null);
+  const fetchDataRef     = useRef<(() => void) | null>(null);
   const drawingToolRef = useRef<DrawingTool>(drawingTool);
   const intervalRef    = useRef<string>(periodCfg.i);
   const chartTypeRef   = useRef<ChartType>(chartType);
@@ -810,6 +812,7 @@ export default function ChartPanel({
   useEffect(() => { chartTypeRef.current = chartType; }, [chartType]);
 
   const [loading, setLoading]           = useState(true);
+  const [loadError, setLoadError]       = useState<string | null>(null);
   const [hoverCandle, setHoverCandle]   = useState<HoverCandle | null>(null);
   const [hoverIdx, setHoverIdx]         = useState(-1);
   const [lastCandle, setLastCandle]     = useState<{ c: number; pct: number } | null>(null);
@@ -1185,35 +1188,67 @@ export default function ChartPanel({
       grid: grids, xAxis: xAxes, yAxis: yAxes, series,
     }, true);
 
-    requestAnimationFrame(() => paintSvg());
-  }, [indicators, showRSI, showMACD, paintSvg]);
+    // Repaint via ref so renderChart's identity doesn't depend on paintSvg
+    // (which itself depends on `drawings`) — otherwise drawing on the chart
+    // would cascade back through fetchData and trigger a re-fetch.
+    requestAnimationFrame(() => paintSvgRef.current?.());
+  }, [indicators, showRSI, showMACD]);
 
   // ── Fetch ──────────────────────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
     if (!symbol) return;
     setLoading(true);
+    setLoadError(null);
     try {
       const qs = periodCfg.start && periodCfg.end
         ? `start=${periodCfg.start}&end=${periodCfg.end}&interval=${periodCfg.i}`
         : `period=${periodCfg.p}&interval=${periodCfg.i}`;
       const data = await fetchApi<{ candles: unknown[] }>(`/stocks/${encodeURIComponent(symbol)}/history?${qs}`);
-      candles.current = data.candles ?? [];
+      // Runtime-validate the candle shape — backend changes shouldn't silently
+      // corrupt the chart with NaN OHLC values.
+      const raw = Array.isArray(data?.candles) ? data.candles : [];
+      const validated: Candle[] = [];
+      for (const c of raw) {
+        if (!c || typeof c !== "object") continue;
+        const o = (c as Candle).open, h = (c as Candle).high, l = (c as Candle).low,
+              cl = (c as Candle).close, t = (c as Candle).time, v = (c as Candle).volume;
+        if (
+          typeof t === "number" && Number.isFinite(t) &&
+          typeof o === "number" && Number.isFinite(o) &&
+          typeof h === "number" && Number.isFinite(h) &&
+          typeof l === "number" && Number.isFinite(l) &&
+          typeof cl === "number" && Number.isFinite(cl)
+        ) {
+          validated.push({ time: t, open: o, high: h, low: l, close: cl, volume: typeof v === "number" ? v : 0 });
+        }
+      }
+      candles.current = validated;
+      if (validated.length === 0) {
+        setLoadError(raw.length > 0 ? "Received malformed price data." : "No price data available for this symbol.");
+      }
       // Compute last close + daily change
       const cs = candles.current;
       if (cs.length >= 2) {
         const last = cs[cs.length - 1];
         const prev = cs[cs.length - 2];
-        setLastCandle({ c: last.close, pct: ((last.close - prev.close) / prev.close) * 100 });
+        setLastCandle({ c: last.close, pct: prev.close !== 0 ? ((last.close - prev.close) / prev.close) * 100 : 0 });
       } else if (cs.length === 1) {
         setLastCandle({ c: cs[0].close, pct: 0 });
+      } else {
+        setLastCandle(null);
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      candles.current = [];
+      setLastCandle(null);
+      setLoadError(err instanceof Error ? err.message : "Failed to load price data.");
     } finally {
       setLoading(false);
     }
-    renderChart();
-  }, [symbol, periodCfg, renderChart]);
+    // Render via ref so fetchData's identity doesn't track renderChart —
+    // keeps the [symbol, periodCfg] effect from re-firing on indicator
+    // toggles or drawing edits.
+    renderChartRef.current?.();
+  }, [symbol, periodCfg]);
 
   // ── Init ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1249,17 +1284,21 @@ export default function ChartPanel({
     });
     ro.observe(div);
 
-    fetchData();
+    // Initial fetch is driven by the [symbol, periodCfg] effect below, which
+    // fires on mount via fetchDataRef. Avoids a double fetch on first render.
     return () => { ro.disconnect(); chart.dispose(); chartRef.current = null; };
   }, []);
 
-  useEffect(() => { fetchData(); }, [symbol, periodCfg]);
-  useEffect(() => { renderChart(); }, [indicators, showRSI, showMACD, chartType]);
-  useEffect(() => { if (candles.current.length) renderChart(); }, [theme]);
-  useEffect(() => { paintSvg(); }, [drawings]);
-  // Keep paintSvgRef pointing at the latest closure so echarts event handlers
-  // (registered once at init) always repaint with up-to-date drawings/state.
-  useEffect(() => { paintSvgRef.current = paintSvg; }, [paintSvg]);
+  // Sync stable refs so long-lived listeners and cross-callback calls always
+  // see the latest closures, without bloating effect dep arrays into cascades.
+  useEffect(() => { paintSvgRef.current   = paintSvg;   }, [paintSvg]);
+  useEffect(() => { renderChartRef.current = renderChart; }, [renderChart]);
+  useEffect(() => { fetchDataRef.current  = fetchData;  }, [fetchData]);
+
+  useEffect(() => { fetchDataRef.current?.();  }, [symbol, periodCfg]);
+  useEffect(() => { renderChartRef.current?.(); }, [indicators, showRSI, showMACD, chartType]);
+  useEffect(() => { if (candles.current.length) renderChartRef.current?.(); }, [theme]);
+  useEffect(() => { paintSvgRef.current?.(); }, [drawings]);
 
   // ── Drawing helpers ────────────────────────────────────────────────────────
   const getXY = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -1734,6 +1773,20 @@ export default function ChartPanel({
         <div ref={containerRef} className="absolute inset-0" />
         {loading && (
           <div className="absolute inset-0 z-30 pointer-events-none transition-opacity" style={{ background: TC.dimBg }} />
+        )}
+        {!loading && loadError && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">
+            <div
+              className="px-4 py-2 rounded-md text-xs font-medium border"
+              style={{
+                background: theme === "dark" ? "rgba(127,29,29,0.85)" : "rgba(254,226,226,0.95)",
+                color: theme === "dark" ? "#fecaca" : "#991b1b",
+                borderColor: theme === "dark" ? "rgba(248,113,113,0.4)" : "rgba(248,113,113,0.5)",
+              }}
+            >
+              {loadError}
+            </div>
+          </div>
         )}
         <svg ref={svgRef} className="absolute inset-0" style={{ pointerEvents: "none", zIndex: 10 }} />
         {/* Overlay: only shown while actively drawing or dragging a drawing.

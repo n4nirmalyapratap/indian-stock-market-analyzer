@@ -263,8 +263,11 @@ const SearchModal = forwardRef<SearchModalHandle, {
     debounce.current = setTimeout(async () => {
       setLoading(true);
       try {
-        const d = await fetchApi<{ results: unknown[] }>(`/stocks/search?q=${encodeURIComponent(val.trim())}`);
-        setResults(d.results ?? []); setActiveIdx(0);
+        const d = await fetchApi<{ results: SearchResult[] }>(`/stocks/search?q=${encodeURIComponent(val.trim())}`);
+        const results = Array.isArray(d?.results)
+          ? d.results.filter((r): r is SearchResult => !!r && typeof r === "object" && typeof (r as SearchResult).symbol === "string")
+          : [];
+        setResults(results); setActiveIdx(0);
       } catch { setResults([]); }
       finally { setLoading(false); }
     }, 160);
