@@ -448,12 +448,21 @@ async def get_news_stats() -> dict:
         src = a.get("sourceShort", "?")
         sources[src] = sources.get(src, 0) + 1
 
+    # marketMood requires a meaningful sample (≥5 articles) AND a meaningful
+    # margin (≥10% of articles must lean one way more than the other) before
+    # we declare a directional mood. Otherwise small noisy samples like
+    # "5 bullish, 4 bearish, 90 neutral" would be labelled "bullish".
+    total = len(cached)
+    margin = abs(sentiments["bullish"] - sentiments["bearish"])
+    if total >= 5 and margin / total >= 0.10:
+        mood = "bullish" if sentiments["bullish"] > sentiments["bearish"] else "bearish"
+    else:
+        mood = "neutral"
     return {
-        "totalArticles": len(cached),
+        "totalArticles": total,
         "sentiments":    sentiments,
         "sources":       sources,
-        "marketMood":    "bullish" if sentiments["bullish"] > sentiments["bearish"] else
-                         "bearish" if sentiments["bearish"] > sentiments["bullish"] else "neutral",
+        "marketMood":    mood,
     }
 
 
