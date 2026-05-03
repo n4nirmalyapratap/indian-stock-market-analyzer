@@ -1,12 +1,12 @@
-import { useState, useMemo, Fragment } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
 import {
-  PageHeader, Card, Loading, EmptyState, MenuDropdown, ErrorState,
+  PageHeader, Loading, EmptyState, MenuDropdown, ErrorState,
   PillTabs, useChartPalette,
 } from "../_shared";
 import {
-  PieChart, ChevronDown, ChevronRight, ExternalLink, RefreshCw, TrendingUp, TrendingDown,
+  PieChart, ChevronDown, ExternalLink, RefreshCw, TrendingUp, TrendingDown,
   ArrowUpRight, ArrowDownRight, Sparkles, Building2, Search, Layers, X,
 } from "lucide-react";
 import {
@@ -300,69 +300,98 @@ export default function MfHoldings() {
       )}
 
       {data?.items && data.items.length > 0 && (
-        <Card className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-xs uppercase text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/40">
-              <tr>
-                <th className="px-3 py-3 text-left w-6"></th>
-                <th className="px-3 py-3 text-left">Scheme</th>
-                <th className="px-3 py-3 text-left">AMC</th>
-                <th className="px-3 py-3 text-left">Class</th>
-                <th className="px-3 py-3 text-left">Sub-category</th>
-                <th className="px-3 py-3 text-right">NAV (₹)</th>
-                <th className="px-3 py-3 text-left">As of</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.items.map(s => {
-                const isOpen = expanded === s.schemeCode;
-                return (
-                  <Fragment key={s.schemeCode}>
-                    <tr
-                      onClick={() => setExpanded(isOpen ? null : s.schemeCode)}
-                      className="border-t border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition cursor-pointer"
-                    >
-                      <td className="px-3 py-2.5 text-gray-400">
-                        {isOpen ? <ChevronDown className="w-4 h-4"/> : <ChevronRight className="w-4 h-4"/>}
-                      </td>
-                      <td className="px-3 py-2.5 font-medium text-gray-900 dark:text-white max-w-md" title={s.schemeName}>
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <AmcAvatar logo={s.amcLogo} name={s.amc} size={28}/>
-                          <div className="min-w-0">
-                            <div className="truncate">{s.schemeName}</div>
-                            {s.seo && (
-                              <div className="text-[10px] text-emerald-600 dark:text-emerald-400 inline-flex items-center gap-1 mt-0.5">
-                                <Sparkles className="w-2.5 h-2.5"/> Holdings available
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-3 py-2.5 text-gray-500 dark:text-gray-400 text-xs max-w-[180px] truncate" title={s.amc}>{s.amc}</td>
-                      <td className="px-3 py-2.5 text-xs">
-                        <span className="inline-block px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-700 dark:text-indigo-300">
-                          {s.assetClass || "—"}
+        <div role="table" aria-label="Mutual fund schemes" className="space-y-2">
+          {/* Column header strip — aligns with the row grid below */}
+          <div role="row" className="hidden md:grid px-4 py-1.5 grid-cols-[44px_minmax(0,1fr)_140px_120px_28px] lg:grid-cols-[44px_minmax(0,1fr)_180px_140px_28px] gap-3 items-center text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500 font-medium">
+            <span role="columnheader" aria-label="AMC logo"></span>
+            <span role="columnheader">Scheme</span>
+            <span role="columnheader">Category</span>
+            <span role="columnheader" className="text-right">NAV (₹)</span>
+            <span role="columnheader" aria-label="Expand"></span>
+          </div>
+
+          <div role="rowgroup" className="space-y-1.5">
+            {data.items.map(s => {
+              const isOpen = expanded === s.schemeCode;
+              return (
+                <div
+                  key={s.schemeCode}
+                  role="row"
+                  className={`group rounded-xl border bg-white dark:bg-gray-800/60 shadow-sm transition-all ${
+                    isOpen
+                      ? "border-indigo-300 dark:border-indigo-500/50 shadow-md ring-1 ring-indigo-500/10"
+                      : "border-gray-200 dark:border-gray-700/60 hover:border-indigo-200 dark:hover:border-indigo-500/40 hover:shadow-md"
+                  }`}
+                >
+                  <button
+                    onClick={() => setExpanded(isOpen ? null : s.schemeCode)}
+                    className="w-full text-left px-3 py-3 grid grid-cols-[44px_minmax(0,1fr)_auto] md:grid-cols-[44px_minmax(0,1fr)_140px_120px_28px] lg:grid-cols-[44px_minmax(0,1fr)_180px_140px_28px] gap-3 items-center"
+                    aria-expanded={isOpen}
+                  >
+                    {/* AMC logo */}
+                    <AmcAvatar logo={s.amcLogo} name={s.amc} size={40}/>
+
+                    {/* Scheme name + AMC + holdings badge */}
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-gray-900 dark:text-white truncate" title={s.schemeName}>
+                        {s.schemeName}
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-gray-500 dark:text-gray-400 min-w-0">
+                        <span className="truncate" title={s.amc}>{s.amc}</span>
+                        {s.seo && (
+                          <span className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-px rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 text-[10px] font-medium flex-shrink-0">
+                            <Sparkles className="w-2.5 h-2.5"/> Holdings
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Asset class + sub-category chips (md+) */}
+                    <div className="hidden md:flex flex-col gap-0.5 min-w-0">
+                      {s.assetClass && (
+                        <span className="inline-flex items-center self-start max-w-full px-2 py-0.5 rounded-md bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 text-[10px] font-medium truncate">
+                          {s.assetClass}
                         </span>
-                      </td>
-                      <td className="px-3 py-2.5 text-gray-600 dark:text-gray-300 text-xs">{s.subCategory || "—"}</td>
-                      <td className="px-3 py-2.5 text-right font-semibold text-gray-900 dark:text-white tabular-nums">
-                        {s.nav != null ? s.nav.toFixed(4) : "—"}
-                      </td>
-                      <td className="px-3 py-2.5 text-gray-500 dark:text-gray-400 text-xs whitespace-nowrap">{s.date}</td>
-                    </tr>
-                    {isOpen && (
-                      <tr className="bg-gray-50/60 dark:bg-gray-900/30">
-                        <td colSpan={7} className="px-4 py-4">
-                          <SchemeDetailPanel code={s.schemeCode} fallbackName={s.schemeName} />
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        </Card>
+                      )}
+                      {s.subCategory && (
+                        <span className="text-[11px] text-gray-500 dark:text-gray-400 truncate" title={s.subCategory}>
+                          {s.subCategory}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* NAV + as-of date (md+) */}
+                    <div className="hidden md:block text-right">
+                      <div className="text-sm font-bold text-gray-900 dark:text-white tabular-nums">
+                        {s.nav != null ? `₹${s.nav.toFixed(4)}` : "—"}
+                      </div>
+                      <div className="text-[10px] text-gray-400 dark:text-gray-500 tabular-nums whitespace-nowrap">
+                        {s.date}
+                      </div>
+                    </div>
+
+                    {/* Mobile-only NAV (replaces last 2 columns) */}
+                    <div className="md:hidden text-right">
+                      <div className="text-sm font-bold text-gray-900 dark:text-white tabular-nums">
+                        {s.nav != null ? `₹${s.nav.toFixed(2)}` : "—"}
+                      </div>
+                      <ChevronDown className={`w-4 h-4 text-gray-400 ml-auto mt-0.5 transition-transform ${isOpen ? "rotate-180 text-indigo-500" : ""}`}/>
+                    </div>
+
+                    {/* Chevron (md+) */}
+                    <ChevronDown className={`hidden md:block w-4 h-4 text-gray-400 transition-transform ${isOpen ? "rotate-180 text-indigo-500" : "group-hover:text-indigo-500"}`}/>
+                  </button>
+
+                  {isOpen && (
+                    <div className="px-4 pt-2 pb-4 border-t border-gray-200 dark:border-gray-700/60">
+                      <SchemeDetailPanel code={s.schemeCode} fallbackName={s.schemeName} />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
       )}
     </div>
   );
