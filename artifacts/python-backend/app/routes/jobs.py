@@ -170,7 +170,7 @@ class _NewsRefreshJob(_Job):
 
 class _ScannersRunAllJob(_Job):
     async def _execute(self) -> str:
-        from app.services.scanners_service import ScannersService, _DB
+        from app.services.scanners_service import ScannersService
         from app.services.yahoo_service import YahooService
         from app.services.nse_service import NseService
         from app.services.price_service import PriceService
@@ -183,7 +183,8 @@ class _ScannersRunAllJob(_Job):
         for sc in all_scanners:
             try:
                 result = await svc.run_scanner(sc["id"])
-                hits += len(result.get("matches", []))
+                # Result schema (run_scanner): {results: [...], scanErrors: [...], ...}
+                hits += len(result.get("results", []))
             except Exception:
                 pass
         return f"Ran {len(all_scanners)} scanner(s) — {hits} total matches found"

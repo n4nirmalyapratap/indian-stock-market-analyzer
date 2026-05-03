@@ -16,6 +16,7 @@ _service = ScannersService(_price)
 
 
 def _meta() -> dict:
+    from ..lib.universe import universe_freshness
     state = _disk.current_market_state()
     return {
         "source":       "NSE",
@@ -25,6 +26,7 @@ def _meta() -> dict:
         "eodSealed":    state in ("CLOSED", "WEEKEND"),
         "eodDate":      _disk._eod_date_for(state),
         "cacheVersion": _disk.cache_version(),
+        "universe":     universe_freshness(),
     }
 
 
