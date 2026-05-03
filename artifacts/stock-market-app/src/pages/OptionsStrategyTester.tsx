@@ -77,6 +77,127 @@ const STRATEGY_GROUPS = [
 ];
 
 // ── Components ────────────────────────────────────────────────────────────────
+
+/**
+ * SEBI Compliance card — fetches GET /options/compliance and shows the
+ * authoritative lot size, expiry weekday, cost schedule, and live FRED
+ * risk-free rate for the currently selected symbol.  Pure additive UI;
+ * does not affect any existing inputs or analytics.
+ */
+function SEBIComplianceCard({ symbol }: { symbol: string }) {
+  const [data, setData] = useState<any>(null);
+  const [open, setOpen] = useState(false);
+  const [err,  setErr]  = useState("");
+
+  useEffect(() => {
+    let cancel = false;
+    setErr("");
+    setData(null);
+    fetchApi<any>(`/options/compliance?symbol=${encodeURIComponent(symbol)}`)
+      .then((d) => { if (!cancel) setData(d); })
+      .catch((e) => { if (!cancel) setErr(String(e?.message || e)); });
+    return () => { cancel = true; };
+  }, [symbol]);
+
+  if (err) {
+    return (
+      <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 text-xs text-amber-700">
+        Compliance snapshot unavailable: {err}
+      </div>
+    );
+  }
+  if (!data) return null;
+
+  const sym  = data.symbols?.[0];
+  const cs   = data.cost_schedule;
+  const rfr  = data.risk_free_rate;
+  const lot  = sym?.lot_size;
+  const wd   = sym?.expiry_weekday?.weekday_name;
+
+  return (
+    <div className="bg-indigo-50/40 border border-indigo-200 rounded-xl px-4 py-3">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between text-left"
+      >
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+          <span className="font-semibold text-indigo-800">SEBI Compliance</span>
+          <span className="text-gray-700">
+            Lot <b>{lot?.value ?? "—"}</b>
+          </span>
+          <span className="text-gray-700">
+            Expiry <b>{wd ?? "—"}</b>
+          </span>
+          <span className="text-gray-700">
+            Weekly <b>{sym?.weekly_available ? "yes" : "no"}</b>
+          </span>
+          <span className="text-gray-700">
+            Risk-free <b>{(rfr?.value * 100).toFixed(2)}%</b>
+            <span className="ml-1 text-gray-400">({rfr?.source})</span>
+          </span>
+          <span className="text-gray-400">as of {data.as_of}</span>
+        </div>
+        <span className="text-indigo-600 text-xs ml-2">
+          {open ? "hide details ▾" : "show details ▸"}
+        </span>
+      </button>
+
+      {open && (
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+          <div className="bg-white border border-gray-200 rounded-lg p-3">
+            <div className="font-semibold text-gray-700 mb-1">
+              Lot size — {lot?.value ?? "—"} units
+            </div>
+            <div className="text-gray-600">
+              Effective from {lot?.effective_from ?? "—"}
+            </div>
+            <div className="text-gray-500 mt-1 break-words">
+              Ref: {lot?.circular_ref ?? "—"}
+            </div>
+            {lot?.notes && (
+              <div className="text-gray-500 mt-1 italic">{lot.notes}</div>
+            )}
+          </div>
+
+          <div className="bg-white border border-gray-200 rounded-lg p-3">
+            <div className="font-semibold text-gray-700 mb-1">
+              Cost schedule (effective {cs?.effective_from})
+            </div>
+            <ul className="text-gray-600 space-y-0.5">
+              <li>STT (sell premium): <b>{(cs?.stt_sell_premium_pct * 100).toFixed(4)}%</b></li>
+              <li>STT (exercise / ITM): <b>{(cs?.stt_exercise_pct * 100).toFixed(4)}%</b></li>
+              <li>NSE exchange charge: <b>{(cs?.exchange_charge_pct * 100).toFixed(4)}%</b></li>
+              <li>SEBI turnover: <b>{(cs?.sebi_charge_pct * 100).toFixed(5)}%</b></li>
+              <li>Stamp duty (buy): <b>{(cs?.stamp_duty_pct * 100).toFixed(4)}%</b></li>
+              <li>GST: <b>{(cs?.gst_pct * 100).toFixed(0)}%</b> on (brokerage+exch+sebi)</li>
+              <li>Brokerage: <b>₹{cs?.brokerage_per_order}</b> per executed order</li>
+            </ul>
+            <div className="text-gray-500 mt-1 break-words">
+              Ref: {cs?.circular_ref}
+            </div>
+          </div>
+
+          <div className="bg-white border border-gray-200 rounded-lg p-3 md:col-span-2">
+            <div className="font-semibold text-gray-700 mb-1">
+              Risk-free rate (India 10Y G-Sec)
+            </div>
+            <div className="text-gray-600">
+              <b>{(rfr?.value * 100).toFixed(3)}%</b>
+              {rfr?.asOf && <span className="ml-2 text-gray-500">as of {rfr.asOf}</span>}
+              <span className="ml-2 text-gray-500">— source: {rfr?.source}</span>
+            </div>
+            {!rfr?.success && (
+              <div className="text-amber-600 mt-1">
+                ⚠ {rfr?.note} — strategy math is using the {(rfr?.value * 100).toFixed(2)}% fallback.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Loader() {
   return (
     <div className="flex items-center gap-2 text-indigo-500 text-sm">
@@ -1357,6 +1478,9 @@ export default function OptionsStrategyTester() {
           </div>
         );
       })()}
+
+      {/* SEBI Compliance card — live rule snapshot from backend registry */}
+      <SEBIComplianceCard symbol={symbol} />
 
       {/* Tabs */}
       <div className="border-b border-gray-200">

@@ -20,10 +20,16 @@ from typing import Optional
 import numpy as np
 from scipy.stats import norm as _norm   # module-level import — not inside hot loop
 
+from .options_service import bs_price as _bs_price
+from . import sebi_registry as _sebi
+
 logger = logging.getLogger("options_backtest")
 
-# ── Costs ─────────────────────────────────────────────────────────────────────
-COMMISSION_PER_LOT = 20.0   # INR — approx NSE transaction + brokerage per lot
+# ── Costs (legacy constants — retained for back-compat with tests/imports) ───
+# Realistic regulatory costs (STT/GST/stamp/SEBI/exchange) are now applied via
+# sebi_registry.compute_leg_costs(); these constants remain only for callers
+# that import them directly.
+COMMISSION_PER_LOT = 20.0   # INR — flat brokerage per lot (Zerodha-style)
 SLIPPAGE_PCT       = 0.003  # 0.3% of premium as bid-ask slippage
 
 # ── Strategy templates ────────────────────────────────────────────────────────
@@ -241,25 +247,12 @@ def _build_legs(strategy: str, S: float, otm_pct: float) -> list[dict]:
     raise ValueError(f"Unknown strategy: {strategy}")
 
 
+# Backwards-compat alias — previously a duplicated inline BS pricer; now
+# delegates to the canonical implementation in options_service so we do not
+# carry two copies that can drift apart.
 def _bs_price_fast(S: float, K: float, T: float, r: float, sigma: float,
                    opt_type: str) -> float:
-    """
-    Inline Black-Scholes pricer (avoids cross-module import overhead in backtest loop).
-    Uses module-level _norm import for performance.
-    """
-    if T <= 0:
-        return max(0.0, S - K) if opt_type == "call" else max(0.0, K - S)
-    if sigma <= 0:
-        return max(0.0, S - K) if opt_type == "call" else max(0.0, K - S)
-
-    sqrt_t = math.sqrt(T)
-    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * sqrt_t)
-    d2 = d1 - sigma * sqrt_t
-    exp_rt = math.exp(-r * T)
-
-    if opt_type == "call":
-        return max(0.0, S * _norm.cdf(d1) - K * exp_rt * _norm.cdf(d2))
-    return max(0.0, K * exp_rt * _norm.cdf(-d2) - S * _norm.cdf(-d1))
+    return _bs_price(S, K, T, r, sigma, opt_type)
 
 
 def _apply_slippage(price: float, action: str, is_entry: bool) -> float:
@@ -338,10 +331,18 @@ def _run_backtest_sync(
     hist["HV30"]    = hist["HV30"].clip(lower=0.05)
     hist["HV30"]    = hist["HV30"].ffill().bfill().fillna(0.20)
 
-    # ── Generate expiry cycle (correct weekday per symbol) ───────────────────
+    # ── Generate expiry cycle (correct weekday per symbol, holiday-aware) ────
+    # The legacy `_expiry_dates` helper is preserved for back-compat in tests,
+    # but the backtest loop uses the SEBI registry directly so that scheduled
+    # expiries falling on NSE holidays (e.g. Republic Day 26 Jan 2024 for
+    # SENSEX, Mahashivratri 26 Feb 2025 for BANKNIFTY) are shifted to the
+    # previous trading day, matching real-world settlement.
     start_dt = pd.to_datetime(start_date).date()
     end_dt   = pd.to_datetime(end_date).date()
-    expiries = _expiry_dates(start_dt, end_dt, symbol=symbol, use_weekly=use_weekly)
+    if use_weekly:
+        expiries = _sebi.weekly_expiries(symbol, start_dt, end_dt, holiday_adjust=True)
+    else:
+        expiries = _sebi.monthly_expiries(symbol, start_dt, end_dt, holiday_adjust=True)
 
     if not expiries:
         return {"error": "No expiry dates fall within the specified date range"}
@@ -390,9 +391,14 @@ def _run_backtest_sync(
         except ValueError as e:
             return {"error": str(e)}
 
-        # Commission is per lot: sum across legs respecting lots_mult (butterfly ATM = 2×).
-        total_lots_count = sum(int(leg.get("lots_mult", 1)) for leg in raw_legs) * lots
-        total_commission = COMMISSION_PER_LOT * total_lots_count * 2  # entry + exit
+        entry_costs_total = 0.0
+        exit_costs_total  = 0.0
+        cost_breakdown    = {
+            "brokerage": 0.0, "stt": 0.0, "exchange_charge": 0.0,
+            "sebi_charge": 0.0, "stamp_duty": 0.0, "gst": 0.0,
+        }
+        entry_date_obj = entry_ts.date() if hasattr(entry_ts, "date") else entry_ts
+        exit_date_obj  = exit_ts.date()  if hasattr(exit_ts,  "date") else exit_ts
 
         entry_credit = 0.0
         filled_legs: list[dict] = []
@@ -408,10 +414,19 @@ def _run_backtest_sync(
             fill_price = _apply_slippage(raw_price, action, is_entry=True)
             fill_price = max(0.01, fill_price)
 
+            qty = effective_lots * lot_size
             if action == "sell":
-                entry_credit += fill_price * effective_lots * lot_size
+                entry_credit += fill_price * qty
             else:
-                entry_credit -= fill_price * effective_lots * lot_size
+                entry_credit -= fill_price * qty
+
+            entry_cb = _sebi.compute_leg_costs(
+                action=action, premium=fill_price, quantity=qty,
+                is_entry=True, on_date=entry_date_obj,
+            )
+            entry_costs_total += entry_cb.total
+            for k in cost_breakdown:
+                cost_breakdown[k] += getattr(entry_cb, k)
 
             filled_legs.append({**leg, "premium": fill_price, "lots": effective_lots,
                                  "lot_size": lot_size, "iv": iv_entry})
@@ -424,7 +439,8 @@ def _run_backtest_sync(
             action       = leg["action"]
             effective_lots = int(leg["lots"])  # already includes lots_mult from entry loop
 
-            if T_exit <= 0:
+            is_exercise_exit = (T_exit <= 0)
+            if is_exercise_exit:
                 exit_price = max(0.0, S_exit - K) if opt_type == "call" else max(0.0, K - S_exit)
             else:
                 raw_exit    = _bs_price_fast(S_exit, K, T_exit, risk_free, iv_exit, opt_type)
@@ -432,12 +448,31 @@ def _run_backtest_sync(
                 exit_price  = _apply_slippage(raw_exit, exit_action, is_entry=False)
                 exit_price  = max(0.0, exit_price)
 
+            qty = effective_lots * lot_size
             if action == "buy":
-                exit_debit -= exit_price * effective_lots * lot_size
+                exit_debit -= exit_price * qty
             else:
-                exit_debit += exit_price * effective_lots * lot_size
+                exit_debit += exit_price * qty
 
-        trade_pnl = entry_credit - exit_debit - total_commission
+            exit_cb = _sebi.compute_leg_costs(
+                action=action, premium=exit_price, quantity=qty,
+                is_entry=False, on_date=exit_date_obj,
+                is_exercise=is_exercise_exit,
+            )
+            exit_costs_total += exit_cb.total
+            for k in cost_breakdown:
+                cost_breakdown[k] += getattr(exit_cb, k)
+
+        total_commission = entry_costs_total + exit_costs_total
+
+        # Covered-call honesty fix: option leg alone understates P&L because the
+        # short call is hedged by the assumed long underlying.  Track the
+        # underlying P&L explicitly so the user sees a complete picture.
+        underlying_pnl = 0.0
+        if strategy == "covered_call":
+            underlying_pnl = (S_exit - S_entry) * lots * lot_size
+
+        trade_pnl = entry_credit - exit_debit - total_commission + underlying_pnl
         cum_pnl  += trade_pnl
 
         trades.append({
@@ -450,8 +485,10 @@ def _run_backtest_sync(
             "entry_credit":   round(entry_credit, 2),
             "exit_debit":     round(exit_debit, 2),
             "commission":     round(total_commission, 2),
+            "underlying_pnl": round(underlying_pnl, 2),
             "trade_pnl":      round(trade_pnl, 2),
             "cumulative_pnl": round(cum_pnl, 2),
+            "costs_breakdown": {k: round(v, 2) for k, v in cost_breakdown.items()},
             "strategy":       strategy,
         })
         equity_curve.append({
