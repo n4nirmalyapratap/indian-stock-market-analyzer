@@ -39,6 +39,8 @@ from ..services.options_service import (
 )
 from ..services.options_backtest_service import run_backtest, STRATEGIES, _to_yf_sym, _to_yf_sym_candidates
 from ..services.options_chatbot import chat_reply, _AI_FALLBACK_REPLY
+from ..services import sebi_registry
+from ..services.risk_free_service import get_india_risk_free_rate
 
 router = APIRouter(prefix="/options", tags=["options"])
 logger = logging.getLogger("options_route")
@@ -99,7 +101,7 @@ def _fetch_spot_and_hv_sync(symbol: str) -> dict:
         "hv30_pct": round(hv30 * 100, 2),
         "lot_size": lot,
         "atm":      atm,
-        "source":   "yahoo",
+        "source":   f"yahoo:{used_sym}",
     }
 
 
@@ -641,3 +643,38 @@ async def list_sebi_reports(full: bool = False):
         result.append(entry)
 
     return {"reports": result, "total": len(result)}
+
+
+# ── GET /options/compliance (SEBI rule snapshot) ──────────────────────────────
+
+@router.get("/compliance")
+async def get_compliance(symbol: Optional[str] = None,
+                         on_date: Optional[str] = None):
+    """Return the SEBI/exchange rule set effective on `on_date` (defaults to
+    today), plus the live India 10-yr risk-free rate from FRED.
+
+    Query params:
+        symbol   — Optional canonical symbol (NIFTY, BANKNIFTY, …).
+                   If omitted, every supported symbol is returned.
+        on_date  — Optional ISO date (YYYY-MM-DD).  Defaults to today.
+
+    The response is the user-facing source of truth for: lot size + circular
+    reference, monthly expiry weekday, weekly availability, the realistic
+    cost schedule (STT/SEBI/exchange/stamp/GST/brokerage), and the FRED
+    risk-free rate with `asOf` and `source` fields.
+    """
+    from datetime import date as _date
+
+    parsed: Optional[_date] = None
+    if on_date:
+        try:
+            parsed = datetime.strptime(on_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400,
+                                detail=f"on_date must be YYYY-MM-DD, got {on_date!r}")
+
+    snap = sebi_registry.compliance_snapshot(symbol=symbol, on_date=parsed)
+    rfr  = await get_india_risk_free_rate()
+    snap["risk_free_rate"] = rfr
+    snap["fallback_risk_free_rate"] = RISK_FREE_RATE
+    return snap
