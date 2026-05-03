@@ -6,7 +6,7 @@ import {
 } from "../_shared";
 import {
   Truck, Search, X, RefreshCw, ArrowUpRight, ArrowDownRight,
-  TrendingUp, Package, Sparkles, IndianRupee,
+  TrendingUp, Package, Sparkles, IndianRupee, Layers,
 } from "lucide-react";
 
 interface DeliveryItem {
@@ -34,12 +34,26 @@ interface DeliveryStats {
   totalTurnover: number;
   totalDelivValue: number;
   delivRatio: number;
+  sectorCount?: number;
+}
+interface SectorRow {
+  sector: string;
+  count: number;
+  totalTraded: number;
+  totalDeliv: number;
+  totalTurnover: number;
+  totalDelivValue: number;
+  avgDelivPct: number;
+  delivRatio: number;
+  topSymbol: string | null;
+  topDelivPct: number;
 }
 interface TopDeliveriesResponse {
   available: boolean;
   message?: string;
   items: DeliveryItem[];
   highlights: DeliveryItem[];
+  sectors?: SectorRow[];
   totalSymbols: number;
   matched: number;
   tradeDate: string | null;
@@ -213,6 +227,11 @@ export default function TopDeliveries() {
             ))}
           </div>
         </div>
+      )}
+
+      {/* Sector-wise breakdown */}
+      {data?.sectors && data.sectors.length > 0 && (
+        <SectorBreakdown sectors={data.sectors} totalDelivValue={data.stats?.totalDelivValue || 0}/>
       )}
 
       {/* Filter card */}
@@ -429,6 +448,92 @@ function DelivBar({ pct, className = "" }: { pct: number; className?: string }) 
       aria-label={`Delivery percentage ${pct.toFixed(1)}%`}
       className={`h-1.5 rounded-full bg-gray-200 dark:bg-gray-700/60 overflow-hidden ${className}`}>
       <div className={`h-full ${color} transition-all`} style={{ width: `${clamped}%` }}/>
+    </div>
+  );
+}
+
+function SectorBreakdown({ sectors, totalDelivValue }:
+  { sectors: SectorRow[]; totalDelivValue: number }) {
+  const [expanded, setExpanded] = useState(false);
+  const max = sectors.reduce((m, s) => Math.max(m, s.totalDelivValue), 0) || 1;
+  const visible = expanded ? sectors : sectors.slice(0, 8);
+
+  return (
+    <div className="mb-4 rounded-2xl border border-gray-200 dark:border-gray-700/60 bg-gradient-to-br from-white to-gray-50/40 dark:from-gray-800/80 dark:to-gray-900/40 backdrop-blur shadow-sm">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200/80 dark:border-gray-700/60">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg bg-violet-500/10 flex items-center justify-center">
+            <Layers className="w-4 h-4 text-violet-600 dark:text-violet-400"/>
+          </div>
+          <div>
+            <div className="text-sm font-semibold text-gray-900 dark:text-white">Sector-wise Deliveries</div>
+            <div className="text-[11px] text-gray-500 dark:text-gray-400">
+              {sectors.length} sectors · sorted by delivered value
+            </div>
+          </div>
+        </div>
+        {sectors.length > 8 && (
+          <button onClick={() => setExpanded(e => !e)}
+            className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
+            {expanded ? "Show top 8" : `Show all (${sectors.length})`}
+          </button>
+        )}
+      </div>
+      <div className="p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5">
+        {visible.map(s => {
+          const sharePct = totalDelivValue > 0 ? (s.totalDelivValue / totalDelivValue) * 100 : 0;
+          const barPct = (s.totalDelivValue / max) * 100;
+          return (
+            <div key={s.sector}
+              className="rounded-xl border border-gray-200/80 dark:border-gray-700/60 bg-white/60 dark:bg-gray-900/40 p-3 hover:border-violet-400/60 dark:hover:border-violet-500/40 transition">
+              <div className="flex items-start justify-between gap-2 mb-1.5">
+                <div className="text-sm font-semibold text-gray-900 dark:text-white truncate" title={s.sector}>
+                  {s.sector}
+                </div>
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-violet-500/10 text-violet-700 dark:text-violet-300 flex-shrink-0">
+                  {s.count}
+                </span>
+              </div>
+              <div className="flex items-baseline gap-1.5 mb-1">
+                <span className="text-lg font-bold text-gray-900 dark:text-white">
+                  ₹{fmtIndianNum(s.totalDelivValue)}
+                </span>
+                <span className="text-[11px] text-gray-500 dark:text-gray-400">
+                  · {sharePct.toFixed(1)}%
+                </span>
+              </div>
+              <div role="progressbar" aria-valuenow={Math.round(barPct)} aria-valuemin={0} aria-valuemax={100}
+                aria-label={`${s.sector} share of delivered value`}
+                className="h-1.5 rounded-full bg-gray-200 dark:bg-gray-700/60 overflow-hidden mb-2">
+                <div className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 transition-all"
+                  style={{ width: `${Math.max(2, barPct)}%` }}/>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+                <div>
+                  <div className="text-gray-500 dark:text-gray-400">Avg deliv %</div>
+                  <div className="font-semibold text-gray-900 dark:text-white">{s.avgDelivPct.toFixed(1)}%</div>
+                </div>
+                <div>
+                  <div className="text-gray-500 dark:text-gray-400">Deliv ratio</div>
+                  <div className="font-semibold text-gray-900 dark:text-white">{s.delivRatio.toFixed(1)}%</div>
+                </div>
+                <div className="col-span-2">
+                  <div className="text-gray-500 dark:text-gray-400">Turnover</div>
+                  <div className="font-semibold text-gray-900 dark:text-white">₹{fmtIndianNum(s.totalTurnover)}</div>
+                </div>
+                {s.topSymbol && (
+                  <div className="col-span-2 pt-1.5 mt-0.5 border-t border-gray-200/70 dark:border-gray-700/60 flex items-center justify-between">
+                    <span className="text-gray-500 dark:text-gray-400">Top</span>
+                    <span className="font-semibold text-gray-900 dark:text-white">
+                      {s.topSymbol} <span className="text-violet-600 dark:text-violet-400">{s.topDelivPct.toFixed(1)}%</span>
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
