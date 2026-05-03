@@ -214,7 +214,14 @@ class PriceService:
                     if eod_prev is not None:
                         q["previousClose"] = eod_prev
                         q["change"]        = round(eod_close - eod_prev, 2)
-                        q["pChange"]       = round((eod_close - eod_prev) / eod_prev * 100, 4) if eod_prev else 0
+                        # Guard against the pathological eod_prev == 0 (would
+                        # divide by zero). Surface None instead of pretending
+                        # the change was 0% — the UI's formatPctChange will
+                        # render "—" so we don't lie about a missing number.
+                        q["pChange"]       = (
+                            round((eod_close - eod_prev) / eod_prev * 100, 4)
+                            if eod_prev else None
+                        )
                     # Provenance contract:
                     #   `source`     = the original provider that produced the
                     #                  number (preserved from the cached
