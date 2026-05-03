@@ -79,8 +79,8 @@ A `/portfolio` route that turns the app into a personal portfolio book — track
 A top-level `/insights` section replicates the ScanX "Insights" experience with 12 sub-tabs and a sticky inner sidebar.
 - Top nav: `Insights` entry in `MAIN_NAV` (`src/LayoutShell.tsx`)
 - Routes: `/insights` and `/insights/:tab*` → `src/pages/insights/InsightsLayout.tsx`
-- Tab pages: `src/pages/insights/tabs/` (Macro, Heatmap, FiiDii, CompanyFilings, MfHoldings, BulkBlockDeals, Signals, SlbmRental, MtfInsights, FoBan, TopDeliveries, MarketValuation, Ipo)
-- Backend: `app/routes/insights.py` registered in `main.py`. Endpoints: `/api/insights/{macro,macro/strip,indices,heatmap,company-filings,mf-holdings,signals,index-valuation,market-valuation,fo-ban,top-deliveries,fii-dii,slbm,mtf,ipos}`.
+- Tab pages: `src/pages/insights/tabs/` (Macro, Heatmap, FiiDii, CompanyFilings, MfHoldings, BulkBlockDeals, FoBan, TopDeliveries, MarketValuation, Ipo)
+- Backend: `app/routes/insights.py` registered in `main.py`. Endpoints: `/api/insights/{macro,macro/strip,indices,heatmap,company-filings,mf-holdings,index-valuation,market-valuation,bulk-block-deals,fo-ban,top-deliveries,fii-dii,ipos}`.
 
 #### Real-data wiring (data sources, network reachability)
 This Replit container can reach **yfinance**, **api.bseindia.com**, and **portal.amfiindia.com** but is BLOCKED from `www.nseindia.com`, `www.moneycontrol.com`, and `www.chittorgarh.com`. Endpoints handle this honestly:
@@ -89,7 +89,7 @@ This Replit container can reach **yfinance**, **api.bseindia.com**, and **portal
 - **MF Holdings** (`/mf-holdings?amc=&category=&search=&limit=`) — fetches `https://portal.amfiindia.com/spages/NAVAll.txt` (follow-redirects from amfiindia.com), parses the semicolon-separated NAV list (~14k schemes) with `_parse_amfi_text`, returns AMC + category facets for UI dropdowns.
 - **Signals** (`/signals?index=…&verdict=all|bullish|bearish|neutral`) — yfinance 6-month history, computes RSI(14) and MA20/MA50 cross with `_compute_signal`. Verdict logic: RSI ≥70 / ≤30 → Bearish/Bullish; price vs MAs → trend confirmation.
 - **Market / Index Valuation** (`/index-valuation`, `/market-valuation`) — yfinance multi-index time series normalised to a 22× PE proxy.
-- **F&O Ban** (`/fo-ban`) — attempts `NseService.fetch_nse(/api/liveMwpl)`; returns `{available:false, message: NSE_BLOCKED_MSG}` when blocked.
+- **F&O Ban / MWPL** (`/fo-ban`) — multi-source: NSE static `nsearchives.nseindia.com/content/fo/fo_secban.csv` (authoritative ban list, parsed from "Trade Date …: SYM1,SYM2" or "NIL") + scanx `fno-ban-list` ng-state JSON (rich `TotalOiPercentComapredMwpl`, `PrevDayTotalOiPercentComapredMwpl`, LTP, change). Concurrent `asyncio.gather`, separate 30-min caches, dedupe by symbol, status classified Banned (in NSE list or MWPL≥95) / Possible Entrant (80–95) / Possible Exit (was banned, now <95) / Watch. Each row carries Dhan logo URL.
 - **FII/DII** — Backend: `app/services/fii_dii_service.py`. Routes: `GET /api/insights/fii-dii?segment=&days=` (segments: `equity`, `index_future`, `index_option`, `stock_future`, `stock_option`) and admin-guarded `POST /api/insights/fii-dii/backfill?days=`. Two distinct sources:
   - **F&O segments (4 tabs)** — `fetch_fno_historical()` downloads NSE's daily participant-OI archive from `nsearchives.nseindia.com/content/nsccl/fao_participant_oi_DDMMYYYY.csv` via `NseService.fetch_nse_archive_text()` and splits each day's CSV into all four F&O segment tables in one pass. The cache ships preloaded with ~13 months of history (267 trading-day rows per segment, Mar 2025 → Apr 2026).
   - **Equity** — `fetch_equity_snapshot()` hits NSE's `/api/fiidiiTradeReact` (the only public NSE endpoint that returns equity FII/DII). NSE does not expose bulk historical equity FII/DII anywhere, so the equity tab is a snapshot accumulator: each day's snapshot is appended on-demand and history grows over time.
@@ -223,7 +223,7 @@ Nifty Node is a full-stack platform designed for comprehensive Indian stock mark
 The project is structured with a clear separation of concerns:
 - **Frontend (User App & Admin Dashboard):** Both are built with React 18, Vite, and Tailwind CSS for a modern, responsive UI. `wouter` is used for routing, and `TanStack Query` for data fetching. Charting libraries include Recharts, ECharts, and Lightweight Charts. The UI adheres to consistent design tokens for theming.
 - **Backend:** A Python 3.11 FastAPI application handles all API endpoints, business logic, and integrations. Key services include market data processing, AI-driven sentiment analysis, and SEBI compliance auditing.
-- **Insights Module:** Replicates a detailed "Insights" experience with 12 sub-tabs (Heatmap, FiiDii, CompanyFilings, MfHoldings, BulkBlockDeals, Signals, SlbmRental, MtfInsights, FoBan, TopDeliveries, MarketValuation, Ipo), powered by `app/routes/insights.py`.
+- **Insights Module:** Replicates a detailed "Insights" experience with sub-tabs (Macro, Heatmap, FiiDii, CompanyFilings, MfHoldings, BulkBlockDeals, FoBan, TopDeliveries, MarketValuation, Ipo), powered by `app/routes/insights.py`.
 - **API Authentication:** Custom HS256 JWT tokens are used for user endpoints, and a separate admin JWT for the admin dashboard, passed via `X-Admin-Token`.
 - **Market Sentiment Engine:** Calculates a composite sentiment score from News NLP, Price Action, India VIX, and PCR Proxy, with recommendations for strategies like Iron Condor based on sentiment and VIX levels.
 - **Options Strategy Tester:** Features live NSE options chain, Black-Scholes model, Greeks, payoff curves, and Monte Carlo VaR, supporting 17 strategies. An AI chatbot provides strategy assistance.
