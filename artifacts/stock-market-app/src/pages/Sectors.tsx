@@ -201,8 +201,8 @@ function StrengthMatrix({ sectors, isDark }: { sectors: any[]; isDark: boolean }
                         <span className="font-bold text-sm" style={{ color: isDark ? "#f1f5f9" : "#111827" }}>{s.name}</span>
                         <span className="ml-2 text-xs" style={{ color: muTxt }}>{s.symbol}</span>
                       </div>
-                      <span className={`text-xs font-semibold ${s.pChange >= 0 ? "text-green-500" : "text-red-400"}`}>
-                        {s.pChange >= 0 ? "▲" : "▼"} {Math.abs(s.pChange || 0).toFixed(2)}%
+                      <span className={`text-xs font-semibold ${s.pChange == null ? "text-gray-400" : s.pChange >= 0 ? "text-green-500" : "text-red-400"}`}>
+                        {s.pChange == null ? "—" : `${s.pChange >= 0 ? "▲" : "▼"} ${Math.abs(s.pChange).toFixed(2)}%`}
                       </span>
                     </div>
                     <MomentumBar value={s.momentum?.composite ?? 0} isDark={isDark} />
@@ -375,7 +375,7 @@ function SectorTable({ sectors, isDark }: { sectors: any[]; isDark: boolean }) {
                   <td className="px-3 py-2.5 text-right font-mono font-bold" style={{ color: tm.color }}>
                     {ms.composite != null ? ms.composite.toFixed(3) : "—"}
                   </td>
-                  <td className={`px-3 py-2.5 text-right font-semibold ${(s.pChange || 0) >= 0 ? "text-green-500" : "text-red-400"}`}>{fmt(s.pChange)}%</td>
+                  <td className={`px-3 py-2.5 text-right font-semibold ${s.pChange == null ? "text-gray-400" : s.pChange >= 0 ? "text-green-500" : "text-red-400"}`}>{s.pChange == null ? "—" : `${fmt(s.pChange)}%`}</td>
                   <td className={`px-3 py-2.5 text-right ${(ms.rs || 0) >= 0 ? "text-green-500" : "text-red-400"}`}>{fmt(ms.rs)}%</td>
                   <td className={`px-3 py-2.5 text-right ${(ms.roc_6m || 0) >= 0 ? "text-green-500" : "text-red-400"}`}>{fmt(ms.roc_6m)}%</td>
                   <td className="px-3 py-2.5 text-right" style={{ color: isDark ? "#cbd5e1" : "#374151" }}>
