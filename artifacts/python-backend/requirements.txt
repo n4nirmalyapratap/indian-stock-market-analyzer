@@ -9,6 +9,11 @@ python-multipart>=0.0.9
 openpyxl>=3.1.0
 yfinance>=0.2.48
 scipy>=1.11.0
+statsmodels>=0.14.0
+# pandas-ta is intentionally NOT pinned here — newer PyPI releases require
+# Python 3.12 but the project runs on 3.11. The 0.3.14b0 build comes from
+# the Replit Python module / Nix layer and is verified at app startup.
+pydantic>=2.0.0
 feedparser>=6.0.0
 vaderSentiment>=3.3.2
 nsepython>=2.97
