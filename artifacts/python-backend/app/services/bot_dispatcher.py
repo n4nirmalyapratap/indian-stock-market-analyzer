@@ -555,17 +555,63 @@ class BotDispatcher:
         symbol = self._resolve_symbol(args, raw)
         if not symbol:
             return BotResponse("Usage: `/dcf SYMBOL`", error=True)
-        # DCF service is not yet implemented (tracked separately) —
-        # return a graceful "coming soon" so the command is wired up cleanly.
+        from . import dcf_service
+        try:
+            res = await dcf_service.compute_dcf(symbol)
+        except Exception as exc:
+            logger.exception("dcf failed for %s", symbol)
+            return BotResponse(
+                f"⚠️ DCF failed for {symbol}: {exc}", error=True,
+                actions=[BotAction(f"Analyze {symbol}", f"/analyze {symbol}")],
+            )
+        if res.get("error"):
+            return BotResponse(
+                f"⚠️ {res['error']}", error=True,
+                actions=[BotAction(f"Analyze {symbol}", f"/analyze {symbol}")],
+            )
+
+        a = res["assumptions"]
+        iv  = res["intrinsicValue"]
+        cp  = res.get("currentPrice")
+        mos = res.get("marginOfSafety")
+        verdict = res.get("verdict", "UNKNOWN")
+        verdict_emoji = {"UNDERVALUED": "🟢", "FAIR": "🟡",
+                         "OVERVALUED": "🔴"}.get(verdict, "⚪")
+
+        lines = [
+            f"📐 *DCF intrinsic value: {symbol}*",
+            f"_{res.get('companyName', symbol)}_\n",
+            f"Intrinsic value: *₹{iv:,.2f}* / share",
+        ]
+        if cp:
+            lines.append(f"Current price:   ₹{cp:,.2f}")
+        if mos is not None:
+            lines.append(
+                f"Margin of safety: *{mos*100:+.1f}%*  {verdict_emoji} {verdict}"
+            )
+        lines.append("")
+        lines.append("*Assumptions*")
+        lines.append(f"• Base FCF: ₹{a['baseFcfCr']:,.0f} Cr (avg of last positives)")
+        lines.append(f"• Growth Y1-5: {a['growthYears1to5Pct']:.1f}%  ·  "
+                     f"Y6-10: {a['growthYears6to10Pct']:.1f}%  ·  "
+                     f"Terminal: {a['terminalGrowthPct']:.1f}%")
+        lines.append(f"• WACC: {a['waccPct']:.2f}%  "
+                     f"(rf {a['riskFreePct']:.2f}% + β {a['beta']} × ERP "
+                     f"{a['equityRiskPremiumPct']:.0f}%)")
+        net_debt = a['netDebtCr']
+        nd_label = (f"net cash ₹{-net_debt:,.0f} Cr" if net_debt < 0
+                    else f"net debt ₹{net_debt:,.0f} Cr")
+        lines.append(f"• Shares: {a['sharesOutstandingCr']:,.2f} Cr  ·  {nd_label}")
+        lines.append(f"• Horizon: {a['horizonYears']}y explicit + Gordon terminal")
+        lines.append(f"\n_Source: {res.get('source','yahoo+fred')} · "
+                     "growth from {gs}_".format(gs=a.get("growthSource", "n/a")))
+
         return BotResponse(
-            f"📐 *DCF intrinsic value: {symbol}*\n\n"
-            "DCF analysis is currently rolling out — once the engine ships, "
-            "this command returns the intrinsic value, margin of safety and "
-            "key assumptions. For now use /analyze for technical signals or "
-            "/forecast for a near-term price projection.",
+            "\n".join(lines),
             actions=[
                 BotAction(f"Forecast {symbol}", f"/forecast {symbol}"),
-                BotAction(f"Analyze {symbol}", f"/analyze {symbol}"),
+                BotAction(f"Analyze {symbol}",  f"/analyze {symbol}"),
+                BotAction(f"Sentiment {symbol}", f"/sentiment {symbol}"),
             ],
         )
 

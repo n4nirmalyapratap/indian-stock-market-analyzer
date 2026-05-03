@@ -472,6 +472,36 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
+export interface DcfResponse {
+  symbol:         string;
+  companyName:    string;
+  currency:       string;
+  currentPrice:   number | null;
+  intrinsicValue: number;
+  marginOfSafety: number | null;
+  verdict:        "UNDERVALUED" | "FAIR" | "OVERVALUED" | "UNKNOWN";
+  assumptions: {
+    baseFcfCr:            number;
+    growthYears1to5Pct:   number;
+    growthYears6to10Pct:  number;
+    terminalGrowthPct:    number;
+    waccPct:              number;
+    riskFreePct:          number;
+    beta:                 string;
+    equityRiskPremiumPct: number;
+    sharesOutstandingCr:  number;
+    totalDebtCr:          number;
+    cashCr:               number;
+    netDebtCr:            number;
+    enterpriseValueCr:    number;
+    equityValueCr:        number;
+    horizonYears:         number;
+    growthSource:         string;
+  };
+  fcfHistoryCr: number[];
+  source:       string;
+}
+
 export const api = {
   health: () =>
     fetchApi<{ status: string }>("/healthz"),
@@ -491,6 +521,9 @@ export const api = {
 
   stockFinancials: (symbol: string) =>
     fetchApi<StockFinancials>(`/stocks/${encodeURIComponent(symbol)}/financials`),
+
+  stockDcf: (symbol: string) =>
+    fetchApi<DcfResponse>(`/stocks/${encodeURIComponent(symbol)}/dcf`),
 
   stockTechnicalSummary: (symbol: string, interval = "1d") =>
     fetchApi<TechnicalSummary>(`/stocks/${encodeURIComponent(symbol)}/technical-summary?interval=${interval}`),
