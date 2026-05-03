@@ -321,18 +321,16 @@ def _strategy_table(composite: float, vix: float) -> list[dict]:
 
 # ── Core async functions ─────────────────────────────────────────────────────
 
-async def _fetch_vix() -> tuple[float, float]:
-    """Returns (vix_current, vix_5d_pct_change)."""
+async def _fetch_vix() -> tuple[float | None, float | None]:
+    """Returns (vix_current, vix_5d_pct_change). Returns (None, None) when
+    Yahoo cannot be reached or returns no data — the engine then marks the
+    VIX leg as unavailable and excludes it from the composite. The earlier
+    `(15.0, 0.0)` fallback was dishonest: 15.0 is a real plausible reading
+    so users could not distinguish a fetch failure from a calm day."""
     try:
-        from .yahoo_service import YahooService
-        from .market_cache_service import is_market_open
         import httpx
 
-        # Yahoo's official India VIX ticker. The previous "^NSEVIXY" symbol
-        # is delisted and silently returned the 15.0/0.0 fallback, which
-        # neutralised the entire VIX leg of the composite score. Verified
-        # 2026-05: ^INDIAVIX returns full historical chart data, ^NSEVIXY
-        # 404s with "No data found, symbol may be delisted".
+        # Yahoo's official India VIX ticker. Verified 2026-05.
         yahoo_ticker = "^INDIAVIX"
         headers = {"User-Agent": "Mozilla/5.0"}
 
@@ -340,28 +338,32 @@ async def _fetch_vix() -> tuple[float, float]:
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_ticker}?interval=1d&range=1mo"
             resp = await client.get(url, headers=headers)
             if resp.status_code != 200:
-                return 15.0, 0.0
+                return None, None
             data = resp.json()
             result = data.get("chart", {}).get("result", [None])[0]
             if not result:
-                return 15.0, 0.0
+                return None, None
 
             closes = result.get("indicators", {}).get("quote", [{}])[0].get("close", [])
             closes = [c for c in closes if c is not None]
             if not closes:
-                return 15.0, 0.0
+                return None, None
 
             current_vix = closes[-1]
             vix_5d_ago  = closes[-6] if len(closes) >= 6 else closes[0]
-            pct_change  = (current_vix - vix_5d_ago) / vix_5d_ago * 100 if vix_5d_ago else 0.0
+            pct_change  = (current_vix - vix_5d_ago) / vix_5d_ago * 100 if vix_5d_ago else None
             return current_vix, pct_change
     except Exception as e:
         logger.warning("VIX fetch failed: %s", e)
-        return 15.0, 0.0
+        return None, None
 
 
 async def _fetch_nifty_price_action() -> dict:
-    """Fetch Nifty50 history and compute price-action sentiment."""
+    """Fetch Nifty50 history and compute price-action sentiment. On failure
+    returns `{available: False, ...}` so the engine excludes this leg from
+    the composite instead of silently substituting a neutral 0.0 score
+    (which would still consume 35% of the composite weight)."""
+    _UNAVAIL = {"available": False, "compound": None, "label": "UNAVAILABLE", "indicators": {}}
     try:
         import httpx
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -369,29 +371,39 @@ async def _fetch_nifty_price_action() -> dict:
             url = "https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&range=3mo"
             resp = await client.get(url, headers=headers)
             if resp.status_code != 200:
-                return {"compound": 0.0, "label": "NEUTRAL", "indicators": {}}
+                return _UNAVAIL
             data = resp.json()
             result = data.get("chart", {}).get("result", [None])[0]
             if not result:
-                return {"compound": 0.0, "label": "NEUTRAL", "indicators": {}}
+                return _UNAVAIL
             closes = result.get("indicators", {}).get("quote", [{}])[0].get("close", [])
             closes = [c for c in closes if c is not None]
+            if len(closes) < 14:
+                return _UNAVAIL
 
         from .hydra_sentiment_service import price_action_sentiment
-        return price_action_sentiment(closes)
+        out = price_action_sentiment(closes)
+        out["available"] = True
+        return out
     except Exception as e:
         logger.warning("Nifty price action fetch failed: %s", e)
-        return {"compound": 0.0, "label": "NEUTRAL", "indicators": {}}
+        return _UNAVAIL
 
 
 async def _fetch_news_mood() -> dict:
-    """Fetch current news sentiment summary."""
+    """Fetch current news sentiment summary. On failure returns a dict
+    with `available:False` so the news leg is excluded from the composite
+    instead of silently contributing a 0 score weighted at 35%."""
     try:
         from .news_service import get_news_stats
-        return await get_news_stats()
+        out = await get_news_stats()
+        out["available"] = True
+        return out
     except Exception as e:
         logger.warning("News mood fetch failed: %s", e)
-        return {"totalArticles": 0, "sentiments": {"bullish": 0, "bearish": 0, "neutral": 0}, "marketMood": "neutral"}
+        return {"available": False, "totalArticles": 0,
+                "sentiments": {"bullish": 0, "bearish": 0, "neutral": 0},
+                "marketMood": "neutral"}
 
 
 async def _fetch_sector_sentiments() -> list[dict]:
@@ -416,19 +428,27 @@ async def _fetch_sector_sentiments() -> list[dict]:
 
     headers = {"User-Agent": "Mozilla/5.0"}
 
+    # Mark fetch failures as `available:False, score:None` rather than
+    # silently substituting score=0 / "Neutral" — a real Neutral reading is
+    # informative, but a synthetic one indistinguishable from failure is not.
+    _UNAVAIL = lambda n: {"sector": n, "available": False, "score": None,
+                          "label": "Unavailable", "compound": None}
+
     async def _one(name: str, ticker: str) -> dict:
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=3mo"
                 resp = await client.get(url, headers=headers)
                 if resp.status_code != 200:
-                    return {"sector": name, "score": 0, "label": "Neutral", "compound": 0.0}
+                    return _UNAVAIL(name)
                 data = resp.json()
                 result = data.get("chart", {}).get("result", [None])[0]
                 if not result:
-                    return {"sector": name, "score": 0, "label": "Neutral", "compound": 0.0}
+                    return _UNAVAIL(name)
                 closes = result.get("indicators", {}).get("quote", [{}])[0].get("close", [])
                 closes = [c for c in closes if c is not None]
+                if len(closes) < 14:
+                    return _UNAVAIL(name)
                 pa = price_action_sentiment(closes)
                 compound = pa.get("compound", 0.0)
                 score = round(compound * 100)
@@ -442,19 +462,21 @@ async def _fetch_sector_sentiments() -> list[dict]:
                 indicators = pa.get("indicators", {})
                 return {
                     "sector": name,
+                    "available": True,
                     "score": score,
                     "label": label,
                     "compound": compound,
-                    "momentum5d": indicators.get("momentum5d", 0),
-                    "momentum20d": indicators.get("momentum20d", 0),
-                    "rsi14": indicators.get("rsi14", 50),
+                    "momentum5d": indicators.get("momentum5d"),
+                    "momentum20d": indicators.get("momentum20d"),
+                    "rsi14": indicators.get("rsi14"),
                 }
         except Exception as e:
             logger.debug("Sector %s fetch error: %s", name, e)
-            return {"sector": name, "score": 0, "label": "Neutral", "compound": 0.0}
+            return _UNAVAIL(name)
 
     results = await asyncio.gather(*[_one(n, t) for n, t in SECTOR_TICKERS])
-    return sorted(results, key=lambda x: x["score"], reverse=True)
+    # Sort: available first by score desc, unavailable last.
+    return sorted(results, key=lambda x: (-1, -(x["score"] or 0)) if x.get("available") else (0, 0))
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -468,7 +490,11 @@ async def get_market_sentiment(force_refresh: bool = False) -> dict:
     if not force_refresh:
         cached = _cached(cache_key)
         if cached:
-            return cached
+            # Mark the cached copy explicitly so the route/UI can tell the
+            # difference between a fresh compute and a cache hit. The stored
+            # entry was written with `cached:False` at compute time; override
+            # only on the way out.
+            return {**cached, "cached": True}
 
     logger.info("Computing fresh market sentiment…")
 
@@ -482,62 +508,100 @@ async def get_market_sentiment(force_refresh: bool = False) -> dict:
     vix_current, vix_5d_pct = vix_result
 
     # ── News NLP score (-100 → +100) ─────────────────────────────────────────
+    # News leg requires ≥5 articles for a meaningful sample. Below that the
+    # bullish/bearish counts are too noisy to drive a 35%-weighted leg.
     sentiments    = news_mood.get("sentiments", {})
     news_bullish  = sentiments.get("bullish", 0)
     news_bearish  = sentiments.get("bearish", 0)
     news_neutral  = sentiments.get("neutral", 0)
     news_total    = news_bullish + news_bearish + news_neutral
+    news_available = bool(news_mood.get("available")) and news_total >= 5
 
-    if news_total > 0:
+    if news_available:
         news_raw   = (news_bullish - news_bearish) / news_total   # -1 → +1
-        news_score = news_raw * 100
+        news_score: float | None = news_raw * 100
     else:
-        news_score = 0.0
+        news_score = None
 
     # ── Price action score (-100 → +100) ─────────────────────────────────────
-    pa_compound    = nifty_pa.get("compound", 0.0)
-    pa_score       = pa_compound * 100
-    pa_indicators  = nifty_pa.get("indicators", {})
+    pa_available   = bool(nifty_pa.get("available"))
+    pa_compound    = nifty_pa.get("compound") if pa_available else None
+    pa_score: float | None = pa_compound * 100 if pa_compound is not None else None
+    pa_indicators  = nifty_pa.get("indicators", {}) if pa_available else {}
 
     # ── VIX score (-100 → +100) ──────────────────────────────────────────────
-    vix_score = _vix_to_score(vix_current)
+    vix_available = vix_current is not None
+    vix_score: float | None = _vix_to_score(vix_current) if vix_available else None
 
-    # ── PCR proxy ────────────────────────────────────────────────────────────
-    pcr_proxy = _vix_to_pcr_proxy(vix_current, vix_5d_pct)
-    pcr_score = _pcr_to_score(pcr_proxy)
+    # ── PCR proxy (DISPLAY-ONLY, not in composite) ───────────────────────────
+    # PCR proxy is a deterministic function f(vix, vix_5d_pct) — including it
+    # in the composite double-counts the VIX leg. We keep PCR on the panel
+    # for context but exclude it from the composite math.
+    if vix_available:
+        pcr_proxy: float | None = _vix_to_pcr_proxy(vix_current, vix_5d_pct or 0.0)
+        pcr_score: float | None = _pcr_to_score(pcr_proxy)
+    else:
+        pcr_proxy = None
+        pcr_score = None
 
-    # ── Composite score (weighted average) ────────────────────────────────────
-    composite = (
-        news_score  * 0.35 +
-        pa_score    * 0.35 +
-        vix_score   * 0.20 +
-        pcr_score   * 0.10
-    )
-    composite = round(max(-100.0, min(100.0, composite)), 1)
-    label     = _label(composite)
+    # ── Composite score (weighted average over AVAILABLE legs only) ──────────
+    # Weights are renormalised across whichever legs returned data. If no leg
+    # is available the composite is None and the page renders "Unavailable".
+    leg_weights = [
+        ("news",         news_score, 35),
+        ("price_action", pa_score,   35),
+        ("vix",          vix_score,  20),
+    ]
+    available_legs = [(name, s, w) for name, s, w in leg_weights if s is not None]
+    if available_legs:
+        wsum = sum(w for _, _, w in available_legs)
+        composite_raw = sum(s * w for _, s, w in available_legs) / wsum
+        composite: float | None = round(max(-100.0, min(100.0, composite_raw)), 1)
+        label = _label(composite)
+    else:
+        composite = None
+        label = "Unavailable"
 
     # ── Interpretations ───────────────────────────────────────────────────────
-    vix_interp = _interpret_vix(vix_current)
-    pcr_interp = _interpret_pcr(pcr_proxy)
+    vix_interp = _interpret_vix(vix_current) if vix_available else None
+    pcr_interp = _interpret_pcr(pcr_proxy) if pcr_proxy is not None else None
 
-    # ── Contrarian signals ────────────────────────────────────────────────────
-    contrarian = _contrarian_signals(composite, vix_current, pcr_proxy, news_bullish, news_bearish)
+    # ── Contrarian signals (require composite + VIX + PCR all available) ────
+    if composite is not None and vix_available and pcr_proxy is not None:
+        contrarian = _contrarian_signals(composite, vix_current, pcr_proxy,
+                                         news_bullish, news_bearish)
+    else:
+        contrarian = []
 
-    # ── Strategy recommendations ─────────────────────────────────────────────
-    strategies = _strategy_table(composite, vix_current)
+    # ── Strategy recommendations (require composite + VIX) ───────────────────
+    strategies = (_strategy_table(composite, vix_current)
+                  if composite is not None and vix_available else [])
 
     # ── Component breakdown ───────────────────────────────────────────────────
+    def _r(v):
+        return round(v, 1) if v is not None else None
+
     components = [
-        {"name": "News Sentiment",  "score": round(news_score, 1),  "weight": 35,
-         "detail": f"{news_bullish} bullish / {news_bearish} bearish / {news_neutral} neutral articles"},
-        {"name": "Price Action",    "score": round(pa_score, 1),    "weight": 35,
-         "detail": (f"Mom5d: {pa_indicators.get('momentum5d', 0):+.1f}% · "
-                    f"Mom20d: {pa_indicators.get('momentum20d', 0):+.1f}% · "
-                    f"RSI14: {pa_indicators.get('rsi14', 50):.0f}")},
-        {"name": "India VIX",       "score": round(vix_score, 1),   "weight": 20,
-         "detail": f"VIX {vix_current:.1f} ({vix_interp['level']}) · 5d change: {vix_5d_pct:+.1f}%"},
-        {"name": "PCR Proxy",       "score": round(pcr_score, 1),   "weight": 10,
-         "detail": f"Synthetic PCR estimate: {pcr_proxy:.2f} ({pcr_interp['level']})"},
+        {"name": "News Sentiment", "score": _r(news_score), "weight": 35,
+         "available": news_available,
+         "detail": (f"{news_bullish} bullish / {news_bearish} bearish / {news_neutral} neutral articles"
+                    if news_available else f"Insufficient sample ({news_total} articles)")},
+        {"name": "Price Action",   "score": _r(pa_score),   "weight": 35,
+         "available": pa_available,
+         "detail": ((f"Mom5d: {pa_indicators.get('momentum5d', 0):+.1f}% · "
+                     f"Mom20d: {pa_indicators.get('momentum20d', 0):+.1f}% · "
+                     f"RSI14: {pa_indicators.get('rsi14', 50):.0f}")
+                    if pa_available else "Yahoo Finance feed unavailable")},
+        {"name": "India VIX",      "score": _r(vix_score),  "weight": 20,
+         "available": vix_available,
+         "detail": (f"VIX {vix_current:.1f} ({vix_interp['level']}) · 5d change: {vix_5d_pct:+.1f}%"
+                    if vix_available and vix_interp else "VIX feed unavailable")},
+        # PCR weight is 0 — kept for display, not in composite.
+        {"name": "PCR Proxy",      "score": _r(pcr_score),  "weight": 0,
+         "available": pcr_proxy is not None,
+         "detail": (f"Synthetic PCR estimate: {pcr_proxy:.2f} "
+                    f"({pcr_interp['level']}) · derived from VIX, not in composite"
+                    if pcr_proxy is not None and pcr_interp else "Requires VIX")},
     ]
 
     result = {
@@ -545,34 +609,45 @@ async def get_market_sentiment(force_refresh: bool = False) -> dict:
         "label": label,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "cached": False,
+        "availability": {
+            "news":         news_available,
+            "price_action": pa_available,
+            "vix":          vix_available,
+            "pcr":          pcr_proxy is not None,
+        },
         "components": components,
         "vix": {
-            "current": round(vix_current, 2),
-            "change5d_pct": round(vix_5d_pct, 1),
-            "score": round(vix_score, 1),
+            "available":    vix_available,
+            "current":      round(vix_current, 2) if vix_available else None,
+            "change5d_pct": round(vix_5d_pct, 1) if vix_5d_pct is not None else None,
+            "score":        _r(vix_score),
             "interpretation": vix_interp,
         },
         "pcr": {
-            "proxy_value": pcr_proxy,
-            "score": round(pcr_score, 1),
-            "note": "Synthetic estimate based on VIX level and trend. Use NSE options chain for live PCR.",
+            "available":    pcr_proxy is not None,
+            "proxy_value":  pcr_proxy,
+            "score":        _r(pcr_score),
+            "note": ("Derived from VIX level and trend. Display-only — not counted "
+                     "in the composite to avoid double-weighting the VIX leg."),
             "interpretation": pcr_interp,
         },
         "news": {
+            "available":     news_available,
             "total_articles": news_total,
-            "bullish": news_bullish,
-            "bearish": news_bearish,
-            "neutral": news_neutral,
-            "mood": news_mood.get("marketMood", "neutral"),
-            "score": round(news_score, 1),
+            "bullish":       news_bullish,
+            "bearish":       news_bearish,
+            "neutral":       news_neutral,
+            "mood":          news_mood.get("marketMood", "neutral"),
+            "score":         _r(news_score),
         },
         "price_action": {
-            "score": round(pa_score, 1),
-            "compound": pa_compound,
-            "label": nifty_pa.get("label", "NEUTRAL"),
+            "available":  pa_available,
+            "score":      _r(pa_score),
+            "compound":   pa_compound,
+            "label":      nifty_pa.get("label", "NEUTRAL"),
             "indicators": pa_indicators,
         },
-        "contrarian_signals": contrarian,
+        "contrarian_signals":       contrarian,
         "strategy_recommendations": strategies,
     }
 

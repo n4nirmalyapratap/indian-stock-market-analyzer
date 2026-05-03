@@ -9,26 +9,37 @@ import DataFreshness from "@/components/DataFreshness";
 import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-interface Component { name: string; score: number; weight: number; detail: string }
-interface VixData    { current: number; change5d_pct: number; score: number;
-                       interpretation: { level: string; emoji: string; color: string; text: string } }
-interface PcrData    { proxy_value: number; score: number; note: string;
-                       interpretation: { level: string; emoji: string; color: string; text: string } }
-interface NewsData   { total_articles: number; bullish: number; bearish: number; neutral: number;
-                       mood: string; score: number }
-interface PriceAction{ score: number; compound: number; label: string;
+// Every numeric reading can be null when its upstream feed is unavailable.
+// The page must render "—" / a "Data unavailable" panel in that case rather
+// than substituting a synthetic 0 (which would look like a real flat reading).
+interface Component { name: string; score: number | null; weight: number;
+                      detail: string; available?: boolean }
+interface VixData    { available?: boolean; current: number | null;
+                       change5d_pct: number | null; score: number | null;
+                       interpretation: { level: string; emoji: string; color: string; text: string } | null }
+interface PcrData    { available?: boolean; proxy_value: number | null;
+                       score: number | null; note: string;
+                       interpretation: { level: string; emoji: string; color: string; text: string } | null }
+interface NewsData   { available?: boolean; total_articles: number;
+                       bullish: number; bearish: number; neutral: number;
+                       mood: string; score: number | null }
+interface PriceAction{ available?: boolean; score: number | null;
+                       compound: number | null; label: string;
                        indicators: { momentum5d?: number; momentum20d?: number; rsi14?: number } }
 interface Signal     { type: string; title: string; description: string;
                        signal: string; direction: string; emoji: string; color: string }
 interface Strategy   { strategy: string; outlook: string; vol: string; risk: string }
+interface Availability { news: boolean; price_action: boolean; vix: boolean; pcr: boolean }
 interface Sentiment  {
-  composite: number; label: string; timestamp: string;
+  composite: number | null; label: string; timestamp: string;
+  availability?: Availability;
   components: Component[]; vix: VixData; pcr: PcrData;
   news: NewsData; price_action: PriceAction;
   contrarian_signals: Signal[]; strategy_recommendations: Strategy[];
 }
-interface SectorItem { sector: string; score: number; label: string; compound: number;
-                       momentum5d?: number; rsi14?: number }
+interface SectorItem { sector: string; score: number | null; label: string;
+                       compound: number | null; available?: boolean;
+                       momentum5d?: number | null; rsi14?: number | null }
 interface SectorsResp{ sectors: SectorItem[]; count: number }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -70,7 +81,23 @@ function signalBorderColor(color: string): string {
 }
 
 // ── Speedometer gauge ────────────────────────────────────────────────────────
-function Speedometer({ score, label }: { score: number; label: string }) {
+function Speedometer({ score, label }: { score: number | null; label: string }) {
+  // When the composite couldn't be computed (no available legs) render a
+  // greyed-out gauge with "—" instead of pinning the needle to 0 (which would
+  // be indistinguishable from a real "Neutral 0" reading).
+  if (score == null) {
+    return (
+      <div className="flex flex-col items-center">
+        <svg width="220" height="140" viewBox="0 0 220 140">
+          <path d="M 20 110 A 90 90 0 0 1 200 110"
+                fill="none" stroke="#e5e7eb" strokeWidth="18" strokeLinecap="round" />
+          <text x="110" y="100" textAnchor="middle" fontSize="28" fontWeight="bold" fill="#9ca3af">—</text>
+          <text x="110" y="125" textAnchor="middle" fontSize="10" fill="#9ca3af">Data Unavailable</text>
+        </svg>
+        <p className="text-lg font-bold mt-1 text-gray-400">{label}</p>
+      </div>
+    );
+  }
   const r = 90;
   const cx = 110;
   const cy = 110;
@@ -144,20 +171,44 @@ function Speedometer({ score, label }: { score: number; label: string }) {
 
 // ── Component bar ─────────────────────────────────────────────────────────────
 function ComponentBar({ comp }: { comp: Component }) {
-  const pct = Math.abs(comp.score) / 100 * comp.weight;
-  const positive = comp.score >= 0;
+  // weight=0 means the component is shown for context (e.g. PCR Proxy, which
+  // is derived from VIX) but not part of the composite. weight>0 with a null
+  // score means the upstream feed failed and the leg was excluded.
+  const isUnavailable = comp.score == null || comp.available === false;
+  const isInformational = comp.weight === 0;
+  const weightLabel = isInformational
+    ? "informational"
+    : `${comp.weight}% weight`;
+
+  if (isUnavailable) {
+    return (
+      <div>
+        <div className="flex justify-between text-xs mb-1">
+          <span className="text-gray-600 dark:text-gray-400 font-medium">{comp.name}</span>
+          <span className="text-gray-400">— <span className="text-gray-400">({weightLabel})</span></span>
+        </div>
+        <div className="h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden opacity-60">
+          <div className="h-full bg-gray-300 dark:bg-gray-700" style={{ width: "100%" }} />
+        </div>
+        <p className="text-[10px] text-gray-400 mt-0.5 truncate italic">{comp.detail || "Unavailable"}</p>
+      </div>
+    );
+  }
+
+  const score = comp.score as number;
+  const positive = score >= 0;
   return (
     <div>
       <div className="flex justify-between text-xs mb-1">
         <span className="text-gray-600 dark:text-gray-400 font-medium">{comp.name}</span>
-        <span className={comp.score >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-500"}>
-          {comp.score > 0 ? "+" : ""}{comp.score}  <span className="text-gray-400">({comp.weight}% weight)</span>
+        <span className={positive ? "text-emerald-600 dark:text-emerald-400" : "text-red-500"}>
+          {score > 0 ? "+" : ""}{score}  <span className="text-gray-400">({weightLabel})</span>
         </span>
       </div>
       <div className="h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
         <div
           className={`h-full rounded-full ${positive ? "bg-emerald-500" : "bg-red-500"}`}
-          style={{ width: `${Math.min(100, Math.abs(comp.score))}%`, opacity: 0.8 }}
+          style={{ width: `${Math.min(100, Math.abs(score))}%`, opacity: 0.8 }}
         />
       </div>
       <p className="text-[10px] text-gray-400 mt-0.5 truncate">{comp.detail}</p>
@@ -196,13 +247,15 @@ export default function SentimentDashboard() {
     }
   }, []);
 
-  const score    = sentiment?.composite ?? 0;
+  const score    = sentiment?.composite ?? null;
   const sectors  = sectorsData?.sectors ?? [];
   const meta     = pickMeta(sentiment) ?? pickMeta(sectorsData);
 
-  // ── Format timestamp ────────────────────────────────────────────────────────
+  // ── Format timestamp (force IST so users abroad see Indian market time) ─────
   const updatedAt = sentiment?.timestamp
-    ? new Date(sentiment.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
+    ? new Date(sentiment.timestamp).toLocaleTimeString("en-IN", {
+        hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata",
+      }) + " IST"
     : null;
 
   return (
@@ -300,81 +353,99 @@ export default function SentimentDashboard() {
                   </h2>
                   <span className="text-xs text-gray-400">Fear Gauge</span>
                 </div>
-                <div className="flex items-end gap-3 mb-3">
-                  <span className="text-4xl font-black text-gray-900 dark:text-white">
-                    {sentiment.vix.current.toFixed(1)}
-                  </span>
-                  <span className={`text-sm font-medium mb-1 ${sentiment.vix.change5d_pct >= 0 ? "text-red-500" : "text-emerald-500"}`}>
-                    {sentiment.vix.change5d_pct > 0 ? "▲" : "▼"} {Math.abs(sentiment.vix.change5d_pct).toFixed(1)}% (5d)
-                  </span>
-                </div>
+                {sentiment.vix.current == null || sentiment.vix.interpretation == null ? (
+                  <div className="rounded-lg p-3 text-xs border bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400">
+                    VIX feed unavailable. The VIX leg is excluded from the composite until the next refresh succeeds.
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-end gap-3 mb-3">
+                      <span className="text-4xl font-black text-gray-900 dark:text-white">
+                        {sentiment.vix.current.toFixed(1)}
+                      </span>
+                      {sentiment.vix.change5d_pct != null && (
+                        <span className={`text-sm font-medium mb-1 ${sentiment.vix.change5d_pct >= 0 ? "text-red-500" : "text-emerald-500"}`}>
+                          {sentiment.vix.change5d_pct > 0 ? "▲" : "▼"} {Math.abs(sentiment.vix.change5d_pct).toFixed(1)}% (5d)
+                        </span>
+                      )}
+                    </div>
 
-                {/* VIX level bar */}
-                <div className="relative h-3 bg-gradient-to-r from-emerald-400 via-yellow-400 to-red-500 rounded-full mb-3">
-                  <div
-                    className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white border-2 border-gray-800 dark:border-white rounded-full shadow-sm"
-                    style={{ left: `${Math.min(95, Math.max(5, (sentiment.vix.current / 40) * 100))}%` }}
-                  />
-                </div>
-                <div className="flex justify-between text-[10px] text-gray-400 mb-3">
-                  <span>0 (Calm)</span><span>20</span><span>40+ (Panic)</span>
-                </div>
+                    {/* VIX level bar */}
+                    <div className="relative h-3 bg-gradient-to-r from-emerald-400 via-yellow-400 to-red-500 rounded-full mb-3">
+                      <div
+                        className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white border-2 border-gray-800 dark:border-white rounded-full shadow-sm"
+                        style={{ left: `${Math.min(95, Math.max(5, (sentiment.vix.current / 40) * 100))}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between text-[10px] text-gray-400 mb-3">
+                      <span>0 (Calm)</span><span>20</span><span>40+ (Panic)</span>
+                    </div>
 
-                <div className={`rounded-lg p-3 text-xs border
-                  ${sentiment.vix.current < 15 ? "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800"
-                  : sentiment.vix.current < 22 ? "bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800"
-                  : "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800"}`}>
-                  <p className="font-semibold text-gray-800 dark:text-gray-200 mb-0.5">
-                    {sentiment.vix.interpretation.emoji} {sentiment.vix.interpretation.level}
-                  </p>
-                  <p className="text-gray-600 dark:text-gray-400">{sentiment.vix.interpretation.text}</p>
-                </div>
+                    <div className={`rounded-lg p-3 text-xs border
+                      ${sentiment.vix.current < 15 ? "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800"
+                      : sentiment.vix.current < 22 ? "bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800"
+                      : "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800"}`}>
+                      <p className="font-semibold text-gray-800 dark:text-gray-200 mb-0.5">
+                        {sentiment.vix.interpretation.emoji} {sentiment.vix.interpretation.level}
+                      </p>
+                      <p className="text-gray-600 dark:text-gray-400">{sentiment.vix.interpretation.text}</p>
+                    </div>
+                  </>
+                )}
               </div>
 
-              {/* PCR card */}
+              {/* PCR card — display only, derived from VIX, not in composite */}
               <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-5">
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-widest">
                     PCR Proxy
                   </h2>
-                  <span className="text-xs text-gray-400">Put/Call Ratio Est.</span>
+                  <span className="text-[10px] text-gray-400 uppercase tracking-wider">Informational</span>
                 </div>
-                <div className="flex items-end gap-3 mb-3">
-                  <span className="text-4xl font-black text-gray-900 dark:text-white">
-                    {sentiment.pcr.proxy_value.toFixed(2)}
-                  </span>
-                  <span className={`text-xs mb-1.5 font-medium ${sentiment.pcr.proxy_value > 1.0 ? "text-red-500" : "text-emerald-500"}`}>
-                    {sentiment.pcr.interpretation.level}
-                  </span>
-                </div>
-
-                {/* PCR zones bar */}
-                <div className="relative h-3 rounded-full mb-1 overflow-hidden">
-                  <div className="absolute inset-0 flex">
-                    <div className="flex-1 bg-emerald-500" title="< 0.5 Extreme Bull" />
-                    <div className="flex-1 bg-green-400"   title="0.5–0.7 Bullish" />
-                    <div className="flex-1 bg-gray-400"    title="0.7–1.0 Neutral" />
-                    <div className="flex-1 bg-orange-400"  title="1.0–1.4 Bearish" />
-                    <div className="flex-1 bg-red-500"     title="> 1.4 Extreme Bear" />
+                {sentiment.pcr.proxy_value == null || sentiment.pcr.interpretation == null ? (
+                  <div className="rounded-lg p-3 text-xs border bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400">
+                    PCR proxy requires VIX — currently unavailable.
                   </div>
-                  <div
-                    className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white border-2 border-gray-800 dark:border-white rounded-full shadow-sm"
-                    style={{ left: `${Math.min(95, Math.max(5, ((sentiment.pcr.proxy_value - 0.3) / 1.5) * 100))}%` }}
-                  />
-                </div>
-                <div className="flex justify-between text-[10px] text-gray-400 mb-3">
-                  <span>0.3</span><span>0.7</span><span>1.0</span><span>1.4</span><span>1.8</span>
-                </div>
+                ) : (
+                  <>
+                    <div className="flex items-end gap-3 mb-3">
+                      <span className="text-4xl font-black text-gray-900 dark:text-white">
+                        {sentiment.pcr.proxy_value.toFixed(2)}
+                      </span>
+                      <span className={`text-xs mb-1.5 font-medium ${sentiment.pcr.proxy_value > 1.0 ? "text-red-500" : "text-emerald-500"}`}>
+                        {sentiment.pcr.interpretation.level}
+                      </span>
+                    </div>
 
-                <div className={`rounded-lg p-3 text-xs border
-                  ${sentiment.pcr.proxy_value < 0.7 ? "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800"
-                  : sentiment.pcr.proxy_value < 1.0 ? "bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700"
-                  : "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800"}`}>
-                  <p className="font-semibold text-gray-800 dark:text-gray-200 mb-0.5">
-                    {sentiment.pcr.interpretation.emoji} {sentiment.pcr.interpretation.level}
-                  </p>
-                  <p className="text-gray-600 dark:text-gray-400">{sentiment.pcr.interpretation.text}</p>
-                </div>
+                    {/* PCR zones bar */}
+                    <div className="relative h-3 rounded-full mb-1 overflow-hidden">
+                      <div className="absolute inset-0 flex">
+                        <div className="flex-1 bg-emerald-500" title="< 0.5 Extreme Bull" />
+                        <div className="flex-1 bg-green-400"   title="0.5–0.7 Bullish" />
+                        <div className="flex-1 bg-gray-400"    title="0.7–1.0 Neutral" />
+                        <div className="flex-1 bg-orange-400"  title="1.0–1.4 Bearish" />
+                        <div className="flex-1 bg-red-500"     title="> 1.4 Extreme Bear" />
+                      </div>
+                      <div
+                        className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white border-2 border-gray-800 dark:border-white rounded-full shadow-sm"
+                        style={{ left: `${Math.min(95, Math.max(5, ((sentiment.pcr.proxy_value - 0.3) / 1.5) * 100))}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between text-[10px] text-gray-400 mb-3">
+                      <span>0.3</span><span>0.7</span><span>1.0</span><span>1.4</span><span>1.8</span>
+                    </div>
+
+                    <div className={`rounded-lg p-3 text-xs border
+                      ${sentiment.pcr.proxy_value < 0.7 ? "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800"
+                      : sentiment.pcr.proxy_value < 1.0 ? "bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700"
+                      : "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800"}`}>
+                      <p className="font-semibold text-gray-800 dark:text-gray-200 mb-0.5">
+                        {sentiment.pcr.interpretation.emoji} {sentiment.pcr.interpretation.level}
+                      </p>
+                      <p className="text-gray-600 dark:text-gray-400">{sentiment.pcr.interpretation.text}</p>
+                    </div>
+                  </>
+                )}
                 <p className="text-[10px] text-gray-400 mt-2 flex items-start gap-1">
                   <Info className="w-3 h-3 shrink-0 mt-0.5" /> {sentiment.pcr.note}
                 </p>
@@ -389,6 +460,14 @@ export default function SentimentDashboard() {
                 <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-widest mb-4">
                   News Sentiment
                 </h2>
+                {sentiment.news.available === false ? (
+                  <div className="rounded-lg p-3 text-xs border bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400">
+                    Insufficient article sample to score the news leg
+                    ({sentiment.news.total_articles} articles, need ≥5).
+                    Excluded from composite.
+                  </div>
+                ) : (
+                <>
                 <div className="flex items-center gap-3 mb-4">
                   <div className={`text-3xl font-black ${sentiment.news.mood === "bullish" ? "text-emerald-500" : sentiment.news.mood === "bearish" ? "text-red-500" : "text-gray-500"}`}>
                     {sentiment.news.mood === "bullish" ? "Bullish" : sentiment.news.mood === "bearish" ? "Bearish" : "Neutral"}
@@ -415,6 +494,8 @@ export default function SentimentDashboard() {
                     );
                   })}
                 </div>
+                </>
+                )}
               </div>
 
               {/* Price Action card */}
@@ -422,26 +503,40 @@ export default function SentimentDashboard() {
                 <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-widest mb-4">
                   Nifty 50 Price Action
                 </h2>
-                <div className="grid grid-cols-3 gap-3">
-                  {[
-                    { label: "5d Momentum", value: `${(sentiment.price_action.indicators.momentum5d ?? 0) > 0 ? "+" : ""}${(sentiment.price_action.indicators.momentum5d ?? 0).toFixed(1)}%`,
-                      positive: (sentiment.price_action.indicators.momentum5d ?? 0) >= 0 },
-                    { label: "20d Momentum", value: `${(sentiment.price_action.indicators.momentum20d ?? 0) > 0 ? "+" : ""}${(sentiment.price_action.indicators.momentum20d ?? 0).toFixed(1)}%`,
-                      positive: (sentiment.price_action.indicators.momentum20d ?? 0) >= 0 },
-                    { label: "RSI 14", value: `${(sentiment.price_action.indicators.rsi14 ?? 50).toFixed(0)}`,
-                      positive: (sentiment.price_action.indicators.rsi14 ?? 50) >= 50 },
-                  ].map((kpi, i) => (
-                    <div key={i} className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3 text-center">
-                      <p className="text-[10px] text-gray-400 mb-1">{kpi.label}</p>
-                      <p className={`text-sm font-bold ${kpi.positive ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
-                        {kpi.value}
-                      </p>
+                {sentiment.price_action.available === false || sentiment.price_action.score == null ? (
+                  <div className="rounded-lg p-3 text-xs border bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400">
+                    Nifty price feed unavailable. Price-action leg excluded from the composite.
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-3 gap-3">
+                      {[
+                        { label: "5d Momentum",  raw: sentiment.price_action.indicators.momentum5d,
+                          fmt: (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(1)}%`,
+                          positive: (v: number) => v >= 0 },
+                        { label: "20d Momentum", raw: sentiment.price_action.indicators.momentum20d,
+                          fmt: (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(1)}%`,
+                          positive: (v: number) => v >= 0 },
+                        { label: "RSI 14",       raw: sentiment.price_action.indicators.rsi14,
+                          fmt: (v: number) => v.toFixed(0),
+                          positive: (v: number) => v >= 50 },
+                      ].map((kpi, i) => {
+                        const has = kpi.raw != null;
+                        return (
+                          <div key={i} className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3 text-center">
+                            <p className="text-[10px] text-gray-400 mb-1">{kpi.label}</p>
+                            <p className={`text-sm font-bold ${!has ? "text-gray-400" : kpi.positive(kpi.raw as number) ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+                              {has ? kpi.fmt(kpi.raw as number) : "—"}
+                            </p>
+                          </div>
+                        );
+                      })}
                     </div>
-                  ))}
-                </div>
-                <p className={`text-center text-sm font-semibold mt-3 ${sentiment.price_action.score >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
-                  {sentiment.price_action.label.replace("_", " ")}
-                </p>
+                    <p className={`text-center text-sm font-semibold mt-3 ${sentiment.price_action.score >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+                      {sentiment.price_action.label.replace("_", " ")}
+                    </p>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -453,32 +548,46 @@ export default function SentimentDashboard() {
                 <BarChart2 className="w-4 h-4" /> Sector Sentiment Heatmap
               </h2>
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
-                {sectors.map((s, i) => (
-                  <div key={i} className={`${sectorBg(s.score)} rounded-xl p-3 flex flex-col gap-1`}>
-                    <p className={`text-[10px] font-bold ${sectorText(s.score)} leading-tight`}>
-                      {s.sector}
-                    </p>
-                    <p className={`text-lg font-black ${sectorText(s.score)}`}>
-                      {s.score > 0 ? "+" : ""}{s.score}
-                    </p>
-                    <p className={`text-[10px] ${sectorText(s.score)} opacity-80`}>
-                      {s.label}
-                    </p>
-                    {s.rsi14 && (
-                      <p className={`text-[9px] ${sectorText(s.score)} opacity-70`}>
-                        RSI {s.rsi14.toFixed(0)}
+                {sectors.map((s, i) => {
+                  // Render unavailable sectors as a distinct grey card so a
+                  // failed fetch isn't shown as a synthetic "Neutral 0".
+                  if (s.available === false || s.score == null) {
+                    return (
+                      <div key={i} className="bg-gray-100 dark:bg-gray-800 rounded-xl p-3 flex flex-col gap-1 opacity-70">
+                        <p className="text-[10px] font-bold text-gray-500 dark:text-gray-400 leading-tight">{s.sector}</p>
+                        <p className="text-lg font-black text-gray-400">—</p>
+                        <p className="text-[10px] text-gray-400">Unavailable</p>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div key={i} className={`${sectorBg(s.score)} rounded-xl p-3 flex flex-col gap-1`}>
+                      <p className={`text-[10px] font-bold ${sectorText(s.score)} leading-tight`}>
+                        {s.sector}
                       </p>
-                    )}
-                  </div>
-                ))}
+                      <p className={`text-lg font-black ${sectorText(s.score)}`}>
+                        {s.score > 0 ? "+" : ""}{s.score}
+                      </p>
+                      <p className={`text-[10px] ${sectorText(s.score)} opacity-80`}>
+                        {s.label}
+                      </p>
+                      {s.rsi14 != null && (
+                        <p className={`text-[9px] ${sectorText(s.score)} opacity-70`}>
+                          RSI {s.rsi14.toFixed(0)}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-              {/* Legend */}
+              {/* Legend — ranges are half-open at the upper edge to match
+                  sectorBg() thresholds (≥40 emerald, ≥15 green-400, …). */}
               <div className="flex flex-wrap gap-3 mt-4 text-[10px] text-gray-500 dark:text-gray-400">
                 {[
                   { color: "bg-emerald-500", label: "Extremely Bullish (≥40)" },
-                  { color: "bg-green-400",   label: "Bullish (15–40)" },
-                  { color: "bg-gray-300 dark:bg-gray-600", label: "Neutral (-15–15)" },
-                  { color: "bg-orange-400",  label: "Bearish (-40–-15)" },
+                  { color: "bg-green-400",   label: "Bullish (15–<40)" },
+                  { color: "bg-gray-300 dark:bg-gray-600", label: "Neutral (-15–<15)" },
+                  { color: "bg-orange-400",  label: "Bearish (-40–<-15)" },
                   { color: "bg-red-500",     label: "Extremely Bearish (≤-40)" },
                 ].map((l, i) => (
                   <div key={i} className="flex items-center gap-1">
