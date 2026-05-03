@@ -18,8 +18,8 @@ export interface SectorData {
   focus?: string;
   /** Data source label */
   source?: string;
-  /** A/D ratio for the sector */
-  advanceDeclineRatio?: number;
+  /** A/D ratio for the sector. null when declines == 0 (infinite). */
+  advanceDeclineRatio?: number | null;
   [key: string]: unknown;
 }
 
@@ -80,11 +80,12 @@ export interface SectorRotation {
     declining: number;
     unchanged: number;
     /** A/D ratio as a formatted string, e.g. "5.00" */
-    advanceDeclineRatio?: number | string;
+    advanceDeclineRatio?: number | string | null;
     /** Market breadth percentage 0–100 */
     breadthScore?: number;
   };
-  adRatio: number;
+  /** null when declines == 0 (mathematically infinite ratio). UI renders "∞". */
+  adRatio: number | null;
   sectors: SectorData[];
   whereToBuyNow: SectorData[];
   phasedOut?: SectorData[];
