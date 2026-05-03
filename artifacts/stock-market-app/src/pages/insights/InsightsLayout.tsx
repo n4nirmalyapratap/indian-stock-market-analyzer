@@ -1,7 +1,7 @@
 import { useLocation } from "wouter";
 import {
   LayoutGrid, BarChart3, FileText, PieChart, Briefcase,
-  Activity, Repeat, Users, Ban, Truck, LineChart, Rocket,
+  Ban, Truck, LineChart, Rocket,
   Globe, ArrowLeft, ChevronRight,
 } from "lucide-react";
 import HeatmapTab from "./tabs/Heatmap";
@@ -9,9 +9,6 @@ import FiiDiiTab from "./tabs/FiiDii";
 import CompanyFilingsTab from "./tabs/CompanyFilings";
 import MfHoldingsTab from "./tabs/MfHoldings";
 import BulkBlockDealsTab from "./tabs/BulkBlockDeals";
-import SignalsTab from "./tabs/Signals";
-import SlbmRentalTab from "./tabs/SlbmRental";
-import MtfInsightsTab from "./tabs/MtfInsights";
 import FoBanTab from "./tabs/FoBan";
 import TopDeliveriesTab from "./tabs/TopDeliveries";
 import MarketValuationTab from "./tabs/MarketValuation";
@@ -72,33 +69,6 @@ const TABS = [
     Component: BulkBlockDealsTab,
     color: "text-indigo-500",
     bg: "bg-indigo-50 dark:bg-indigo-500/10"
-  },
-  {
-    slug: "signals",
-    label: "Signals",
-    description: "Technical signals including RSI, moving average crossovers, and momentum.",
-    icon: Activity,
-    Component: SignalsTab,
-    color: "text-rose-500",
-    bg: "bg-rose-50 dark:bg-rose-500/10"
-  },
-  {
-    slug: "slbm-rental",
-    label: "Stock Rental (SLBM)",
-    description: "Insights into Securities Lending and Borrowing Mechanism activity.",
-    icon: Repeat,
-    Component: SlbmRentalTab,
-    color: "text-amber-500",
-    bg: "bg-amber-50 dark:bg-amber-500/10"
-  },
-  {
-    slug: "mtf-insights",
-    label: "MTF Insights",
-    description: "Margin Trading Facility data and leveraged position trends.",
-    icon: Users,
-    Component: MtfInsightsTab,
-    color: "text-cyan-500",
-    bg: "bg-cyan-50 dark:bg-cyan-500/10"
   },
   {
     slug: "fo-ban",
