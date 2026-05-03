@@ -2,22 +2,24 @@
 ai_analyst.py — REST + SSE endpoints for the Deep AI Analyst feature.
 
 Endpoints (all behind JWT, like every other /api route):
-  POST /api/ai-analyst/run/{ticker}            — SSE stream of phase events
+  POST /api/ai-analyst/run                     — SSE stream (ticker in JSON body)
+  POST /api/ai-analyst/run/{ticker}            — SSE stream (ticker in path, alias)
   GET  /api/ai-analyst/report/{ticker}         — cached report or 404
   GET  /api/ai-analyst/quota                   — remaining quota for caller
   POST /api/ai-analyst/compare?a=…&b=…         — run two analyses in parallel (JSON)
-  GET  /api/ai-analyst/admin/stats             — admin-only metrics (X-Admin-Token)
-  POST /api/ai-analyst/admin/flush             — admin-only cache flush
+  GET  /api/ai-analyst/admin/stats             — admin-only (strict X-Admin-Token)
+  POST /api/ai-analyst/admin/flush             — admin-only (strict X-Admin-Token)
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
-from fastapi import APIRouter, Request, Query, HTTPException
+from fastapi import APIRouter, Request, Query, HTTPException, Body
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
 
 from ..services import ai_analyst_service as svc
 
@@ -29,8 +31,20 @@ def _user_id(request: Request) -> str:
     return getattr(request.state, "user_id", "anonymous") or "anonymous"
 
 
-def _is_admin(request: Request) -> bool:
-    return getattr(request.state, "user_id", None) == "admin"
+def _require_admin(request: Request) -> None:
+    """Strict admin gate: require a valid X-Admin-Token header on the request,
+    independent of any bearer-auth identity. Bearer-auth callers — even if
+    their JWT subject literally equals 'admin' — cannot reach admin routes."""
+    token = request.headers.get("X-Admin-Token", "")
+    if not token:
+        raise HTTPException(403, "X-Admin-Token required")
+    try:
+        from ..routes.admin import _valid_session  # noqa: PLC0415
+    except Exception as e:  # pragma: no cover
+        logger.error("admin token validator unavailable: %s", e)
+        raise HTTPException(503, "admin auth unavailable") from e
+    if not _valid_session(token):
+        raise HTTPException(403, "invalid admin token")
 
 
 @router.get("/feature")
@@ -65,13 +79,12 @@ async def _sse_stream(gen: AsyncGenerator[dict, None]) -> AsyncGenerator[bytes, 
         yield f"data: {err}\n\n".encode("utf-8")
 
 
-@router.post("/run/{ticker}")
-async def run(ticker: str, request: Request,
-              force: bool = Query(False)):
-    if not svc.feature_enabled():
-        raise HTTPException(503, "AI Analyst feature is disabled")
-    user = _user_id(request)
-    gen = svc.run_analysis(ticker, user, force_refresh=force)
+class RunPayload(BaseModel):
+    ticker: str
+    force: Optional[bool] = False
+
+
+def _stream_response(gen):
     return StreamingResponse(
         _sse_stream(gen),
         media_type="text/event-stream",
@@ -79,6 +92,29 @@ async def run(ticker: str, request: Request,
             "Cache-Control": "no-cache, no-transform",
             "X-Accel-Buffering": "no",   # disable nginx-style proxy buffering
         },
+    )
+
+
+@router.post("/run")
+async def run_body(request: Request, payload: RunPayload = Body(...)):
+    """SSE stream — ticker provided in JSON body (per task spec)."""
+    if not svc.feature_enabled():
+        raise HTTPException(503, "AI Analyst feature is disabled")
+    return _stream_response(
+        svc.run_analysis(payload.ticker, _user_id(request),
+                         force_refresh=bool(payload.force))
+    )
+
+
+@router.post("/run/{ticker}")
+async def run_path(ticker: str, request: Request,
+                   force: bool = Query(False)):
+    """SSE stream — ticker in path (alias of POST /run, kept for the
+    frontend's path-style URLs)."""
+    if not svc.feature_enabled():
+        raise HTTPException(503, "AI Analyst feature is disabled")
+    return _stream_response(
+        svc.run_analysis(ticker, _user_id(request), force_refresh=force)
     )
 
 
@@ -110,14 +146,12 @@ async def compare(request: Request,
 
 @router.get("/admin/stats")
 async def admin_stats(request: Request):
-    if not _is_admin(request):
-        raise HTTPException(403, "admin only")
+    _require_admin(request)
     return svc.admin_stats()
 
 
 @router.post("/admin/flush")
 async def admin_flush(request: Request):
-    if not _is_admin(request):
-        raise HTTPException(403, "admin only")
+    _require_admin(request)
     n = svc.flush_cache()
     return {"flushed": n}
