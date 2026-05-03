@@ -179,9 +179,16 @@ def test_pcr_not_in_composite_math(monkeypatch: pytest.MonkeyPatch) -> None:
 # ── 5. marketMood thresholds ─────────────────────────────────────────────────
 
 def _mood(monkeypatch: pytest.MonkeyPatch, articles: list[dict]) -> str:
-    """Bypass network: stub _cache_get('feed') to return canned articles."""
+    """Bypass network: stub _cache_get('feed') to return canned articles.
+    The cache entry shape is `{ts, data: {articles, sources}}` after the
+    2026-05 news-service audit."""
+    import time as _time
+    fake_entry = {
+        "ts":   _time.time(),
+        "data": {"articles": articles, "sources": []},
+    }
     monkeypatch.setattr(news_service, "_cache_get",
-                        lambda key: articles if key == "feed" else None)
+                        lambda key: fake_entry if key == "feed" else None)
     import asyncio
     return asyncio.run(news_service.get_news_stats())["marketMood"]
 
