@@ -53,6 +53,11 @@ export default defineConfig({
         target: apiProxyTarget,
         changeOrigin: true,
       },
+      "/admin": {
+        target: process.env.VITE_ADMIN_PROXY_TARGET || "http://localhost:5173",
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
   preview: {
