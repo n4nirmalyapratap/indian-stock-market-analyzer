@@ -21,6 +21,8 @@ import NewsFeed from "@/pages/NewsFeed";
 import SentimentDashboard from "@/pages/SentimentDashboard";
 import LoginPage from "@/pages/LoginPage";
 import InsightsLayout from "@/pages/insights/InsightsLayout";
+import AIAnalyst from "@/pages/AIAnalyst";
+import AIAnalystCompare from "@/pages/AIAnalystCompare";
 import GlobalAssistant from "@/components/GlobalAssistant";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { CustomAuthProvider, useCustomAuth } from "@/context/CustomAuthContext";
@@ -110,6 +112,9 @@ function AppRoutes() {
         <Route path="/hydra"           component={HydraAlpha} />
         <Route path="/agents/:symbol"  component={InvestorCouncil} />
         <Route path="/agents"          component={InvestorCouncil} />
+        <Route path="/ai-analyst/compare" component={AIAnalystCompare} />
+        <Route path="/ai-analyst/:ticker" component={AIAnalyst} />
+        <Route path="/ai-analyst"      component={AIAnalyst} />
         <Route path="/options"         component={OptionsStrategyTester} />
         <Route path="/portfolio"       component={Portfolio} />
         <Route path="/settings"        component={SettingsPage} />
