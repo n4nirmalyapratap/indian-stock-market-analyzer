@@ -299,17 +299,17 @@ function ValuationTab({ data, isDark }: { data: SectorDetailData; isDark: boolea
     {
       key: "pe", label: "P/E Ratio",
       val: mode === "cap" ? v?.pe : v?.pe_equal,
-      tip: "Price-to-Earnings: Sum of Market Caps / Sum of Net Earnings. High P/E suggests high growth expectations but is less reliable when earnings are negative.",
+      tip: "Price-to-Earnings: market-cap-weighted average of each constituent's P/E ratio (constituents with negative or missing earnings are excluded). High P/E suggests high growth expectations.",
     },
     {
       key: "pb", label: "P/B Ratio",
       val: mode === "cap" ? v?.pb : v?.pb_equal,
-      tip: "Price-to-Book: Sum of Market Caps / Sum of Book Values. Most useful for asset-heavy sectors (Financials, Industrials). Below 1 may indicate undervaluation.",
+      tip: "Price-to-Book: market-cap-weighted average of each constituent's P/B ratio. Most useful for asset-heavy sectors (Financials, Industrials). Below 1 may indicate undervaluation.",
     },
     {
       key: "ps", label: "P/S Ratio",
       val: mode === "cap" ? v?.ps : v?.ps_equal,
-      tip: "Price-to-Sales: Sum of Market Caps / Sum of Total Revenues. Key metric for sectors with unprofitable companies (e.g. early-stage tech).",
+      tip: "Price-to-Sales: market-cap-weighted average of each constituent's P/S ratio. Key metric for sectors with unprofitable companies (e.g. early-stage tech).",
     },
     {
       key: "evEbitda", label: "EV/EBITDA",
@@ -420,7 +420,7 @@ function ProfitabilityTab({ data, isDark }: { data: SectorDetailData; isDark: bo
         <div className="rounded-xl border p-4" style={{ background: isDark ? "#1e293b" : "#f8fafc", borderColor: isDark ? "#334155" : "#e2e8f0" }}>
           <div className="flex items-center gap-1 text-xs mb-1" style={{ color: muTxt }}>
             Aggregate Net Profit Margin
-            <InfoTip text="Sum of Net Incomes / Sum of Revenues. Declining margins signal rising competition or costs." />
+            <InfoTip text="Market-cap-weighted average of each constituent's net profit margin (Net Income ÷ Revenue). Declining margins signal rising competition or costs." />
           </div>
           <div className="text-3xl font-bold" style={{ color: hdrTxt }}>
             {p?.netMargin != null ? p.netMargin.toFixed(1) + "%" : "—"}
@@ -432,7 +432,7 @@ function ProfitabilityTab({ data, isDark }: { data: SectorDetailData; isDark: bo
         <div className="rounded-xl border p-4" style={{ background: isDark ? "#1e293b" : "#f8fafc", borderColor: isDark ? "#334155" : "#e2e8f0" }}>
           <div className="flex items-center gap-1 text-xs mb-1" style={{ color: muTxt }}>
             Aggregate ROE
-            <InfoTip text="Return on Equity: Sum of Net Incomes / Sum of Shareholder Equity. High ROE indicates efficiency — cross-check D/E to ensure it's not just from high leverage." />
+            <InfoTip text="Market-cap-weighted average of each constituent's Return on Equity. High ROE indicates efficiency — cross-check D/E to ensure it's not just from high leverage." />
           </div>
           <div className="text-3xl font-bold" style={{ color: hdrTxt }}>
             {p?.roe != null ? p.roe.toFixed(1) + "%" : "—"}
@@ -564,7 +564,7 @@ function FinancialHealthTab({ data, isDark }: { data: SectorDetailData; isDark: 
       <div className="rounded-xl border p-5" style={{ background: cardBg, borderColor: borderC }}>
         <div className="flex items-center gap-1 text-xs mb-1" style={{ color: muTxt }}>
           Aggregate Debt-to-Equity Ratio
-          <InfoTip text="Sum of Total Debts / Sum of Shareholder Equity. What's 'high' depends on the sector — Financials normally run high D/E. A sharp upward trend is a red flag." />
+          <InfoTip text="Average D/E ratio across constituents (Total Debt ÷ Shareholder Equity). What's 'high' depends on the sector — Financials normally run high D/E. A sharp upward trend is a red flag." />
         </div>
         <div className="text-4xl font-bold" style={{ color: hdrTxt }}>
           {h?.debtToEquity != null ? h.debtToEquity.toFixed(2) + "×" : "—"}
