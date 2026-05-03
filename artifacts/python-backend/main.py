@@ -235,11 +235,12 @@ async def lifespan(app: FastAPI):
     transition_task = asyncio.create_task(_market_state_transition_loop())
     fixer_task      = asyncio.create_task(_bug_fixer_loop())
     rfr_task        = asyncio.create_task(_risk_free_rate_scheduler())
+    bhav_task       = asyncio.create_task(_bhavcopy_refresh_scheduler())
     try:
         yield
     finally:
         for t in (poll_task, universe_task, warmup_task, transition_task,
-                  fixer_task, rfr_task):
+                  fixer_task, rfr_task, bhav_task):
             t.cancel()
             try:
                 await t
@@ -267,6 +268,32 @@ async def _risk_free_rate_scheduler() -> None:
             await asyncio.sleep(24 * 3600)
         except asyncio.CancelledError:
             logger.info("Risk-free scheduler stopped.")
+            break
+
+
+async def _bhavcopy_refresh_scheduler() -> None:
+    """Refresh the NSE/BSE F&O bhavcopy cache once a day.
+
+    On startup, pulls the last 7 trading days that aren't already cached so
+    fresh installs become useful quickly.  Subsequent ticks pull just the
+    last 2 days to catch the previous trading session.
+    """
+    from app.services.nse_bhavcopy_service import refresh_recent
+    await asyncio.sleep(5)
+    first_run = True
+    while True:
+        try:
+            results = await asyncio.to_thread(refresh_recent, 7 if first_run else 2)
+            ok = sum(1 for r in results if r["status"] == "ok")
+            logger.info("Bhavcopy scheduler tick: %d new days cached "
+                        "(%d attempts)", ok, len(results))
+        except Exception as exc:
+            logger.warning("Bhavcopy scheduler tick failed: %s", exc)
+        first_run = False
+        try:
+            await asyncio.sleep(24 * 3600)
+        except asyncio.CancelledError:
+            logger.info("Bhavcopy scheduler stopped.")
             break
 
 

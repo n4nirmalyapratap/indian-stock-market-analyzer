@@ -41,6 +41,7 @@ from ..services.options_backtest_service import run_backtest, STRATEGIES, _to_yf
 from ..services.options_chatbot import chat_reply, _AI_FALLBACK_REPLY
 from ..services import sebi_registry
 from ..services.risk_free_service import get_india_risk_free_rate
+from ..services import nse_bhavcopy_service as _bhav
 
 router = APIRouter(prefix="/options", tags=["options"])
 logger = logging.getLogger("options_route")
@@ -447,6 +448,26 @@ async def calc_var(req: VaRReq):
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ── GET /options/bhavcopy/coverage ───────────────────────────────────────────
+
+@router.get("/bhavcopy/coverage")
+async def bhavcopy_coverage():
+    """Return NSE/BSE F&O bhavcopy cache statistics — date range, row count
+    per symbol, and last 20 ingest attempts.  Used by the Backtest UI to
+    show the user exactly which dates are backed by real settlement data."""
+    return await asyncio.to_thread(_bhav.get_coverage)
+
+
+@router.post("/bhavcopy/refresh")
+async def bhavcopy_refresh(days: int = 7):
+    """Manually pull the last `days` trading days into the cache.
+    Skips dates already marked 'ok'."""
+    if days < 1 or days > 90:
+        raise HTTPException(status_code=400, detail="days must be 1..90")
+    results = await asyncio.to_thread(_bhav.refresh_recent, days)
+    return {"requested_days": days, "results": results}
 
 
 # ── GET /options/strategies ───────────────────────────────────────────────────
