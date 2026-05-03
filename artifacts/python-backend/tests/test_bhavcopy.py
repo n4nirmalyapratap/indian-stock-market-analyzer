@@ -197,19 +197,121 @@ class TestDownload:
 # ── Backtest integration ────────────────────────────────────────────────────
 
 class TestBacktestIntegration:
-    """Ensure the backtest service consults lookup_premium and surfaces the
-    premium_source_breakdown in its result.  Uses an isolated empty cache
-    so all fills must fall back to synthetic_bs — which proves the tagging
-    logic is reachable from the real code path."""
+    """End-to-end checks that the backtester consults bhavcopy and surfaces
+    premium_source on every trade record + the aggregate breakdown.  Uses
+    a synthetic yfinance mock so no network is touched."""
+
+    def _mock_yf(self, monkeypatch):
+        """Return a yf.Ticker stub returning 6 months of fake daily bars."""
+        import pandas as pd
+        import numpy as np
+        idx = pd.date_range("2024-01-01", "2024-06-28", freq="B", tz="Asia/Kolkata")
+        rng = np.random.default_rng(42)
+        # Mild random walk around 22_000
+        prices = 22_000 + np.cumsum(rng.normal(0, 50, len(idx)))
+        df = pd.DataFrame({
+            "Open": prices, "High": prices + 20, "Low": prices - 20,
+            "Close": prices, "Volume": 1_000_000,
+        }, index=idx)
+
+        class _T:
+            def __init__(self, sym): self.sym = sym
+            def history(self, **kw): return df.copy()
+
+        import yfinance as yf
+        monkeypatch.setattr(yf, "Ticker", _T)
 
     def test_synthetic_only_when_cache_empty(self, bhav, monkeypatch):
-        # Force the live backtest service to use the same isolated DB
+        """Empty cache → every entry/exit fill must be tagged synthetic_bs;
+        every expiry exit must be tagged intrinsic_settlement."""
         import app.services.options_backtest_service as obs
         importlib.reload(obs)
-        # Fast-path: build a tiny synthetic input by calling _run_backtest_sync
-        # would require a yfinance mock.  Instead, exercise _resolve_premium
-        # surrogate by calling lookup_premium and confirming the tagging:
-        assert obs._bhav is bhav  # same module instance
-        assert bhav.lookup_premium("NIFTY", date(2024, 3, 28), 22000, "call",
-                                    date(2024, 3, 15)) is None
-        # When None, the backtest tags the fill 'synthetic_bs' (verified by code review)
+        self._mock_yf(monkeypatch)
+
+        res = obs._run_backtest_sync(
+            symbol="NIFTY", strategy="long_call",
+            start_date="2024-02-01", end_date="2024-06-15",
+            lots=1, lot_size=75, entry_dte=15, roll_dte=0,
+            otm_pct=0.03, risk_free=0.07, use_weekly=False,
+        )
+        assert "trades" in res and len(res["trades"]) >= 2
+        psb = res["premium_source_breakdown"]
+        # No bhavcopy data is cached, so the real-data ratio must be 0%.
+        # Every entry fill is synthetic_bs; exit fills are either synthetic_bs
+        # (when exit_ts < expiry) or intrinsic_settlement (when exit_ts == expiry).
+        assert psb["bhavcopy_fills"] == 0
+        assert psb["real_pct"] == 0.0
+        assert psb["synthetic_bs_fills"] >= len(res["trades"])
+        assert psb["primary_source"] in ("synthetic_bs", "intrinsic_settlement")
+        # Aggregate keys are always present so the UI can render the badge
+        assert set(psb).issuperset({
+            "bhavcopy_fills", "synthetic_bs_fills",
+            "intrinsic_settlement_fills", "real_pct", "synthetic_pct",
+            "intrinsic_settlement_pct", "primary_source", "note",
+        })
+
+        # Per-trade tagging — every trade carries its own source breakdown
+        # and per-leg attribution
+        for t in res["trades"]:
+            assert t["premium_source"] in ("synthetic_bs", "intrinsic_settlement")
+            assert "premium_source_breakdown" in t
+            assert "leg_premium_sources" in t
+            assert len(t["leg_premium_sources"]) >= 1
+            for lps in t["leg_premium_sources"]:
+                # Entry must always come from synthetic (cache empty)
+                assert lps["entry_premium_source"] == "synthetic_bs"
+                # Exit is either synthetic_bs (rolled before expiry) or
+                # intrinsic_settlement (settled at expiry) — never bhavcopy
+                # because the cache is empty.
+                assert lps["exit_premium_source"] in (
+                    "synthetic_bs", "intrinsic_settlement"
+                )
+
+    def test_real_when_cache_populated(self, bhav, monkeypatch):
+        """Pre-seed the cache with NIFTY ATM call/put covering an entry date
+        in the backtest range and confirm at least one bhavcopy fill is
+        recorded and tagged correctly."""
+        import app.services.options_backtest_service as obs
+        importlib.reload(obs)
+        self._mock_yf(monkeypatch)
+
+        # Seed: cover the 28-MAR-2024 expiry with a wide strike grid so the
+        # backtester's ATM strike for that entry date is found.
+        seed_rows = []
+        for k in range(20_000, 24_001, 100):
+            for opt in ("call", "put"):
+                seed_rows.append(dict(
+                    symbol="NIFTY", trade_date="2024-03-13",
+                    expiry="2024-03-28", strike=float(k), opt_type=opt,
+                    open=100, high=120, low=80, close=100.0, settle=100.0,
+                    contracts=10, oi=100,
+                ))
+        with bhav._connect() as conn:
+            bhav._insert_records(conn, seed_rows)
+            conn.commit()
+
+        res = obs._run_backtest_sync(
+            symbol="NIFTY", strategy="long_call",
+            start_date="2024-03-01", end_date="2024-04-30",
+            lots=1, lot_size=75, entry_dte=15, roll_dte=0,
+            otm_pct=0.05, risk_free=0.07, use_weekly=False,
+        )
+        psb = res["premium_source_breakdown"]
+        assert psb["bhavcopy_fills"] >= 1, \
+            f"Expected >=1 bhavcopy fill, got breakdown {psb}"
+        # Find the trade whose entry date is 2024-03-13 (or nearest trading day
+        # >= entry_target = 2024-03-13) and check its leg sources include bhavcopy
+        bhav_trade = next(
+            (t for t in res["trades"]
+             if any(l["entry_premium_source"] == "bhavcopy"
+                    for l in t["leg_premium_sources"])),
+            None,
+        )
+        assert bhav_trade is not None
+        # Aggregate keys present
+        assert set(psb).issuperset({
+            "bhavcopy_fills", "synthetic_bs_fills",
+            "intrinsic_settlement_fills", "real_pct",
+            "synthetic_pct", "intrinsic_settlement_pct",
+            "primary_source", "note",
+        })
