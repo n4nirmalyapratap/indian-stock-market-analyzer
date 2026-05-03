@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { memo, useEffect, useMemo, useState, useTransition } from "react";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { fetchApi } from "@/lib/api";
 import {
@@ -123,14 +123,23 @@ export default function FiiDii() {
   const [view, setView] = useState<ViewMode>("both");
   const [range, setRange] = useState<Range>("1y");
   const reduced = useReducedMotion();
+  // Concurrent transition for tab/range swaps so the heavy ~14-chart
+  // re-render never blocks click feedback or the theme ripple.
+  const [, startTransition] = useTransition();
 
-  const { data, isLoading, error } = useQuery<FiiDiiResponse>({
+  const { data, isLoading, isFetching, error } = useQuery<FiiDiiResponse>({
     queryKey: ["insights/fii-dii", segment, range],
     queryFn: () => fetchApi(`/insights/fii-dii?segment=${segment}&days=${rangeLimit(range)}`),
     staleTime: 10 * 60_000,
+    // Keep showing the previous tab's content while the next segment loads —
+    // no more "collapses to spinner then re-mounts everything" jank when
+    // hopping between Equity → Index Futures → Stock Options.
+    placeholderData: keepPreviousData,
   });
 
   const segMeta = SEGMENT_OPTIONS.find(s => s.value === segment)!;
+  const switchSegment = (v: Segment) => startTransition(() => setSegment(v));
+  const switchRange = (v: Range) => startTransition(() => setRange(v));
 
   return (
     <div>
@@ -154,7 +163,7 @@ export default function FiiDii() {
             return (
               <button
                 key={o.value}
-                onClick={() => setSegment(o.value)}
+                onClick={() => switchSegment(o.value)}
                 className={`group relative inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-medium transition border whitespace-nowrap
                   ${active
                     ? "bg-indigo-600 text-white border-indigo-600 dark:bg-indigo-500 dark:border-indigo-500 shadow-md shadow-indigo-500/20"
@@ -180,13 +189,15 @@ export default function FiiDii() {
           message={data?.message || "No data returned. Try again later."}
         />
       ) : (
-        <Body
-          data={data}
-          segMeta={segMeta}
-          view={view} setView={setView}
-          range={range} setRange={setRange}
-          reduced={!!reduced}
-        />
+        <div className={isFetching ? "transition-opacity duration-200 opacity-70" : "transition-opacity duration-200 opacity-100"}>
+          <Body
+            data={data}
+            segMeta={segMeta}
+            view={view} setView={setView}
+            range={range} setRange={switchRange}
+            reduced={!!reduced}
+          />
+        </div>
       )}
     </div>
   );
@@ -303,12 +314,46 @@ function Body({
         <FiiDiiTable rows={rows} segment={data.segment} />
       )}
 
-      {/* Month-wise breakdown */}
-      {monthly.length > 0 && (
-        <MonthlyBreakdown months={monthly} isContracts={isContracts} reduced={reduced} />
-      )}
+      {/* Month-wise breakdown — deferred so the heaviest part of the page
+          (~13 mini-charts) doesn't block first paint when switching tabs. */}
+      <DeferredMonthly months={monthly} isContracts={isContracts} reduced={reduced} />
     </div>
   );
+}
+
+/** Renders MonthlyBreakdown only after the browser is idle, so segment
+ *  switches feel instantaneous instead of stalling on chart layout. */
+function DeferredMonthly({ months, isContracts, reduced }: {
+  months: MonthBucket[]; isContracts: boolean; reduced: boolean;
+}) {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    setReady(false);
+    const ric = (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }).requestIdleCallback;
+    if (ric) {
+      const id = ric(() => setReady(true), { timeout: 400 });
+      return () => (window as Window & { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback?.(id);
+    }
+    const t = setTimeout(() => setReady(true), 120);
+    return () => clearTimeout(t);
+  }, [months]);
+  if (!months.length) return null;
+  if (!ready) {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center gap-2 mt-2">
+          <Calendar className="w-4 h-4 text-indigo-500 dark:text-indigo-400" />
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Month-wise Breakdown</h3>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {months.slice(0, 4).map((m) => (
+            <div key={m.key} className="h-40 rounded-xl border border-gray-100 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-800/40 animate-pulse" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+  return <MonthlyBreakdown months={months} isContracts={isContracts} reduced={reduced} />;
 }
 
 function ViewBtn({ current, value, onClick, icon, label }: {
@@ -566,16 +611,16 @@ function MonthlyBreakdown({ months, isContracts, reduced }: {
         <span className="text-[11px] text-gray-500 dark:text-gray-400">({months.length} months)</span>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {months.map((m, i) => (
-          <MonthCard key={m.key} month={m} isContracts={isContracts} delay={i * 0.03} reduced={reduced} />
+        {months.map((m) => (
+          <MonthCard key={m.key} month={m} isContracts={isContracts} reduced={reduced} />
         ))}
       </div>
     </div>
   );
 }
 
-function MonthCard({ month, isContracts, delay, reduced }: {
-  month: MonthBucket; isContracts: boolean; delay: number; reduced: boolean;
+const MonthCard = memo(function MonthCard({ month, isContracts, reduced }: {
+  month: MonthBucket; isContracts: boolean; reduced: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const palette = useChartPalette();
@@ -591,9 +636,9 @@ function MonthCard({ month, isContracts, delay, reduced }: {
 
   return (
     <motion.div
-      initial={reduced ? { opacity: 0 } : { opacity: 0, y: 12 }}
+      initial={reduced ? { opacity: 0 } : { opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, delay }}
+      transition={{ duration: 0.25 }}
       className="relative overflow-hidden rounded-xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm"
     >
       <div className={`absolute inset-0 bg-gradient-to-br ${netGradient(total)} pointer-events-none`} />
@@ -693,4 +738,4 @@ function MonthCard({ month, isContracts, delay, reduced }: {
       </div>
     </motion.div>
   );
-}
+});
