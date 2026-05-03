@@ -65,8 +65,30 @@ logger = logging.getLogger(__name__)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-DEFAULT_DAILY_QUOTA = 3      # free tier
+DEFAULT_DAILY_QUOTA = 3      # free tier (admin-configurable via secret AI_ANALYST_DAILY_QUOTA)
 PAID_DAILY_QUOTA    = 25     # paid tier (no billing wired yet)
+
+
+def _daily_quota_limit() -> int:
+    """Resolve the per-user daily quota.
+
+    Priority: ``AI_ANALYST_DAILY_QUOTA`` from secrets_store (DB → env)
+    → ``DEFAULT_DAILY_QUOTA``. Clamped to [1, 1000] to guard against
+    typos that would either lock everyone out or let one user burn the
+    whole free tier.
+    """
+    try:
+        from app.lib.secrets_store import get_secret  # noqa: PLC0415
+        raw = (get_secret("AI_ANALYST_DAILY_QUOTA", "") or "").strip()
+    except Exception:
+        raw = ""
+    if not raw:
+        return DEFAULT_DAILY_QUOTA
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_DAILY_QUOTA
+    return max(1, min(1000, n))
 
 _CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "market_cache"
 _DB_FILE   = _CACHE_DIR / "ai_analyst.db"
@@ -184,7 +206,7 @@ def get_quota(user_id: str) -> dict:
             (user_id, today),
         ).fetchone()
     used = int(row["runs_used"]) if row else 0
-    limit = DEFAULT_DAILY_QUOTA
+    limit = _daily_quota_limit()
     return {
         "used":         used,
         "limit":        limit,
@@ -217,10 +239,12 @@ def _refund_quota(user_id: str) -> None:
         c.commit()
 
 
-def _try_reserve_quota(user_id: str, limit: int = DEFAULT_DAILY_QUOTA) -> bool:
+def _try_reserve_quota(user_id: str, limit: Optional[int] = None) -> bool:
     """Atomically reserve one quota slot. Returns True on success, False if exhausted.
     This closes the check-then-increment race window (especially for /compare which
     fans out two analyses in parallel)."""
+    if limit is None:
+        limit = _daily_quota_limit()
     today = _today_ist()
     with _DB_LOCK, _conn() as c:
         # Ensure a row exists, then conditionally increment in the same transaction.
@@ -308,7 +332,8 @@ def admin_stats() -> dict:
         "weekRuns":         int(week_runs),
         "avgWallClockMs":   int(avg_ms or 0),
         "topTickers":       [{"ticker": r["ticker"], "runs": int(r["n"])} for r in top],
-        "quotaPerUserDay":  DEFAULT_DAILY_QUOTA,
+        "quotaPerUserDay":  _daily_quota_limit(),
+        "quotaDefault":     DEFAULT_DAILY_QUOTA,
     }
 
 

@@ -182,3 +182,25 @@ async def admin_flush(request: Request):
     _require_admin(request)
     n = svc.flush_cache()
     return {"flushed": n}
+
+
+@router.put("/admin/quota")
+async def admin_set_quota(request: Request, payload: dict):
+    """Set the per-user daily quota (admin-only). Body: {"limit": <int>}."""
+    _require_admin(request)
+    raw = payload.get("limit") if isinstance(payload, dict) else None
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "limit must be an integer")
+    if n < 1 or n > 1000:
+        raise HTTPException(400, "limit must be between 1 and 1000")
+    from app.lib.secrets_store import set_secret  # noqa: PLC0415
+    set_secret(
+        "AI_ANALYST_DAILY_QUOTA",
+        value=str(n),
+        description=("Deep AI Analyst: max fresh analyses per user per IST "
+                     "day (default: 3). Cached reports don't count."),
+        masked=False,
+    )
+    return svc.admin_stats()
