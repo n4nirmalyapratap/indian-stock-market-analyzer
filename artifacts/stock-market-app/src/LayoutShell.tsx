@@ -6,7 +6,7 @@ import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
   Brain, TrendingUp, CandlestickChart, Microscope,
   Settings, ChevronRight, ChevronLeft, ChevronDown, Sun, Moon,
-  Newspaper, Gauge, Sparkles, Users, Briefcase, ShieldCheck,
+  Newspaper, Gauge, Sparkles, Users, Briefcase,
 } from "lucide-react";
 
 export const MAIN_NAV = [
@@ -139,17 +139,6 @@ export function LayoutShell({
           ) : (
             <NavLink path="/settings" label="Settings" icon={Settings} open={false} />
           )}
-
-          <a
-            href="/admin/"
-            title={!open ? "Admin Dashboard" : undefined}
-            className={`flex items-center gap-2.5 transition rounded-lg mx-1.5
-              ${open ? "px-2.5 py-2" : "px-0 py-2 justify-center"}
-              text-gray-500 dark:text-gray-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 hover:text-indigo-700 dark:hover:text-indigo-300`}
-          >
-            <ShieldCheck className="flex-shrink-0 w-[18px] h-[18px]" />
-            {open && <span className="font-medium whitespace-nowrap text-sm">Admin Dashboard</span>}
-          </a>
 
           <ThemeToggle open={open} />
           <ProfileComponent open={open} />
