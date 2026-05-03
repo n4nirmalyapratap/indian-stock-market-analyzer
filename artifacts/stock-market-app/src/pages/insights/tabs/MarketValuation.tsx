@@ -75,13 +75,18 @@ export default function MarketValuation() {
   const palette = useChartPalette();
   const { border: cBorder, muted: cMuted, text: cText, surf: cSurf, accent: cAccent } = palette;
 
-  const { data, isLoading } = useQuery<ValuationResponse>(
-    marketDataQueryOptions<ValuationResponse, { enabled: boolean }>(
+  const { data, isLoading, isFetching } = useQuery<ValuationResponse>(
+    marketDataQueryOptions<ValuationResponse, { enabled: boolean; placeholderData: (prev: ValuationResponse | undefined) => ValuationResponse | undefined }>(
       ["insights/index-valuation", codes, period, metric],
       () => fetchApi(`/insights/index-valuation?indices=${encodeURIComponent(codes)}&period=${period}&metric=${metric}`),
-      { enabled: codes.length > 0 },
+      { enabled: codes.length > 0, placeholderData: (prev) => prev },
     ),
   );
+  // Show data the moment we have any (placeholderData = previous response).
+  // `isFetching && !isLoading` means a background refetch is in flight — dim
+  // the chart slightly so the user sees something is happening but the page
+  // doesn't go fully blank.
+  const isRefetching = isFetching && !isLoading;
   const valuationMeta = pickMeta(data);
 
   const addable = useMemo(
@@ -178,7 +183,7 @@ export default function MarketValuation() {
       )}
 
       {data && data.series.length > 0 && (
-        <Card className="p-4">
+        <Card className={`p-4 transition-opacity duration-200 ${isRefetching ? "opacity-60" : "opacity-100"}`}>
           <div className="h-[460px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={data.series} margin={{ top: 8, right: 16, left: -8, bottom: 0 }}>
