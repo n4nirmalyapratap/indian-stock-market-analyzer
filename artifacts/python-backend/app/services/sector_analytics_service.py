@@ -94,7 +94,7 @@ SECTOR_CONSTITUENTS: dict[str, list[str]] = {
     ],
     "NIFTY CONSUMER DURABLES": [
         "TITAN.NS", "HAVELLS.NS", "VOLTAS.NS", "WHIRLPOOL.NS", "BLUESTARCO.NS",
-        "CROMPTON.NS", "BATAINDIA.NS", "RAJESHEXPO.NS", "VMART.NS", "AARTISIND.NS",
+        "CROMPTON.NS", "DIXON.NS", "KALYANKJIL.NS", "KAJARIACER.NS", "BATAINDIA.NS",
     ],
     "NIFTY OIL AND GAS": [
         "RELIANCE.NS", "ONGC.NS", "BPCL.NS", "GAIL.NS", "HINDPETRO.NS",
@@ -102,7 +102,13 @@ SECTOR_CONSTITUENTS: dict[str, list[str]] = {
     ],
     "NIFTY HEALTHCARE INDEX": [
         "SUNPHARMA.NS", "APOLLOHOSP.NS", "MAXHEALTH.NS", "FORTIS.NS", "CIPLA.NS",
-        "DRREDDY.NS", "METROPOLIS.NS", "THYROCARE.NS", "NARAYANA.NS", "LALPATHLAB.NS",
+        "DRREDDY.NS", "METROPOLIS.NS", "THYROCARE.NS", "NH.NS", "LALPATHLAB.NS",
+    ],
+    # NIFTY 50 is a broad-market index, not a sector. Top 10 weights only,
+    # so the Sector Detail page renders meaningfully if anyone navigates here.
+    "NIFTY 50": [
+        "RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS", "TCS.NS",
+        "ITC.NS", "BHARTIARTL.NS", "LT.NS", "SBIN.NS", "AXISBANK.NS",
     ],
 }
 
@@ -555,15 +561,24 @@ class SectorAnalyticsService:
                     info["change1d"] = q.get("pChange")
                 if q.get("previousClose") is not None:
                     info["previousClose"] = q.get("previousClose")
-                info["_priceSource"]  = canon.get("source")
+                # Provenance: `source` = originating provider (NSE/YAHOO),
+                # `servedFrom` = which layer returned it on this call
+                # (PRICE_SERVICE for live, DISK_EOD when EOD overlay applied).
+                info["_priceSource"]      = canon.get("source")
+                info["_priceServedFrom"]  = canon.get("servedFrom")
 
         # Drop empty fundamentals shells so they don't pollute aggregates / sorting.
         stock_infos = [s for s in stock_infos if s and s.get("symbol")]
 
-        # If Yahoo Finance has no index history for this sector, synthesize
-        # a price series from constituent stocks (normalised equal-weight avg).
+        # If Yahoo Finance has no index history for this sector (e.g. delisted
+        # ticker like ^CNXOILGAS / ^CNXHEALTH), synthesize a price series from
+        # constituent stocks (normalised equal-weight avg). Surface a flag so
+        # the UI can disclose this — the Performance and Relative Strength
+        # numbers are then approximations rather than the official index.
+        history_synthetic = False
         if len(sector_hist) < 10 and constituents:
             sector_hist = await _synthetic_history(constituents, period)
+            history_synthetic = True
 
         # Use the canonical sector name from SECTOR_INDICES (e.g. "Nifty IT")
         # instead of `sector_symbol.title()` which mangles acronyms ("Nifty It").
@@ -576,6 +591,7 @@ class SectorAnalyticsService:
             "symbol":       sector_symbol,
             "name":         canonical_name,
             "marketCap":    SECTOR_MARKET_CAP_PROXY.get(sector_symbol, 5.0),
+            "historySynthetic": history_synthetic,
             "relativeStrength": self._compute_rs_chart(sector_hist, nifty_hist),
             "performance":  self._compute_performance(sector_hist),
             "valuation":    self._compute_valuation(stock_infos),
@@ -745,6 +761,15 @@ class SectorAnalyticsService:
                 "dividendYield": s.get("dividendYield"),
                 "beta":          s.get("beta"),
                 "industry":      s.get("industry"),
-                "priceSource":   s.get("_priceSource"),
+                "priceSource":     s.get("_priceSource"),
+                "priceServedFrom": s.get("_priceServedFrom"),
             })
+        # Drop rows that have neither a price nor any fundamentals — these
+        # are pure failure shells (e.g. delisted/wrong tickers in the
+        # constituent list) and would render as a row of "—"s otherwise.
+        rows = [
+            r for r in rows
+            if r.get("price") is not None or r.get("marketCap") is not None
+            or r.get("pe") is not None or r.get("pb") is not None
+        ]
         return sorted(rows, key=lambda r: r.get("marketCap") or 0, reverse=True)
