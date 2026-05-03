@@ -288,7 +288,9 @@ function MwplBar({ pct, className = "" }: { pct: number; className?: string }) {
       ? "bg-amber-500"
       : "bg-indigo-500";
   return (
-    <div className={`h-1.5 rounded-full bg-gray-200 dark:bg-gray-700/60 overflow-hidden ${className}`}>
+    <div role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}
+      aria-label={`MWPL ${pct.toFixed(1)}%`}
+      className={`h-1.5 rounded-full bg-gray-200 dark:bg-gray-700/60 overflow-hidden ${className}`}>
       <div className={`h-full ${color} transition-all`} style={{ width: `${clamped}%` }}/>
     </div>
   );

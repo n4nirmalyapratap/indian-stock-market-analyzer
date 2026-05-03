@@ -29,6 +29,7 @@ import time
 import os
 import re
 import json
+from datetime import datetime, timedelta
 from typing import Any
 from concurrent.futures import ThreadPoolExecutor
 
@@ -2431,9 +2432,308 @@ async def get_fo_ban(
     }
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Top Deliveries — high-conviction accumulation tracker (multi-source)
+#
+#   Primary  → NSE static `sec_bhavdata_full_DDMMYYYY.csv` from
+#              nsearchives.nseindia.com — the official daily bhavcopy
+#              with DELIV_QTY & DELIV_PER per stock (EQ series only).
+#              We walk back up to 7 days to cover weekends/holidays.
+#   Enrich   → scanx.trade ng-state JSON — adds Sector, Dhan logo and
+#              recent intraday LTP/change (overrides bhavcopy close where
+#              available, since bhavcopy is end-of-day).
+#   Fallback → If NSE archive is unreachable, the scanx data alone is
+#              served as the items[] (with a clear `sources` label).
+#
+# Frontend filters by index constituent universe (NIFTY50/100/200/500,
+# sectoral, etc.) using the existing INDEX_CONSTITUENTS map.
+#
+# Heavy data — cache 4 h (LONG_TTL/1.5) per source key.
+# ────────────────────────────────────────────────────────────────────────────
+NSE_BHAVDATA_URL_TPL = (
+    "https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{ddmmyyyy}.csv"
+)
+SCANX_TOP_DELIVERIES_URL = "https://scanx.trade/insight/top-deliveries"
+
+
+def _parse_nse_bhavdata_csv(text: str) -> list[dict]:
+    """NSE sec_bhavdata_full CSV columns (whitespace-padded):
+       SYMBOL, SERIES, DATE1, PREV_CLOSE, OPEN_PRICE, HIGH_PRICE, LOW_PRICE,
+       LAST_PRICE, CLOSE_PRICE, AVG_PRICE, TTL_TRD_QNTY, TURNOVER_LACS,
+       NO_OF_TRADES, DELIV_QTY, DELIV_PER
+
+    Filters to SERIES == "EQ" and rows with valid delivery data."""
+    import csv as _csv
+    from io import StringIO
+    rows: list[dict] = []
+    rdr = _csv.reader(StringIO(text))
+    header = None
+    for raw in rdr:
+        if not raw:
+            continue
+        cells = [c.strip() for c in raw]
+        if header is None:
+            header = cells
+            continue
+        if len(cells) < 15:
+            continue
+        if cells[1].upper() != "EQ":
+            continue
+        sym = cells[0].upper()
+        try:
+            prev_close = float(cells[3] or 0)
+            close      = float(cells[8] or 0)
+            avg_price  = float(cells[9] or 0)
+            traded_qty = int(float(cells[10] or 0))
+            turnover_l = float(cells[11] or 0)            # in lakhs
+            trades     = int(float(cells[12] or 0))
+            deliv_qty  = int(float(cells[13] or 0)) if cells[13] not in ("", "-") else 0
+            deliv_pct  = float(cells[14] or 0) if cells[14] not in ("", "-") else 0.0
+        except (TypeError, ValueError):
+            continue
+        if traded_qty <= 0 or deliv_pct <= 0:
+            continue
+        change     = round(close - prev_close, 2) if prev_close else 0.0
+        change_pct = round((change / prev_close) * 100, 2) if prev_close else 0.0
+        rows.append({
+            "symbol":      sym,
+            "name":        sym,                  # bhavcopy has no display name
+            "exchange":    "NSE",
+            "ltp":         round(close, 2),
+            "prevClose":   round(prev_close, 2),
+            "avgPrice":    round(avg_price, 2),
+            "change":      change,
+            "changePct":   change_pct,
+            "tradedQty":   traded_qty,
+            "delivQty":    deliv_qty,
+            "delivPct":    round(deliv_pct, 2),
+            "trades":      trades,
+            "turnover":    round(turnover_l * 1_00_000, 0),  # lakhs → ₹
+            "delivValue":  round(deliv_qty * avg_price, 0) if avg_price else 0.0,
+            "sector":      None,
+            "logo":        DHAN_STOCK_LOGO.format(sym=sym),
+        })
+    return rows
+
+
+async def _fetch_nse_bhavdata() -> tuple[list[dict], str | None]:
+    """Walks back up to 7 days, returns (rows, trade_date_iso) for the latest
+    available bhavcopy. Cached 4 h."""
+    cache_key = "nse:bhavdata-latest"
+    cached = _cache_get(cache_key, ttl=60 * 60 * 4)
+    if cached is not None:
+        return cached["rows"], cached["date"]
+
+    rows: list[dict] = []
+    trade_date: str | None = None
+    from app.services.nse_service import NseService
+    svc = NseService()
+    today = datetime.now(IST_TZ) if "IST_TZ" in globals() else datetime.utcnow()
+    for offset in range(0, 8):
+        d = today - timedelta(days=offset)
+        if d.weekday() >= 5:        # skip Sat/Sun
+            continue
+        ddmmyyyy = d.strftime("%d%m%Y")
+        url = NSE_BHAVDATA_URL_TPL.format(ddmmyyyy=ddmmyyyy)
+        try:
+            text = await svc.fetch_nse_archive_text(url, f"bhav-{ddmmyyyy}", ttl=86400)
+        except Exception as exc:
+            logger.warning("bhavdata %s fetch failed: %s", ddmmyyyy, exc)
+            text = None
+        if text and "SYMBOL" in text[:50] and "DELIV_PER" in text[:300]:
+            parsed = _parse_nse_bhavdata_csv(text)
+            if parsed:
+                rows = parsed
+                trade_date = d.strftime("%Y-%m-%d")
+                break
+
+    _cache_set(cache_key, {"rows": rows, "date": trade_date})
+    return rows, trade_date
+
+
+def _parse_scanx_top_deliveries(html: str) -> list[dict]:
+    """Extract delivery rows from scanx ng-state JSON. Each entry has a
+    DeliveryData sub-object plus DispSym/Sector/Ltp/Pchange/PPerchange/Sym."""
+    m = _NG_STATE_RE.search(html)
+    if not m:
+        return []
+    try:
+        ng = json.loads(m.group(1))
+    except Exception:
+        return []
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for v in ng.values():
+        if not isinstance(v, dict):
+            continue
+        data = (v.get("b") or {}).get("data")
+        if not isinstance(data, list) or not data:
+            continue
+        first = data[0]
+        if not (isinstance(first, dict) and isinstance(first.get("DeliveryData"), dict)):
+            continue
+        for d in data:
+            if not isinstance(d, dict): continue
+            sym = (d.get("Sym") or "").strip().upper()
+            if not sym or sym in seen: continue
+            seen.add(sym)
+            dd = d.get("DeliveryData") or {}
+            try:
+                ltp        = float(d.get("Ltp") or 0)
+                change     = float(d.get("Pchange") or 0)
+                change_pct = float(d.get("PPerchange") or 0)
+                deliv_pct  = float(dd.get("DailyDeliveredPer") or 0)
+                deliv_qty  = int(float(dd.get("DailyDeliveredQty") or 0))
+                traded_qty = int(float(dd.get("DailyTradedQty") or 0))
+            except (TypeError, ValueError):
+                continue
+            if deliv_pct <= 0 or traded_qty <= 0: continue
+            rows.append({
+                "symbol":     sym,
+                "name":       (d.get("DispSym") or sym).strip(),
+                "exchange":   (d.get("Exch") or "NSE").upper(),
+                "ltp":        round(ltp, 2),
+                "prevClose":  round(ltp - change, 2) if change else round(ltp, 2),
+                "avgPrice":   round(ltp, 2),  # scanx doesn't ship avg
+                "change":     round(change, 2),
+                "changePct":  round(change_pct, 2),
+                "tradedQty":  traded_qty,
+                "delivQty":   deliv_qty,
+                "delivPct":   round(deliv_pct, 2),
+                "trades":     0,
+                "turnover":   round(traded_qty * ltp, 0),
+                "delivValue": round(deliv_qty * ltp, 0),
+                "sector":     d.get("Sector"),
+                "logo":       DHAN_STOCK_LOGO.format(sym=sym),
+            })
+    return rows
+
+
+async def _fetch_scanx_top_deliveries() -> list[dict]:
+    cache_key = "scanx:top-deliveries"
+    cached = _cache_get(cache_key, ttl=60 * 60 * 4)
+    if cached is not None:
+        return cached
+    rows: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True,
+                                      headers={"User-Agent": "Mozilla/5.0"}) as cli:
+            r = await cli.get(SCANX_TOP_DELIVERIES_URL)
+        r.raise_for_status()
+        rows = _parse_scanx_top_deliveries(r.text)
+    except Exception as exc:
+        logger.warning("scanx top-deliveries fetch failed: %s", exc)
+    _cache_set(cache_key, rows)
+    return rows
+
+
+_SORT_KEYS = {
+    "delivPct":   lambda r: r.get("delivPct") or 0.0,
+    "delivQty":   lambda r: r.get("delivQty") or 0,
+    "delivValue": lambda r: r.get("delivValue") or 0,
+    "turnover":   lambda r: r.get("turnover") or 0,
+    "changePct":  lambda r: r.get("changePct") or 0.0,
+}
+
+
 @router.get("/top-deliveries")
-async def get_top_deliveries(period: str = Query("daily"), index: str = Query("NIFTY50")):
-    return {"available": False, "message": NSE_BLOCKED_MSG, "items": []}
+async def get_top_deliveries(
+    index: str = Query("NIFTY50"),
+    sort: str = Query("delivPct"),
+    minDelivPct: float = Query(0.0, ge=0.0, le=100.0),
+    search: str = Query(""),
+    limit: int = Query(100, ge=1, le=500),
+):
+    nse_task   = asyncio.create_task(_fetch_nse_bhavdata())
+    scanx_task = asyncio.create_task(_fetch_scanx_top_deliveries())
+    (nse_rows, trade_date), scanx_rows = await asyncio.gather(nse_task, scanx_task)
+
+    # Build sector + display-name lookup from scanx (for enriching NSE rows).
+    scanx_meta: dict[str, dict] = {r["symbol"]: r for r in scanx_rows}
+
+    sources: list[str] = []
+    if nse_rows:
+        primary_rows = nse_rows
+        sources.append("NSE")
+        # Enrich with sector / display name where scanx has it.
+        for r in primary_rows:
+            sx = scanx_meta.get(r["symbol"])
+            if sx:
+                if sx.get("sector"): r["sector"] = sx["sector"]
+                if sx.get("name") and sx["name"] != r["symbol"]:
+                    r["name"] = sx["name"]
+        if scanx_rows:
+            sources.append("scanx.trade")
+    else:
+        primary_rows = scanx_rows
+        if scanx_rows:
+            sources.append("scanx.trade")
+
+    if not primary_rows:
+        return {
+            "available": False,
+            "message": "Top deliveries feed temporarily unavailable.",
+            "items": [], "highlights": [],
+            "totalSymbols": 0, "matched": 0,
+            "tradeDate": trade_date,
+            "sources": sources, "indexCode": index.upper(),
+            "indexLabel": INDEX_LABELS.get(index.upper(), index),
+        }
+
+    # Index-universe filter — strip ".NS" / ".BO" from constituents.
+    code = index.upper().strip()
+    universe: set[str] | None = None
+    if code and code != "ALL":
+        syms = INDEX_CONSTITUENTS.get(code)
+        if syms:
+            universe = {_pretty(s).upper() for s in syms}
+
+    def keep(r: dict) -> bool:
+        if universe is not None and r["symbol"] not in universe:
+            return False
+        if (r.get("delivPct") or 0.0) < minDelivPct:
+            return False
+        if search:
+            q = search.lower().strip()
+            if q not in (r.get("symbol") or "").lower() and q not in (r.get("name") or "").lower():
+                return False
+        return True
+
+    filtered = [r for r in primary_rows if keep(r)]
+
+    sort_key = _SORT_KEYS.get(sort, _SORT_KEYS["delivPct"])
+    filtered.sort(key=sort_key, reverse=True)
+
+    items = filtered[:limit]
+    highlights = filtered[:5]
+
+    # Aggregate stats for the index slice.
+    total_traded   = sum(r.get("tradedQty") or 0 for r in filtered)
+    total_deliv    = sum(r.get("delivQty") or 0 for r in filtered)
+    total_turnover = sum(r.get("turnover") or 0 for r in filtered)
+    total_delivval = sum(r.get("delivValue") or 0 for r in filtered)
+    avg_deliv_pct  = (sum((r.get("delivPct") or 0.0) for r in filtered) / len(filtered)
+                      if filtered else 0.0)
+
+    return {
+        "available": True,
+        "items": items,
+        "highlights": highlights,
+        "totalSymbols": len(primary_rows),
+        "matched": len(filtered),
+        "tradeDate": trade_date,
+        "sources": sources,
+        "indexCode": code,
+        "indexLabel": INDEX_LABELS.get(code, code),
+        "stats": {
+            "avgDelivPct":  round(avg_deliv_pct, 2),
+            "totalTraded":  total_traded,
+            "totalDeliv":   total_deliv,
+            "totalTurnover": total_turnover,
+            "totalDelivValue": total_delivval,
+            "delivRatio":   round((total_deliv / total_traded * 100), 2) if total_traded else 0.0,
+        },
+    }
 
 
 @router.get("/fii-dii")
