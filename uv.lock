@@ -1038,6 +1038,20 @@ wheels = [
 ]
 
 [[package]]
+name = "nsepython"
+version = "2.97"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pandas" },
+    { name = "requests" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/be/bb/159deb25e57925ced46ae1268b61342a8091bc8cc8f3ed8d50610d109d2d/nsepython-2.97.tar.gz", hash = "sha256:24e7035739ff46e96ccead343aade1ce16afda152cd2d2cfa1fa9f33ff84578a", size = 27735, upload-time = "2025-05-26T15:15:29.248Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/92/ff/47ba4009597f282e1fe251419f262340fac421a84d17775302a13ef7fbaf/nsepython-2.97-py3-none-any.whl", hash = "sha256:2873d2d0319ff72033754effcefc23a9ce860bf45083420769208597907dc3c6", size = 25478, upload-time = "2025-05-26T15:15:27.667Z" },
+]
+
+[[package]]
 name = "numpy"
 version = "2.4.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1551,6 +1565,7 @@ dependencies = [
     { name = "feedparser" },
     { name = "httpx" },
     { name = "lxml" },
+    { name = "nsepython" },
     { name = "numpy" },
     { name = "openai" },
     { name = "openpyxl" },
@@ -1575,6 +1590,7 @@ requires-dist = [
     { name = "feedparser", specifier = ">=6.0.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "lxml", specifier = ">=6.1.0" },
+    { name = "nsepython", specifier = ">=2.97" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "openai", specifier = ">=2.32.0" },
     { name = "openpyxl", specifier = ">=3.1.0" },
