@@ -40,6 +40,7 @@ Persistence: SQLite at artifacts/python-backend/market_cache/ai_analyst.db
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -132,10 +133,6 @@ def _ensure_schema() -> None:
                 wall_clock_ms INTEGER NOT NULL DEFAULT 0,
                 sources_used  TEXT NOT NULL DEFAULT '',
                 created_at    INTEGER NOT NULL,
-                -- Per-user cache: each user gets their own copy of today's
-                -- report so requests are isolated across accounts. `user_id`
-                -- is part of the PK so two users analysing the same ticker
-                -- on the same IST day each have their own row.
                 PRIMARY KEY (ticker, run_date_ist, user_id)
             );
             CREATE INDEX IF NOT EXISTS idx_reports_created ON ai_analyst_reports(created_at);
@@ -146,11 +143,35 @@ def _ensure_schema() -> None:
                 runs_used    INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (user_id, run_date_ist)
             );
+
+            -- Persistent per-user "saved analyses" store covering all three
+            -- scopes (single ticker, pair compare, watchlist group). One
+            -- row per (user, scope_type, scope_key); re-running the same
+            -- input upserts the row. No daily expiry — entries live until
+            -- the user re-runs or deletes them.
+            CREATE TABLE IF NOT EXISTS ai_analyst_saved (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id       TEXT NOT NULL,
+                scope_type    TEXT NOT NULL,        -- 'single' | 'pair' | 'group'
+                scope_key     TEXT NOT NULL,        -- TICKER | 'A|B' | sha1(sorted tickers)
+                tickers_json  TEXT NOT NULL,        -- JSON list of tickers (sorted for pair/group)
+                label         TEXT,                 -- optional display label (e.g. group name)
+                verdict       TEXT,                 -- BUY/HOLD/SELL or NULL for pair/group previews
+                confidence    TEXT,
+                headline      TEXT,
+                report_json   TEXT NOT NULL,        -- full report (single) or {a,b} (pair) or {items,…} (group)
+                models_used   TEXT NOT NULL DEFAULT '',
+                sources_used  TEXT NOT NULL DEFAULT '',
+                wall_clock_ms INTEGER NOT NULL DEFAULT 0,
+                created_at    INTEGER NOT NULL,
+                updated_at    INTEGER NOT NULL,
+                UNIQUE (user_id, scope_type, scope_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_saved_user_updated
+                ON ai_analyst_saved(user_id, scope_type, updated_at DESC);
         """)
         # One-time migration: older databases used PK (ticker, run_date_ist)
-        # which shared a single report across users. We now isolate per user
-        # by including user_id in the PK. SQLite cannot ALTER a primary key,
-        # so detect the legacy schema and rebuild the table in place.
+        # which shared a single report across users. Rebuild in place.
         pk_cols = [r["name"] for r in c.execute(
             "PRAGMA table_info(ai_analyst_reports)"
         ).fetchall() if r["pk"] > 0]
@@ -180,6 +201,35 @@ def _ensure_schema() -> None:
                 CREATE INDEX IF NOT EXISTS idx_reports_created
                     ON ai_analyst_reports(created_at);
             """)
+        # One-time migration: forward old day-scoped rows into the new
+        # saved store as `single` entries so users don't lose what's
+        # already there. We pick the latest report per (user, ticker)
+        # only if a saved entry doesn't already exist.
+        try:
+            c.execute("""
+                INSERT OR IGNORE INTO ai_analyst_saved
+                    (user_id, scope_type, scope_key, tickers_json, label,
+                     verdict, confidence, headline, report_json,
+                     models_used, sources_used, wall_clock_ms,
+                     created_at, updated_at)
+                SELECT r.user_id, 'single', r.ticker,
+                       json_array(r.ticker), NULL,
+                       json_extract(r.report_json, '$.verdict'),
+                       json_extract(r.report_json, '$.confidence'),
+                       json_extract(r.report_json, '$.headline'),
+                       r.report_json, r.models_used, r.sources_used,
+                       r.wall_clock_ms, r.created_at, r.created_at
+                  FROM ai_analyst_reports r
+                  JOIN (
+                       SELECT ticker, user_id, MAX(created_at) AS mx
+                         FROM ai_analyst_reports
+                        GROUP BY ticker, user_id
+                  ) m ON m.ticker=r.ticker
+                     AND m.user_id=r.user_id
+                     AND m.mx=r.created_at
+            """)
+        except sqlite3.OperationalError as e:  # pragma: no cover
+            logger.warning("ai_analyst_saved migration skipped: %s", e)
         c.commit()
 
 
@@ -261,72 +311,298 @@ def _try_reserve_quota(user_id: str, limit: Optional[int] = None) -> bool:
         return cur.rowcount == 1
 
 
-# ── Cache ─────────────────────────────────────────────────────────────────────
+# ── Saved analyses store ──────────────────────────────────────────────────────
+# One persistent row per (user, scope_type, scope_key). Re-running the same
+# input upserts the row. No daily expiry — entries live until the user
+# deletes them or re-runs (which overwrites).
 
-def get_cached_report(ticker: str, user_id: str = "") -> Optional[dict]:
-    """Return today's cached report for this ticker scoped to ``user_id``.
-    Cache is per-user/per-ticker/per-IST-day so two users running the same
-    ticker each get their own report row (and one user's report is never
-    served to another user)."""
-    today = _today_ist()
+def _norm_ticker(t: str) -> str:
+    return (t or "").upper().strip()
+
+
+def _pair_scope_key(a: str, b: str) -> tuple[str, list[str]]:
+    pair = sorted([_norm_ticker(a), _norm_ticker(b)])
+    return "|".join(pair), pair
+
+
+def _group_scope_key(tickers: list[str]) -> tuple[str, list[str]]:
+    cleaned = sorted({_norm_ticker(t) for t in (tickers or []) if _norm_ticker(t)})
+    h = hashlib.sha1("|".join(cleaned).encode("utf-8")).hexdigest()
+    return h, cleaned
+
+
+def _row_to_preview(row: sqlite3.Row) -> dict:
+    return {
+        "id":         int(row["id"]),
+        "scope":      row["scope_type"],
+        "scopeKey":   row["scope_key"],
+        "tickers":    json.loads(row["tickers_json"] or "[]"),
+        "label":      row["label"],
+        "verdict":    row["verdict"],
+        "confidence": row["confidence"],
+        "headline":   row["headline"],
+        "savedAt":    datetime.fromtimestamp(int(row["updated_at"]), tz=IST).isoformat(),
+        "createdAt":  datetime.fromtimestamp(int(row["created_at"]), tz=IST).isoformat(),
+    }
+
+
+def _row_to_full(row: sqlite3.Row) -> dict:
+    out = _row_to_preview(row)
+    try:
+        out["report"] = json.loads(row["report_json"])
+    except Exception:
+        out["report"] = None
+    out["modelsUsed"]  = [m for m in (row["models_used"] or "").split(",") if m]
+    out["sourcesUsed"] = [s for s in (row["sources_used"] or "").split(",") if s]
+    out["wallClockMs"] = int(row["wall_clock_ms"] or 0)
+    return out
+
+
+def _upsert_saved(user_id: str, scope_type: str, scope_key: str,
+                  tickers: list[str], label: Optional[str],
+                  verdict: Optional[str], confidence: Optional[str],
+                  headline: Optional[str], report: dict,
+                  models: list[str], sources: list[str],
+                  wall_clock_ms: int) -> int:
+    now = int(time.time())
+    uid = user_id or "anonymous"
+    with _DB_LOCK, _conn() as c:
+        existing = c.execute(
+            "SELECT id, created_at FROM ai_analyst_saved "
+            "WHERE user_id=? AND scope_type=? AND scope_key=?",
+            (uid, scope_type, scope_key),
+        ).fetchone()
+        created_at = int(existing["created_at"]) if existing else now
+        c.execute("""
+            INSERT INTO ai_analyst_saved
+                (user_id, scope_type, scope_key, tickers_json, label,
+                 verdict, confidence, headline, report_json,
+                 models_used, sources_used, wall_clock_ms,
+                 created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(user_id, scope_type, scope_key) DO UPDATE SET
+                tickers_json  = excluded.tickers_json,
+                label         = COALESCE(excluded.label, ai_analyst_saved.label),
+                verdict       = excluded.verdict,
+                confidence    = excluded.confidence,
+                headline      = excluded.headline,
+                report_json   = excluded.report_json,
+                models_used   = excluded.models_used,
+                sources_used  = excluded.sources_used,
+                wall_clock_ms = excluded.wall_clock_ms,
+                updated_at    = excluded.updated_at
+        """, (
+            uid, scope_type, scope_key,
+            json.dumps(tickers), label,
+            verdict, confidence, headline,
+            json.dumps(report),
+            ",".join(models), ",".join(sources),
+            int(wall_clock_ms), created_at, now,
+        ))
+        c.commit()
+        row = c.execute(
+            "SELECT id FROM ai_analyst_saved "
+            "WHERE user_id=? AND scope_type=? AND scope_key=?",
+            (uid, scope_type, scope_key),
+        ).fetchone()
+        return int(row["id"]) if row else 0
+
+
+def get_saved_single(ticker: str, user_id: str) -> Optional[dict]:
+    """Return the saved single-stock report for ``user_id`` with no day expiry.
+    The returned dict is the original report blob with ``cached``/``cachedAt``
+    plus the new ``savedAt``/``savedId`` fields tacked on for the frontend."""
+    uid = user_id or "anonymous"
     with _DB_LOCK, _conn() as c:
         row = c.execute(
-            "SELECT report_json, created_at FROM ai_analyst_reports "
-            "WHERE ticker=? AND run_date_ist=? AND user_id=?",
-            (ticker.upper(), today, user_id or "anonymous"),
+            "SELECT * FROM ai_analyst_saved "
+            "WHERE user_id=? AND scope_type='single' AND scope_key=?",
+            (uid, _norm_ticker(ticker)),
         ).fetchone()
     if not row:
         return None
     try:
         rpt = json.loads(row["report_json"])
-        rpt["cached"] = True
-        rpt["cachedAt"] = datetime.fromtimestamp(row["created_at"], tz=IST).isoformat()
-        return rpt
     except Exception:
         return None
+    saved_at = datetime.fromtimestamp(int(row["updated_at"]), tz=IST).isoformat()
+    rpt["cached"]   = True
+    rpt["cachedAt"] = saved_at
+    rpt["savedAt"]  = saved_at
+    rpt["savedId"]  = int(row["id"])
+    return rpt
 
 
+# Back-compat alias used by ai_analyst.py routes and the orchestrator.
+get_cached_report = get_saved_single
+
+
+def save_single(ticker: str, user_id: str, report: dict, models: list[str],
+                sources: list[str], wall_clock_ms: int) -> int:
+    upper = _norm_ticker(ticker)
+    return _upsert_saved(
+        user_id, "single", upper, [upper], None,
+        report.get("verdict"), report.get("confidence"),
+        report.get("headline"), report,
+        models, sources, wall_clock_ms,
+    )
+
+
+# Internal alias used by the orchestrator. Kept under the old name so the
+# existing call site doesn't churn.
 def _save_report(ticker: str, user_id: str, report: dict, models: list[str],
                  sources: list[str], wall_clock_ms: int) -> None:
-    # PK is (ticker, run_date_ist, user_id) so different users can each have
-    # their own copy without overwriting one another.
+    save_single(ticker, user_id, report, models, sources, wall_clock_ms)
+
+
+def get_saved_pair(a: str, b: str, user_id: str) -> Optional[dict]:
+    key, _pair = _pair_scope_key(a, b)
     with _DB_LOCK, _conn() as c:
-        c.execute("""
-            INSERT OR REPLACE INTO ai_analyst_reports
-            (ticker, run_date_ist, user_id, report_json, models_used,
-             wall_clock_ms, sources_used, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            ticker.upper(), _today_ist(), user_id or "anonymous",
-            json.dumps(report), ",".join(models),
-            int(wall_clock_ms), ",".join(sources),
-            int(time.time()),
-        ))
+        row = c.execute(
+            "SELECT * FROM ai_analyst_saved "
+            "WHERE user_id=? AND scope_type='pair' AND scope_key=?",
+            (user_id or "anonymous", key),
+        ).fetchone()
+    return _row_to_full(row) if row else None
+
+
+def save_pair(user_id: str, a_report: dict, b_report: dict) -> dict:
+    a_t = _norm_ticker(a_report.get("ticker") or "")
+    b_t = _norm_ticker(b_report.get("ticker") or "")
+    key, pair = _pair_scope_key(a_t, b_t)
+    headline = (
+        f"{pair[0]} {a_report.get('verdict','?') if pair[0]==a_t else b_report.get('verdict','?')}"
+        f" · {pair[1]} {b_report.get('verdict','?') if pair[1]==b_t else a_report.get('verdict','?')}"
+    )
+    blob = {"a": a_report, "b": b_report}
+    new_id = _upsert_saved(
+        user_id, "pair", key, pair, None,
+        None, None, headline, blob, [], [], 0,
+    )
+    return {"id": new_id, "scopeKey": key, "tickers": pair}
+
+
+def get_saved_group(tickers: list[str], user_id: str) -> Optional[dict]:
+    key, _ = _group_scope_key(tickers)
+    with _DB_LOCK, _conn() as c:
+        row = c.execute(
+            "SELECT * FROM ai_analyst_saved "
+            "WHERE user_id=? AND scope_type='group' AND scope_key=?",
+            (user_id or "anonymous", key),
+        ).fetchone()
+    return _row_to_full(row) if row else None
+
+
+def save_group(user_id: str, tickers: list[str], items: list[dict],
+               name: Optional[str] = None) -> dict:
+    key, sorted_t = _group_scope_key(tickers)
+    counts = {"BUY": 0, "HOLD": 0, "SELL": 0,
+              "skipped": 0, "error": 0, "analyzed": 0, "cached": 0}
+    for it in items:
+        st = (it.get("status") or "").lower()
+        if st in ("analyzed", "cached", "saved"):
+            counts[st if st != "saved" else "cached"] = counts.get(
+                st if st != "saved" else "cached", 0) + 1
+            v = ((it.get("report") or {}).get("verdict") or "").upper()
+            if v in counts:
+                counts[v] += 1
+        elif st == "skipped":
+            counts["skipped"] += 1
+        elif st == "error":
+            counts["error"] += 1
+    parts = []
+    if counts["BUY"]:  parts.append(f"{counts['BUY']} BUY")
+    if counts["HOLD"]: parts.append(f"{counts['HOLD']} HOLD")
+    if counts["SELL"]: parts.append(f"{counts['SELL']} SELL")
+    if counts["skipped"]: parts.append(f"{counts['skipped']} skipped")
+    if counts["error"]:   parts.append(f"{counts['error']} failed")
+    headline = f"{len(sorted_t)} stocks · " + (" · ".join(parts) if parts else "no verdicts")
+    label = (name or "").strip() or None
+    blob = {"tickers": sorted_t, "name": label, "items": items, "counts": counts}
+    new_id = _upsert_saved(
+        user_id, "group", key, sorted_t, label,
+        None, None, headline, blob, [], [], 0,
+    )
+    return {"id": new_id, "scopeKey": key, "tickers": sorted_t, "label": label}
+
+
+def list_saved(user_id: str, scope: Optional[str] = None,
+               q: Optional[str] = None, limit: int = 50,
+               offset: int = 0) -> dict:
+    uid = user_id or "anonymous"
+    # Build the filter clause + its args once, then reuse for both the
+    # paginated SELECT and the unpaginated COUNT — this keeps the two
+    # queries provably consistent and avoids any args-slicing tricks.
+    where: list[str] = ["user_id = ?"]
+    filter_args: list = [uid]
+    if scope in ("single", "pair", "group"):
+        where.append("scope_type = ?")
+        filter_args.append(scope)
+    if q:
+        where.append("(UPPER(tickers_json) LIKE ? OR UPPER(COALESCE(label,'')) LIKE ?)")
+        like = f"%{q.upper()}%"
+        filter_args.extend([like, like])
+    where_sql = " AND ".join(where)
+
+    lim = max(1, min(200, int(limit)))
+    off = max(0, int(offset))
+    list_sql = (f"SELECT * FROM ai_analyst_saved WHERE {where_sql} "
+                f"ORDER BY updated_at DESC LIMIT ? OFFSET ?")
+    count_sql = f"SELECT COUNT(*) AS n FROM ai_analyst_saved WHERE {where_sql}"
+    with _DB_LOCK, _conn() as c:
+        rows = c.execute(list_sql, tuple(filter_args + [lim, off])).fetchall()
+        total = c.execute(count_sql, tuple(filter_args)).fetchone()["n"]
+    return {
+        "items": [_row_to_preview(r) for r in rows],
+        "total": int(total),
+        "limit": lim,
+        "offset": off,
+    }
+
+
+def get_saved_by_id(user_id: str, sid: int) -> Optional[dict]:
+    with _DB_LOCK, _conn() as c:
+        row = c.execute(
+            "SELECT * FROM ai_analyst_saved WHERE id=? AND user_id=?",
+            (int(sid), user_id or "anonymous"),
+        ).fetchone()
+    return _row_to_full(row) if row else None
+
+
+def delete_saved(user_id: str, sid: int) -> bool:
+    with _DB_LOCK, _conn() as c:
+        cur = c.execute(
+            "DELETE FROM ai_analyst_saved WHERE id=? AND user_id=?",
+            (int(sid), user_id or "anonymous"),
+        )
         c.commit()
+        return cur.rowcount > 0
 
 
 def admin_stats() -> dict:
-    """Aggregate metrics for admin dashboard."""
-    today = _today_ist()
-    week_ago = (datetime.now(tz=IST) - timedelta(days=7)).date().isoformat()
+    """Aggregate metrics for admin dashboard, computed off the saved store."""
+    week_ago_ts = int((datetime.now(tz=IST) - timedelta(days=7)).timestamp())
+    today_start_ts = int(datetime.now(tz=IST).replace(
+        hour=0, minute=0, second=0, microsecond=0).timestamp())
     with _DB_LOCK, _conn() as c:
         today_runs = c.execute(
-            "SELECT COUNT(*) AS n FROM ai_analyst_reports WHERE run_date_ist=?",
-            (today,),
+            "SELECT COUNT(*) AS n FROM ai_analyst_saved WHERE updated_at>=?",
+            (today_start_ts,),
         ).fetchone()["n"]
         week_runs = c.execute(
-            "SELECT COUNT(*) AS n FROM ai_analyst_reports WHERE run_date_ist>=?",
-            (week_ago,),
+            "SELECT COUNT(*) AS n FROM ai_analyst_saved WHERE updated_at>=?",
+            (week_ago_ts,),
         ).fetchone()["n"]
         avg_ms = c.execute(
-            "SELECT AVG(wall_clock_ms) AS avg FROM ai_analyst_reports WHERE run_date_ist>=?",
-            (week_ago,),
+            "SELECT AVG(wall_clock_ms) AS avg FROM ai_analyst_saved "
+            "WHERE updated_at>=? AND scope_type='single'",
+            (week_ago_ts,),
         ).fetchone()["avg"] or 0
         top = c.execute("""
-            SELECT ticker, COUNT(*) AS n FROM ai_analyst_reports
-            WHERE run_date_ist >= ?
-            GROUP BY ticker ORDER BY n DESC LIMIT 10
-        """, (week_ago,)).fetchall()
+            SELECT scope_key AS ticker, COUNT(*) AS n FROM ai_analyst_saved
+            WHERE updated_at >= ? AND scope_type='single'
+            GROUP BY scope_key ORDER BY n DESC LIMIT 10
+        """, (week_ago_ts,)).fetchall()
     return {
         "todayRuns":        int(today_runs),
         "weekRuns":         int(week_runs),
@@ -338,10 +614,12 @@ def admin_stats() -> dict:
 
 
 def flush_cache() -> int:
+    """Wipe both the legacy daily cache and the saved analyses store."""
     with _DB_LOCK, _conn() as c:
-        cur = c.execute("DELETE FROM ai_analyst_reports")
+        n = c.execute("DELETE FROM ai_analyst_reports").rowcount
+        n += c.execute("DELETE FROM ai_analyst_saved").rowcount
         c.commit()
-        return cur.rowcount
+        return n
 
 
 # ── Data gathering ────────────────────────────────────────────────────────────
@@ -858,7 +1136,8 @@ async def _run_analysis_impl(ticker: str, user_id: str,
 
 
 async def scan_watchlist(tickers: list, user_id: str,
-                         force_refresh: bool = False) -> AsyncGenerator[dict, None]:
+                         force_refresh: bool = False,
+                         group_name: Optional[str] = None) -> AsyncGenerator[dict, None]:
     """Scan a list of tickers sequentially.
 
     Strategy (cost-aware):
@@ -895,15 +1174,21 @@ async def scan_watchlist(tickers: list, user_id: str,
     yield _ev("start", total=len(queue), queued=queue)
 
     cached_n = analyzed_n = skipped_n = errors_n = 0
+    items_for_save: list[dict] = []
 
     for tk in queue:
-        # 1. Serve cached if available and caller hasn't asked for a refresh
+        # 1. Serve the user's saved report if present and the caller hasn't
+        #    asked for a refresh. Cache hits do NOT count against the quota.
         if not force_refresh:
-            cached = get_cached_report(tk, user_id)
-            if cached:
+            saved = get_saved_single(tk, user_id)
+            if saved:
                 cached_n += 1
-                yield _ev("item", ticker=tk, status="cached")
-                yield _ev("result", ticker=tk, status="cached", report=cached)
+                # Emit both "saved" (new) and the legacy "cached" string in
+                # the same event so older clients keep working.
+                yield _ev("item", ticker=tk, status="saved")
+                yield _ev("result", ticker=tk, status="saved", report=saved)
+                items_for_save.append({"ticker": tk, "status": "saved",
+                                       "report": saved})
                 continue
 
         # 2. Need a fresh run — check quota first (peek; reservation is atomic
@@ -913,6 +1198,8 @@ async def scan_watchlist(tickers: list, user_id: str,
             skipped_n += 1
             yield _ev("result", ticker=tk, status="skipped",
                       reason="quota_exhausted")
+            items_for_save.append({"ticker": tk, "status": "skipped",
+                                   "reason": "quota_exhausted"})
             continue
 
         yield _ev("item", ticker=tk, status="analyzing")
@@ -929,6 +1216,8 @@ async def scan_watchlist(tickers: list, user_id: str,
                     skipped_n += 1
                     yield _ev("result", ticker=tk, status="skipped",
                               reason=per_item_error)
+                    items_for_save.append({"ticker": tk, "status": "skipped",
+                                           "reason": per_item_error})
                     per_item_error = "__handled__"
                     break
         if per_item_error == "__handled__":
@@ -937,19 +1226,34 @@ async def scan_watchlist(tickers: list, user_id: str,
             errors_n += 1
             yield _ev("result", ticker=tk, status="error",
                       error=per_item_error)
+            items_for_save.append({"ticker": tk, "status": "error",
+                                   "error": per_item_error})
         elif final:
             analyzed_n += 1
             yield _ev("result", ticker=tk, status="analyzed", report=final)
+            items_for_save.append({"ticker": tk, "status": "analyzed",
+                                   "report": final})
         else:
             errors_n += 1
             yield _ev("result", ticker=tk, status="error",
                       error="no report produced")
+            items_for_save.append({"ticker": tk, "status": "error",
+                                   "error": "no report produced"})
+
+    # Persist the whole scan as a saved group entry (upsert per scope_key).
+    saved_meta = None
+    try:
+        saved_meta = save_group(user_id, queue, items_for_save,
+                                name=group_name)
+    except Exception as e:  # pragma: no cover
+        logger.warning("save_group failed: %s", e)
 
     yield _ev("done",
               processed=cached_n + analyzed_n + errors_n,
               cached=cached_n, analyzed=analyzed_n,
               skipped=skipped_n, errors=errors_n,
-              quota=get_quota(user_id))
+              quota=get_quota(user_id),
+              saved=saved_meta)
 
 
 async def run_analysis(ticker: str, user_id: str,
