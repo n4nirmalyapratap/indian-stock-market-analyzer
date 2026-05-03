@@ -2210,33 +2210,225 @@ NSE_BLOCKED_MSG = (
 )
 
 
-@router.get("/fo-ban")
-async def get_fo_ban():
-    cached = _cache_get("fo-ban", ttl=LONG_TTL)
+# ────────────────────────────────────────────────────────────────────────────
+# F&O Ban — MWPL Tracker (multi-source)
+#
+#   Primary  → NSE static CSV (`fo_secban.csv`) — authoritative list of
+#              symbols currently banned for fresh F&O positions. Rolling
+#              file updated daily by NSE (returns "NIL" on quiet days).
+#   Enrich   → scanx.trade ng-state JSON — gives previous-day & current-day
+#              MWPL %, LTP, change, etc. for every name with elevated open
+#              interest (i.e. the "high option activity" watch-list).
+#
+# A symbol is classified:
+#   • Banned          → present in NSE secban CSV (or current MWPL ≥ 95%)
+#   • Possible Entrant → 80% ≤ MWPL < 95%
+#   • Possible Exit   → was banned yesterday (prev MWPL ≥ 95) and now < 95
+#   • Watch           → otherwise
+#
+# Each source cached 30 min independently so a stale fallback can serve.
+# ────────────────────────────────────────────────────────────────────────────
+NSE_FO_SECBAN_URL = "https://nsearchives.nseindia.com/content/fo/fo_secban.csv"
+SCANX_FOBAN_URL   = "https://scanx.trade/insight/fno-ban-list"
+
+
+def _parse_nse_secban_csv(text: str) -> list[str]:
+    """NSE's fo_secban.csv format:
+       'Securities in Ban For Trade Date DD-MMM-YYYY: SYM1,SYM2,...'
+    or: 'Securities in Ban For Trade Date DD-MMM-YYYY: NIL'
+    Returns the list of currently banned symbols (uppercase)."""
+    if not text:
+        return []
+    body = text.strip()
+    if ":" in body:
+        body = body.split(":", 1)[1]
+    body = body.strip()
+    if not body or body.upper() == "NIL":
+        return []
+    return [s.strip().upper() for s in body.split(",") if s.strip()]
+
+
+async def _fetch_nse_secban() -> tuple[list[str], str | None]:
+    """Returns (banned_symbols, trade_date_iso_or_None). Cached 30 min."""
+    cache_key = "nse:fo-secban"
+    cached = _cache_get(cache_key, ttl=60 * 30)
+    if cached is not None:
+        return cached["symbols"], cached["date"]
+    symbols: list[str] = []
+    trade_date: str | None = None
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True,
+                                      headers=_NSE_CSV_HEADERS) as cli:
+            r = await cli.get(NSE_FO_SECBAN_URL)
+        if r.status_code == 200 and r.text:
+            symbols = _parse_nse_secban_csv(r.text)
+            # Pull the date out of the header line for response metadata.
+            import re as _re
+            m = _re.search(r"Trade Date\s+(\d{2}-[A-Z]{3}-\d{4})", r.text.upper())
+            if m:
+                trade_date = _nse_csv_date_to_iso(m.group(1))
+    except Exception as exc:
+        logger.warning("NSE secban fetch failed: %s", exc)
+    _cache_set(cache_key, {"symbols": symbols, "date": trade_date})
+    return symbols, trade_date
+
+
+def _parse_scanx_foban(html: str) -> list[dict]:
+    """Extract the F&O ban / high-option-activity list from scanx ng-state."""
+    m = _NG_STATE_RE.search(html)
+    if not m:
+        return []
+    try:
+        ng = json.loads(m.group(1))
+    except Exception:
+        return []
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for v in ng.values():
+        if not isinstance(v, dict):
+            continue
+        data = (v.get("b") or {}).get("data")
+        if not isinstance(data, list) or not data:
+            continue
+        first = data[0]
+        if not (isinstance(first, dict)
+                and "TotalOiPercentComapredMwpl" in first
+                and "Sym" in first):
+            continue
+        for d in data:
+            sym_check = (d.get("Sym") or "").strip().upper() if isinstance(d, dict) else ""
+            if sym_check and sym_check in seen:
+                continue
+            if sym_check:
+                seen.add(sym_check)
+            if not isinstance(d, dict):
+                continue
+            sym = (d.get("Sym") or "").strip().upper()
+            if not sym:
+                continue
+            try:
+                ltp     = float(d.get("Ltp") or 0.0)
+                change  = float(d.get("Pchange") or 0.0)
+                pct     = float(d.get("PPerchange") or 0.0)
+                cur_mw  = float(d.get("TotalOiPercentComapredMwpl") or 0.0)
+                prev_mw = float(d.get("PrevDayTotalOiPercentComapredMwpl") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            rows.append({
+                "symbol":         sym,
+                "name":           (d.get("DispSym") or sym).strip(),
+                "exchange":       (d.get("Exch") or "NSE").upper(),
+                "isin":           d.get("Isin"),
+                "ltp":            round(ltp, 2),
+                "change":         round(change, 2),
+                "changePct":      round(pct, 2),
+                "prevMwplPct":    round(prev_mw, 2),
+                "currentMwplPct": round(cur_mw, 2),
+                "logo":           DHAN_STOCK_LOGO.format(sym=sym),
+            })
+    return rows
+
+
+async def _fetch_scanx_foban() -> list[dict]:
+    cache_key = "scanx:fo-ban"
+    cached = _cache_get(cache_key, ttl=60 * 30)
     if cached is not None:
         return cached
+    rows: list[dict] = []
     try:
-        from ..services.nse_service import NseService
-        svc = NseService()
-        data = await svc.fetch_nse("/api/liveMwpl?index=&symbol=&segLink=", "fno_mwpl", ttl=300)
-    except Exception as e:
-        logger.warning("fo-ban fetch failed: %s", e)
-        data = None
-    if not data:
-        res = {"available": False, "message": NSE_BLOCKED_MSG, "items": []}
-        _cache_set("fo-ban", res)
-        return res
-    items = []
-    for r in data.get("data", []):
-        items.append({
-            "symbol": r.get("symbol"),
-            "name": r.get("symbol"),
-            "currentMwplPct": r.get("mwplPercentage"),
-            "status": "Possible Entrant" if (r.get("mwplPercentage") or 0) >= 95 else "Watch",
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True,
+                                      headers={"User-Agent": "Mozilla/5.0"}) as cli:
+            r = await cli.get(SCANX_FOBAN_URL)
+        r.raise_for_status()
+        rows = _parse_scanx_foban(r.text)
+    except Exception as exc:
+        logger.warning("scanx fo-ban fetch failed: %s", exc)
+    _cache_set(cache_key, rows)
+    return rows
+
+
+def _classify_foban(row: dict, banned_set: set[str]) -> str:
+    sym = row.get("symbol", "")
+    cur = row.get("currentMwplPct") or 0.0
+    prev = row.get("prevMwplPct") or 0.0
+    if sym in banned_set or cur >= 95:
+        return "Banned"
+    if prev >= 95 and cur < 95:
+        return "Possible Exit"
+    if cur >= 80:
+        return "Possible Entrant"
+    return "Watch"
+
+
+@router.get("/fo-ban")
+async def get_fo_ban(
+    status: str = "",   # "" | "Banned" | "Possible Entrant" | "Possible Exit" | "Watch"
+    search: str = "",
+    limit: int = 200,
+):
+    nse_task   = asyncio.create_task(_fetch_nse_secban())
+    scanx_task = asyncio.create_task(_fetch_scanx_foban())
+    (banned_syms, trade_date), scanx_rows = await asyncio.gather(nse_task, scanx_task)
+    banned_set = set(banned_syms)
+
+    sources: list[str] = []
+    if banned_syms or trade_date: sources.append("NSE")
+    if scanx_rows:                sources.append("scanx.trade")
+
+    # Build merged rows: every scanx row + any banned-only NSE symbols not in scanx.
+    merged: list[dict] = []
+    seen: set[str] = set()
+    for r in scanx_rows:
+        r2 = dict(r)
+        r2["status"] = _classify_foban(r2, banned_set)
+        merged.append(r2); seen.add(r2["symbol"])
+    for sym in banned_syms:
+        if sym in seen: continue
+        merged.append({
+            "symbol": sym, "name": sym, "exchange": "NSE",
+            "ltp": None, "change": None, "changePct": None,
+            "prevMwplPct": None, "currentMwplPct": None,
+            "logo": DHAN_STOCK_LOGO.format(sym=sym),
+            "status": "Banned",
         })
-    res = {"available": True, "items": items}
-    _cache_set("fo-ban", res)
-    return res
+
+    if not merged:
+        return {
+            "available": False,
+            "message": "F&O ban / MWPL feed temporarily unavailable.",
+            "items": [], "highlights": [],
+            "totalSymbols": 0, "matched": 0,
+            "bannedCount": 0, "tradeDate": trade_date,
+            "sources": sources,
+        }
+
+    # Sort by current MWPL desc (most-stressed names first).
+    merged.sort(key=lambda r: (r.get("currentMwplPct") or 0.0), reverse=True)
+
+    status_u = status.strip()
+    q = search.lower().strip()
+    def keep(r: dict) -> bool:
+        if status_u and r["status"] != status_u: return False
+        if q and not (q in (r.get("symbol") or "").lower()
+                      or q in (r.get("name") or "").lower()):
+            return False
+        return True
+
+    filtered = [r for r in merged if keep(r)]
+    items = filtered[:max(1, min(limit, 500))]
+    highlights = sorted(filtered, key=lambda r: (r.get("currentMwplPct") or 0.0),
+                        reverse=True)[:5]
+
+    return {
+        "available": True,
+        "items": items,
+        "highlights": highlights,
+        "totalSymbols": len(merged),
+        "matched": len(filtered),
+        "bannedCount": sum(1 for r in merged if r["status"] == "Banned"),
+        "tradeDate": trade_date,
+        "sources": sources,
+    }
 
 
 @router.get("/top-deliveries")
