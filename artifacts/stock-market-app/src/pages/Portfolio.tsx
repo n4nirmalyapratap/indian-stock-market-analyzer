@@ -961,7 +961,9 @@ function PerformanceTab({ pid }: { pid: string }) {
                 <Tooltip formatter={(v: any) => `₹${fmtINR(Number(v))}`} />
                 <Legend />
                 <Area type="monotone" dataKey="equity"    name="Portfolio" stroke="#6366f1" fill="url(#eqGrad)" />
-                <Line type="monotone" dataKey="benchmark" name={q.data?.benchmark ?? benchmark} stroke="#f59e0b" dot={false} strokeDasharray="4 4" />
+                <Line type="monotone" dataKey="benchmark" name={q.data?.benchmark ?? benchmark}
+                      stroke="#f59e0b" dot={false} strokeDasharray="4 4"
+                      connectNulls strokeWidth={2} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
