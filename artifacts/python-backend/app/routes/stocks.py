@@ -488,8 +488,24 @@ async def get_technical_summary(symbol: str, interval: str = "1d"):
         ma_sell    = sum(1 for r in ma_rows if r["action"] == "SELL")
         ma_neutral = sum(1 for r in ma_rows if r["action"] == "NEUTRAL")
 
-        # ── Pivots (based on previous candle) ──────────────────────────────
-        prev = df.iloc[-2] if len(df) >= 2 else df.iloc[-1]
+        # ── Pivots (based on previous SEALED candle) ───────────────────────
+        # Pick the most recent SEALED daily bar:
+        #   • Market OPEN/PRE_OPEN: iloc[-1] is today's unsealed intraday
+        #     candle — step back to iloc[-2].
+        #   • Market CLOSED + eod_sealed: iloc[-1] IS today's sealed close,
+        #     use it directly.
+        #   • Market CLOSED + NOT eod_sealed (rare — intraday cache before
+        #     today's EOD lands): iloc[-1] is still unsealed, step back.
+        # Previously we always took iloc[-2], which silently turned
+        # "yesterday's pivots" into "two-days-ago's pivots" every EOD.
+        last_is_unsealed = (market_state in ("OPEN", "PRE_OPEN")) or (not eod_sealed)
+        if last_is_unsealed and len(df) >= 2:
+            prev = df.iloc[-2]
+        elif len(df) >= 1:
+            prev = df.iloc[-1]
+        else:
+            return JSONResponse(status_code=404,
+                content={"error": f"No price history for {symbol_upper}"})
         H, L, C = float(prev["High"]), float(prev["Low"]), float(prev["Close"])
         O_prev = float(prev["Open"])
 

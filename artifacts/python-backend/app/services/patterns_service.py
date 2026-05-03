@@ -289,8 +289,23 @@ class PatternsService:
         add = out.append
 
         def mk(pattern, pattern_type, signal, base_conf, description, category,
-               *, vol_w=1.0, body_w=1.0, extra=0.0, tgt=None, sl=None):
+               *, vol_w=1.0, body_w=1.0, extra=0.0,
+               target_r: float = 2.0, stop_r: float = 1.0,
+               tgt=None, sl=None):
+            # Targets & stops are ATR-based (volatility-scaled) by default —
+            # `target_r` and `stop_r` are R-multiples on the 14-bar ATR.
+            # E.g. target_r=2.0, stop_r=1.0 → 2:1 reward:risk on this
+            # symbol's own volatility, which is honest about per-stock risk
+            # rather than a hardcoded "price * 1.04". Callers can still
+            # pass explicit tgt/sl to override (used by tests).
+            # WAIT signals get no target/stop — they're "watch, don't act".
             conf = _adj_conf(base_conf, factors, vol_weight=vol_w, body_weight=body_w, extra=extra)
+            if signal == "CALL":
+                if tgt is None: tgt = price + atr * target_r
+                if sl  is None: sl  = price - atr * stop_r
+            elif signal == "PUT":
+                if tgt is None: tgt = price - atr * target_r
+                if sl  is None: sl  = price + atr * stop_r
             return _mk(symbol, universe, pattern, pattern_type, signal, conf, price,
                        description, category, tgt, sl, scanned_at_iso=scanned_at_iso)
 
@@ -302,14 +317,14 @@ class PatternsService:
                 "Long lower wick signals strong buying pressure — bullish reversal likely",
                 "Candlestick",
                 extra=min(8.0, (50 - lr) / 50 * 10) + min(4.0, (wick_dom - 2) * 1.5),
-                tgt=price * 1.04, sl=price - atr))
+                target_r=2.0, stop_r=1.0))
 
         if _upper(c0) > 2 * _body(c0) and _lower(c0) < 0.5 * _body(c0) and lr < 45 and _is_bull(c0):
             add(mk("Inverted Hammer", "BULLISH", "CALL", 62,
                 "Buyers pushed up after a downtrend — potential bullish reversal",
                 "Candlestick",
                 extra=min(6.0, (45 - lr) / 45 * 8),
-                tgt=price * 1.03, sl=price - atr))
+                target_r=1.5, stop_r=1.0))
 
         if _upper(c0) > 2 * _body(c0) and _lower(c0) < 0.5 * _body(c0) and lr > 55:
             wick_dom = _upper(c0) / max(_body(c0), 1e-9)
@@ -317,14 +332,14 @@ class PatternsService:
                 "Long upper wick after rally — sellers overwhelmed buyers, bearish reversal signal",
                 "Candlestick",
                 extra=min(8.0, (lr - 55) / 45 * 10) + min(4.0, (wick_dom - 2) * 1.5),
-                sl=price + atr))
+                target_r=2.0, stop_r=1.0))
 
         if _lower(c0) > 2 * _body(c0) and _upper(c0) < 0.5 * _body(c0) and lr > 60 and _is_bear(c0):
             add(mk("Hanging Man", "BEARISH", "PUT", 65,
                 "Hammer shape at the top of an uptrend — distribution signal, bearish reversal",
                 "Candlestick",
                 extra=min(6.0, (lr - 60) / 40 * 8),
-                sl=price + atr))
+                target_r=2.0, stop_r=1.0))
 
         if _is_doji(c0) and _range(c0) > atr * 0.5:
             # Doji is indecision — confidence shouldn't be inflated by body strength.
@@ -336,12 +351,12 @@ class PatternsService:
             add(mk("Dragonfly Doji", "BULLISH", "CALL", 68,
                 "Long lower wick, no upper wick — buyers strongly rejected the lows, bullish",
                 "Candlestick", body_w=0.0,
-                tgt=price * 1.03, sl=price - atr))
+                target_r=1.5, stop_r=1.0))
 
         if _is_doji(c0) and _upper(c0) > _range(c0) * 0.7:
             add(mk("Gravestone Doji", "BEARISH", "PUT", 68,
                 "Long upper wick, no lower wick — sellers pushed price back from highs, bearish",
-                "Candlestick", body_w=0.0, sl=price + atr))
+                "Candlestick", body_w=0.0, target_r=2.0, stop_r=1.0))
 
         if not _is_doji(c0) and _body(c0) < _range(c0) * 0.3 and _lower(c0) > _body(c0) and _upper(c0) > _body(c0):
             add(mk("Spinning Top", "NEUTRAL", "WAIT", 48,
@@ -353,12 +368,12 @@ class PatternsService:
             add(mk("Bullish Marubozu", "BULLISH", "CALL", 72,
                 "Full bull candle, no wicks — complete buyer control, strong momentum",
                 "Candlestick", body_w=1.5, vol_w=1.2,
-                tgt=price * 1.03, sl=price - atr))
+                target_r=1.5, stop_r=1.0))
 
         if _is_bear(c0) and _body(c0) > _range(c0) * 0.9 and _body(c0) > atr * 1.2:
             add(mk("Bearish Marubozu", "BEARISH", "PUT", 72,
                 "Full bear candle, no wicks — complete seller control, strong downward momentum",
-                "Candlestick", body_w=1.5, vol_w=1.2, sl=price + atr))
+                "Candlestick", body_w=1.5, vol_w=1.2, target_r=2.0, stop_r=1.0))
 
         if c0["high"] < c1["high"] and c0["low"] > c1["low"] and _body(c0) < _body(c1) * 0.6:
             add(mk("Inside Bar", "NEUTRAL", "WAIT", 55,
@@ -378,7 +393,7 @@ class PatternsService:
                 "Green candle fully engulfs previous red candle — strong bullish reversal",
                 "Two-Candle", vol_w=1.3,
                 extra=min(6.0, (engulf_ratio - 1.0) * 4),
-                tgt=price * 1.04, sl=price - atr))
+                target_r=2.0, stop_r=1.0))
 
         if _is_bull(c1) and _is_bear(c0) and c0["open"] > c1["close"] and c0["close"] < c1["open"]:
             engulf_ratio = _body(c0) / max(_body(c1), 1e-9)
@@ -386,40 +401,40 @@ class PatternsService:
                 "Red candle fully engulfs previous green candle — strong bearish reversal",
                 "Two-Candle", vol_w=1.3,
                 extra=min(6.0, (engulf_ratio - 1.0) * 4),
-                sl=price + atr))
+                target_r=2.0, stop_r=1.0))
 
         if _is_bear(c1) and _is_bull(c0) and c0["open"] > c1["close"] and c0["close"] < c1["open"] and _body(c0) < _body(c1) * 0.6:
             add(mk("Bullish Harami", "BULLISH", "CALL", 62,
                 "Small green candle inside large red candle — bearish momentum slowing",
                 "Two-Candle", body_w=0.5,
-                tgt=price * 1.03, sl=price - atr))
+                target_r=1.5, stop_r=1.0))
 
         if _is_bull(c1) and _is_bear(c0) and c0["open"] < c1["close"] and c0["close"] > c1["open"] and _body(c0) < _body(c1) * 0.6:
             add(mk("Bearish Harami", "BEARISH", "PUT", 62,
                 "Small red candle inside large green candle — bullish momentum slowing",
-                "Two-Candle", body_w=0.5, sl=price + atr))
+                "Two-Candle", body_w=0.5, target_r=2.0, stop_r=1.0))
 
         if _is_bear(c1) and _is_bull(c0) and c0["open"] < c1["low"] and c0["close"] > _mid(c1) and c0["close"] < c1["open"]:
             add(mk("Piercing Line", "BULLISH", "CALL", 68,
                 "Green candle opens below prior low but closes above its midpoint — bullish reversal",
                 "Two-Candle", vol_w=1.2,
-                tgt=price * 1.03, sl=price - atr))
+                target_r=1.5, stop_r=1.0))
 
         if _is_bull(c1) and _is_bear(c0) and c0["open"] > c1["high"] and c0["close"] < _mid(c1) and c0["close"] > c1["open"]:
             add(mk("Dark Cloud Cover", "BEARISH", "PUT", 68,
                 "Red candle opens above prior high but closes below its midpoint — bearish reversal",
-                "Two-Candle", vol_w=1.2, sl=price + atr))
+                "Two-Candle", vol_w=1.2, target_r=2.0, stop_r=1.0))
 
         if abs(c0["low"] - c1["low"]) / price < 0.003 and _is_bear(c1) and _is_bull(c0) and lr < 55:
             add(mk("Tweezer Bottom", "BULLISH", "CALL", 65,
                 "Two candles share the same low — strong support confirmed, bullish reversal",
                 "Two-Candle", extra=min(4.0, (55 - lr) / 55 * 6),
-                tgt=price * 1.03, sl=price - atr))
+                target_r=1.5, stop_r=1.0))
 
         if abs(c0["high"] - c1["high"]) / price < 0.003 and _is_bull(c1) and _is_bear(c0) and lr > 55:
             add(mk("Tweezer Top", "BEARISH", "PUT", 65,
                 "Two candles share the same high — strong resistance confirmed, bearish reversal",
-                "Two-Candle", extra=min(4.0, (lr - 55) / 45 * 6), sl=price + atr))
+                "Two-Candle", extra=min(4.0, (lr - 55) / 45 * 6), target_r=2.0, stop_r=1.0))
 
         # ── Three candle ─────────────────────────────────────────────────────
         if _is_bear(c2) and _body(c1) < _body(c2) * 0.4 and _is_bull(c0) and c0["close"] > _mid(c2) and lr < 55:
@@ -427,25 +442,25 @@ class PatternsService:
                 "Three-candle bullish reversal: large red → small indecision → strong green",
                 "Three-Candle", vol_w=1.3,
                 extra=min(5.0, (55 - lr) / 55 * 8),
-                tgt=price * 1.05, sl=price - atr * 1.5))
+                target_r=2.5, stop_r=1.5))
 
         if _is_bull(c2) and _body(c1) < _body(c2) * 0.4 and _is_bear(c0) and c0["close"] < _mid(c2) and lr > 55:
             add(mk("Evening Star", "BEARISH", "PUT", 78,
                 "Three-candle bearish reversal: large green → small indecision → strong red",
                 "Three-Candle", vol_w=1.3,
                 extra=min(5.0, (lr - 55) / 45 * 8),
-                sl=price + atr * 1.5))
+                target_r=2.5, stop_r=1.5))
 
         if _is_bear(c2) and _is_doji(c1) and _is_bull(c0) and c0["close"] > _mid(c2):
             add(mk("Morning Doji Star", "BULLISH", "CALL", 80,
                 "Strongest bullish reversal: bearish candle → doji → strong green breakout",
                 "Three-Candle", vol_w=1.3,
-                tgt=price * 1.05, sl=price - atr * 1.5))
+                target_r=2.5, stop_r=1.5))
 
         if _is_bull(c2) and _is_doji(c1) and _is_bear(c0) and c0["close"] < _mid(c2):
             add(mk("Evening Doji Star", "BEARISH", "PUT", 80,
                 "Strongest bearish reversal: bullish candle → doji → strong red breakdown",
-                "Three-Candle", vol_w=1.3, sl=price + atr * 1.5))
+                "Three-Candle", vol_w=1.3, target_r=2.5, stop_r=1.5))
 
         if (_is_bull(c2) and _is_bull(c1) and _is_bull(c0) and
                 c0["close"] > c1["close"] and c1["close"] > c2["close"] and
@@ -453,14 +468,14 @@ class PatternsService:
             add(mk("Three White Soldiers", "BULLISH", "CALL", 76,
                 "Three consecutive strong green candles — relentless buying, strong bullish trend",
                 "Three-Candle", body_w=1.3, vol_w=1.2,
-                tgt=price * 1.05, sl=price - atr * 2))
+                target_r=2.5, stop_r=2.0))
 
         if (_is_bear(c2) and _is_bear(c1) and _is_bear(c0) and
                 c0["close"] < c1["close"] and c1["close"] < c2["close"] and
                 _body(c0) > atr * 0.7 and _body(c1) > atr * 0.7 and _body(c2) > atr * 0.7):
             add(mk("Three Black Crows", "BEARISH", "PUT", 76,
                 "Three consecutive strong red candles — relentless selling, strong bearish trend",
-                "Three-Candle", body_w=1.3, vol_w=1.2, sl=price + atr * 2))
+                "Three-Candle", body_w=1.3, vol_w=1.2, target_r=2.5, stop_r=2.0))
 
         # ── Indicator patterns ────────────────────────────────────────────────
         if lr < 35 and price > le50:
@@ -470,7 +485,7 @@ class PatternsService:
                 f"RSI {lr:.1f} — deeply oversold while price holds EMA50 support. Bounce likely",
                 "Indicator", body_w=0.3,
                 extra=min(10.0, (35 - lr) / 35 * 14),
-                tgt=price * 1.04, sl=price - atr))
+                target_r=2.0, stop_r=1.0))
 
         if len(rsi_arr) >= 10:
             price_low1 = min(closes[-10:-5])
@@ -484,14 +499,14 @@ class PatternsService:
                     "Price making lower lows but RSI making higher lows — hidden buying strength",
                     "Indicator", body_w=0.3,
                     extra=min(8.0, rsi_gap * 0.8),
-                    tgt=price * 1.05, sl=price - atr * 1.5))
+                    target_r=2.5, stop_r=1.5))
 
         if lr > 72:
             add(mk("RSI Overbought", "BEARISH", "PUT", 60,
                 f"RSI {lr:.1f} — extreme overbought zone. Correction likely",
                 "Indicator", body_w=0.3,
                 extra=min(10.0, (lr - 72) / 28 * 14),
-                sl=price + atr))
+                target_r=2.0, stop_r=1.0))
 
         if len(rsi_arr) >= 10:
             price_high1 = max(closes[-10:-5])
@@ -504,7 +519,7 @@ class PatternsService:
                     "Price making higher highs but RSI making lower highs — weakening momentum",
                     "Indicator", body_w=0.3,
                     extra=min(8.0, rsi_gap * 0.8),
-                    sl=price + atr * 1.5))
+                    target_r=2.5, stop_r=1.5))
 
         if pm < ps and lm > ls:
             # MACD crossover strength = histogram magnitude.
@@ -512,48 +527,48 @@ class PatternsService:
                 "MACD line just crossed above Signal line — buy signal, momentum turning bullish",
                 "Indicator", body_w=0.3, vol_w=1.2,
                 extra=min(6.0, abs(lm - ls) / max(price * 0.005, 1e-9)),
-                tgt=price * 1.04, sl=price - atr))
+                target_r=2.0, stop_r=1.0))
 
         if pm > ps and lm < ls:
             add(mk("MACD Bearish Crossover", "BEARISH", "PUT", 70,
                 "MACD line just crossed below Signal line — sell signal, momentum turning bearish",
                 "Indicator", body_w=0.3, vol_w=1.2,
                 extra=min(6.0, abs(lm - ls) / max(price * 0.005, 1e-9)),
-                sl=price + atr))
+                target_r=2.0, stop_r=1.0))
 
         if lh > 0 and lh > ph and ph != 0 and lh > ph * 1.3:
             add(mk("MACD Histogram Expanding (Bull)", "BULLISH", "CALL", 64,
                 "MACD histogram growing rapidly in positive zone — bullish momentum accelerating",
                 "Indicator", body_w=0.3,
-                tgt=price * 1.03, sl=price - atr))
+                target_r=1.5, stop_r=1.0))
 
         if lh < 0 and ph != 0 and abs(lh) > abs(ph) * 1.3:
             add(mk("MACD Histogram Expanding (Bear)", "BEARISH", "PUT", 64,
                 "MACD histogram deepening in negative zone — bearish momentum accelerating",
-                "Indicator", body_w=0.3, sl=price + atr))
+                "Indicator", body_w=0.3, target_r=2.0, stop_r=1.0))
 
         if pe20 < pe50 and le20 > le50:
             add(mk("EMA Golden Cross (20/50)", "BULLISH", "CALL", 78,
                 "EMA20 just crossed above EMA50 — medium-term trend turning bullish",
                 "Indicator", body_w=0.3, vol_w=1.3,
-                tgt=price * 1.05, sl=price - atr * 1.5))
+                target_r=2.5, stop_r=1.5))
 
         if pe20 > pe50 and le20 < le50:
             add(mk("EMA Death Cross (20/50)", "BEARISH", "PUT", 78,
                 "EMA20 just crossed below EMA50 — medium-term trend turning bearish",
                 "Indicator", body_w=0.3, vol_w=1.3,
-                sl=price + atr * 1.5))
+                target_r=2.5, stop_r=1.5))
 
         if len(ema200) >= 2 and pe50 < pe200 and le50 > le200:
             add(mk("EMA Golden Cross (50/200)", "BULLISH", "CALL", 84,
                 "EMA50 just crossed above EMA200 — major trend turning bullish (Golden Cross)",
                 "Indicator", body_w=0.3, vol_w=1.3,
-                tgt=price * 1.08, sl=price - atr * 2))
+                target_r=4.0, stop_r=2.0))
 
         if len(ema200) >= 2 and pe50 > pe200 and le50 < le200:
             add(mk("EMA Death Cross (50/200)", "BEARISH", "PUT", 84,
                 "EMA50 just crossed below EMA200 — major trend turning bearish (Death Cross)",
                 "Indicator", body_w=0.3, vol_w=1.3,
-                sl=price + atr * 2))
+                target_r=2.5, stop_r=2.0))
 
         return out
