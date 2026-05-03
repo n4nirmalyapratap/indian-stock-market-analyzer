@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import * as echarts from "echarts";
-import { calcEMA, calcSMA, calcRSI, calcMACD, calcBollingerBands } from "@/lib/indicators";
+import {
+  calcEMA, calcSMA, calcWMA, calcHMA, calcVWMA, calcDEMA, calcTEMA,
+  calcRSI, calcMACD, calcBollingerBands, calcDonchian, calcKeltner,
+  calcATR, calcPSAR, calcSupertrend,
+  calcStochastic, calcStochRSI, calcCCI, calcWilliamsR, calcMFI,
+  calcOBV, calcROC, calcAO, calcCMF, calcTRIX, calcADX,
+} from "@/lib/indicators";
 import { fetchApi } from "@/lib/api";
 
 export type DrawingTool =
@@ -40,9 +46,8 @@ interface Props {
   drawingTool: DrawingTool;
   chartType: ChartType;
   indicators: Set<string>;
-  showRSI: boolean;
-  showMACD: boolean;
   isActive: boolean;
+  onIndicatorRemove?: (key: string) => void;
   drawings: Drawing[];
   onDrawingAdd: (d: Drawing) => void;
   onDrawingErase: (id: string) => void;
@@ -77,14 +82,230 @@ function getThemeColors(theme: "dark" | "light") {
   };
 }
 
-const IND_META: Record<string, { label: string; color: string }> = {
-  ema9:   { label: "EMA 9",   color: "#f59e0b" },
-  ema21:  { label: "EMA 21",  color: "#6366f1" },
-  ema50:  { label: "EMA 50",  color: "#10b981" },
-  ema200: { label: "EMA 200", color: "#ef4444" },
-  sma50:  { label: "SMA 50",  color: "#a78bfa" },
-  bb:     { label: "BB (20)", color: "#3b82f6" },
-};
+// ─── Indicator catalog ──────────────────────────────────────────────────────
+// One entry per supported indicator. `compute()` returns ECharts series specs
+// (without xAxis/yAxisIndex — those are assigned dynamically by the chart
+// renderer) plus a `cache` map of named series for pill-value lookup.
+
+export interface IndicatorInput {
+  highs: number[]; lows: number[]; closes: number[]; volumes: number[];
+}
+
+export interface IndicatorComputed {
+  // ECharts series specs minus xAxis/yAxisIndex (added by renderer)
+  series: Record<string, any>[];
+  // Named cached series for pill value display (key -> array)
+  cache: Record<string, (number | null)[]>;
+}
+
+export interface IndicatorDef {
+  key: string;
+  label: string;
+  pillColor: string;
+  group: "Moving Averages" | "Channels & Bands" | "Trend / Volatility" | "Oscillators" | "Volume";
+  paneOwn: boolean;        // true = own sub-pane (oscillator); false = overlay on price
+  needsVolume?: boolean;   // skip if symbol has zero volume (e.g. some indices)
+  yMin?: number; yMax?: number;
+  guides?: { value: number; color: string }[];
+  pillSeries?: string;     // cache key to display in pill (default "main")
+  pillDigits?: number;     // decimals for pill (default 2 for oscillators, price-aware otherwise)
+  compute(in_: IndicatorInput): IndicatorComputed;
+}
+
+// Helper for a simple single-line overlay
+function lineSeries(name: string, data: (number | null)[], color: string, width = 1.5, dashed = false) {
+  return {
+    name, type: "line", data, showSymbol: false, connectNulls: false,
+    lineStyle: { color, width, ...(dashed ? { type: "dashed" } : {}) },
+  };
+}
+
+const IND_CATALOG: IndicatorDef[] = [
+  // ─── Moving Averages ─────────────────────────────────────────────────────
+  { key: "ema9",   label: "EMA 9",   pillColor: "#f59e0b", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcEMA(closes, 9);   return { series: [lineSeries("EMA 9",   v, "#f59e0b")], cache: { main: v } }; } },
+  { key: "ema21",  label: "EMA 21",  pillColor: "#6366f1", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcEMA(closes, 21);  return { series: [lineSeries("EMA 21",  v, "#6366f1")], cache: { main: v } }; } },
+  { key: "ema50",  label: "EMA 50",  pillColor: "#10b981", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcEMA(closes, 50);  return { series: [lineSeries("EMA 50",  v, "#10b981")], cache: { main: v } }; } },
+  { key: "ema200", label: "EMA 200", pillColor: "#ef4444", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcEMA(closes, 200); return { series: [lineSeries("EMA 200", v, "#ef4444")], cache: { main: v } }; } },
+  { key: "sma20",  label: "SMA 20",  pillColor: "#22d3ee", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcSMA(closes, 20);  return { series: [lineSeries("SMA 20",  v, "#22d3ee")], cache: { main: v } }; } },
+  { key: "sma50",  label: "SMA 50",  pillColor: "#a78bfa", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcSMA(closes, 50);  return { series: [lineSeries("SMA 50",  v, "#a78bfa")], cache: { main: v } }; } },
+  { key: "wma20",  label: "WMA 20",  pillColor: "#facc15", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcWMA(closes, 20);  return { series: [lineSeries("WMA 20",  v, "#facc15")], cache: { main: v } }; } },
+  { key: "hma20",  label: "HMA 20",  pillColor: "#a3e635", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcHMA(closes, 20);  return { series: [lineSeries("HMA 20",  v, "#a3e635")], cache: { main: v } }; } },
+  { key: "vwma20", label: "VWMA 20", pillColor: "#fb7185", group: "Moving Averages", paneOwn: false, needsVolume: true,
+    compute: ({ closes, volumes }) => { const v = calcVWMA(closes, volumes, 20); return { series: [lineSeries("VWMA 20", v, "#fb7185")], cache: { main: v } }; } },
+  { key: "dema21", label: "DEMA 21", pillColor: "#f472b6", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcDEMA(closes, 21); return { series: [lineSeries("DEMA 21", v, "#f472b6")], cache: { main: v } }; } },
+  { key: "tema21", label: "TEMA 21", pillColor: "#fdba74", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcTEMA(closes, 21); return { series: [lineSeries("TEMA 21", v, "#fdba74")], cache: { main: v } }; } },
+
+  // ─── Channels & Bands ────────────────────────────────────────────────────
+  { key: "bb", label: "BB (20,2)", pillColor: "#3b82f6", group: "Channels & Bands", paneOwn: false, pillSeries: "middle",
+    compute: ({ closes }) => {
+      const b = calcBollingerBands(closes);
+      return {
+        series: [
+          lineSeries("BB+", b.upper,  "#3b82f6", 1, true),
+          lineSeries("BBm", b.middle, "#64748b", 1, true),
+          lineSeries("BB-", b.lower,  "#3b82f6", 1, true),
+        ],
+        cache: { upper: b.upper, middle: b.middle, lower: b.lower },
+      };
+    } },
+  { key: "donchian", label: "Donchian (20)", pillColor: "#0ea5e9", group: "Channels & Bands", paneOwn: false, pillSeries: "middle",
+    compute: ({ highs, lows }) => {
+      const d = calcDonchian(highs, lows);
+      return {
+        series: [
+          lineSeries("DC+", d.upper,  "#0ea5e9", 1, true),
+          lineSeries("DCm", d.middle, "#64748b", 1, true),
+          lineSeries("DC-", d.lower,  "#0ea5e9", 1, true),
+        ],
+        cache: { upper: d.upper, middle: d.middle, lower: d.lower },
+      };
+    } },
+  { key: "keltner", label: "Keltner (20)", pillColor: "#22c55e", group: "Channels & Bands", paneOwn: false, pillSeries: "middle",
+    compute: ({ highs, lows, closes }) => {
+      const k = calcKeltner(highs, lows, closes);
+      return {
+        series: [
+          lineSeries("KC+", k.upper,  "#22c55e", 1, true),
+          lineSeries("KCm", k.middle, "#64748b", 1, true),
+          lineSeries("KC-", k.lower,  "#22c55e", 1, true),
+        ],
+        cache: { upper: k.upper, middle: k.middle, lower: k.lower },
+      };
+    } },
+
+  // ─── Trend overlays ──────────────────────────────────────────────────────
+  { key: "psar", label: "PSAR", pillColor: "#eab308", group: "Trend / Volatility", paneOwn: false,
+    compute: ({ highs, lows }) => {
+      const v = calcPSAR(highs, lows);
+      return {
+        // Plot SAR dots — small scatter via "line" with symbols only
+        series: [{
+          name: "PSAR", type: "scatter", data: v.map(p => p === null ? "-" : p),
+          symbolSize: 3, itemStyle: { color: "#eab308" },
+        }],
+        cache: { main: v },
+      };
+    } },
+  { key: "supertrend", label: "Supertrend (10,3)", pillColor: "#a855f7", group: "Trend / Volatility", paneOwn: false,
+    compute: ({ highs, lows, closes }) => {
+      const st = calcSupertrend(highs, lows, closes, 10, 3);
+      // Split into up/down line segments so trend reversal isn't a single zig-zag
+      const upArr:   (number | null)[] = st.trend.map((v, i) => st.isUp[i] === true  ? v : null);
+      const downArr: (number | null)[] = st.trend.map((v, i) => st.isUp[i] === false ? v : null);
+      return {
+        series: [
+          lineSeries("ST↑", upArr,   "#22c55e", 1.8),
+          lineSeries("ST↓", downArr, "#ef4444", 1.8),
+        ],
+        cache: { main: st.trend },
+      };
+    } },
+
+  // ─── Oscillators (each gets own sub-pane) ────────────────────────────────
+  { key: "rsi", label: "RSI (14)", pillColor: "#f59e0b", group: "Oscillators", paneOwn: true,
+    yMin: 0, yMax: 100, guides: [{ value: 70, color: "rgba(239,68,68,0.35)" }, { value: 30, color: "rgba(38,166,154,0.35)" }],
+    compute: ({ closes }) => { const v = calcRSI(closes); return { series: [lineSeries("RSI", v, "#f59e0b")], cache: { main: v } }; } },
+  { key: "macd", label: "MACD (12,26,9)", pillColor: "#2962ff", group: "Oscillators", paneOwn: true, pillSeries: "macd",
+    compute: ({ closes }) => {
+      const m = calcMACD(closes);
+      return {
+        series: [
+          lineSeries("MACD",   m.macd,   "#2962ff", 1.3),
+          lineSeries("Signal", m.signal, "#ff6d00", 1.3),
+          { name: "Hist", type: "bar", barMaxWidth: 5,
+            data: m.histogram.map(v => ({ value: v, itemStyle: { color: (v ?? 0) >= 0 ? "rgba(38,166,154,0.7)" : "rgba(239,83,80,0.7)" } })) },
+        ],
+        cache: { macd: m.macd, signal: m.signal, hist: m.histogram },
+      };
+    } },
+  { key: "stoch", label: "Stoch (14,3)", pillColor: "#06b6d4", group: "Oscillators", paneOwn: true,
+    yMin: 0, yMax: 100, guides: [{ value: 80, color: "rgba(239,68,68,0.35)" }, { value: 20, color: "rgba(38,166,154,0.35)" }],
+    pillSeries: "k",
+    compute: ({ highs, lows, closes }) => {
+      const s = calcStochastic(highs, lows, closes);
+      return {
+        series: [lineSeries("%K", s.k, "#06b6d4", 1.4), lineSeries("%D", s.d, "#f97316", 1.2)],
+        cache: { k: s.k, d: s.d },
+      };
+    } },
+  { key: "stochrsi", label: "Stoch RSI", pillColor: "#84cc16", group: "Oscillators", paneOwn: true,
+    yMin: 0, yMax: 100, guides: [{ value: 80, color: "rgba(239,68,68,0.35)" }, { value: 20, color: "rgba(38,166,154,0.35)" }],
+    pillSeries: "k",
+    compute: ({ closes }) => {
+      const s = calcStochRSI(closes);
+      return {
+        series: [lineSeries("%K", s.k, "#84cc16", 1.4), lineSeries("%D", s.d, "#f97316", 1.2)],
+        cache: { k: s.k, d: s.d },
+      };
+    } },
+  { key: "cci", label: "CCI (20)", pillColor: "#c084fc", group: "Oscillators", paneOwn: true,
+    guides: [{ value: 100, color: "rgba(239,68,68,0.35)" }, { value: -100, color: "rgba(38,166,154,0.35)" }, { value: 0, color: "rgba(120,123,134,0.35)" }],
+    compute: ({ highs, lows, closes }) => { const v = calcCCI(highs, lows, closes); return { series: [lineSeries("CCI", v, "#c084fc")], cache: { main: v } }; } },
+  { key: "willr", label: "Williams %R", pillColor: "#fb923c", group: "Oscillators", paneOwn: true,
+    yMin: -100, yMax: 0, guides: [{ value: -20, color: "rgba(239,68,68,0.35)" }, { value: -80, color: "rgba(38,166,154,0.35)" }],
+    compute: ({ highs, lows, closes }) => { const v = calcWilliamsR(highs, lows, closes); return { series: [lineSeries("Wm%R", v, "#fb923c")], cache: { main: v } }; } },
+  { key: "atr", label: "ATR (14)", pillColor: "#94a3b8", group: "Oscillators", paneOwn: true,
+    compute: ({ highs, lows, closes }) => { const v = calcATR(highs, lows, closes); return { series: [lineSeries("ATR", v, "#94a3b8")], cache: { main: v } }; } },
+  { key: "adx", label: "ADX (14)", pillColor: "#f43f5e", group: "Oscillators", paneOwn: true,
+    yMin: 0, yMax: 100, guides: [{ value: 25, color: "rgba(120,123,134,0.35)" }],
+    pillSeries: "adx",
+    compute: ({ highs, lows, closes }) => {
+      const a = calcADX(highs, lows, closes);
+      return {
+        series: [
+          lineSeries("ADX", a.adx, "#f43f5e", 1.5),
+          lineSeries("+DI", a.plusDI,  "#22c55e", 1.1),
+          lineSeries("-DI", a.minusDI, "#ef4444", 1.1),
+        ],
+        cache: { adx: a.adx, plusDI: a.plusDI, minusDI: a.minusDI },
+      };
+    } },
+  { key: "mfi", label: "MFI (14)", pillColor: "#14b8a6", group: "Oscillators", paneOwn: true, needsVolume: true,
+    yMin: 0, yMax: 100, guides: [{ value: 80, color: "rgba(239,68,68,0.35)" }, { value: 20, color: "rgba(38,166,154,0.35)" }],
+    compute: ({ highs, lows, closes, volumes }) => { const v = calcMFI(highs, lows, closes, volumes); return { series: [lineSeries("MFI", v, "#14b8a6")], cache: { main: v } }; } },
+  { key: "roc", label: "ROC (12)", pillColor: "#7dd3fc", group: "Oscillators", paneOwn: true,
+    guides: [{ value: 0, color: "rgba(120,123,134,0.35)" }],
+    compute: ({ closes }) => { const v = calcROC(closes); return { series: [lineSeries("ROC", v, "#7dd3fc")], cache: { main: v } }; } },
+  { key: "trix", label: "TRIX (14)", pillColor: "#bef264", group: "Oscillators", paneOwn: true,
+    guides: [{ value: 0, color: "rgba(120,123,134,0.35)" }],
+    compute: ({ closes }) => { const v = calcTRIX(closes); return { series: [lineSeries("TRIX", v, "#bef264")], cache: { main: v } }; } },
+  { key: "ao", label: "Awesome Osc.", pillColor: "#e879f9", group: "Oscillators", paneOwn: true,
+    compute: ({ highs, lows }) => {
+      const v = calcAO(highs, lows);
+      // Bar chart, green when rising vs prev, red when falling
+      const data = v.map((cur, i) => {
+        const prev = i > 0 ? v[i - 1] : null;
+        const up = cur !== null && prev !== null ? cur >= prev : (cur ?? 0) >= 0;
+        return { value: cur, itemStyle: { color: up ? "rgba(38,166,154,0.7)" : "rgba(239,83,80,0.7)" } };
+      });
+      return {
+        series: [{ name: "AO", type: "bar", data, barMaxWidth: 5 }],
+        cache: { main: v },
+      };
+    } },
+  { key: "cmf", label: "CMF (20)", pillColor: "#fcd34d", group: "Oscillators", paneOwn: true, needsVolume: true,
+    guides: [{ value: 0, color: "rgba(120,123,134,0.35)" }],
+    compute: ({ highs, lows, closes, volumes }) => { const v = calcCMF(highs, lows, closes, volumes); return { series: [lineSeries("CMF", v, "#fcd34d")], cache: { main: v } }; } },
+  { key: "obv", label: "OBV", pillColor: "#fda4af", group: "Volume", paneOwn: true,
+    compute: ({ closes, volumes }) => { const v = calcOBV(closes, volumes); return { series: [lineSeries("OBV", v, "#fda4af")], cache: { main: v } }; } },
+];
+
+const IND_BY_KEY: Record<string, IndicatorDef> = Object.fromEntries(IND_CATALOG.map(d => [d.key, d]));
+
+// Public catalog for menu rendering in TradingPlatform (typed metadata only)
+export const INDICATOR_CATALOG = IND_CATALOG.map(d => ({
+  key: d.key, label: d.label, pillColor: d.pillColor, group: d.group, paneOwn: d.paneOwn, needsVolume: !!d.needsVolume,
+}));
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -783,8 +1004,8 @@ interface HoverCandle {
 
 export default function ChartPanel({
   symbol, symbolName, periodCfg, drawingTool, chartType, indicators,
-  showRSI, showMACD, isActive, drawings, onDrawingAdd, onDrawingErase, onClearDrawings, onActivate,
-  onDrawingDone, onDrawingUpdate, theme,
+  isActive, drawings, onDrawingAdd, onDrawingErase, onClearDrawings, onActivate,
+  onDrawingDone, onDrawingUpdate, theme, onIndicatorRemove,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef       = useRef<SVGSVGElement>(null);
@@ -1010,54 +1231,61 @@ export default function ChartPanel({
     const closes   = wcs.map(c => c.close);
     const ohlc     = wcs.map(c => [c.open, c.close, c.low, c.high]);
 
-    const hasSub = showRSI || showMACD;
+    // ── Identify selected overlays vs oscillators (each oscillator gets own pane) ──
+    const hasVol = cs.some(c => (c.volume ?? 0) > 0);
+    const selectedDefs = [...indicators]
+      .map(k => IND_BY_KEY[k])
+      .filter((d): d is IndicatorDef => !!d && (!d.needsVolume || hasVol));
+    const overlayDefs    = selectedDefs.filter(d => !d.paneOwn);
+    const oscillatorDefs = selectedDefs.filter(d =>  d.paneOwn);
+    const N_OSC = oscillatorDefs.length;
 
-    // ── Grid layout: main chart / volume / sub-panel ──────────────────────
-    // Main chart — ends well above volume so x-axis labels don't overlap bars
-    // Volume — dates shown only here when no sub-panel, hidden otherwise
-    const mainHeight = hasSub ? "48%" : "68%";
-    const mainBottom = hasSub ? "44%" : "24%";
-    const volTop     = hasSub ? "54%" : "76%";
-    const volHeight  = hasSub ? "8%"  : "16%";
-    const subTop     = "68%";
-    const subHeight  = "26%";
+    // ── Grid layout: dynamic — price + volume + N oscillator panes ────────
+    // Weighted heights that fill the available vertical space.
+    const TOP_PCT = 4;
+    const BOT_PCT = 4;
+    const AVAIL   = 100 - TOP_PCT - BOT_PCT;
+    const PRICE_W = 4;
+    const VOL_W   = 1;
+    const OSC_W   = 1.6;
+    const totalW  = PRICE_W + VOL_W + N_OSC * OSC_W;
+    const heights = [PRICE_W * AVAIL / totalW, VOL_W * AVAIL / totalW, ...Array(N_OSC).fill(OSC_W * AVAIL / totalW)];
+    const tops: number[] = []; { let acc = TOP_PCT; for (const h of heights) { tops.push(acc); acc += h; } }
 
     // Prices on right side — narrow left margin, wider right margin for labels
     const GL = 8, GR = 70;
-    const grids: object[] = [
-      { top: "4%",  left: GL, right: GR, height: mainHeight },
-      { top: volTop, left: GL, right: GR, height: volHeight  },
-    ];
-    if (hasSub) grids.push({ top: subTop, left: GL, right: GR, height: subHeight });
+    const grids: object[] = heights.map((h, i) => ({
+      top: `${tops[i].toFixed(2)}%`, left: GL, right: GR, height: `${h.toFixed(2)}%`,
+    }));
 
-    // x-axis: labels ONLY on the bottom-most grid
+    // x-axis: labels ONLY on the bottom-most grid (volume if no oscillators, else last oscillator)
     const xBase = { axisLine: { lineStyle: { color: T.grid } }, axisTick: { show: false } };
-    const xAxes: object[] = [
-      { ...xBase, gridIndex: 0, data: dates, axisLabel: { show: false }, splitLine: { lineStyle: { color: T.grid } }, axisPointer: { label: { show: false } } },
-      { ...xBase, gridIndex: 1, data: dates, axisLabel: hasSub ? { show: false } : { color: T.text, fontSize: 9, margin: 6, formatter: (v: string) => fmtXLabel(v, showTime) }, splitLine: { show: false }, axisPointer: hasSub ? { label: { show: false } } : {} },
-    ];
-    if (hasSub) {
-      xAxes.push({ ...xBase, gridIndex: 2, data: dates, axisLabel: { color: T.text, fontSize: 9, margin: 6, formatter: (v: string) => fmtXLabel(v, showTime) }, splitLine: { lineStyle: { color: T.grid } } });
-    }
+    const lastIdx = grids.length - 1;
+    const xAxes: object[] = grids.map((_, i) => ({
+      ...xBase, gridIndex: i, data: dates,
+      axisLabel: i === lastIdx
+        ? { color: T.text, fontSize: 9, margin: 6, formatter: (v: string) => fmtXLabel(v, showTime) }
+        : { show: false },
+      splitLine: i === 0 || i > 1 ? { lineStyle: { color: T.grid } } : { show: false },
+      axisPointer: i === lastIdx ? {} : { label: { show: false } },
+    }));
 
     // y-axis — all positioned on the RIGHT side
     const yBase = { axisLine: { show: false }, axisTick: { show: false }, position: "right" };
     const yAxes: object[] = [
-      {
-        ...yBase, gridIndex: 0, scale: true,
+      { ...yBase, gridIndex: 0, scale: true,
         axisLabel: { color: T.text, fontSize: 10, margin: 6 },
-        splitLine: { lineStyle: { color: T.grid } },
-      },
-      {
-        ...yBase, gridIndex: 1, scale: true,
+        splitLine: { lineStyle: { color: T.grid } } },
+      { ...yBase, gridIndex: 1, scale: true,
         axisLabel: { show: true, color: T.text, fontSize: 9, margin: 6, formatter: (v: number) => fmtVol(v) },
-        splitLine: { show: false },
-        splitNumber: 2,
-      },
+        splitLine: { show: false }, splitNumber: 2 },
     ];
-    if (hasSub) {
+    for (let i = 0; i < N_OSC; i++) {
+      const d = oscillatorDefs[i];
       yAxes.push({
-        ...yBase, gridIndex: 2, scale: true,
+        ...yBase, gridIndex: 2 + i, scale: true,
+        ...(d.yMin !== undefined ? { min: d.yMin } : {}),
+        ...(d.yMax !== undefined ? { max: d.yMax } : {}),
         axisLabel: { color: T.text, fontSize: 9, margin: 6 },
         splitLine: { lineStyle: { color: T.grid } },
         splitNumber: 3,
@@ -1121,49 +1349,36 @@ export default function ChartPanel({
     // Reset indicator cache for this render
     indicatorDataRef.current = {};
 
-    const MA = [
-      { key: "ema9",   label: "EMA 9",   color: "#f59e0b", fn: () => calcEMA(closes, 9)   },
-      { key: "ema21",  label: "EMA 21",  color: "#6366f1", fn: () => calcEMA(closes, 21)  },
-      { key: "ema50",  label: "EMA 50",  color: "#10b981", fn: () => calcEMA(closes, 50)  },
-      { key: "ema200", label: "EMA 200", color: "#ef4444", fn: () => calcEMA(closes, 200) },
-      { key: "sma50",  label: "SMA 50",  color: "#a78bfa", fn: () => calcSMA(closes, 50)  },
-    ];
-    for (const m of MA) {
-      if (!indicators.has(m.key)) continue;
-      const vals = m.fn().map(v => v ?? null);
-      indicatorDataRef.current[m.key] = vals;
-      series.push({ name: m.label, type: "line", xAxisIndex: 0, yAxisIndex: 0, data: vals, lineStyle: { color: m.color, width: 1.5 }, showSymbol: false, connectNulls: false });
+    // ── Compute & emit catalog-driven series ────────────────────────────────
+    const highs   = wcs.map(c => c.high);
+    const lows    = wcs.map(c => c.low);
+    const volumes = cs.map(c => c.volume ?? 0);
+    const indInput = { highs, lows, closes, volumes };
+
+    // Overlays attach to the price pane (xAxisIndex 0 / yAxisIndex 0).
+    for (const def of overlayDefs) {
+      const { series: specs, cache } = def.compute(indInput);
+      for (const k in cache) indicatorDataRef.current[`${def.key}.${k}`] = cache[k];
+      for (const s of specs) series.push({ ...s, xAxisIndex: 0, yAxisIndex: 0 });
     }
-    if (indicators.has("bb")) {
-      const bb = calcBollingerBands(closes);
-      indicatorDataRef.current["bb_upper"]  = bb.upper.map(v => v ?? null);
-      indicatorDataRef.current["bb_middle"] = bb.middle.map(v => v ?? null);
-      indicatorDataRef.current["bb_lower"]  = bb.lower.map(v => v ?? null);
-      series.push(
-        { name: "BB+", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: indicatorDataRef.current["bb_upper"],  lineStyle: { color: "#3b82f6", width: 1, type: "dashed" }, showSymbol: false },
-        { name: "BBm", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: indicatorDataRef.current["bb_middle"], lineStyle: { color: "#64748b", width: 1, type: "dashed" }, showSymbol: false },
-        { name: "BB-", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: indicatorDataRef.current["bb_lower"],  lineStyle: { color: "#3b82f6", width: 1, type: "dashed" }, showSymbol: false },
-      );
-    }
-    if (showRSI && !showMACD) {
-      const rv = calcRSI(closes);
-      indicatorDataRef.current["rsi"] = rv.map(v => v !== null ? +(v as number).toFixed(2) as any : null);
-      series.push(
-        { name: "RSI",  type: "line", xAxisIndex: 2, yAxisIndex: 2, data: indicatorDataRef.current["rsi"], lineStyle: { color: "#f59e0b", width: 1.5 }, showSymbol: false },
-        { name: "OB",   type: "line", xAxisIndex: 2, yAxisIndex: 2, data: dates.map(() => 70), lineStyle: { color: "rgba(239,68,68,0.35)", width: 1, type: "dashed" }, showSymbol: false },
-        { name: "OS",   type: "line", xAxisIndex: 2, yAxisIndex: 2, data: dates.map(() => 30), lineStyle: { color: "rgba(38,166,154,0.35)", width: 1, type: "dashed" }, showSymbol: false },
-      );
-    }
-    if (showMACD) {
-      const mac = calcMACD(closes);
-      indicatorDataRef.current["macd"]   = mac.macd.map(v => v !== null ? +(v as number).toFixed(4) as any : null);
-      indicatorDataRef.current["signal"] = mac.signal.map(v => v !== null ? +(v as number).toFixed(4) as any : null);
-      series.push(
-        { name: "MACD",   type: "line", xAxisIndex: 2, yAxisIndex: 2, data: indicatorDataRef.current["macd"],   lineStyle: { color: "#2962ff", width: 1.3 }, showSymbol: false },
-        { name: "Signal", type: "line", xAxisIndex: 2, yAxisIndex: 2, data: indicatorDataRef.current["signal"], lineStyle: { color: "#ff6d00", width: 1.3 }, showSymbol: false },
-        { name: "Hist",   type: "bar",  xAxisIndex: 2, yAxisIndex: 2, barMaxWidth: 5,
-          data: mac.histogram.map(v => ({ value: v !== null ? +(v as number).toFixed(4) : null, itemStyle: { color: (v ?? 0) >= 0 ? "rgba(38,166,154,0.7)" : "rgba(239,83,80,0.7)" } })) },
-      );
+
+    // Each oscillator gets its own pane. Pane index = 2 + position in oscillatorDefs.
+    for (let i = 0; i < oscillatorDefs.length; i++) {
+      const def = oscillatorDefs[i];
+      const paneIdx = 2 + i;
+      const { series: specs, cache } = def.compute(indInput);
+      for (const k in cache) indicatorDataRef.current[`${def.key}.${k}`] = cache[k];
+      for (const s of specs) series.push({ ...s, xAxisIndex: paneIdx, yAxisIndex: paneIdx });
+      // Reference guides (e.g. RSI 70/30, ADX 25, Stoch 80/20)
+      if (def.guides) {
+        for (const g of def.guides) {
+          series.push({
+            name: `${def.key}_g_${g.value}`, type: "line", xAxisIndex: paneIdx, yAxisIndex: paneIdx,
+            data: dates.map(() => g.value), showSymbol: false,
+            lineStyle: { color: g.color, width: 1, type: "dashed" }, silent: true,
+          });
+        }
+      }
     }
 
     chart.setOption({
@@ -1191,7 +1406,7 @@ export default function ChartPanel({
       },
       axisPointer: { link: [{ xAxisIndex: "all" }] },
       dataZoom: [
-        { type: "inside", xAxisIndex: hasSub ? [0, 1, 2] : [0, 1], start: 60, end: 100, zoomOnMouseWheel: true, moveOnMouseMove: true },
+        { type: "inside", xAxisIndex: grids.map((_, i) => i), start: 60, end: 100, zoomOnMouseWheel: true, moveOnMouseMove: true },
       ],
       grid: grids, xAxis: xAxes, yAxis: yAxes, series,
     }, true);
@@ -1200,7 +1415,7 @@ export default function ChartPanel({
     // (which itself depends on `drawings`) — otherwise drawing on the chart
     // would cascade back through fetchData and trigger a re-fetch.
     requestAnimationFrame(() => paintSvgRef.current?.());
-  }, [indicators, showRSI, showMACD]);
+  }, [indicators]);
 
   // ── Fetch ──────────────────────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
@@ -1441,7 +1656,7 @@ export default function ChartPanel({
   useEffect(() => { fetchDataRef.current  = fetchData;  }, [fetchData]);
 
   useEffect(() => { fetchDataRef.current?.();  }, [symbol, periodCfg]);
-  useEffect(() => { renderChartRef.current?.(); }, [indicators, showRSI, showMACD, chartType]);
+  useEffect(() => { renderChartRef.current?.(); }, [indicators, chartType]);
   useEffect(() => { if (candles.current.length) renderChartRef.current?.(); }, [theme]);
   useEffect(() => { paintSvgRef.current?.(); }, [drawings]);
 
@@ -1822,7 +2037,7 @@ export default function ChartPanel({
     return i >= 0 && i < arr.length ? arr[i] : null;
   };
 
-  const hasAnyInd = indicators.size > 0 || showRSI || showMACD;
+  const hasAnyInd = indicators.size > 0;
   const TC = getThemeColors(theme);
 
   return (
@@ -1857,48 +2072,37 @@ export default function ChartPanel({
               <span className="text-[11px]" style={{ color: priceColor }}>{lastCandle.pct >= 0 ? "+" : ""}{lastCandle.pct.toFixed(2)}%</span>
             </div>
           )}
-          {/* Row 3: active indicator pills (TradingView-style) */}
+          {/* Row 3: active indicator pills (TradingView-style) — click X to remove */}
           {hasAnyInd && (
-            <div className="flex items-center gap-2.5 mt-0.5 flex-wrap">
+            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
               {[...indicators].map(key => {
-                const meta = IND_META[key];
-                if (!meta) return null;
-                if (key === "bb") {
-                  const mid = indVal("bb_middle");
-                  return (
-                    <span key={key} className="flex items-center gap-1 text-[10px]">
-                      <span style={{ color: meta.color }} className="font-medium">{meta.label}</span>
-                      {mid !== null && <span className="text-gray-400">{fmtPrice(mid)}</span>}
-                    </span>
-                  );
-                }
-                const val = indVal(key);
+                const def = IND_BY_KEY[key];
+                if (!def) return null;
+                const seriesKey = def.pillSeries ?? "main";
+                const val = indVal(`${def.key}.${seriesKey}`);
+                const digits = def.pillDigits ?? (def.paneOwn ? 2 : undefined);
+                const display = val === null
+                  ? null
+                  : digits !== undefined
+                    ? (val as number).toFixed(digits)
+                    : fmtPrice(val as number);
                 return (
-                  <span key={key} className="flex items-center gap-1 text-[10px]">
-                    <span style={{ color: meta.color }} className="font-medium">{meta.label}</span>
-                    {val !== null && <span className="text-gray-400">{fmtPrice(val)}</span>}
+                  <span key={key} className="group flex items-center gap-1 text-[10px] rounded px-1.5 py-0.5 hover:bg-white/5">
+                    <span style={{ color: def.pillColor }} className="font-medium">{def.label}</span>
+                    {display !== null && <span className="text-gray-400">{display}</span>}
+                    <button
+                      type="button"
+                      title={`Remove ${def.label}`}
+                      onClick={(e) => { e.stopPropagation(); onIndicatorRemove?.(key); }}
+                      className="ml-0.5 w-3.5 h-3.5 flex items-center justify-center rounded-sm text-gray-500 hover:text-red-400 hover:bg-red-500/15 opacity-60 group-hover:opacity-100 transition-opacity"
+                    >
+                      <svg viewBox="0 0 10 10" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                        <path d="M2 2 L8 8 M8 2 L2 8" />
+                      </svg>
+                    </button>
                   </span>
                 );
               })}
-              {showRSI && !showMACD && (() => {
-                const val = indVal("rsi");
-                return (
-                  <span className="flex items-center gap-1 text-[10px]">
-                    <span style={{ color: "#f59e0b" }} className="font-medium">RSI</span>
-                    {val !== null && <span className="text-gray-400">{(val as number).toFixed(2)}</span>}
-                  </span>
-                );
-              })()}
-              {showMACD && (() => {
-                const m = indVal("macd"), s = indVal("signal");
-                return (
-                  <span className="flex items-center gap-1.5 text-[10px]">
-                    <span style={{ color: "#2962ff" }} className="font-medium">MACD</span>
-                    {m !== null && <span className="text-gray-400">{(m as number).toFixed(2)}</span>}
-                    {s !== null && <span style={{ color: "#ff6d00" }}>{(s as number).toFixed(2)}</span>}
-                  </span>
-                );
-              })()}
             </div>
           )}
         </div>
