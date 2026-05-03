@@ -813,6 +813,14 @@ export default function ChartPanel({
 
   const [loading, setLoading]           = useState(true);
   const [loadError, setLoadError]       = useState<string | null>(null);
+  const [loadingMore, setLoadingMore]   = useState(false);
+  const loadingMoreRef                  = useRef(false);
+  const noMoreHistoryRef                = useRef(false);
+  // Monotonic request epoch — incremented whenever the symbol or window
+  // changes. In-flight fetches compare against this on completion and
+  // discard their result if a newer request has been issued, preventing
+  // stale data from overwriting the current chart.
+  const requestEpochRef                 = useRef(0);
   const [hoverCandle, setHoverCandle]   = useState<HoverCandle | null>(null);
   const [hoverIdx, setHoverIdx]         = useState(-1);
   const [lastCandle, setLastCandle]     = useState<{ c: number; pct: number } | null>(null);
@@ -1197,6 +1205,9 @@ export default function ChartPanel({
   // ── Fetch ──────────────────────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
     if (!symbol) return;
+    // Bump epoch — any in-flight prepend or base fetch from a previous
+    // symbol/window will see the mismatch on completion and bail out.
+    const epoch = ++requestEpochRef.current;
     setLoading(true);
     setLoadError(null);
     try {
@@ -1204,6 +1215,7 @@ export default function ChartPanel({
         ? `start=${periodCfg.start}&end=${periodCfg.end}&interval=${periodCfg.i}`
         : `period=${periodCfg.p}&interval=${periodCfg.i}`;
       const data = await fetchApi<{ candles: unknown[] }>(`/stocks/${encodeURIComponent(symbol)}/history?${qs}`);
+      if (epoch !== requestEpochRef.current) return;  // superseded
       // Runtime-validate the candle shape — backend changes shouldn't silently
       // corrupt the chart with NaN OHLC values.
       const raw = Array.isArray(data?.candles) ? data.candles : [];
@@ -1238,17 +1250,138 @@ export default function ChartPanel({
         setLastCandle(null);
       }
     } catch (err) {
+      if (epoch !== requestEpochRef.current) return;  // superseded
       candles.current = [];
       setLastCandle(null);
       setLoadError(err instanceof Error ? err.message : "Failed to load price data.");
     } finally {
-      setLoading(false);
+      if (epoch === requestEpochRef.current) setLoading(false);
     }
     // Render via ref so fetchData's identity doesn't track renderChart —
     // keeps the [symbol, periodCfg] effect from re-firing on indicator
     // toggles or drawing edits.
+    // Reset infinite-scroll state when the symbol or window changes —
+    // the new fetch is the new baseline.
+    noMoreHistoryRef.current = false;
     renderChartRef.current?.();
   }, [symbol, periodCfg]);
+
+  // ── Pan-to-load-more (infinite scroll left) ────────────────────────────────
+  // Fetches an older chunk of daily/weekly/monthly history when the user
+  // pans to the leftmost edge, prepends it to candles.current, and shifts
+  // the dataZoom window to keep the visible candles visually anchored.
+  const loadMoreHistory = useCallback(async () => {
+    if (loadingMoreRef.current || noMoreHistoryRef.current) return;
+    if (!symbol) return;
+    const cur = candles.current;
+    if (cur.length < 2) return;
+    // Only meaningful for daily-or-larger candles — intraday range is capped
+    // by Yahoo to the last few days, so paging back doesn't help there.
+    const intvl = intervalRef.current;
+    if (!["1d", "1wk", "1mo"].includes(intvl)) return;
+
+    const oldestSec = cur[0].time;
+    const endStr = new Date(oldestSec * 1000).toISOString().slice(0, 10);
+    // Chunk size: ~2y for 1d, ~10y for 1wk/1mo (Yahoo serves whatever exists
+    // in that window — possibly less, which signals "no older data").
+    const daysBack = intvl === "1d" ? 730 : 3650;
+    const startStr = new Date((oldestSec - daysBack * 86400) * 1000)
+      .toISOString().slice(0, 10);
+
+    // Snapshot baseline so we can verify nothing changed under us during
+    // the await. If the user switches symbol/range mid-fetch, we discard.
+    const baselineEpoch    = requestEpochRef.current;
+    const baselineSymbol   = symbol;
+    const baselineInterval = intvl;
+    const baselineOldest   = oldestSec;
+
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    try {
+      const qs = `start=${startStr}&end=${endStr}&interval=${intvl}`;
+      const data = await fetchApi<{ candles: unknown[] }>(
+        `/stocks/${encodeURIComponent(symbol)}/history?${qs}`
+      );
+      // Bail if a newer request superseded us, or the chart's baseline
+      // shifted (different symbol/interval/oldest) — committing now would
+      // corrupt the current chart with data from a stale context.
+      if (
+        baselineEpoch    !== requestEpochRef.current ||
+        baselineSymbol   !== symbol ||
+        baselineInterval !== intervalRef.current ||
+        candles.current.length === 0 ||
+        candles.current[0].time !== baselineOldest
+      ) {
+        return;
+      }
+      const raw = Array.isArray(data?.candles) ? data.candles : [];
+      const olderValidated: Candle[] = [];
+      for (const c of raw) {
+        if (!c || typeof c !== "object") continue;
+        const o = (c as Candle).open, h = (c as Candle).high, l = (c as Candle).low,
+              cl = (c as Candle).close, t = (c as Candle).time, v = (c as Candle).volume;
+        if (
+          typeof t === "number" && Number.isFinite(t) &&
+          typeof o === "number" && Number.isFinite(o) &&
+          typeof h === "number" && Number.isFinite(h) &&
+          typeof l === "number" && Number.isFinite(l) &&
+          typeof cl === "number" && Number.isFinite(cl) &&
+          t < oldestSec   // strictly older than what we already have
+        ) {
+          olderValidated.push({ time: t, open: o, high: h, low: l, close: cl, volume: typeof v === "number" ? v : 0 });
+        }
+      }
+      olderValidated.sort((a, b) => a.time - b.time);
+      if (olderValidated.length === 0) {
+        noMoreHistoryRef.current = true;
+        return;
+      }
+      const addedCount = olderValidated.length;
+      const prevTotal  = cur.length;
+      candles.current  = [...olderValidated, ...cur];
+      const newTotal   = candles.current.length;
+
+      // Re-render with the larger dataset, then shift the dataZoom window
+      // so the same candles remain on screen (no visual jump).
+      const chart = chartRef.current;
+      let prevStartPct = 0, prevEndPct = 100;
+      if (chart) {
+        const opt = chart.getOption() as { dataZoom?: { start?: number; end?: number }[] };
+        const dz0 = (opt.dataZoom || [])[0];
+        if (dz0) {
+          prevStartPct = dz0.start ?? 0;
+          prevEndPct   = dz0.end   ?? 100;
+        }
+      }
+      // Map the previously-visible window (in old indices) to new indices.
+      const oldStartIdx = (prevStartPct / 100) * (prevTotal - 1);
+      const oldEndIdx   = (prevEndPct   / 100) * (prevTotal - 1);
+      const newStartIdx = oldStartIdx + addedCount;
+      const newEndIdx   = oldEndIdx   + addedCount;
+      const newStartPct = (newStartIdx / (newTotal - 1)) * 100;
+      const newEndPct   = (newEndIdx   / (newTotal - 1)) * 100;
+
+      renderChartRef.current?.();
+      // Apply the shifted window after the re-render so the user sees the
+      // same candles in the same positions, just with more room to pan left.
+      requestAnimationFrame(() => {
+        chartRef.current?.dispatchAction({
+          type: "dataZoom",
+          start: newStartPct,
+          end:   newEndPct,
+        });
+      });
+    } catch {
+      // Network failure or 404 — don't lock out future attempts permanently;
+      // the user can scroll right and try again.
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }, [symbol]);
+
+  const loadMoreHistoryRef = useRef<(() => void) | null>(null);
+  useEffect(() => { loadMoreHistoryRef.current = loadMoreHistory; }, [loadMoreHistory]);
 
   // ── Init ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1257,7 +1390,19 @@ export default function ChartPanel({
     const chart = echarts.init(div, null, { renderer: "canvas" });
     chartRef.current = chart;
 
-    chart.on("dataZoom", () => { requestAnimationFrame(() => paintSvgRef.current?.()); });
+    chart.on("dataZoom", () => {
+      requestAnimationFrame(() => paintSvgRef.current?.());
+      // Pan-to-load-more: when the visible window reaches the very left edge,
+      // ask for an older chunk. Throttled by loadingMoreRef inside the
+      // callback so rapid drag events don't trigger parallel fetches.
+      try {
+        const opt = chart.getOption() as { dataZoom?: { start?: number; end?: number }[] };
+        const dz0 = (opt.dataZoom || [])[0];
+        if (dz0 && (dz0.start ?? 0) <= 1.5) {
+          loadMoreHistoryRef.current?.();
+        }
+      } catch { /* defensive */ }
+    });
     chart.on("rendered",  () => { requestAnimationFrame(() => paintSvgRef.current?.()); });
 
     // Update OHLCV header on crosshair move
@@ -1758,6 +1903,7 @@ export default function ChartPanel({
           )}
         </div>
         {loading && <span className="ml-auto text-[10px] text-gray-600 animate-pulse self-center">Loading…</span>}
+        {!loading && loadingMore && <span className="ml-auto text-[10px] text-gray-500 animate-pulse self-center">Loading older candles…</span>}
       </div>
 
       {/* ── Chart + SVG overlay ──────────────────────────────────────────── */}

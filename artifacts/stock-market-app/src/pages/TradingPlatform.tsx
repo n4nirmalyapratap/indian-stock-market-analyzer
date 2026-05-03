@@ -182,7 +182,8 @@ const RANGES: RangeEntry[] = [
   { label: "6M",  p: "6mo", i: "1d"  },
   { label: "YTD", p: "ytd", i: "1d"  }, // resolved dynamically
   { label: "1Y",  p: "1y",  i: "1d"  },
-  { label: "All", p: "5y",  i: "1wk" },
+  { label: "5Y",  p: "5y",  i: "1wk" },
+  { label: "All", p: "max", i: "1wk" },
 ];
 
 // ─── Layout modes ────────────────────────────────────────────────────────────

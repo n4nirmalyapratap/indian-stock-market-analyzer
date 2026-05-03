@@ -290,7 +290,7 @@ class PriceService:
             # Translate period → days for the daily aggregator
             period_to_days = {
                 "1d": 5, "5d": 10, "1mo": 35, "3mo": 95, "6mo": 185,
-                "1y": 370, "2y": 740, "5y": 1830,
+                "1y": 370, "2y": 740, "5y": 1830, "10y": 3660, "max": 36500,
             }
             days = period_to_days.get(period, 95)
             data = await self.get_historical_data(symbol, days)
