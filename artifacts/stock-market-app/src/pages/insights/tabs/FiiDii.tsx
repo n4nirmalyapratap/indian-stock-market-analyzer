@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { memo, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { fetchApi } from "@/lib/api";
 import {
@@ -123,14 +123,23 @@ export default function FiiDii() {
   const [view, setView] = useState<ViewMode>("both");
   const [range, setRange] = useState<Range>("1y");
   const reduced = useReducedMotion();
+  // Concurrent transition for tab/range swaps so the heavy ~14-chart
+  // re-render never blocks click feedback or the theme ripple.
+  const [, startTransition] = useTransition();
 
-  const { data, isLoading, error } = useQuery<FiiDiiResponse>({
+  const { data, isLoading, isFetching, error } = useQuery<FiiDiiResponse>({
     queryKey: ["insights/fii-dii", segment, range],
     queryFn: () => fetchApi(`/insights/fii-dii?segment=${segment}&days=${rangeLimit(range)}`),
     staleTime: 10 * 60_000,
+    // Keep showing the previous tab's content while the next segment loads —
+    // no more "collapses to spinner then re-mounts everything" jank when
+    // hopping between Equity → Index Futures → Stock Options.
+    placeholderData: keepPreviousData,
   });
 
   const segMeta = SEGMENT_OPTIONS.find(s => s.value === segment)!;
+  const switchSegment = (v: Segment) => startTransition(() => setSegment(v));
+  const switchRange = (v: Range) => startTransition(() => setRange(v));
 
   return (
     <div>
@@ -154,7 +163,7 @@ export default function FiiDii() {
             return (
               <button
                 key={o.value}
-                onClick={() => setSegment(o.value)}
+                onClick={() => switchSegment(o.value)}
                 className={`group relative inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-medium transition border whitespace-nowrap
                   ${active
                     ? "bg-indigo-600 text-white border-indigo-600 dark:bg-indigo-500 dark:border-indigo-500 shadow-md shadow-indigo-500/20"
@@ -180,13 +189,15 @@ export default function FiiDii() {
           message={data?.message || "No data returned. Try again later."}
         />
       ) : (
-        <Body
-          data={data}
-          segMeta={segMeta}
-          view={view} setView={setView}
-          range={range} setRange={setRange}
-          reduced={!!reduced}
-        />
+        <div className={isFetching ? "transition-opacity duration-200 opacity-70" : "transition-opacity duration-200 opacity-100"}>
+          <Body
+            data={data}
+            segMeta={segMeta}
+            view={view} setView={setView}
+            range={range} setRange={switchRange}
+            reduced={!!reduced}
+          />
+        </div>
       )}
     </div>
   );
@@ -295,18 +306,141 @@ function Body({
         </p>
       </Card>
 
-      {/* Combined view (chart + table or one of them) */}
+      {/* Combined view (chart + table or one of them) — both are deferred so the
+          toolbar/hero cards reflow instantly on segment switch and the heavy
+          chart/table mount in the next idle frame. */}
       {(view === "chart" || view === "both") && (
-        <FiiDiiChart rows={rows} segment={data.segment} reduced={reduced} />
+        <IdleMount deps={[data.segment, range]} placeholder={<ChartSkeleton />}>
+          <FiiDiiChart rows={rows} segment={data.segment} />
+        </IdleMount>
       )}
       {(view === "table" || view === "both") && (
-        <FiiDiiTable rows={rows} segment={data.segment} />
+        <IdleMount deps={[data.segment, range]} placeholder={<TableSkeleton />}>
+          <FiiDiiTable rows={rows} segment={data.segment} />
+        </IdleMount>
       )}
 
-      {/* Month-wise breakdown */}
-      {monthly.length > 0 && (
-        <MonthlyBreakdown months={monthly} isContracts={isContracts} reduced={reduced} />
-      )}
+      {/* Month-wise breakdown — deferred so the heaviest part of the page
+          (~13 mini-charts) doesn't block first paint when switching tabs. */}
+      <IdleMount deps={[data.segment, range]} placeholder={<MonthlySkeleton months={monthly.length} />}>
+        {monthly.length > 0 && <MonthlyBreakdown months={monthly} isContracts={isContracts} reduced={reduced} />}
+      </IdleMount>
+    </div>
+  );
+}
+
+/** "Mount in the next animation frame" boundary. Re-defers whenever any
+ *  dependency in `deps` changes — the placeholder paints in frame 1,
+ *  the heavy children mount in frame 2 (~16-32 ms). Fast enough that
+ *  cached tab switches never linger on a skeleton, but still gives the
+ *  browser a frame to commit the lighter parts of the page first. */
+function IdleMount({ deps, placeholder, children }: {
+  deps: unknown[]; placeholder: React.ReactNode; children: React.ReactNode;
+}) {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    setReady(false);
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setReady(true));
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      if (raf2) cancelAnimationFrame(raf2);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return <>{ready ? children : placeholder}</>;
+}
+
+/** Downsample an array of rows for charting. Returns the original rows
+ *  when count <= maxPoints, otherwise groups consecutive rows into
+ *  buckets and sums fii/dii nets per bucket so the chart never plots
+ *  more than ~maxPoints bars. Massively reduces SVG paint cost on
+ *  wide ranges (e.g. 1y of F&O = 365 → ~120 buckets). */
+function downsampleRows(rows: Row[], maxPoints: number): Row[] {
+  if (rows.length <= maxPoints) return rows;
+  const bucketSize = Math.ceil(rows.length / maxPoints);
+  const out: Row[] = [];
+  for (let i = 0; i < rows.length; i += bucketSize) {
+    const slice = rows.slice(i, i + bucketSize);
+    let fii = 0, dii = 0;
+    for (const r of slice) {
+      fii += r.fiiNet ?? 0;
+      dii += r.diiNet ?? 0;
+    }
+    const head = slice[0];
+    const tail = slice[slice.length - 1];
+    out.push({
+      ...head,
+      fiiNet: fii,
+      diiNet: dii,
+      // Label spans bucket window: "01 Jan→07 Jan"
+      displayDate: slice.length > 1
+        ? `${tail.displayDate || tail.date}→${head.displayDate || head.date}`
+        : (head.displayDate || head.date),
+    });
+  }
+  return out;
+}
+
+/** Mount-on-visible boundary using IntersectionObserver. Renders the
+ *  placeholder until the wrapper enters the viewport, then mounts the
+ *  children. Used by MonthCard so the 13 mini charts only build SVG
+ *  when the user actually scrolls them into view. */
+function VisibleOnce({ placeholder, children, rootMargin = "200px" }: {
+  placeholder: React.ReactNode; children: React.ReactNode; rootMargin?: string;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (visible || !ref.current) return;
+    const el = ref.current;
+    if (typeof IntersectionObserver === "undefined") { setVisible(true); return; }
+    const obs = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) { setVisible(true); obs.disconnect(); break; }
+      }
+    }, { rootMargin });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [visible, rootMargin]);
+  return <div ref={ref}>{visible ? children : placeholder}</div>;
+}
+
+function ChartSkeleton() {
+  return (
+    <div className="rounded-xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
+      <div className="h-4 w-40 rounded bg-gray-100 dark:bg-gray-700/50 animate-pulse mb-3" />
+      <div className="h-72 md:h-80 rounded-lg bg-gray-50/80 dark:bg-gray-800/40 animate-pulse" />
+    </div>
+  );
+}
+function TableSkeleton() {
+  return (
+    <div className="rounded-xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800">
+      <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700 h-12 animate-pulse" />
+      <div className="p-4 space-y-2">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="h-7 rounded bg-gray-50/80 dark:bg-gray-800/40 animate-pulse" />
+        ))}
+      </div>
+    </div>
+  );
+}
+function MonthlySkeleton({ months }: { months: number }) {
+  if (!months) return null;
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 mt-2">
+        <Calendar className="w-4 h-4 text-indigo-500 dark:text-indigo-400" />
+        <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Month-wise Breakdown</h3>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {Array.from({ length: Math.min(4, months) }).map((_, i) => (
+          <div key={i} className="h-40 rounded-xl border border-gray-100 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-800/40 animate-pulse" />
+        ))}
+      </div>
     </div>
   );
 }
@@ -337,7 +471,8 @@ function daysWindowLabel(rows: Row[]): string {
 }
 
 /* ── Hero summary card with sparkline + green/red day count ─────────── */
-function HeroCard({
+const HeroCard = memo(_HeroCard);
+function _HeroCard({
   title, icon, cell, isContracts, rowsForSpark, subtitle, delay, reduced,
 }: {
   title: string;
@@ -414,9 +549,9 @@ function HeroCard({
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={sparkData} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
                 <ReferenceLine y={0} stroke={palette.border} strokeWidth={1} />
-                <Bar dataKey="fii" fill={palette.fii} opacity={0.55} maxBarSize={4} />
-                <Bar dataKey="dii" fill={palette.dii} opacity={0.55} maxBarSize={4} />
-                <Line type="monotone" dataKey="total" stroke={palette.line} strokeWidth={1.5} dot={false} />
+                <Bar dataKey="fii" fill={palette.fii} opacity={0.55} maxBarSize={4} isAnimationActive={false} />
+                <Bar dataKey="dii" fill={palette.dii} opacity={0.55} maxBarSize={4} isAnimationActive={false} />
+                <Line type="monotone" dataKey="total" stroke={palette.line} strokeWidth={1.5} dot={false} isAnimationActive={false} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -432,25 +567,27 @@ function HeroCard({
 }
 
 /* ── Main chart ─────────────────────────────────────────────────────── */
-function FiiDiiChart({ rows, segment, reduced }: { rows: Row[]; segment: string; reduced: boolean }) {
+const FiiDiiChart = memo(function FiiDiiChart({ rows, segment }: { rows: Row[]; segment: string }) {
   const palette = useChartPalette();
   const isContracts = segment !== "equity";
-  const data = useMemo(() => [...rows].reverse().map(r => ({
-    label: (r.displayDate || r.date).slice(0, 6),
-    fii: r.fiiNet ?? 0,
-    dii: r.diiNet ?? 0,
-  })), [rows]);
+  const data = useMemo(() => {
+    // Downsample to keep SVG paint cost flat regardless of range.
+    // 120 bars renders in a single frame even on mid-tier devices.
+    const sampled = downsampleRows(rows, 120);
+    return [...sampled].reverse().map(r => ({
+      label: (r.displayDate || r.date).slice(0, 6),
+      fii: r.fiiNet ?? 0,
+      dii: r.diiNet ?? 0,
+    }));
+  }, [rows]);
+  const isAggregated = rows.length > 120;
 
   if (!data.length) {
     return <EmptyState title="Nothing to plot yet" message="Once a few daily snapshots are collected, this chart will populate." icon={<BarChart3 className="w-6 h-6" />} />;
   }
 
   return (
-    <motion.div
-      initial={reduced ? { opacity: 0 } : { opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay: 0.05 }}
-    >
+    <div>
       <Card className="p-4">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
@@ -481,18 +618,19 @@ function FiiDiiChart({ rows, segment, reduced }: { rows: Row[]; segment: string;
                 formatter={(value: number, name: string) => [fmtCr(value, isContracts), name === "fii" ? "FII Net" : "DII Net"]}
               />
               <ReferenceLine y={0} stroke={palette.muted} strokeWidth={1} />
-              <Bar dataKey="fii" name="fii" fill={palette.fii} radius={[3, 3, 0, 0]} maxBarSize={22} />
-              <Bar dataKey="dii" name="dii" fill={palette.dii} radius={[3, 3, 0, 0]} maxBarSize={22} />
+              <Bar dataKey="fii" name="fii" fill={palette.fii} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
+              <Bar dataKey="dii" name="dii" fill={palette.dii} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
         <p className="mt-2 text-[11px] text-gray-500 dark:text-gray-400">
           {isContracts ? "Net flows in contracts (Long − Short)." : "Net flows in ₹ Cr (Buy − Sell)."} Positive bars indicate net buying, negative bars indicate net selling.
+          {isAggregated && ` Showing ${data.length} aggregated buckets across ${rows.length} sessions for performance — see the table for daily detail.`}
         </p>
       </Card>
-    </motion.div>
+    </div>
   );
-}
+});
 
 function LegendChip({ kind, color }: { kind: "fii" | "dii"; color: string }) {
   return (
@@ -504,18 +642,26 @@ function LegendChip({ kind, color }: { kind: "fii" | "dii"; color: string }) {
 }
 
 /* ── Table ──────────────────────────────────────────────────────────── */
-function FiiDiiTable({ rows, segment }: { rows: Row[]; segment: string }) {
+const TABLE_INITIAL_ROWS = 80;
+const FiiDiiTable = memo(function FiiDiiTable({ rows, segment }: { rows: Row[]; segment: string }) {
   const isContracts = segment !== "equity";
+  const [showAll, setShowAll] = useState(false);
+  // Reset paging when the underlying dataset shape changes.
+  useEffect(() => { setShowAll(false); }, [segment, rows.length]);
   if (!rows.length) {
     return <EmptyState title="No rows in this range" message="Try a wider time range." icon={<TableIcon className="w-6 h-6" />} />;
   }
+  const visible = showAll ? rows : rows.slice(0, TABLE_INITIAL_ROWS);
+  const hidden = rows.length - visible.length;
   return (
     <Card className="p-0 overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between bg-gray-50/60 dark:bg-gray-900/30">
         <h3 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
           <TableIcon className="w-4 h-4 text-indigo-500 dark:text-indigo-400" /> Daily Activity
         </h3>
-        <span className="text-[11px] text-gray-500 dark:text-gray-400">{rows.length} sessions</span>
+        <span className="text-[11px] text-gray-500 dark:text-gray-400">
+          {showAll ? `${rows.length} sessions` : `${visible.length} of ${rows.length} sessions`}
+        </span>
       </div>
       <div className="overflow-x-auto max-h-[520px]">
         <table className="w-full text-sm">
@@ -531,8 +677,8 @@ function FiiDiiTable({ rows, segment }: { rows: Row[]; segment: string }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-700/60">
-            {rows.map(r => (
-              <tr key={r.date} className="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition">
+            {visible.map(r => (
+              <tr key={r.date} className="hover:bg-gray-50 dark:hover:bg-gray-700/30">
                 <td className="px-4 py-2 font-medium text-gray-900 dark:text-white whitespace-nowrap">{r.displayDate || r.date}</td>
                 <td className="px-3 py-2 text-right tabular-nums text-gray-700 dark:text-gray-300">{fmtNumCell(r.fiiBuy)}</td>
                 <td className="px-3 py-2 text-right tabular-nums text-gray-700 dark:text-gray-300">{fmtNumCell(r.fiiSell)}</td>
@@ -545,9 +691,20 @@ function FiiDiiTable({ rows, segment }: { rows: Row[]; segment: string }) {
           </tbody>
         </table>
       </div>
+      {hidden > 0 && (
+        <div className="px-4 py-2.5 border-t border-gray-100 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-900/30 flex items-center justify-center">
+          <button
+            type="button"
+            onClick={() => setShowAll(true)}
+            className="text-xs font-medium text-indigo-600 dark:text-indigo-300 hover:text-indigo-700 dark:hover:text-indigo-200"
+          >
+            Show all {rows.length} sessions ({hidden} more)
+          </button>
+        </div>
+      )}
     </Card>
   );
-}
+});
 
 function fmtNumCell(n: number | null | undefined) {
   if (n == null || isNaN(n)) return "—";
@@ -566,16 +723,16 @@ function MonthlyBreakdown({ months, isContracts, reduced }: {
         <span className="text-[11px] text-gray-500 dark:text-gray-400">({months.length} months)</span>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {months.map((m, i) => (
-          <MonthCard key={m.key} month={m} isContracts={isContracts} delay={i * 0.03} reduced={reduced} />
+        {months.map((m) => (
+          <MonthCard key={m.key} month={m} isContracts={isContracts} reduced={reduced} />
         ))}
       </div>
     </div>
   );
 }
 
-function MonthCard({ month, isContracts, delay, reduced }: {
-  month: MonthBucket; isContracts: boolean; delay: number; reduced: boolean;
+const MonthCard = memo(function MonthCard({ month, isContracts, reduced }: {
+  month: MonthBucket; isContracts: boolean; reduced: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const palette = useChartPalette();
@@ -591,9 +748,9 @@ function MonthCard({ month, isContracts, delay, reduced }: {
 
   return (
     <motion.div
-      initial={reduced ? { opacity: 0 } : { opacity: 0, y: 12 }}
+      initial={reduced ? { opacity: 0 } : { opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, delay }}
+      transition={{ duration: 0.25 }}
       className="relative overflow-hidden rounded-xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm"
     >
       <div className={`absolute inset-0 bg-gradient-to-br ${netGradient(total)} pointer-events-none`} />
@@ -634,26 +791,31 @@ function MonthCard({ month, isContracts, delay, reduced }: {
           </div>
         </div>
 
-        {/* Mini chart */}
+        {/* Mini chart — only mounts when the card scrolls into view, so
+            the initial 13-card grid doesn't pay for 13 SVG charts at once. */}
         {miniData.length > 1 && (
-          <div className="h-20 px-2 pb-2">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={miniData} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
-                <ReferenceLine y={0} stroke={palette.border} strokeWidth={1} />
-                <Tooltip
-                  contentStyle={{
-                    background: palette.surf, border: `1px solid ${palette.border}`,
-                    borderRadius: 8, color: palette.text, fontSize: 11, padding: "6px 8px",
-                  }}
-                  labelStyle={{ color: palette.muted, fontSize: 10, marginBottom: 2 }}
-                  cursor={{ fill: palette.border, opacity: 0.2 }}
-                  formatter={(v: number, n: string) => [fmtCr(v, isContracts), n === "fii" ? "FII" : "DII"]}
-                />
-                <Bar dataKey="fii" fill={palette.fii} maxBarSize={6} />
-                <Bar dataKey="dii" fill={palette.dii} maxBarSize={6} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          <VisibleOnce
+            placeholder={<div className="h-20 px-2 pb-2"><div className="h-full rounded bg-gray-50/80 dark:bg-gray-800/40 animate-pulse" /></div>}
+          >
+            <div className="h-20 px-2 pb-2">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={miniData} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
+                  <ReferenceLine y={0} stroke={palette.border} strokeWidth={1} />
+                  <Tooltip
+                    contentStyle={{
+                      background: palette.surf, border: `1px solid ${palette.border}`,
+                      borderRadius: 8, color: palette.text, fontSize: 11, padding: "6px 8px",
+                    }}
+                    labelStyle={{ color: palette.muted, fontSize: 10, marginBottom: 2 }}
+                    cursor={{ fill: palette.border, opacity: 0.2 }}
+                    formatter={(v: number, n: string) => [fmtCr(v, isContracts), n === "fii" ? "FII" : "DII"]}
+                  />
+                  <Bar dataKey="fii" fill={palette.fii} maxBarSize={6} isAnimationActive={false} />
+                  <Bar dataKey="dii" fill={palette.dii} maxBarSize={6} isAnimationActive={false} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </VisibleOnce>
         )}
 
         {/* Expanded daily table */}
@@ -693,4 +855,4 @@ function MonthCard({ month, isContracts, delay, reduced }: {
       </div>
     </motion.div>
   );
-}
+});

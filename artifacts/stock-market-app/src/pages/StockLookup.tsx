@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useSearch } from "wouter";
+import { useSearch, Link } from "wouter";
 import { api } from "@/lib/api";
-import { Search, TrendingUp, TrendingDown, AlertCircle, BarChart2, Activity } from "lucide-react";
+import { Search, TrendingUp, TrendingDown, AlertCircle, BarChart2, Activity, Users } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
 import StockFinancials from "@/components/financials/StockFinancials";
 import TechnicalSummary from "@/components/technicals/TechnicalSummary";
@@ -113,6 +113,14 @@ export default function StockLookup() {
               </div>
             </div>
             <p className="mt-3 text-sm text-gray-600 leading-relaxed">{data.insight}</p>
+
+            <Link
+              href={`/agents/${encodeURIComponent(data.symbol)}`}
+              className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-indigo-50 to-violet-50 hover:from-indigo-100 hover:to-violet-100 text-indigo-700 text-xs font-medium border border-indigo-200/60 transition"
+            >
+              <Users className="w-3.5 h-3.5" />
+              Ask the Investor Council about {data.symbol}
+            </Link>
             <div className="mt-3">
               <DataFreshness meta={pickMeta(data)} refreshKeys={["stock", symbol]} />
             </div>

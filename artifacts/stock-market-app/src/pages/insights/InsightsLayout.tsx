@@ -1,23 +1,31 @@
 import { useLocation } from "wouter";
 import {
   LayoutGrid, BarChart3, FileText, PieChart, Briefcase,
-  Activity, Repeat, Users, Ban, Truck, LineChart, Rocket,
-  ArrowLeft, ChevronRight,
+  Ban, Truck, LineChart, Rocket, CalendarClock,
+  Globe, ArrowLeft, ChevronRight,
 } from "lucide-react";
 import HeatmapTab from "./tabs/Heatmap";
 import FiiDiiTab from "./tabs/FiiDii";
 import CompanyFilingsTab from "./tabs/CompanyFilings";
 import MfHoldingsTab from "./tabs/MfHoldings";
 import BulkBlockDealsTab from "./tabs/BulkBlockDeals";
-import SignalsTab from "./tabs/Signals";
-import SlbmRentalTab from "./tabs/SlbmRental";
-import MtfInsightsTab from "./tabs/MtfInsights";
+import CorpEventsTab from "./tabs/CorpEvents";
 import FoBanTab from "./tabs/FoBan";
 import TopDeliveriesTab from "./tabs/TopDeliveries";
 import MarketValuationTab from "./tabs/MarketValuation";
 import IpoTab from "./tabs/Ipo";
+import MacroTab from "./tabs/Macro";
 
 const TABS = [
+  {
+    slug: "macro",
+    label: "Macro Pulse",
+    description: "RBI repo rate, CPI, IIP, USD/INR, India 10Y and Brent — all in one place.",
+    icon: Globe,
+    Component: MacroTab,
+    color: "text-teal-500",
+    bg: "bg-teal-50 dark:bg-teal-500/10"
+  },
   {
     slug: "heatmap",
     label: "Heatmap",
@@ -35,6 +43,15 @@ const TABS = [
     Component: FiiDiiTab,
     color: "text-blue-500",
     bg: "bg-blue-50 dark:bg-blue-500/10"
+  },
+  {
+    slug: "top-deliveries",
+    label: "Top Deliveries",
+    description: "Highest-conviction names by delivery % — long-term accumulation signal.",
+    icon: Truck,
+    Component: TopDeliveriesTab,
+    color: "text-violet-500",
+    bg: "bg-violet-50 dark:bg-violet-500/10"
   },
   {
     slug: "company-filings",
@@ -64,31 +81,13 @@ const TABS = [
     bg: "bg-indigo-50 dark:bg-indigo-500/10"
   },
   {
-    slug: "signals",
-    label: "Signals",
-    description: "Technical signals including RSI, moving average crossovers, and momentum.",
-    icon: Activity,
-    Component: SignalsTab,
-    color: "text-rose-500",
-    bg: "bg-rose-50 dark:bg-rose-500/10"
-  },
-  {
-    slug: "slbm-rental",
-    label: "Stock Rental (SLBM)",
-    description: "Insights into Securities Lending and Borrowing Mechanism activity.",
-    icon: Repeat,
-    Component: SlbmRentalTab,
+    slug: "corp-events",
+    label: "Corp. Events",
+    description: "Dividends, results, splits, board meetings and other scheduled corporate actions.",
+    icon: CalendarClock,
+    Component: CorpEventsTab,
     color: "text-amber-500",
     bg: "bg-amber-50 dark:bg-amber-500/10"
-  },
-  {
-    slug: "mtf-insights",
-    label: "MTF Insights",
-    description: "Margin Trading Facility data and leveraged position trends.",
-    icon: Users,
-    Component: MtfInsightsTab,
-    color: "text-cyan-500",
-    bg: "bg-cyan-50 dark:bg-cyan-500/10"
   },
   {
     slug: "fo-ban",
@@ -100,17 +99,8 @@ const TABS = [
     bg: "bg-red-50 dark:bg-red-500/10"
   },
   {
-    slug: "top-deliveries",
-    label: "Top Deliveries",
-    description: "Daily high-delivery stocks indicating long-term institutional interest.",
-    icon: Truck,
-    Component: TopDeliveriesTab,
-    color: "text-slate-500",
-    bg: "bg-slate-50 dark:bg-slate-500/10"
-  },
-  {
     slug: "market-valuation",
-    label: "Market Valuation",
+    label: "Index Comparison",
     description: "Historical PE, PB, and Yield analysis for major market indices.",
     icon: LineChart,
     Component: MarketValuationTab,

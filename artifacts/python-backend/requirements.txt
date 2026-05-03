@@ -9,7 +9,15 @@ python-multipart>=0.0.9
 openpyxl>=3.1.0
 yfinance>=0.2.48
 scipy>=1.11.0
+statsmodels>=0.14.0
+# pandas_ta is intentionally NOT pinned — it's a thin local shim at
+# ./pandas_ta/__init__.py that wraps the `ta` library above. Vendored in
+# the repo so Docker / pip install needs nothing extra for it. The boot
+# check in main.py still verifies it's importable.
+pydantic>=2.0.0
 feedparser>=6.0.0
+vaderSentiment>=3.3.2
+nsepython>=2.97
 PyJWT>=2.8.0
 cryptography>=41.0.0
 bcrypt>=4.0.0

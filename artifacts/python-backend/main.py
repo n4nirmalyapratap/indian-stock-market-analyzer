@@ -30,6 +30,8 @@ from app.routes.auth import router as auth_router
 from app.routes.sentiment import router as sentiment_router
 from app.routes.jobs import router as jobs_router
 from app.routes.insights import router as insights_router
+from app.routes.agents import router as agents_router
+from app.routes.portfolio import router as portfolio_router
 from app.services.log_buffer import setup_ring_buffer
 from app.services.market_cache_service import is_market_open, cache_status
 from app.services import market_cache_service as _mcs
@@ -177,8 +179,47 @@ async def _bug_fixer_loop() -> None:
         await asyncio.sleep(600)  # 10 minutes
 
 
+def _verify_critical_dependencies() -> None:
+    """Fail loudly at boot if any data-source-critical package is missing.
+    
+    History: both `nsepython` (NSE deals/events) and `statsmodels`
+    (cointegration p-values for Hydra Pairs) were used inside silent
+    try/except blocks. When the packages went missing from requirements,
+    the features simply returned empty/weak results without anyone noticing.
+    A loud import here is the meta-fix — anything in this list MUST resolve
+    or the backend won't start.
+    """
+    critical = {
+        "nsepython":   "NSE bulk/block deals + corporate events feed",
+        "statsmodels": "Engle-Granger cointegration for Hydra Pairs",
+        "pandas_ta":   "Technical indicators (RSI/MACD/etc)",
+        "vaderSentiment": "News sentiment scoring",
+        "feedparser":  "RSS news ingestion",
+        "yfinance":    "Yahoo price fallback",
+        "spacy":       "NER for news entity extraction",
+    }
+    missing: list[str] = []
+    for mod, why in critical.items():
+        try:
+            __import__(mod)
+        except ImportError as e:
+            missing.append(f"  - {mod}: {why}  ({e})")
+    if missing:
+        msg = (
+            "FATAL: critical dependencies missing — refusing to start.\n"
+            "Add these to requirements.txt:\n" + "\n".join(missing)
+        )
+        logger.error(msg)
+        raise RuntimeError(msg)
+    logger.info("Dependency check OK: %d critical packages present", len(critical))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Verify all critical data-source packages are importable. Loud failure
+    # beats silent fallback — see _verify_critical_dependencies for the why.
+    _verify_critical_dependencies()
+
     # Attach the ring-buffer AFTER uvicorn has configured logging (it resets
     # the root logger on startup, so setup_ring_buffer() in run.py is too early).
     # Also hook uvicorn's own loggers explicitly — they set propagate=False.
@@ -308,3 +349,5 @@ app.include_router(auth_router,             prefix="/api")
 app.include_router(sentiment_router,        prefix="/api")
 app.include_router(jobs_router,             prefix="/api")
 app.include_router(insights_router,         prefix="/api")
+app.include_router(agents_router,            prefix="/api")
+app.include_router(portfolio_router,         prefix="/api")
