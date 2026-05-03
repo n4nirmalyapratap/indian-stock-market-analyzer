@@ -49,6 +49,29 @@ A full-stack Indian stock market analysis platform with:
 - **Admin dashboard** (`/admin`) — React/Vite admin panel for user/system/compliance management
 - **Python FastAPI backend** (`/api`) — All API endpoints on port 8090
 
+### Deep AI Analyst (added 2026-05, Task #6, TradingAgents-architecture-faithful)
+Multi-agent equity-research pipeline at `/ai-analyst/:ticker`. Native
+implementation (not the upstream `tradingagents` PyPI package — see
+`.local/tradingagents_spike.md` for the rejection rationale: ~50MB of
+new deps and US-centric default tools that all need replacing).
+
+5 phases per run: 4 analysts (fundamentals/news/technicals/macro) in
+parallel → Bull vs Bear debate → Trader JSON synthesis → Risk/SEBI
+compliance gate. ~5 LLM calls per run via existing `ai_client`.
+
+- Backend service: `app/services/ai_analyst_service.py` (atomic
+  per-user quota in SQLite, per-user report cache, defence-in-depth
+  SEBI scrub on every user-visible string)
+- Routes: `app/routes/ai_analyst.py` — SSE `/run/{ticker}`, cached
+  `/report/{ticker}`, `/quota`, `/compare?a=&b=`, admin `/admin/stats`
+  & `/admin/flush` (X-Admin-Token only)
+- Cache DB: `market_cache/ai_analyst.db` (committed, mirrors fii_dii pattern)
+- Quota: 3 runs/user/IST-day, atomic reservation closes the
+  check-then-increment race for `/compare`'s parallel fan-out
+- Feature flag: `FEATURE_AI_ANALYST` env (defaults ON)
+- Frontend: `pages/AIAnalyst.tsx`, `pages/AIAnalystCompare.tsx`,
+  `components/AIAnalystButton.tsx`, nav entry in LayoutShell
+
 ### Famous-Investor AI Council (added 2026-05, Phase 1 of FinceptTerminal-inspired roadmap)
 A `/agents` and `/agents/:symbol` page that runs eight legendary investor personas (Buffett, Graham, Lynch, Munger, Klarman, Marks, Dalio, Burry) against any NSE stock, scores their documented checklists deterministically, aggregates a council verdict (`STRONG_BUY` / `BUY` / `HOLD` / `AVOID` / `STRONG_AVOID`), and writes a one-paragraph thesis in each investor's voice via `ai_client.ask()` (gracefully degrades when OpenRouter isn't connected).
 - **Backend**: `app/services/agents_service.py` (8 persona evaluators + `run_council`/`run_single_persona` + thesis writer), `app/routes/agents.py` (4 endpoints under `/api/agents`). Routes registered in `main.py`. Raw `yf.Ticker(...).info` fetched via `asyncio.to_thread + yahoo_candidates` and cached for 24 h (fundamentals don't move minute-by-minute). Deterministic scoring is fully offline — only the AI thesis touches the LLM.

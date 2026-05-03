@@ -18,6 +18,7 @@ export const MAIN_NAV = [
   { path: "/news",       label: "News Feed",      icon: Newspaper },
   { path: "/stocks",     label: "Stock Lookup",   icon: Search },
   { path: "/agents",     label: "Investor Council", icon: Users },
+  { path: "/ai-analyst", label: "AI Analyst",     icon: Brain },
   { path: "/patterns",   label: "Patterns",       icon: Scan },
   { path: "/scanners",   label: "Scanners",       icon: Filter },
   { path: "/hydra",      label: "AI Analyzer",    icon: Brain },
