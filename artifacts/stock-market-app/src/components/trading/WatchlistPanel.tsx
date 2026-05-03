@@ -189,8 +189,7 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd, theme }, r
     if (!activeSymbol) return;
     let cancelled = false;
     setStockDetail(null);
-    fetch(`/api/stocks/${activeSymbol}`)
-      .then(r => r.ok ? r.json() : null)
+    fetchApi<StockDetail>(`/stocks/${encodeURIComponent(activeSymbol)}`)
       .then(data => { if (!cancelled && data) setStockDetail(data); })
       .catch(() => {});
     return () => { cancelled = true; };
