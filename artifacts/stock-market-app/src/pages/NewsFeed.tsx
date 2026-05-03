@@ -927,8 +927,9 @@ export default function NewsFeed() {
         })}
       </div>
 
-      {/* Search + view toggle (only for news tabs) */}
-      {activeTab !== "deals" && activeTab !== "events" && (
+      {/* Search + view toggle (only for news tabs, hidden in reels mode — the
+          reels overlay has its own "List" exit button) */}
+      {activeTab !== "deals" && activeTab !== "events" && !reelsMode && (
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: muTxt }} />
