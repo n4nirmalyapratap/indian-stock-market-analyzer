@@ -110,11 +110,11 @@ def _ensure_schema() -> None:
                 wall_clock_ms INTEGER NOT NULL DEFAULT 0,
                 sources_used  TEXT NOT NULL DEFAULT '',
                 created_at    INTEGER NOT NULL,
-                -- Shared per-ticker/day cache (task spec): the report is
-                -- generated public research, the same ticker on the same IST
-                -- day returns the same report regardless of who triggered it.
-                -- `user_id` records who originally generated it for audit.
-                PRIMARY KEY (ticker, run_date_ist)
+                -- Per-user cache: each user gets their own copy of today's
+                -- report so requests are isolated across accounts. `user_id`
+                -- is part of the PK so two users analysing the same ticker
+                -- on the same IST day each have their own row.
+                PRIMARY KEY (ticker, run_date_ist, user_id)
             );
             CREATE INDEX IF NOT EXISTS idx_reports_created ON ai_analyst_reports(created_at);
 
@@ -125,6 +125,39 @@ def _ensure_schema() -> None:
                 PRIMARY KEY (user_id, run_date_ist)
             );
         """)
+        # One-time migration: older databases used PK (ticker, run_date_ist)
+        # which shared a single report across users. We now isolate per user
+        # by including user_id in the PK. SQLite cannot ALTER a primary key,
+        # so detect the legacy schema and rebuild the table in place.
+        pk_cols = [r["name"] for r in c.execute(
+            "PRAGMA table_info(ai_analyst_reports)"
+        ).fetchall() if r["pk"] > 0]
+        if pk_cols and "user_id" not in pk_cols:
+            c.executescript("""
+                ALTER TABLE ai_analyst_reports RENAME TO ai_analyst_reports_old;
+                CREATE TABLE ai_analyst_reports (
+                    ticker        TEXT NOT NULL,
+                    run_date_ist  TEXT NOT NULL,
+                    user_id       TEXT NOT NULL,
+                    report_json   TEXT NOT NULL,
+                    models_used   TEXT NOT NULL DEFAULT '',
+                    wall_clock_ms INTEGER NOT NULL DEFAULT 0,
+                    sources_used  TEXT NOT NULL DEFAULT '',
+                    created_at    INTEGER NOT NULL,
+                    PRIMARY KEY (ticker, run_date_ist, user_id)
+                );
+                INSERT INTO ai_analyst_reports
+                    (ticker, run_date_ist, user_id, report_json,
+                     models_used, wall_clock_ms, sources_used, created_at)
+                SELECT ticker, run_date_ist,
+                       COALESCE(NULLIF(user_id, ''), 'anonymous'),
+                       report_json, models_used, wall_clock_ms,
+                       sources_used, created_at
+                  FROM ai_analyst_reports_old;
+                DROP TABLE ai_analyst_reports_old;
+                CREATE INDEX IF NOT EXISTS idx_reports_created
+                    ON ai_analyst_reports(created_at);
+            """)
         c.commit()
 
 
@@ -207,17 +240,16 @@ def _try_reserve_quota(user_id: str, limit: int = DEFAULT_DAILY_QUOTA) -> bool:
 # ── Cache ─────────────────────────────────────────────────────────────────────
 
 def get_cached_report(ticker: str, user_id: str = "") -> Optional[dict]:
-    """Return today's shared cached report for this ticker, if any.
-    Cache is intentionally shared per-ticker/IST-day so a popular ticker is
-    only analysed once per day (cost / quota objective in task spec). The
-    `user_id` argument is accepted for API symmetry but not used for lookup —
-    the report content is generated public research, not user-specific PII."""
+    """Return today's cached report for this ticker scoped to ``user_id``.
+    Cache is per-user/per-ticker/per-IST-day so two users running the same
+    ticker each get their own report row (and one user's report is never
+    served to another user)."""
     today = _today_ist()
     with _DB_LOCK, _conn() as c:
         row = c.execute(
             "SELECT report_json, created_at FROM ai_analyst_reports "
-            "WHERE ticker=? AND run_date_ist=?",
-            (ticker.upper(), today),
+            "WHERE ticker=? AND run_date_ist=? AND user_id=?",
+            (ticker.upper(), today, user_id or "anonymous"),
         ).fetchone()
     if not row:
         return None
@@ -503,12 +535,12 @@ _ADVICE_REPLACEMENTS = [
     (re.compile(r"\b(I|we|our team) (recommend|advise|suggest)s? (buying|selling|holding|shorting|accumulating|booking|trimming|adding|reducing)\b", re.I),
      r"this analysis points to \3"),
     (re.compile(r"\b(strong|firm|clear|sure-shot|sureshot)\s+(buy|sell|hold)\b", re.I),
-     r"\1 \2-side bias in the research"),
+     r"a high-conviction \2-side bias in the research"),
     (re.compile(r"\bbuy (now|today|here|the dip|on dips|at cmp|at this level)\b", re.I),
      "the bull case is intact at current levels"),
     (re.compile(r"\bsell (now|today|here|on rallies|at cmp|at this level)\b", re.I),
      "the bear case is intact at current levels"),
-    (re.compile(r"\b(enter|exit|book profits?|book losses?)\s+(now|today|here|on dips|on rallies|at cmp|at this level)\b", re.I),
+    (re.compile(r"\b(enter|exit|book profit(?:s)?|book loss(?:es)?)\s+(now|today|here|on dips|on rallies|at cmp|at this level)\b", re.I),
      r"the research framing for \1ing improves at these levels"),
     (re.compile(r"\b(must|should)\s+(accumulate|hold|exit|trim|book)\b", re.I),
      r"the analysis suggests \2ing"),
@@ -517,7 +549,7 @@ _ADVICE_REPLACEMENTS = [
     # Outcome guarantees
     (re.compile(r"\b(guaranteed|assured|risk[-\s]?free)\s+(profit|return|gain|win)s?\b", re.I),
      "potential outcome (no guarantees)"),
-    (re.compile(r"\b(can[''']?t lose|sure[-\s]?shot|sureshot|no[-\s]?brainer)\b", re.I),
+    (re.compile(r"\b(can[''\u2019\u2018]?t lose|sure[-\s]?shot|sureshot|no[-\s]?brainer|nobrainer)\b", re.I),
      "high-conviction (still subject to market risk)"),
     (re.compile(r"\bmultibagger\b", re.I),
      "structurally compounding"),
