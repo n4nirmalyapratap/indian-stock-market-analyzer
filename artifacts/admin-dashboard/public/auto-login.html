@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>auto-login</title></head><body>
+<script>
+(function(){
+  var p = new URLSearchParams(location.search);
+  var t = p.get("t");
+  var to = p.get("to") || "/ai-analyst";
+  if (t) sessionStorage.setItem("admin_token", t);
+  location.replace(to);
+})();
+</script>
+</body></html>
