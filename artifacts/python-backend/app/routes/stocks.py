@@ -271,7 +271,7 @@ async def get_stock_financials(symbol: str):
         "grossMargin":     _pct(ov.get("grossMargins")),
         "operatingMargin": _pct(ov.get("operatingMargins")),
         "netMargin":       _pct(ov.get("profitMargins")),
-        "dividendYield":   _f(ov.get("dividendYield")),
+        "dividendYield":   _pct(ov.get("dividendYield")),
         "dividendRate":    _f(ov.get("dividendRate")),
         "earningsGrowth":  _pct(ov.get("earningsGrowth")),
         "revenueGrowth":   _pct(ov.get("revenueGrowth")),

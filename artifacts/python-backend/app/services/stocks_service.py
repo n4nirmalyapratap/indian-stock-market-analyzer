@@ -81,21 +81,27 @@ class StocksService:
         sr     = detect_sr(ohlcv, 10)
 
         lc   = closes[-1]
-        le9  = ema9[-1]  if ema9  else 0
-        le21 = ema21[-1] if ema21 else 0
-        le50 = ema50[-1] if ema50 else 0
-        le200= ema200[-1]if ema200 else 0
-        lr   = rsi[-1]   if rsi   else 50
-        lh   = macd["histogram"][-1] if macd["histogram"] else 0
-        lbu  = bb["upper"][-1]  if bb["upper"]  else lc
-        lbl  = bb["lower"][-1]  if bb["lower"]  else lc
-        lbm  = bb["middle"][-1] if bb["middle"] else lc
-        latr = atr[-1]          if atr          else lc * 0.015
+        # When history is too short to compute the indicator, return None so
+        # the UI can render "—" instead of pretending the EMA equals 0 (which
+        # makes the price look infinitely above the average). Trend defaults
+        # to NEUTRAL when EMA50 is missing.
+        le9  = ema9[-1]   if ema9   else None
+        le21 = ema21[-1]  if ema21  else None
+        le50 = ema50[-1]  if ema50  else None
+        le200= ema200[-1] if ema200 else None
+        lr   = rsi[-1]    if rsi    else None
+        lh   = macd["histogram"][-1] if macd["histogram"] else None
+        lbu  = bb["upper"][-1]  if bb["upper"]  else None
+        lbl  = bb["lower"][-1]  if bb["lower"]  else None
+        lbm  = bb["middle"][-1] if bb["middle"] else None
+        latr = atr[-1]          if atr          else None
 
-        if lc > le50:
-            trend = "STRONG_BULLISH" if lc > le200 else "BULLISH"
+        if le50 is None:
+            trend = "NEUTRAL"
+        elif lc > le50:
+            trend = "STRONG_BULLISH" if (le200 is not None and lc > le200) else "BULLISH"
         elif lc < le50:
-            trend = "STRONG_BEARISH" if lc < le200 else "BEARISH"
+            trend = "STRONG_BEARISH" if (le200 is not None and lc < le200) else "BEARISH"
         else:
             trend = "NEUTRAL"
 
@@ -104,8 +110,11 @@ class StocksService:
         nearest_support    = supports_below[-1]    if supports_below    else None
         nearest_resistance = resistances_above[0]  if resistances_above else None
 
-        bw = f"{(lbu - lbl) / lbm * 100:.2f}" if lbm else "0"
-        bb_pos = "ABOVE_UPPER" if lc > lbu else "BELOW_LOWER" if lc < lbl else "INSIDE"
+        bw = f"{(lbu - lbl) / lbm * 100:.2f}" if (lbm and lbu is not None and lbl is not None) else None
+        if lbu is None or lbl is None:
+            bb_pos = "UNKNOWN"
+        else:
+            bb_pos = "ABOVE_UPPER" if lc > lbu else "BELOW_LOWER" if lc < lbl else "INSIDE"
 
         return {
             "currentPrice": lc,
