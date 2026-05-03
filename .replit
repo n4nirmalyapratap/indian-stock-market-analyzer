@@ -55,13 +55,13 @@ waitForPort = 5000
 name = "Admin Dashboard"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd artifacts/admin-dashboard && PORT=5173 BASE_PATH=/ pnpm dev"
-waitForPort = 5173
-
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd artifacts/admin-dashboard && PORT=5173 BASE_PATH=/admin/ pnpm dev"
+waitForPort = 5173
 
 [agent]
 stack = "BEST_EFFORT_FALLBACK"
