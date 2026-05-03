@@ -378,6 +378,20 @@ export default function AIAnalyst() {
           <div className="bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-900/30 rounded-lg p-4 text-xs text-amber-900 dark:text-amber-200">
             <p className="font-semibold mb-1">Disclosure & disclaimer</p>
             <p>{report.disclaimer}</p>
+            <p className="mt-2">
+              This report is AI-generated educational content, not investment
+              advice or a recommendation under SEBI (Investment Advisers)
+              Regulations, 2013. Always consult a SEBI-registered investment
+              adviser before making investment decisions. Learn more at the{" "}
+              <a
+                href="https://investor.sebi.gov.in/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline font-medium hover:text-amber-950 dark:hover:text-amber-100"
+              >
+                SEBI Investor Awareness portal
+              </a>.
+            </p>
             <p className="mt-2 text-[10px] text-amber-800/80 dark:text-amber-300/70">
               <span className="font-semibold">Models used:</span> {report.modelsUsed.join(", ") || "—"}<br />
               <span className="font-semibold">Data sources:</span> {report.sourcesUsed.join(", ") || "—"}<br />
