@@ -1045,6 +1045,7 @@ export default function TradingPlatform() {
                   chartType={chartType}
                   indicators={indicators}
                   onIndicatorRemove={toggleIndicator}
+                  onClearIndicators={() => setIndicators(new Set())}
                   isActive={panel.id === activePanelId}
                   drawings={panel.drawings}
                   onDrawingAdd={(d) => addDrawing(panel.id, d)}
