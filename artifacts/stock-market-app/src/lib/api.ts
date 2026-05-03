@@ -196,6 +196,8 @@ export interface ChecklistItem {
   detail:    string;
 }
 
+export type PersonaRegion = "India" | "Global";
+
 export interface PersonaResult {
   id:         string;
   name:       string;
@@ -206,6 +208,7 @@ export interface PersonaResult {
   verdict:    AgentVerdict;
   checklist:  ChecklistItem[];
   thesis?:    string;
+  region?:    PersonaRegion;
 }
 
 export interface PersonaMeta {
@@ -215,6 +218,7 @@ export interface PersonaMeta {
   era:        string;
   philosophy: string;
   signature:  string;
+  region?:    PersonaRegion;
 }
 
 export interface AgentSource {
