@@ -9,8 +9,68 @@ import {
 
 // ─── Types — re-exported from shared api types so they stay in sync ──────────
 
-import type { AgentVerdict as Verdict, ChecklistItem, PersonaResult, CouncilResponse } from "@/lib/api";
+import type { AgentVerdict as Verdict, ChecklistItem, PersonaResult, CouncilResponse, PersonaRegion } from "@/lib/api";
 export type { Verdict, ChecklistItem, PersonaResult, CouncilResponse };
+
+// Fallback region map by persona id (backend already emits `region`, but this
+// keeps the UI safe if a payload is missing the field).
+const PERSONA_REGION_FALLBACK: Record<string, PersonaRegion> = {
+  buffett: "Global", graham: "Global", lynch: "Global", munger: "Global",
+  klarman: "Global", marks: "Global", dalio: "Global", burry: "Global",
+  jhunjhunwala: "India", damani_rk: "India", agrawal: "India", kedia: "India",
+  veliyath: "India", damani_ramesh: "India", kacholia: "India", khanna: "India",
+};
+
+function regionOf(p: { id: string; region?: PersonaRegion }): PersonaRegion {
+  return p.region ?? PERSONA_REGION_FALLBACK[p.id] ?? "Global";
+}
+
+type RegionFilter = "all" | "Global" | "India";
+
+function RegionBadge({ region }: { region: PersonaRegion }) {
+  const isIndia = region === "India";
+  return (
+    <span
+      className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wider ${
+        isIndia
+          ? "bg-orange-100 dark:bg-orange-500/20 text-orange-700 dark:text-orange-300"
+          : "bg-sky-100 dark:bg-sky-500/20 text-sky-700 dark:text-sky-300"
+      }`}
+      title={isIndia ? "Indian investor" : "Global investor"}
+    >
+      {isIndia ? "IN" : "GL"}
+    </span>
+  );
+}
+
+function RegionToggle({ value, onChange, counts }: {
+  value: RegionFilter;
+  onChange: (v: RegionFilter) => void;
+  counts: { all: number; Global: number; India: number };
+}) {
+  const opts: { key: RegionFilter; label: string }[] = [
+    { key: "all",    label: `All (${counts.all})` },
+    { key: "Global", label: `Global (${counts.Global})` },
+    { key: "India",  label: `India (${counts.India})` },
+  ];
+  return (
+    <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1 w-fit">
+      {opts.map(o => (
+        <button
+          key={o.key}
+          onClick={() => onChange(o.key)}
+          className={`px-3 py-1.5 rounded-md text-xs font-medium transition ${
+            value === o.key
+              ? "bg-white dark:bg-gray-900 text-indigo-700 dark:text-indigo-300 shadow-sm"
+              : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 // ─── Visual helpers ───────────────────────────────────────────────────────────
 
@@ -91,7 +151,10 @@ function PersonaCard({ persona, onOpen }: { persona: PersonaResult; onOpen: (id:
       <div className="p-4 space-y-3">
         <div className="flex items-start justify-between gap-2">
           <div>
-            <h3 className="font-bold text-gray-900 dark:text-white text-sm">{persona.name}</h3>
+            <div className="flex items-center gap-1.5">
+              <h3 className="font-bold text-gray-900 dark:text-white text-sm">{persona.name}</h3>
+              <RegionBadge region={regionOf(persona)} />
+            </div>
             <p className="text-[11px] text-gray-500 dark:text-gray-400">{persona.firm}</p>
           </div>
           <VerdictBadge verdict={persona.verdict} />
@@ -289,6 +352,7 @@ export default function InvestorCouncil() {
 
   const [openPersona, setOpenPersona] = useState<string | null>(null);
   const [view, setView] = useState<"cards" | "matrix">("cards");
+  const [region, setRegion] = useState<RegionFilter>("all");
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["agent-council", symbol],
@@ -340,6 +404,8 @@ export default function InvestorCouncil() {
           symbol={symbol}
           view={view}
           onChangeView={setView}
+          region={region}
+          onChangeRegion={setRegion}
           onOpenPersona={setOpenPersona}
         />
       )}
@@ -355,14 +421,56 @@ export default function InvestorCouncil() {
   );
 }
 
-function CouncilContent({ data, symbol, view, onChangeView, onOpenPersona }: {
+function deriveCouncilStats(personas: PersonaResult[]) {
+  const buyCount   = personas.filter(p => p.verdict === "BUY"   || p.verdict === "STRONG_BUY").length;
+  const avoidCount = personas.filter(p => p.verdict === "AVOID" || p.verdict === "STRONG_AVOID").length;
+  const holdCount  = personas.filter(p => p.verdict === "HOLD").length;
+  const avgScore   = personas.length
+    ? personas.reduce((s, p) => s + p.score, 0) / personas.length
+    : 0;
+  let verdict: Verdict = "HOLD";
+  if (personas.length > 0) {
+    if (buyCount > avoidCount && avgScore >= 0.65)      verdict = "STRONG_BUY";
+    else if (buyCount > avoidCount)                      verdict = "BUY";
+    else if (avoidCount > buyCount && avgScore < 0.35)   verdict = "STRONG_AVOID";
+    else if (avoidCount > buyCount)                      verdict = "AVOID";
+  }
+  return { buyCount, avoidCount, holdCount, avgScore, verdict };
+}
+
+function CouncilContent({ data, symbol, view, onChangeView, region, onChangeRegion, onOpenPersona }: {
   data: CouncilResponse;
   symbol: string;
   view: "cards" | "matrix";
   onChangeView: (v: "cards" | "matrix") => void;
+  region: RegionFilter;
+  onChangeRegion: (r: RegionFilter) => void;
   onOpenPersona: (id: string) => void;
 }) {
-  const verdictStyle = VERDICT_STYLE[data.council.verdict];
+  const counts = {
+    all:    data.personas.length,
+    Global: data.personas.filter(p => regionOf(p) === "Global").length,
+    India:  data.personas.filter(p => regionOf(p) === "India").length,
+  };
+
+  const filteredPersonas = region === "all"
+    ? data.personas
+    : data.personas.filter(p => regionOf(p) === region);
+
+  // When showing all personas, prefer the council stats already computed by the
+  // backend (it may apply weighting). For region-filtered subsets, recompute
+  // locally so the header reflects the visible voices.
+  const stats = region === "all"
+    ? {
+        buyCount:   data.council.buyCount,
+        holdCount:  data.council.holdCount,
+        avoidCount: data.council.avoidCount,
+        avgScore:   data.council.avgScore,
+        verdict:    data.council.verdict,
+      }
+    : deriveCouncilStats(filteredPersonas);
+
+  const verdictStyle = VERDICT_STYLE[stats.verdict];
 
   return (
     <>
@@ -371,6 +479,11 @@ function CouncilContent({ data, symbol, view, onChangeView, onOpenPersona }: {
           <div>
             <p className="text-xs uppercase tracking-wider text-indigo-600 dark:text-indigo-400 font-bold mb-1">
               Investor Council Verdict
+              {region !== "all" && (
+                <span className="ml-2 normal-case tracking-normal text-[11px] text-gray-500 dark:text-gray-400 font-medium">
+                  · {region} voices only
+                </span>
+              )}
             </p>
             <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
               {data.name || symbol}{" "}
@@ -385,49 +498,58 @@ function CouncilContent({ data, symbol, view, onChangeView, onOpenPersona }: {
               {verdictStyle.label}
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              Avg score {Math.round(data.council.avgScore * 100)}% across {data.personas.length} personas
+              Avg score {Math.round(stats.avgScore * 100)}% across {filteredPersonas.length} personas
             </p>
           </div>
         </div>
 
         <div className="mt-4 flex gap-3 text-xs">
           <span className="px-2 py-1 rounded bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 font-medium">
-            {data.council.buyCount} buy
+            {stats.buyCount} buy
           </span>
           <span className="px-2 py-1 rounded bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 font-medium">
-            {data.council.holdCount} hold
+            {stats.holdCount} hold
           </span>
           <span className="px-2 py-1 rounded bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-300 font-medium">
-            {data.council.avoidCount} avoid
+            {stats.avoidCount} avoid
           </span>
         </div>
       </div>
 
-      <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1 w-fit">
-        <button
-          onClick={() => onChangeView("cards")}
-          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-medium transition ${view === "cards" ? "bg-white dark:bg-gray-900 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"}`}
-        >
-          <LayoutGrid className="w-3.5 h-3.5" /> Persona Cards
-        </button>
-        <button
-          onClick={() => onChangeView("matrix")}
-          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-medium transition ${view === "matrix" ? "bg-white dark:bg-gray-900 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"}`}
-        >
-          <Grid3x3 className="w-3.5 h-3.5" /> Council View
-        </button>
+      <div className="flex items-center gap-3 flex-wrap">
+        <RegionToggle value={region} onChange={onChangeRegion} counts={counts} />
+        <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1 w-fit">
+          <button
+            onClick={() => onChangeView("cards")}
+            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-medium transition ${view === "cards" ? "bg-white dark:bg-gray-900 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"}`}
+          >
+            <LayoutGrid className="w-3.5 h-3.5" /> Persona Cards
+          </button>
+          <button
+            onClick={() => onChangeView("matrix")}
+            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-medium transition ${view === "matrix" ? "bg-white dark:bg-gray-900 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"}`}
+          >
+            <Grid3x3 className="w-3.5 h-3.5" /> Council View
+          </button>
+        </div>
       </div>
 
-      {view === "cards" && (
+      {filteredPersonas.length === 0 && (
+        <div className="text-sm text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-white/10 rounded-xl p-6 text-center">
+          No {region} personas in this council.
+        </div>
+      )}
+
+      {filteredPersonas.length > 0 && view === "cards" && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {data.personas.map((p) => (
+          {filteredPersonas.map((p) => (
             <PersonaCard key={p.id} persona={p} onOpen={onOpenPersona} />
           ))}
         </div>
       )}
 
-      {view === "matrix" && (
-        <CouncilMatrix personas={data.personas} onOpen={onOpenPersona} />
+      {filteredPersonas.length > 0 && view === "matrix" && (
+        <CouncilMatrix personas={filteredPersonas} onOpen={onOpenPersona} />
       )}
 
       <div className="text-xs text-gray-400 dark:text-gray-600 text-center max-w-2xl mx-auto pt-2">
