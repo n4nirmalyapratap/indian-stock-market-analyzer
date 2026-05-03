@@ -15,6 +15,7 @@ function getTierMeta(isDark: boolean) {
     YELLOW:      { label: "Neutral",     color: isDark ? "#fde047" : "#ca8a04", bg: isDark ? "rgba(202,138,4,0.15)"  : "#fefce8", border: isDark ? "rgba(253,224,71,0.3)"  : "#fde68a", badge: "bg-yellow-500 text-white" },
     ORANGE:      { label: "Weakening",   color: isDark ? "#fb923c" : "#ea580c", bg: isDark ? "rgba(234,88,12,0.15)"  : "#fff7ed", border: isDark ? "rgba(251,146,60,0.3)"  : "#fed7aa", badge: "bg-orange-500 text-white" },
     DEEP_RED:    { label: "Deep Red",    color: isDark ? "#f87171" : "#dc2626", bg: isDark ? "rgba(220,38,38,0.15)"  : "#fef2f2", border: isDark ? "rgba(248,113,113,0.3)" : "#fecaca", badge: "bg-red-600 text-white" },
+    UNKNOWN:     { label: "No Data",     color: isDark ? "#94a3b8" : "#6b7280", bg: isDark ? "rgba(100,116,139,0.15)": "#f3f4f6", border: isDark ? "rgba(148,163,184,0.3)" : "#e5e7eb", badge: "bg-gray-500 text-white" },
   } as const;
 }
 
@@ -160,7 +161,7 @@ function StrengthMatrix({ sectors, isDark }: { sectors: any[]; isDark: boolean }
   const TIER_META = getTierMeta(isDark);
   const muTxt = isDark ? "#64748b" : "#9ca3af";
 
-  const byTier: Record<string, any[]> = { DEEP_GREEN: [], LIGHT_GREEN: [], YELLOW: [], ORANGE: [], DEEP_RED: [] };
+  const byTier: Record<string, any[]> = { DEEP_GREEN: [], LIGHT_GREEN: [], YELLOW: [], ORANGE: [], DEEP_RED: [], UNKNOWN: [] };
   for (const s of sectors) {
     const t = s.momentum?.tier || "YELLOW";
     if (byTier[t]) byTier[t].push(s);
@@ -178,7 +179,7 @@ function StrengthMatrix({ sectors, isDark }: { sectors: any[]; isDark: boolean }
       <div className="p-5 space-y-4">
         {Object.entries(byTier).map(([tier, secs]) => {
           if (!secs.length) return null;
-          const m = TIER_META[tier as keyof typeof TIER_META];
+          const m = TIER_META[tier as keyof typeof TIER_META] || TIER_META.YELLOW;
           return (
             <div key={tier}>
               <div className="flex items-center gap-2 mb-2">
@@ -260,7 +261,7 @@ function PortfolioPanel({ strategy, isDark }: { strategy: any; isDark: boolean }
             </p>
             <div className="space-y-2">
               {picks.map((p: any, i: number) => {
-                const tm = TIER_META[p.tier as keyof typeof TIER_META || "YELLOW"];
+                const tm = TIER_META[(p.tier as keyof typeof TIER_META)] || TIER_META.YELLOW;
                 return (
                   <div key={p.symbol} className="rounded-xl p-4 border" style={{ backgroundColor: tm.bg, borderColor: tm.border }}>
                     <div className="flex items-start justify-between gap-3">
@@ -354,7 +355,7 @@ function SectorTable({ sectors, isDark }: { sectors: any[]; isDark: boolean }) {
           <tbody>
             {sectors.map((s: any, i: number) => {
               const ms = s.momentum || {};
-              const tm = TIER_META[ms.tier as keyof typeof TIER_META || "YELLOW"];
+              const tm = TIER_META[(ms.tier as keyof typeof TIER_META)] || TIER_META.YELLOW;
               return (
                 <tr key={s.symbol} className="transition-colors" style={{ borderBottom: `1px solid ${divCol}` }}
                   onMouseEnter={e => (e.currentTarget.style.background = rowHov)}
