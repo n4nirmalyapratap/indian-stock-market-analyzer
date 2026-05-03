@@ -1,0 +1,312 @@
+import { useEffect, useState, useCallback, useMemo } from "react";
+import { Link, useLocation } from "wouter";
+import {
+  Microscope, Search, Trash2, RotateCw, ExternalLink,
+  TrendingUp, TrendingDown, Minus, Loader2, AlertCircle,
+  Building2, GitCompare, ListChecks,
+} from "lucide-react";
+import { useCustomAuth } from "@/context/CustomAuthContext";
+
+type Scope = "single" | "pair" | "group";
+type Verdict = "BUY" | "HOLD" | "SELL";
+
+interface SavedRow {
+  id: number;
+  scope: Scope;
+  scopeKey: string;
+  tickers: string[];
+  label: string | null;
+  verdict: Verdict | null;
+  confidence: string | null;
+  headline: string | null;
+  savedAt: string;
+  createdAt: string;
+}
+
+const VERDICT_STYLE: Record<Verdict, string> = {
+  BUY:  "bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300",
+  HOLD: "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300",
+  SELL: "bg-red-100   text-red-700   dark:bg-red-500/20   dark:text-red-300",
+};
+const VERDICT_ICON: Record<Verdict, any> = {
+  BUY: TrendingUp, HOLD: Minus, SELL: TrendingDown,
+};
+
+function VerdictBadge({ v }: { v: Verdict | null }) {
+  if (!v) return null;
+  const Icon = VERDICT_ICON[v];
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${VERDICT_STYLE[v]}`}>
+      <Icon className="w-3 h-3" />
+      {v}
+    </span>
+  );
+}
+
+function fmtDate(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  } catch {
+    return iso;
+  }
+}
+
+const TABS: { key: Scope; label: string; Icon: any }[] = [
+  { key: "single", label: "Stocks", Icon: Building2 },
+  { key: "pair",   label: "Pairs",  Icon: GitCompare },
+  { key: "group",  label: "Groups", Icon: ListChecks },
+];
+
+const EMPTY_COPY: Record<Scope, { title: string; body: string; cta: { href: string; label: string } }> = {
+  single: {
+    title: "No saved stock analyses yet",
+    body:  "Run a Deep AI Analysis on any stock and it'll show up here, kept until you re-run it.",
+    cta:   { href: "/ai-analyst", label: "Analyse a stock →" },
+  },
+  pair: {
+    title: "No saved pair comparisons yet",
+    body:  "Compare two stocks side-by-side and the result will be saved here.",
+    cta:   { href: "/ai-analyst/compare", label: "Compare two stocks →" },
+  },
+  group: {
+    title: "No saved watchlist scans yet",
+    body:  "Scan a watchlist with AI Analyst and the whole group will be saved here.",
+    cta:   { href: "/ai-analyst/scan", label: "Scan a watchlist →" },
+  },
+};
+
+export default function SavedAnalyses() {
+  const { token } = useCustomAuth();
+  const [, navigate] = useLocation();
+  const [tab, setTab] = useState<Scope>("single");
+  const [q, setQ] = useState("");
+  const [items, setItems] = useState<SavedRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    if (!token) return;
+    setLoading(true); setErr(null);
+    try {
+      const url = `/api/ai-analyst/saved?scope=${tab}&q=${encodeURIComponent(q)}&limit=100`;
+      const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`);
+      const j = await r.json();
+      setItems(j.items || []);
+    } catch (e: any) {
+      setErr(e.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [tab, q, token]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const onDelete = async (row: SavedRow) => {
+    if (!token) return;
+    if (!confirm(`Delete this saved ${row.scope === "single" ? "stock analysis"
+                  : row.scope === "pair" ? "pair comparison" : "watchlist scan"}?`)) return;
+    setBusyId(row.id);
+    try {
+      const r = await fetch(`/api/ai-analyst/saved/${row.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) throw new Error(await r.text() || `HTTP ${r.status}`);
+      setItems(prev => prev.filter(x => x.id !== row.id));
+    } catch (e: any) {
+      setErr(e.message || String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const openHref = (row: SavedRow): string => {
+    if (row.scope === "single") return `/ai-analyst/${encodeURIComponent(row.tickers[0] || "")}`;
+    if (row.scope === "pair") {
+      const [a, b] = row.tickers;
+      return `/ai-analyst/compare?a=${encodeURIComponent(a || "")}&b=${encodeURIComponent(b || "")}`;
+    }
+    return `/ai-analyst/scan?tickers=${encodeURIComponent(row.tickers.join(","))}`
+         + (row.label ? `&name=${encodeURIComponent(row.label)}` : "");
+  };
+
+  const onRerun = (row: SavedRow) => {
+    navigate(`${openHref(row)}${openHref(row).includes("?") ? "&" : "?"}rerun=1`);
+  };
+
+  const empty = EMPTY_COPY[tab];
+  const counts = useMemo(() => {
+    const c = { single: 0, pair: 0, group: 0 };
+    items.forEach(i => { if (c[i.scope] != null) c[i.scope]++; });
+    return c;
+  }, [items]);
+
+  return (
+    <div className="max-w-5xl mx-auto p-4 space-y-4">
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="w-10 h-10 rounded-lg bg-indigo-100 dark:bg-indigo-500/20 flex items-center justify-center">
+          <Microscope className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-xl font-bold text-gray-900 dark:text-white">Saved Analyses</h1>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Every Deep AI Analyst run is saved here until you re-run it. Re-runs overwrite the saved copy.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Link href="/ai-analyst"
+                className="text-xs px-3 py-1.5 rounded-md border border-gray-200 dark:border-white/10 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5">
+            Single ticker
+          </Link>
+          <Link href="/ai-analyst/compare"
+                className="text-xs px-3 py-1.5 rounded-md border border-gray-200 dark:border-white/10 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5">
+            Compare
+          </Link>
+          <Link href="/ai-analyst/scan"
+                className="text-xs px-3 py-1.5 rounded-md border border-gray-200 dark:border-white/10 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5">
+            Scan
+          </Link>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex items-center gap-1 border-b border-gray-200 dark:border-white/10">
+        {TABS.map(t => {
+          const Icon = t.Icon;
+          const active = t.key === tab;
+          return (
+            <button key={t.key}
+                    onClick={() => setTab(t.key)}
+                    className={`inline-flex items-center gap-2 px-3 py-2 text-sm font-medium border-b-2 -mb-px ${
+                      active
+                        ? "border-indigo-600 text-indigo-600 dark:text-indigo-400"
+                        : "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                    }`}>
+              <Icon className="w-4 h-4" />
+              {t.label}
+              {!loading && active && (
+                <span className="text-xs text-gray-400">({counts[t.key]})</span>
+              )}
+            </button>
+          );
+        })}
+        <div className="ml-auto py-1.5">
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              value={q}
+              onChange={e => setQ(e.target.value)}
+              placeholder="Filter by ticker or group name…"
+              className="pl-7 pr-3 py-1.5 text-xs rounded-md border border-gray-200 dark:border-white/10 bg-white dark:bg-gray-950 text-gray-900 dark:text-white w-56"
+            />
+          </div>
+        </div>
+      </div>
+
+      {err && (
+        <div className="rounded-md border border-red-200 dark:border-red-900/40 bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-700 dark:text-red-300 flex items-start gap-2">
+          <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <span>{err}</span>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="text-center py-12 text-gray-500 dark:text-gray-400 text-sm flex items-center justify-center gap-2">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading saved analyses…
+        </div>
+      ) : items.length === 0 ? (
+        <div className="text-center py-16 border border-dashed border-gray-200 dark:border-white/10 rounded-xl">
+          <p className="text-sm font-medium text-gray-700 dark:text-gray-200">{empty.title}</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-md mx-auto">{empty.body}</p>
+          <Link href={empty.cta.href}
+                className="inline-block mt-4 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
+            {empty.cta.label}
+          </Link>
+        </div>
+      ) : (
+        <ul className="space-y-2">
+          {items.map(row => (
+            <li key={row.id}
+                className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-lg p-3 sm:p-4">
+              <div className="flex items-start gap-3 flex-wrap">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {row.scope === "single" && (
+                      <span className="font-mono font-semibold text-sm text-gray-900 dark:text-white">
+                        {row.tickers[0]}
+                      </span>
+                    )}
+                    {row.scope === "pair" && (
+                      <span className="font-mono font-semibold text-sm text-gray-900 dark:text-white">
+                        {row.tickers[0]} <span className="text-gray-400">vs</span> {row.tickers[1]}
+                      </span>
+                    )}
+                    {row.scope === "group" && (
+                      <>
+                        <span className="font-semibold text-sm text-gray-900 dark:text-white">
+                          {row.label || `${row.tickers.length} stocks`}
+                        </span>
+                        <span className="text-xs text-gray-400">·</span>
+                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                          {row.tickers.length} ticker{row.tickers.length === 1 ? "" : "s"}
+                        </span>
+                      </>
+                    )}
+                    <VerdictBadge v={row.verdict} />
+                    {row.confidence && (
+                      <span className="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/5">
+                        {row.confidence}
+                      </span>
+                    )}
+                  </div>
+                  {row.headline && (
+                    <p className="text-sm text-gray-700 dark:text-gray-300 mt-1 line-clamp-2">
+                      {row.headline}
+                    </p>
+                  )}
+                  {row.scope === "group" && (
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {row.tickers.slice(0, 12).map(t => (
+                        <span key={t} className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/5 text-gray-700 dark:text-gray-300">
+                          {t}
+                        </span>
+                      ))}
+                      {row.tickers.length > 12 && (
+                        <span className="text-[10px] text-gray-500 dark:text-gray-400 self-center">
+                          +{row.tickers.length - 12} more
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+                    Saved {fmtDate(row.savedAt)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <Link href={openHref(row)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md bg-indigo-600 hover:bg-indigo-700 text-white">
+                    <ExternalLink className="w-3.5 h-3.5" /> Open
+                  </Link>
+                  <button onClick={() => onRerun(row)}
+                          title="Re-run this analysis (uses quota)"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md border border-gray-200 dark:border-white/10 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5">
+                    <RotateCw className="w-3.5 h-3.5" /> Re-run
+                  </button>
+                  <button onClick={() => onDelete(row)}
+                          disabled={busyId === row.id}
+                          title="Delete this saved analysis"
+                          className="inline-flex items-center gap-1 px-2 py-1.5 text-xs font-medium rounded-md border border-red-200 dark:border-red-900/40 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50">
+                    {busyId === row.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}

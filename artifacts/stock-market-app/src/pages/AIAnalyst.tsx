@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { useParams, Link } from "wouter";
+import { useParams, Link, useSearch } from "wouter";
 import {
   Microscope, Loader2, AlertCircle, Sparkles, TrendingUp,
   TrendingDown, Minus, ChevronDown, ChevronUp, RotateCw,
   Newspaper, BarChart3, Activity, Building2,
-  Zap, Shield,
+  Zap, Shield, Bookmark,
 } from "lucide-react";
 import { useCustomAuth } from "@/context/CustomAuthContext";
 import {
@@ -255,6 +255,7 @@ function KPI({ label, value, hint, tone }:
 
 export default function AIAnalyst() {
   const params = useParams<{ ticker?: string }>();
+  const search = useSearch();
   const [ticker, setTicker] = useState((params.ticker || "").toUpperCase());
   const { token } = useCustomAuth();
   const [events, setEvents] = useState<PhaseEvent[]>([]);
@@ -279,6 +280,50 @@ export default function AIAnalyst() {
   useEffect(() => {
     return () => { abortRef.current?.abort(); };
   }, []);
+
+  // Sync ticker from URL when route changes (e.g. user lands here from
+  // a Saved Analyses "Open" link).
+  useEffect(() => {
+    if (params.ticker) setTicker(params.ticker.toUpperCase());
+  }, [params.ticker]);
+
+  // If the URL carries `?rerun=1` (e.g. the user clicked Re-run from the
+  // Saved Analyses page), kick off a force-refresh once the ticker is set.
+  const rerunFiredRef = useRef(false);
+  useEffect(() => {
+    if (rerunFiredRef.current) return;
+    if (!token || !ticker.trim()) return;
+    const sp = new URLSearchParams(search || "");
+    if (sp.get("rerun") === "1") {
+      rerunFiredRef.current = true;
+      // Defer to next tick so `start` (declared below) is in scope.
+      setTimeout(() => { void start(true); }, 0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ticker, token, search]);
+
+  // Auto-load the saved report (if any) when the URL ticker changes. The
+  // backend's GET /report/{ticker} now reads from the persistent saved
+  // store with no day expiry, so opening a stock instantly shows whatever
+  // was last saved for this user.
+  const autoLoadedRef = useRef<string>("");
+  useEffect(() => {
+    if (!token || !ticker.trim()) return;
+    if (autoLoadedRef.current === ticker) return;
+    autoLoadedRef.current = ticker;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/ai-analyst/report/${encodeURIComponent(ticker)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!r.ok || cancelled) return;
+        const j: Report = await r.json();
+        if (!cancelled) { setReport(j); setError(null); }
+      } catch { /* ignore — user can hit Run */ }
+    })();
+    return () => { cancelled = true; };
+  }, [ticker, token]);
 
   const start = useCallback(async (force = false) => {
     if (!ticker.trim()) { setError("Enter a ticker"); return; }
@@ -411,6 +456,10 @@ export default function AIAnalyst() {
               className="px-3 py-2 text-sm border border-gray-200 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg text-gray-600 dark:text-gray-300">
           Scan a watchlist →
         </Link>
+        <Link href="/ai-analyst/saved"
+              className="px-3 py-2 text-sm border border-gray-200 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg text-indigo-600 dark:text-indigo-400 inline-flex items-center gap-1.5">
+          <Bookmark className="w-3.5 h-3.5" /> Saved analyses
+        </Link>
       </div>
 
       {/* Error */}
@@ -490,12 +539,32 @@ export default function AIAnalyst() {
                   {report.headline}
                 </p>
               </div>
-              {report.cached && (
-                <span className="text-[10px] uppercase tracking-wider bg-white/70 dark:bg-black/30 text-gray-700 dark:text-gray-200 px-2 py-1 rounded self-start">
-                  Cached {report.cachedAt ? new Date(report.cachedAt).toLocaleTimeString() : ""}
-                </span>
-              )}
             </div>
+
+            {report.cached && (
+              <div className="px-5 py-3 bg-indigo-50 dark:bg-indigo-500/10 border-t border-indigo-200 dark:border-indigo-500/20 flex items-center gap-3 flex-wrap">
+                <Bookmark className="w-4 h-4 text-indigo-600 dark:text-indigo-400 flex-shrink-0" />
+                <p className="text-xs text-indigo-900 dark:text-indigo-100 flex-1 min-w-0">
+                  Saved on{" "}
+                  <strong>
+                    {(report.cachedAt || "")
+                      ? new Date(report.cachedAt!).toLocaleDateString("en-IN", {
+                          day: "numeric", month: "short", year: "numeric",
+                        })
+                      : "—"}
+                  </strong>{" "}
+                  · Re-run to refresh with the latest market data and news.
+                </p>
+                <button
+                  onClick={() => start(true)}
+                  disabled={running || quota?.remaining === 0}
+                  title={quota?.remaining === 0 ? "Daily quota exhausted" : "Re-run with fresh data (uses one quota slot)"}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-semibold"
+                >
+                  <RotateCw className="w-3.5 h-3.5" /> Re-run
+                </button>
+              </div>
+            )}
 
             {/* KPI ribbon */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 p-3 border-t border-gray-200 dark:border-white/10 bg-gray-50/50 dark:bg-gray-950/40">
