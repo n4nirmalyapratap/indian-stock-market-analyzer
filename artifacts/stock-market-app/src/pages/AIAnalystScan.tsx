@@ -283,7 +283,10 @@ export default function AIAnalystScan() {
         {!running ? (
           <button
             onClick={start}
-            disabled={!active || !token || (quota?.remaining === 0 && rows.every(r => r.status === "queued"))}
+            disabled={!active || !token}
+            title={quota?.remaining === 0
+              ? "Daily quota exhausted — cached reports will still be shown; uncached tickers will be marked skipped."
+              : undefined}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium"
           >
             <ListChecks className="w-4 h-4" />
