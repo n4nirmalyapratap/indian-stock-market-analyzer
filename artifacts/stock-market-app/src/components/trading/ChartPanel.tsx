@@ -1381,8 +1381,20 @@ export default function ChartPanel({
       }
     }
 
+    // Preserve current zoom range so toggling indicators doesn't snap the chart back
+    const prevOpt = chart.getOption() as any;
+    const prevZoom = Array.isArray(prevOpt?.dataZoom) && prevOpt.dataZoom[0]
+      ? { start: prevOpt.dataZoom[0].start, end: prevOpt.dataZoom[0].end }
+      : null;
+
     chart.setOption({
-      backgroundColor: T.bg, animation: false,
+      backgroundColor: T.bg,
+      // Smooth in/out as panes appear/disappear and series add/remove
+      animation: true,
+      animationDuration: 220,
+      animationDurationUpdate: 220,
+      animationEasing: "cubicOut",
+      animationEasingUpdate: "cubicOut",
       tooltip: {
         trigger: "axis",
         axisPointer: {
@@ -1406,10 +1418,18 @@ export default function ChartPanel({
       },
       axisPointer: { link: [{ xAxisIndex: "all" }] },
       dataZoom: [
-        { type: "inside", xAxisIndex: grids.map((_, i) => i), start: 60, end: 100, zoomOnMouseWheel: true, moveOnMouseMove: true },
+        {
+          type: "inside",
+          xAxisIndex: grids.map((_, i) => i),
+          // Preserve user's current zoom range across indicator toggles
+          start: prevZoom?.start ?? 60,
+          end:   prevZoom?.end   ?? 100,
+          zoomOnMouseWheel: true,
+          moveOnMouseMove: true,
+        },
       ],
       grid: grids, xAxis: xAxes, yAxis: yAxes, series,
-    }, true);
+    }, { replaceMerge: ["grid", "xAxis", "yAxis", "series", "dataZoom"] });
 
     // Repaint via ref so renderChart's identity doesn't depend on paintSvg
     // (which itself depends on `drawings`) — otherwise drawing on the chart
