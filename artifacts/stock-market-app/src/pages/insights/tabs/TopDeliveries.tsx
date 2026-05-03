@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
 import {
@@ -7,6 +7,7 @@ import {
 import {
   Truck, Search, X, RefreshCw, ArrowUpRight, ArrowDownRight,
   TrendingUp, Package, Sparkles, IndianRupee, Layers,
+  ListFilter, ChevronDown, Check, Trophy,
 } from "lucide-react";
 
 interface DeliveryItem {
@@ -130,10 +131,14 @@ function fmtDate(iso: string | null): string {
 /* ─────────────────────────── component ──────────────────────────── */
 
 export default function TopDeliveries() {
-  const [indexCode, setIndexCode] = useState("NIFTY50");
-  const [sort, setSort]           = useState("delivPct");
-  const [minPct, setMinPct]       = useState("0");
-  const [search, setSearch]       = useState("");
+  const [indexCode, setIndexCode]   = useState("NIFTY50");
+  const [sort, setSort]             = useState("delivPct");
+  const [minPct, setMinPct]         = useState("0");
+  const [search, setSearch]         = useState("");
+  const [sectorFilter, setSectorFilter] = useState<string | null>(null);
+
+  // Reset sector filter whenever the underlying universe changes.
+  const onIndexChange = (v: string) => { setSectorFilter(null); setIndexCode(v); };
 
   const params = new URLSearchParams();
   params.set("index", indexCode);
@@ -147,6 +152,17 @@ export default function TopDeliveries() {
     queryFn: () => fetchApi(`/insights/top-deliveries?${params}`),
     staleTime: 10 * 60_000,
   });
+
+  // Client-side sector slice — keeps the API call cheap and lets users
+  // toggle sectors without a network round-trip.
+  const visibleItems = sectorFilter && data?.items
+    ? data.items.filter(it => (it.sector || "Unclassified") === sectorFilter)
+    : (data?.items || []);
+
+  const stocksRef = useRef<HTMLDivElement | null>(null);
+  const scrollToStocks = () => {
+    stocksRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   return (
     <div>
@@ -218,9 +234,18 @@ export default function TopDeliveries() {
         </div>
       )}
 
-      {/* Highlights */}
+      {/* ── Section 1 · Top performers ─────────────────────────── */}
       {data?.highlights && data.highlights.length > 0 && (
-        <div className="mb-4 -mx-1 overflow-x-auto scrollbar-thin">
+        <SectionHeader
+          icon={<Trophy className="w-3.5 h-3.5"/>}
+          eyebrow="Section 1"
+          title="Top Conviction Picks"
+          subtitle={`Highest delivery percentage in ${data.indexLabel}`}
+          accent="amber"
+        />
+      )}
+      {data?.highlights && data.highlights.length > 0 && (
+        <div className="mb-5 -mx-1 overflow-x-auto scrollbar-thin">
           <div className="flex gap-2.5 px-1 min-w-min">
             {data.highlights.map((it, i) => (
               <HighlightCard key={it.symbol} item={it} rank={i + 1}/>
@@ -229,10 +254,51 @@ export default function TopDeliveries() {
         </div>
       )}
 
-      {/* Sector-wise breakdown */}
+      {/* ── Section 2 · Sector breakdown (clickable filter) ───── */}
       {data?.sectors && data.sectors.length > 0 && (
-        <SectorBreakdown sectors={data.sectors} totalDelivValue={data.stats?.totalDelivValue || 0}/>
+        <>
+          <SectionHeader
+            icon={<Layers className="w-3.5 h-3.5"/>}
+            eyebrow="Section 2"
+            title="Sector-wise Deliveries"
+            subtitle="Click any sector to filter the stock list below"
+            accent="violet"
+          />
+          <SectorBreakdown
+            sectors={data.sectors}
+            totalDelivValue={data.stats?.totalDelivValue || 0}
+            activeSector={sectorFilter}
+            onSelect={(s) => {
+              setSectorFilter(prev => prev === s ? null : s);
+              // Defer scroll until after the filter applies / DOM updates.
+              setTimeout(scrollToStocks, 60);
+            }}
+          />
+        </>
       )}
+
+      {/* ── Section 3 · Stock-wise table ──────────────────────── */}
+      <div ref={stocksRef} className="scroll-mt-4">
+      <SectionHeader
+        icon={<ListFilter className="w-3.5 h-3.5"/>}
+        eyebrow="Section 3"
+        title="Stock-wise Deliveries"
+        subtitle={
+          sectorFilter
+            ? `Filtered to ${sectorFilter} — ${visibleItems.length} stocks`
+            : `Detailed delivery data for every stock in ${data?.indexLabel || "the selected index"}`
+        }
+        accent="indigo"
+        right={sectorFilter ? (
+          <button
+            onClick={() => setSectorFilter(null)}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded-lg bg-violet-100 dark:bg-violet-500/15 text-violet-700 dark:text-violet-300 border border-violet-200 dark:border-violet-500/30 hover:bg-violet-200 dark:hover:bg-violet-500/25 transition">
+            <Check className="w-3 h-3"/>
+            {sectorFilter}
+            <X className="w-3 h-3"/>
+          </button>
+        ) : null}
+      />
 
       {/* Filter card */}
       <div className="mb-4 rounded-2xl border border-gray-200 dark:border-gray-700/60 bg-gradient-to-br from-white to-gray-50/40 dark:from-gray-800/80 dark:to-gray-900/40 backdrop-blur shadow-sm p-2.5">
@@ -258,7 +324,7 @@ export default function TopDeliveries() {
             label="Index"
             value={indexCode}
             options={INDEX_OPTIONS}
-            onChange={setIndexCode}
+            onChange={onIndexChange}
           />
           <MenuDropdown
             label="Sort"
@@ -288,8 +354,14 @@ export default function TopDeliveries() {
           message={`No symbols match the selected filters in ${data.indexLabel}. Try lowering the delivery % threshold or selecting a wider index.`}
           icon={<Truck className="w-10 h-10"/>}/>
       )}
+      {!isLoading && data?.available && data.items.length > 0 && visibleItems.length === 0 && (
+        <EmptyState
+          title={`No stocks in ${sectorFilter}`}
+          message={`The current filters returned no stocks for the ${sectorFilter} sector. Clear the sector filter or relax the delivery threshold.`}
+          icon={<Truck className="w-10 h-10"/>}/>
+      )}
 
-      {data?.items && data.items.length > 0 && (
+      {visibleItems.length > 0 && (
         <div className="space-y-2">
           {/* Header row (md+) */}
           <div className="hidden md:grid px-3 py-1.5 grid-cols-[44px_minmax(0,1.6fr)_90px_90px_120px_120px_minmax(0,200px)] gap-3 items-center text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500 font-medium">
@@ -302,10 +374,57 @@ export default function TopDeliveries() {
             <span>Delivery %</span>
           </div>
           <div className="space-y-1.5">
-            {data.items.map(it => <DeliveryRow key={it.symbol} item={it}/>)}
+            {visibleItems.map(it => <DeliveryRow key={it.symbol} item={it}/>)}
           </div>
         </div>
       )}
+      </div>
+    </div>
+  );
+}
+
+/* ──────────────────── section header ──────────────────── */
+
+function SectionHeader({
+  icon, eyebrow, title, subtitle, accent, right,
+}: {
+  icon: React.ReactNode;
+  eyebrow: string;
+  title: string;
+  subtitle?: string;
+  accent: "amber" | "violet" | "indigo" | "emerald";
+  right?: React.ReactNode;
+}) {
+  const accentMap = {
+    amber:   "from-amber-500/15 to-transparent  border-l-amber-500  text-amber-700 dark:text-amber-400",
+    violet:  "from-violet-500/15 to-transparent border-l-violet-500 text-violet-700 dark:text-violet-400",
+    indigo:  "from-indigo-500/15 to-transparent border-l-indigo-500 text-indigo-700 dark:text-indigo-400",
+    emerald: "from-emerald-500/15 to-transparent border-l-emerald-500 text-emerald-700 dark:text-emerald-400",
+  } as const;
+  const [tone, accentText] = (() => {
+    const v = accentMap[accent];
+    const parts = v.split(" ");
+    const text = parts.filter(p => p.startsWith("text-")).join(" ");
+    const tone = parts.filter(p => !p.startsWith("text-")).join(" ");
+    return [tone, text];
+  })();
+  return (
+    <div className={`mb-2.5 flex items-center justify-between gap-3 rounded-r-lg border-l-2 bg-gradient-to-r ${tone} pl-3 pr-2 py-1.5`}>
+      <div className="min-w-0 flex items-center gap-2.5">
+        <span className={`inline-flex items-center justify-center w-6 h-6 rounded-md bg-white/70 dark:bg-gray-900/40 ${accentText}`}>
+          {icon}
+        </span>
+        <div className="min-w-0">
+          <div className={`text-[9px] font-bold uppercase tracking-[0.12em] ${accentText}`}>{eyebrow}</div>
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <span className="text-sm font-semibold text-gray-900 dark:text-white">{title}</span>
+            {subtitle && (
+              <span className="text-[11px] text-gray-500 dark:text-gray-400 truncate">{subtitle}</span>
+            )}
+          </div>
+        </div>
+      </div>
+      {right && <div className="flex-shrink-0">{right}</div>}
     </div>
   );
 }
@@ -452,45 +571,66 @@ function DelivBar({ pct, className = "" }: { pct: number; className?: string }) 
   );
 }
 
-function SectorBreakdown({ sectors, totalDelivValue }:
-  { sectors: SectorRow[]; totalDelivValue: number }) {
+function SectorBreakdown({ sectors, totalDelivValue, activeSector, onSelect }:
+  { sectors: SectorRow[]; totalDelivValue: number;
+    activeSector: string | null; onSelect: (sector: string) => void }) {
   const [expanded, setExpanded] = useState(false);
   const max = sectors.reduce((m, s) => Math.max(m, s.totalDelivValue), 0) || 1;
-  const visible = expanded ? sectors : sectors.slice(0, 8);
+  // If the active sector is beyond the top-8 cap, expand automatically
+  // so it stays visible to the user.
+  const cap = 8;
+  const activeIdx = activeSector ? sectors.findIndex(s => s.sector === activeSector) : -1;
+  const autoExpand = activeIdx >= cap;
+  const visible = (expanded || autoExpand) ? sectors : sectors.slice(0, cap);
 
   return (
-    <div className="mb-4 rounded-2xl border border-gray-200 dark:border-gray-700/60 bg-gradient-to-br from-white to-gray-50/40 dark:from-gray-800/80 dark:to-gray-900/40 backdrop-blur shadow-sm">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200/80 dark:border-gray-700/60">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-violet-500/10 flex items-center justify-center">
-            <Layers className="w-4 h-4 text-violet-600 dark:text-violet-400"/>
-          </div>
-          <div>
-            <div className="text-sm font-semibold text-gray-900 dark:text-white">Sector-wise Deliveries</div>
-            <div className="text-[11px] text-gray-500 dark:text-gray-400">
-              {sectors.length} sectors · sorted by delivered value
-            </div>
-          </div>
+    <div className="mb-5 rounded-2xl border border-gray-200 dark:border-gray-700/60 bg-gradient-to-br from-white to-gray-50/40 dark:from-gray-800/80 dark:to-gray-900/40 backdrop-blur shadow-sm">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-200/80 dark:border-gray-700/60">
+        <div className="text-[11px] text-gray-500 dark:text-gray-400">
+          <span className="font-semibold text-gray-700 dark:text-gray-300">{sectors.length}</span>
+          {" sectors · sorted by delivered value · "}
+          <span className="text-violet-600 dark:text-violet-400 font-medium">click to filter</span>
         </div>
-        {sectors.length > 8 && (
-          <button onClick={() => setExpanded(e => !e)}
-            className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
-            {expanded ? "Show top 8" : `Show all (${sectors.length})`}
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {activeSector && (
+            <button onClick={() => onSelect(activeSector)}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-violet-700 dark:text-violet-300 hover:underline">
+              <X className="w-3 h-3"/> Clear
+            </button>
+          )}
+          {sectors.length > cap && (
+            <button onClick={() => setExpanded(e => !e)}
+              className="text-[11px] font-medium text-indigo-600 dark:text-indigo-400 hover:underline">
+              {(expanded || autoExpand) ? "Show top 8" : `Show all (${sectors.length})`}
+            </button>
+          )}
+        </div>
       </div>
       <div className="p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5">
         {visible.map(s => {
           const sharePct = totalDelivValue > 0 ? (s.totalDelivValue / totalDelivValue) * 100 : 0;
           const barPct = (s.totalDelivValue / max) * 100;
+          const active = activeSector === s.sector;
           return (
-            <div key={s.sector}
-              className="rounded-xl border border-gray-200/80 dark:border-gray-700/60 bg-white/60 dark:bg-gray-900/40 p-3 hover:border-violet-400/60 dark:hover:border-violet-500/40 transition">
+            <button key={s.sector}
+              type="button"
+              onClick={() => onSelect(s.sector)}
+              aria-pressed={active}
+              className={`text-left rounded-xl border p-3 transition relative outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40 ${
+                active
+                  ? "border-violet-500 bg-violet-50 dark:bg-violet-500/10 ring-2 ring-violet-500/30 shadow-md"
+                  : "border-gray-200/80 dark:border-gray-700/60 bg-white/60 dark:bg-gray-900/40 hover:border-violet-400/60 dark:hover:border-violet-500/40 hover:shadow-md hover:-translate-y-px"
+              }`}>
+              {active && (
+                <span className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-violet-600 text-white flex items-center justify-center shadow-md ring-2 ring-white dark:ring-gray-900">
+                  <Check className="w-3 h-3"/>
+                </span>
+              )}
               <div className="flex items-start justify-between gap-2 mb-1.5">
-                <div className="text-sm font-semibold text-gray-900 dark:text-white truncate" title={s.sector}>
+                <div className={`text-sm font-semibold truncate ${active ? "text-violet-900 dark:text-violet-100" : "text-gray-900 dark:text-white"}`} title={s.sector}>
                   {s.sector}
                 </div>
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-violet-500/10 text-violet-700 dark:text-violet-300 flex-shrink-0">
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md flex-shrink-0 ${active ? "bg-violet-600 text-white" : "bg-violet-500/10 text-violet-700 dark:text-violet-300"}`}>
                   {s.count}
                 </span>
               </div>
@@ -530,7 +670,15 @@ function SectorBreakdown({ sectors, totalDelivValue }:
                   </div>
                 )}
               </div>
-            </div>
+              <div className={`mt-2 pt-2 border-t border-dashed flex items-center justify-center gap-1 text-[10px] font-medium transition ${
+                active
+                  ? "border-violet-300 dark:border-violet-500/40 text-violet-700 dark:text-violet-300"
+                  : "border-gray-200 dark:border-gray-700/60 text-gray-400 dark:text-gray-500"
+              }`}>
+                {active ? (<>Filtering stocks below <ChevronDown className="w-3 h-3"/></>)
+                        : (<>Click to filter <ChevronDown className="w-3 h-3"/></>)}
+              </div>
+            </button>
           );
         })}
       </div>
