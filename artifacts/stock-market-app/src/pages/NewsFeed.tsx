@@ -851,21 +851,6 @@ export default function NewsFeed() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {activeTab !== "deals" && activeTab !== "events" && (
-            <button
-              onClick={() => setReelsMode(r => !r)}
-              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl border transition-all"
-              style={{
-                background: reelsMode ? "#6366f1" : isDark ? "#1e293b" : "#fff",
-                color:      reelsMode ? "#fff" : isDark ? "#94a3b8" : "#6b7280",
-                borderColor: reelsMode ? "#6366f1" : isDark ? "#334155" : "#e2e8f0",
-                boxShadow:  reelsMode ? "0 0 0 3px rgba(99,102,241,0.2)" : "none",
-              }}
-            >
-              {reelsMode ? <List className="w-3.5 h-3.5" /> : <Film className="w-3.5 h-3.5" />}
-              {reelsMode ? "List View" : "Reels"}
-            </button>
-          )}
           <DataFreshness meta={feedMeta} hideRefresh />
           <RefreshCountdown seconds={countdown} onRefresh={handleRefresh} isDark={isDark} isRefreshing={refreshMutation.isPending} />
         </div>
@@ -942,26 +927,42 @@ export default function NewsFeed() {
         })}
       </div>
 
-      {/* Search (only for news tabs) */}
+      {/* Search + view toggle (only for news tabs) */}
       {activeTab !== "deals" && activeTab !== "events" && (
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: muTxt }} />
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search headlines, companies, sectors…"
-            className="w-full pl-9 pr-4 py-2.5 rounded-xl text-sm border outline-none transition-all"
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: muTxt }} />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search headlines, companies, sectors…"
+              className="w-full pl-9 pr-4 py-2.5 rounded-xl text-sm border outline-none transition-all"
+              style={{
+                background: isDark ? "#1e293b" : "#fff",
+                borderColor: search ? "#6366f1" : borderCol,
+                color: hdrTxt,
+              }}
+            />
+            {search && (
+              <button className="absolute right-3 top-1/2 -translate-y-1/2 text-xs" style={{ color: muTxt }} onClick={() => setSearch("")}>
+                clear
+              </button>
+            )}
+          </div>
+          <button
+            onClick={() => setReelsMode(r => !r)}
+            title={reelsMode ? "Switch to list view" : "Switch to reels (TikTok-style) view"}
+            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2.5 rounded-xl border transition-all shrink-0"
             style={{
-              background: isDark ? "#1e293b" : "#fff",
-              borderColor: search ? "#6366f1" : borderCol,
-              color: hdrTxt,
+              background: reelsMode ? "#6366f1" : isDark ? "#1e293b" : "#fff",
+              color:      reelsMode ? "#fff" : isDark ? "#94a3b8" : "#6b7280",
+              borderColor: reelsMode ? "#6366f1" : isDark ? "#334155" : "#e2e8f0",
+              boxShadow:  reelsMode ? "0 0 0 3px rgba(99,102,241,0.2)" : "none",
             }}
-          />
-          {search && (
-            <button className="absolute right-3 top-1/2 -translate-y-1/2 text-xs" style={{ color: muTxt }} onClick={() => setSearch("")}>
-              clear
-            </button>
-          )}
+          >
+            {reelsMode ? <List className="w-3.5 h-3.5" /> : <Film className="w-3.5 h-3.5" />}
+            {reelsMode ? "List" : "Reels"}
+          </button>
         </div>
       )}
 
