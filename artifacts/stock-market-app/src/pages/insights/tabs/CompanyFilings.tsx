@@ -98,6 +98,7 @@ function categoryColor(cat: string) {
   if (c.includes("bonus") || c.includes("split")) return "bg-pink-500/15 text-pink-700 dark:text-pink-300";
   if (c.includes("investor")) return "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300";
   if (c.includes("insider")) return "bg-orange-500/15 text-orange-700 dark:text-orange-300";
+  if (c.includes("shareholding")) return "bg-teal-500/15 text-teal-700 dark:text-teal-300";
   return "bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400";
 }
 
@@ -145,8 +146,8 @@ export default function CompanyFilings() {
   const setTypeAndReset = (t: FilingType) => {
     setType(t);
     setPage(1);
-    // Insider tab forces NSE source (only working insider feed).
-    if (t === "insider") setSource("nse");
+    // Insider & Shareholding tabs only have NSE feeds today.
+    if (t === "insider" || t === "shareholding") setSource("nse");
     if (t === "corporate" && source === "nse") setSource("all");
   };
   const setSourceAndReset = (s: FilingSource) => { setSource(s); setPage(1); };
