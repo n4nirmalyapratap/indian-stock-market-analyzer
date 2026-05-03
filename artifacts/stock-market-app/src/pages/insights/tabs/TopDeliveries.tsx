@@ -136,6 +136,8 @@ export default function TopDeliveries() {
   const [minPct, setMinPct]         = useState("0");
   const [search, setSearch]         = useState("");
   const [sectorFilter, setSectorFilter] = useState<string | null>(null);
+  const [openTop, setOpenTop]       = useState(true);
+  const [openSectors, setOpenSectors] = useState(false);
 
   // Reset sector filter whenever the underlying universe changes.
   const onIndexChange = (v: string) => { setSectorFilter(null); setIndexCode(v); };
@@ -234,17 +236,22 @@ export default function TopDeliveries() {
         </div>
       )}
 
-      {/* ── Section 1 · Top performers ─────────────────────────── */}
+      {/* ── Section 1 · Top performers (collapsible) ──────────── */}
       {data?.highlights && data.highlights.length > 0 && (
         <SectionHeader
           icon={<Trophy className="w-3.5 h-3.5"/>}
-          eyebrow="Section 1"
+          eyebrow="Top Picks"
           title="Top Conviction Picks"
-          subtitle={`Highest delivery percentage in ${data.indexLabel}`}
+          subtitle={openTop
+            ? `Highest delivery % in ${data.indexLabel}`
+            : `${data.highlights.length} stocks · click to expand`}
           accent="amber"
+          collapsible
+          open={openTop}
+          onToggle={() => setOpenTop(o => !o)}
         />
       )}
-      {data?.highlights && data.highlights.length > 0 && (
+      {data?.highlights && data.highlights.length > 0 && openTop && (
         <div className="mb-5 -mx-1 overflow-x-auto scrollbar-thin">
           <div className="flex gap-2.5 px-1 min-w-min">
             {data.highlights.map((it, i) => (
@@ -254,26 +261,41 @@ export default function TopDeliveries() {
         </div>
       )}
 
-      {/* ── Section 2 · Sector breakdown (clickable filter) ───── */}
+      {/* ── Section 2 · Sector breakdown (collapsible filter) ─── */}
       {data?.sectors && data.sectors.length > 0 && (
         <>
           <SectionHeader
             icon={<Layers className="w-3.5 h-3.5"/>}
-            eyebrow="Section 2"
+            eyebrow="Sectors"
             title="Sector-wise Deliveries"
-            subtitle="Click any sector to filter the stock list below"
+            subtitle={openSectors
+              ? "Click any sector to filter stocks below"
+              : sectorFilter
+                ? `Filtered: ${sectorFilter} · click to change`
+                : `${data.sectors.length} sectors · click to expand & filter`}
             accent="violet"
+            collapsible
+            open={openSectors}
+            onToggle={() => setOpenSectors(o => !o)}
+            right={sectorFilter && !openSectors ? (
+              <button
+                onClick={(e) => { e.stopPropagation(); setSectorFilter(null); }}
+                className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded-md bg-violet-100 dark:bg-violet-500/15 text-violet-700 dark:text-violet-300 border border-violet-200 dark:border-violet-500/30 hover:bg-violet-200 dark:hover:bg-violet-500/25 transition">
+                <X className="w-2.5 h-2.5"/> Clear
+              </button>
+            ) : null}
           />
-          <SectorBreakdown
-            sectors={data.sectors}
-            totalDelivValue={data.stats?.totalDelivValue || 0}
-            activeSector={sectorFilter}
-            onSelect={(s) => {
-              setSectorFilter(prev => prev === s ? null : s);
-              // Defer scroll until after the filter applies / DOM updates.
-              setTimeout(scrollToStocks, 60);
-            }}
-          />
+          {openSectors && (
+            <SectorBreakdown
+              sectors={data.sectors}
+              totalDelivValue={data.stats?.totalDelivValue || 0}
+              activeSector={sectorFilter}
+              onSelect={(s) => {
+                setSectorFilter(prev => prev === s ? null : s);
+                setTimeout(scrollToStocks, 60);
+              }}
+            />
+          )}
         </>
       )}
 
@@ -281,12 +303,12 @@ export default function TopDeliveries() {
       <div ref={stocksRef} className="scroll-mt-4">
       <SectionHeader
         icon={<ListFilter className="w-3.5 h-3.5"/>}
-        eyebrow="Section 3"
+        eyebrow="Stocks"
         title="Stock-wise Deliveries"
         subtitle={
           sectorFilter
             ? `Filtered to ${sectorFilter} — ${visibleItems.length} stocks`
-            : `Detailed delivery data for every stock in ${data?.indexLabel || "the selected index"}`
+            : `Every stock in ${data?.indexLabel || "the selected index"}`
         }
         accent="indigo"
         right={sectorFilter ? (
@@ -387,6 +409,7 @@ export default function TopDeliveries() {
 
 function SectionHeader({
   icon, eyebrow, title, subtitle, accent, right,
+  collapsible = false, open = true, onToggle,
 }: {
   icon: React.ReactNode;
   eyebrow: string;
@@ -394,6 +417,9 @@ function SectionHeader({
   subtitle?: string;
   accent: "amber" | "violet" | "indigo" | "emerald";
   right?: React.ReactNode;
+  collapsible?: boolean;
+  open?: boolean;
+  onToggle?: () => void;
 }) {
   const accentMap = {
     amber:   "from-amber-500/15 to-transparent  border-l-amber-500  text-amber-700 dark:text-amber-400",
@@ -401,15 +427,25 @@ function SectionHeader({
     indigo:  "from-indigo-500/15 to-transparent border-l-indigo-500 text-indigo-700 dark:text-indigo-400",
     emerald: "from-emerald-500/15 to-transparent border-l-emerald-500 text-emerald-700 dark:text-emerald-400",
   } as const;
-  const [tone, accentText] = (() => {
-    const v = accentMap[accent];
-    const parts = v.split(" ");
-    const text = parts.filter(p => p.startsWith("text-")).join(" ");
-    const tone = parts.filter(p => !p.startsWith("text-")).join(" ");
-    return [tone, text];
-  })();
+  const v = accentMap[accent];
+  const parts = v.split(" ");
+  const accentText = parts.filter(p => p.startsWith("text-")).join(" ");
+  const tone       = parts.filter(p => !p.startsWith("text-")).join(" ");
+  const interactive = collapsible
+    ? "cursor-pointer hover:brightness-105 select-none"
+    : "";
+
   return (
-    <div className={`mb-2.5 flex items-center justify-between gap-3 rounded-r-lg border-l-2 bg-gradient-to-r ${tone} pl-3 pr-2 py-1.5`}>
+    <div
+      className={`mb-2.5 flex items-center justify-between gap-3 rounded-r-lg border-l-2 bg-gradient-to-r ${tone} pl-3 pr-2 py-1.5 ${interactive}`}
+      role={collapsible ? "button" : undefined}
+      tabIndex={collapsible ? 0 : undefined}
+      aria-expanded={collapsible ? open : undefined}
+      onClick={collapsible ? onToggle : undefined}
+      onKeyDown={collapsible ? (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle?.(); }
+      } : undefined}
+    >
       <div className="min-w-0 flex items-center gap-2.5">
         <span className={`inline-flex items-center justify-center w-6 h-6 rounded-md bg-white/70 dark:bg-gray-900/40 ${accentText}`}>
           {icon}
@@ -424,7 +460,14 @@ function SectionHeader({
           </div>
         </div>
       </div>
-      {right && <div className="flex-shrink-0">{right}</div>}
+      <div className="flex items-center gap-2 flex-shrink-0">
+        {right}
+        {collapsible && (
+          <ChevronDown
+            className={`w-4 h-4 text-gray-400 dark:text-gray-500 transition-transform ${open ? "rotate-180" : ""}`}
+          />
+        )}
+      </div>
     </div>
   );
 }
