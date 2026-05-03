@@ -2100,105 +2100,163 @@ async def get_signals(
 # ────────────────────────────────────────────────────────────────────────────
 # Market valuation (PriceService → Yahoo fallback for index history)
 # ────────────────────────────────────────────────────────────────────────────
-def _index_valuation_sync(codes: list[str], period: str) -> dict:
-    """Indices proxy chart. Tries PriceService for each ticker first; if it
-    has no rows (NSE indices often lack daily OHLCV), falls back to yfinance.
-    Either way the result is the same daily-close series used elsewhere."""
-    import yfinance as yf
-    import asyncio as _aio
-    period_days = {"1m":30,"6m":180,"1y":365,"5y":365*5,"10y":365*10}.get(period, 365*5)
-    period_yf   = {"1m":"1mo","6m":"6mo","1y":"1y","5y":"5y","10y":"10y"}.get(period, "5y")
-    label_map = {"^NSEI":"NIFTY 50","^NSEBANK":"NIFTY BANK","^NIFTY_FIN_SERVICE":"NIFTY FIN SERVICES"}
+# Display labels for indices we know about. Anything missing falls back to the
+# raw ticker so the chart still renders correctly (the frontend uses `code` as
+# the series key — `label` is purely for UI display).
+INDEX_LABEL_MAP = {
+    "^NSEI":                 "NIFTY 50",
+    "^NSEBANK":              "NIFTY BANK",
+    "^CNXIT":                "NIFTY IT",
+    "^CNXFMCG":              "NIFTY FMCG",
+    "^CNXAUTO":              "NIFTY AUTO",
+    "^CNXPHARMA":            "NIFTY PHARMA",
+    "^CNXMETAL":             "NIFTY METAL",
+    "^CNXENERGY":            "NIFTY ENERGY",
+    "^CNXREALTY":            "NIFTY REALTY",
+    "^CNXMEDIA":             "NIFTY MEDIA",
+    "^CNXPSUBANK":           "NIFTY PSU BANK",
+    "^CNXPSE":               "NIFTY PSE",
+    "^CNXINFRA":             "NIFTY INFRA",
+    "NIFTY_FIN_SERVICE.NS":  "NIFTY FIN SERVICES",
+    "^NIFTY_FIN_SERVICE":    "NIFTY FIN SERVICES",
+    "^NSMIDCP":              "NIFTY MIDCAP 100",
+    "^CNXSC":                "NIFTY SMALLCAP 100",
+    "^CNX100":               "NIFTY 100",
+    "^CNX200":               "NIFTY 200",
+    "^CRSLDX":               "NIFTY 500",
+}
 
-    series_dict: dict[str, dict[str, float]] = {}
-    indices = []
-    for code in codes:
+
+async def _fetch_index_history(code: str, period_days: int, period_yf: str) -> list[dict]:
+    """Try PriceService first (same daily OHLCV path used everywhere); fall
+    back to yfinance only if PriceService returns nothing."""
+    try:
+        ps_rows = await _price.get_historical_data(code, period_days)
+        if ps_rows and len(ps_rows) >= 2:
+            return ps_rows
+    except Exception as e:
+        logger.debug("index-valuation PriceService %s failed: %s", code, e)
+
+    # Yahoo fallback — runs in executor so it doesn't block the loop.
+    def _yf_pull() -> list[dict]:
+        import yfinance as yf
         try:
-            # 1) PriceService first — same daily OHLCV path used everywhere.
-            ps_rows: list[dict] = []
-            try:
-                ps_rows = _aio.run(_price.get_historical_data(code, period_days))
-            except RuntimeError:
-                # Already inside an event loop — schedule on a fresh one.
-                loop = _aio.new_event_loop()
-                try:
-                    ps_rows = loop.run_until_complete(_price.get_historical_data(code, period_days))
-                finally:
-                    loop.close()
-            except Exception:
-                ps_rows = []
-
-            if ps_rows and len(ps_rows) >= 2:
-                label = label_map.get(code, code)
-                base = float(ps_rows[0].get("close", 0)) or 1.0
-                for r in ps_rows:
-                    d = str(r.get("date", ""))
-                    if not d:
-                        continue
-                    series_dict.setdefault(d, {"date": d})[label] = round(float(r.get("close", 0)) / base * 22.0, 2)
-                last = float(ps_rows[-1].get("close", 0))
-                prev = float(ps_rows[-2].get("close", last))
-                change = last - prev
-                pct = (change / prev * 100) if prev else 0.0
-                indices.append({"code": code, "label": label,
-                                "lastPrice": round(last, 2),
-                                "change":    round(change, 2),
-                                "changePct": round(pct, 2)})
-                continue
-
-            # 2) Yahoo fallback — only when PriceService returns nothing.
-            t = yf.Ticker(code)
-            hist = t.history(period=period_yf, auto_adjust=False)
+            hist = yf.Ticker(code).history(period=period_yf, auto_adjust=False)
             if hist.empty:
-                continue
-            label = label_map.get(code, code)
-            base = float(hist["Close"].iloc[0])
-            for ts, close in hist["Close"].items():
-                d = ts.strftime("%Y-%m-%d")
-                series_dict.setdefault(d, {"date": d})[label] = round(float(close) / base * 22.0, 2)
-            last = float(hist["Close"].iloc[-1])
-            prev = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else last
-            indices.append({
-                "code": code, "label": label, "lastPrice": round(last, 2),
-                "change": round(last - prev, 2),
-                "changePct": round((last - prev) / prev * 100, 2) if prev else 0.0,
-            })
+                return []
+            return [
+                {"date": ts.strftime("%Y-%m-%d"), "close": float(close)}
+                for ts, close in hist["Close"].items()
+            ]
         except Exception as e:
-            logger.debug("valuation %s failed: %s", code, e)
+            logger.debug("index-valuation yfinance %s failed: %s", code, e)
+            return []
+
+    return await asyncio.get_event_loop().run_in_executor(_executor, _yf_pull)
+
+
+async def _index_valuation(codes: list[str], period: str, metric: str) -> dict:
+    """Multi-index daily-close comparison chart. The `metric` controls how each
+    series is transformed:
+      * `price`   — raw close price (currency / index points)
+      * `indexed` — rebased to 100 at the first point in the window
+      * `change`  — percent change from the first point in the window
+    Series objects are keyed by the **ticker code** (not the display label) so
+    the frontend's <Line dataKey={code}/> always lines up regardless of which
+    indices are selected.
+    """
+    period_days = {"1m": 30, "6m": 180, "1y": 365, "5y": 365 * 5, "10y": 365 * 10}.get(period, 365 * 5)
+    period_yf   = {"1m": "1mo", "6m": "6mo", "1y": "1y", "5y": "5y", "10y": "10y"}.get(period, "5y")
+
+    metric = (metric or "indexed").lower()
+    if metric not in ("price", "indexed", "change"):
+        metric = "indexed"
+
+    # Fetch every index's history concurrently.
+    histories = await asyncio.gather(
+        *[_fetch_index_history(c, period_days, period_yf) for c in codes],
+        return_exceptions=True,
+    )
+
+    series_dict: dict[str, dict[str, float | str]] = {}
+    indices: list[dict] = []
+    for code, rows in zip(codes, histories):
+        if isinstance(rows, Exception) or not rows or len(rows) < 2:
+            continue
+        label = INDEX_LABEL_MAP.get(code, code)
+        base = float(rows[0].get("close") or 0.0) or 1.0
+
+        for r in rows:
+            d = str(r.get("date", ""))
+            close = r.get("close")
+            if not d or close is None:
+                continue
+            close = float(close)
+            if metric == "price":
+                value = round(close, 2)
+            elif metric == "indexed":
+                value = round(close / base * 100.0, 2)
+            else:  # "change"
+                value = round((close / base - 1.0) * 100.0, 2)
+            # Key by code, not label, so dataKey matches across all indices.
+            series_dict.setdefault(d, {"date": d})[code] = value
+
+        last = float(rows[-1].get("close") or 0.0)
+        prev = float(rows[-2].get("close") or last)
+        change = last - prev
+        pct = (change / prev * 100.0) if prev else 0.0
+        indices.append({
+            "code":      code,
+            "label":     label,
+            "lastPrice": round(last, 2),
+            "change":    round(change, 2),
+            "changePct": round(pct, 2),
+        })
+
     series = sorted(series_dict.values(), key=lambda r: r["date"])
+
+    metric_msg = {
+        "price":   "Daily close prices in index points / currency.",
+        "indexed": "Each series rebased to 100 at the start of the window — compare relative performance.",
+        "change":  "Percent change from the start of the window.",
+    }[metric]
+
     return {
         "available": True,
-        "message": "Index PE proxy normalised to 22x (true historical PE/PB requires an index data subscription).",
-        "series": series,
-        "indices": indices,
+        "message":   metric_msg,
+        "metric":    metric,
+        "series":    series,
+        "indices":   indices,
     }
-
-# Note: market-valuation/index-valuation re-stamp meta below at request time so
-# cached payloads always reflect the *current* market state, not the stamp from
-# when the cache was filled.
 
 
 @router.get("/index-valuation")
 async def get_index_valuation(
     indices: str = Query("^NSEI,^NSEBANK"),
     period: str = Query("5y"),
-    metric: str = Query("pe"),
+    metric: str = Query("indexed"),
 ):
     codes = [c.strip() for c in indices.split(",") if c.strip()]
-    cache_key = f"index-val:{','.join(codes)}:{period}:{metric}"
+    # Normalise metric early so the cache key reflects the resolved value.
+    m = (metric or "indexed").lower()
+    if m not in ("price", "indexed", "change"):
+        m = "indexed"
+    cache_key = f"index-val:{','.join(codes)}:{period}:{m}"
     cached = _cache_get(cache_key, ttl=LONG_TTL)
     if cached is not None:
         return {**cached, "meta": _meta("VALUATION_ENGINE")}
-    loop = asyncio.get_event_loop()
-    res = await loop.run_in_executor(None, _index_valuation_sync, codes, period)
+    res = await _index_valuation(codes, period, m)
     _cache_set(cache_key, res)
     return {**res, "meta": _meta("VALUATION_ENGINE")}
 
 
-# Alias used by the frontend
+# Alias used by the frontend (kept for backwards compatibility).
 @router.get("/market-valuation")
-async def market_valuation(indices: str = Query("^NSEI,^NSEBANK"), period: str = Query("5y"),
-                            metric: str = Query("pe")):
+async def market_valuation(
+    indices: str = Query("^NSEI,^NSEBANK"),
+    period: str = Query("5y"),
+    metric: str = Query("indexed"),
+):
     return await get_index_valuation(indices=indices, period=period, metric=metric)
 
 
