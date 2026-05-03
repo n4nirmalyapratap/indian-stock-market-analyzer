@@ -370,7 +370,13 @@ def _run_backtest_sync(
     # Premium-source accounting: every leg fill (entry + exit) is tagged with
     # one of {'bhavcopy', 'synthetic_bs'}.  Aggregated into the result so the
     # UI can show an honesty badge ("X% real / Y% synthetic").
-    premium_source_counter = {"bhavcopy": 0, "synthetic_bs": 0}
+    # Three honest buckets:
+    #   bhavcopy            — fill price came from the NSE/BSE settlement archive
+    #   synthetic_bs        — bhavcopy cache miss; Black-Scholes fallback used
+    #   intrinsic_settlement— exit at T<=0; cash-settled at intrinsic value
+    #                          (not a quote at all, kept separate from "real")
+    premium_source_counter = {"bhavcopy": 0, "synthetic_bs": 0,
+                              "intrinsic_settlement": 0}
 
     def _resolve_premium(opt_type: str, K: float, S_now: float, T_now: float,
                          iv_now: float, on_date: date, exp_date: date) -> tuple[float, str]:
@@ -467,9 +473,11 @@ def _run_backtest_sync(
 
             is_exercise_exit = (T_exit <= 0)
             if is_exercise_exit:
-                # Cash settlement at expiry — intrinsic value is the truth.
+                # Cash settlement at expiry — intrinsic value is the truth,
+                # but it is NOT a quote.  Counted in its own bucket.
                 exit_price = max(0.0, S_exit - K) if opt_type == "call" else max(0.0, K - S_exit)
-                premium_source_counter["bhavcopy"] += 1   # settled, not modelled
+                src_exit   = "intrinsic_settlement"
+                premium_source_counter["intrinsic_settlement"] += 1
             else:
                 raw_exit, src_exit = _resolve_premium(
                     opt_type, K, S_exit, T_exit, iv_exit, exit_date_obj, exp,
@@ -478,6 +486,7 @@ def _run_backtest_sync(
                 exit_action = "sell" if action == "buy" else "buy"
                 exit_price  = _apply_slippage(raw_exit, exit_action, is_entry=False)
                 exit_price  = max(0.0, exit_price)
+            leg["_exit_src"] = src_exit
 
             qty = effective_lots * lot_size
             if action == "buy":
@@ -506,6 +515,26 @@ def _run_backtest_sync(
         trade_pnl = entry_credit - exit_debit - total_commission + underlying_pnl
         cum_pnl  += trade_pnl
 
+        # Per-trade premium-source rollup: every leg fill gets its own
+        # entry+exit tag so an auditor can reconstruct exactly which prices
+        # came from real settlement data.
+        leg_sources = [
+            {"strike": float(l["strike"]), "option_type": l["option_type"],
+             "action": l["action"],
+             "entry_premium_source": l.get("_entry_src", "synthetic_bs"),
+             "exit_premium_source":  l.get("_exit_src",  "synthetic_bs")}
+            for l in filled_legs
+        ]
+        trade_counter = {"bhavcopy": 0, "synthetic_bs": 0,
+                         "intrinsic_settlement": 0}
+        for s in leg_sources:
+            trade_counter[s["entry_premium_source"]] += 1
+            trade_counter[s["exit_premium_source"]]  += 1
+        trade_total = sum(trade_counter.values()) or 1
+        # Promote the dominant source to a single trade-level label so the
+        # trades table can show a one-glance honesty pill per row.
+        trade_premium_source = max(trade_counter, key=trade_counter.get)
+
         trades.append({
             "entry_date":     str(entry_ts.date()),
             "exit_date":      str(exit_ts.date()),
@@ -521,6 +550,10 @@ def _run_backtest_sync(
             "cumulative_pnl": round(cum_pnl, 2),
             "costs_breakdown": {k: round(v, 2) for k, v in cost_breakdown.items()},
             "strategy":       strategy,
+            # Honesty fields — see premium_source_breakdown for legend
+            "premium_source":            trade_premium_source,
+            "premium_source_breakdown":  trade_counter,
+            "leg_premium_sources":       leg_sources,
         })
         equity_curve.append({
             "date":           str(exit_ts.date()),
@@ -554,26 +587,34 @@ def _run_backtest_sync(
     down_std = float(np.std(neg_arr)) if len(neg_arr) > 1 else (abs(avg_loss) or 1.0)
     sortino  = float(np.mean(pnl_arr) / down_std * freq) if down_std > 0 else 0.0
 
-    total_fills    = sum(premium_source_counter.values()) or 1
-    real_pct       = round(premium_source_counter["bhavcopy"] / total_fills * 100, 1)
-    synth_pct      = round(premium_source_counter["synthetic_bs"] / total_fills * 100, 1)
-    primary_source = ("bhavcopy" if premium_source_counter["bhavcopy"] >=
-                       premium_source_counter["synthetic_bs"] else "synthetic_bs")
+    total_fills        = sum(premium_source_counter.values()) or 1
+    bhav_n             = premium_source_counter["bhavcopy"]
+    synth_n            = premium_source_counter["synthetic_bs"]
+    intrinsic_n        = premium_source_counter["intrinsic_settlement"]
+    real_pct           = round(bhav_n / total_fills * 100, 1)
+    synth_pct          = round(synth_n / total_fills * 100, 1)
+    intrinsic_pct      = round(intrinsic_n / total_fills * 100, 1)
+    primary_source     = max(premium_source_counter, key=premium_source_counter.get)
 
     return {
         "trades":       trades,
         "equity_curve": equity_curve,
         "premium_source_breakdown": {
-            "bhavcopy_fills":       premium_source_counter["bhavcopy"],
-            "synthetic_bs_fills":   premium_source_counter["synthetic_bs"],
-            "total_fills":          total_fills,
-            "real_pct":             real_pct,
-            "synthetic_pct":        synth_pct,
-            "primary_source":       primary_source,
+            "bhavcopy_fills":             bhav_n,
+            "synthetic_bs_fills":         synth_n,
+            "intrinsic_settlement_fills": intrinsic_n,
+            "total_fills":                total_fills,
+            "real_pct":                   real_pct,
+            "synthetic_pct":              synth_pct,
+            "intrinsic_settlement_pct":   intrinsic_pct,
+            "primary_source":             primary_source,
             "note": (
-                "bhavcopy = NSE/BSE F&O daily settlement archive; "
-                "synthetic_bs = Black-Scholes fallback (cache miss for that "
-                "exact contract on that date)."
+                "bhavcopy = NSE/BSE F&O daily settlement archive (real quote); "
+                "synthetic_bs = Black-Scholes fallback used when the exact "
+                "contract is missing from the cache; "
+                "intrinsic_settlement = exit at expiry (T<=0) settled at "
+                "intrinsic value — not a quote, tracked separately so the "
+                "real-data ratio is not inflated."
             ),
         },
         "metrics": {
