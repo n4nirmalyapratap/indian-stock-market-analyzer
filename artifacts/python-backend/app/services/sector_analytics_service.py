@@ -468,12 +468,17 @@ class SectorAnalyticsService:
             def _pref(primary: Optional[float], fallback: Optional[float]) -> Optional[float]:
                 return primary if primary is not None else fallback
 
+            # Honest missing-data: when the live sectors feed lacks a field
+            # (e.g. NSE sector quote temporarily unavailable), surface None
+            # so the UI renders "—" instead of fabricating a flat 0.0%.
+            live_last = live.get("lastPrice")
+            live_pchg = live.get("pChange")
             result.append({
                 "symbol":    nse_sym,
                 "name":      live.get("name", nse_sym),
                 "category":  live.get("category", ""),
-                "lastPrice": live.get("lastPrice", 0),
-                "change1d":  round(live.get("pChange", 0), 2),
+                "lastPrice": live_last if live_last is not None else None,
+                "change1d":  round(live_pchg, 2) if live_pchg is not None else None,
                 "change1w":  _pref(_pct_change_from_history(hist, 5),   fb.get("change1w")),
                 "change1m":  _pref(_pct_change_from_history(hist, 21),  fb.get("change1m")),
                 "change3m":  _pct_change_from_history(hist, 63),

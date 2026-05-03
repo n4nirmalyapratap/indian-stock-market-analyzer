@@ -300,26 +300,27 @@ function ValuationTab({ data, isDark }: { data: SectorDetailData; isDark: boolea
   const v = data.valuation;
   const hdrTxt = isDark ? "#f1f5f9" : "#111827";
 
+  const wAvg = mode === "cap" ? "market-cap-weighted average" : "equal-weighted average";
   const metrics = [
     {
       key: "pe", label: "P/E Ratio",
       val: mode === "cap" ? v?.pe : v?.pe_equal,
-      tip: "Price-to-Earnings: market-cap-weighted average of each constituent's P/E ratio (constituents with negative or missing earnings are excluded). High P/E suggests high growth expectations.",
+      tip: `Price-to-Earnings: ${wAvg} of each constituent's P/E ratio (constituents with negative or missing earnings are excluded). High P/E suggests high growth expectations.`,
     },
     {
       key: "pb", label: "P/B Ratio",
       val: mode === "cap" ? v?.pb : v?.pb_equal,
-      tip: "Price-to-Book: market-cap-weighted average of each constituent's P/B ratio. Most useful for asset-heavy sectors (Financials, Industrials). Below 1 may indicate undervaluation.",
+      tip: `Price-to-Book: ${wAvg} of each constituent's P/B ratio. Most useful for asset-heavy sectors (Financials, Industrials). Below 1 may indicate undervaluation.`,
     },
     {
       key: "ps", label: "P/S Ratio",
       val: mode === "cap" ? v?.ps : v?.ps_equal,
-      tip: "Price-to-Sales: market-cap-weighted average of each constituent's P/S ratio. Key metric for sectors with unprofitable companies (e.g. early-stage tech).",
+      tip: `Price-to-Sales: ${wAvg} of each constituent's P/S ratio. Key metric for sectors with unprofitable companies (e.g. early-stage tech).`,
     },
     {
       key: "evEbitda", label: "EV/EBITDA",
       val: mode === "cap" ? v?.evEbitda : v?.evEbitda_equal,
-      tip: "Enterprise Value / EBITDA. Capital-structure-neutral metric useful for comparing sectors with different debt levels.",
+      tip: `Enterprise Value / EBITDA — ${wAvg} across constituents. Capital-structure-neutral metric useful for comparing sectors with different debt levels.`,
     },
   ];
 
