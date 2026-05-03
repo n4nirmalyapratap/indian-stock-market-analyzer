@@ -371,16 +371,18 @@ class SectorsService:
                     "yahooTicker": sector["yahooTicker"],
                 })
             else:
+                # Quote unavailable — surface None so the UI renders "—"
+                # instead of a misleading "₹0 / 0.00%". Sort failures last.
                 sectors.append({
                     "name": sector["name"],
                     "symbol": sector["symbol"],
                     "category": sector["category"],
-                    "lastPrice": 0, "change": 0, "pChange": 0,
+                    "lastPrice": None, "change": None, "pChange": None,
                     "advances": 0, "declines": 0,
                     "source": "NSE", "servedFrom": "UNAVAILABLE",
                     "yahooTicker": sector["yahooTicker"],
                 })
-        return sorted(sectors, key=lambda s: s["pChange"], reverse=True)
+        return sorted(sectors, key=lambda s: (s["pChange"] is None, -(s["pChange"] or 0)))
 
     async def get_sector_rotation(self) -> dict:
         fresh = _get_cache()
