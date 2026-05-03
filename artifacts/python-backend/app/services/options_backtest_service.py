@@ -169,8 +169,15 @@ def _to_yf_sym_candidates(symbol: str) -> list[str]:
     return [_to_yf_sym(symbol)]
 
 
-def _strike_step(S: float) -> float:
-    """NSE standard strike increment."""
+def _strike_step(S: float, symbol: str = "") -> float:
+    """NSE standard strike increment (symbol-aware via SEBI registry).
+
+    When called without a symbol, falls back to the legacy spot-bucketed
+    ladder so older call sites keep working unchanged.
+    """
+    from .sebi_registry import get_strike_step
+    if symbol:
+        return get_strike_step(symbol, S)
     if S >= 10_000:
         return 100.0
     if S >= 2_000:
@@ -180,12 +187,13 @@ def _strike_step(S: float) -> float:
     return 5.0
 
 
-def _atm(S: float) -> float:
-    step = _strike_step(S)
+def _atm(S: float, symbol: str = "") -> float:
+    step = _strike_step(S, symbol)
     return round(S / step) * step
 
 
-def _build_legs(strategy: str, S: float, otm_pct: float) -> list[dict]:
+def _build_legs(strategy: str, S: float, otm_pct: float,
+                symbol: str = "") -> list[dict]:
     """
     Build raw leg definitions (strike, action, option_type) for a strategy.
     otm_pct: fraction of S used as OTM wing distance (e.g. 0.05 = 5%).
@@ -194,8 +202,8 @@ def _build_legs(strategy: str, S: float, otm_pct: float) -> list[dict]:
     valid option premium (i.e. non-negative intrinsic or enough time value).
     For spread strategies, the wing strike must be further OTM than the body.
     """
-    step    = _strike_step(S)
-    atm     = _atm(S)
+    step    = _strike_step(S, symbol)
+    atm     = _atm(S, symbol)
     otm_d   = max(step, round(S * otm_pct / step) * step)
     wide_d  = max(step * 2, otm_d * 2)
 
@@ -387,7 +395,7 @@ def _run_backtest_sync(
         T_exit   = max(0.0, (exp - exit_ts.date()).days / 365.0)
 
         try:
-            raw_legs = _build_legs(strategy, S_entry, otm_pct)
+            raw_legs = _build_legs(strategy, S_entry, otm_pct, symbol)
         except ValueError as e:
             return {"error": str(e)}
 
