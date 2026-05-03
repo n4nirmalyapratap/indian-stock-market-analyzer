@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { TrendingUp, TrendingDown, Activity, AlertCircle, RefreshCw } from "lucide-react";
@@ -7,13 +7,46 @@ import DataFreshness from "@/components/DataFreshness";
 import MacroStrip from "@/components/macro/MacroStrip";
 import { marketDataQueryOptions, pickMeta } from "@/lib/marketData";
 
+// ── Pure helpers (exported for unit tests) ──────────────────────────────────
+/** Format the A/D ratio for display. When declining=0 we have no real
+ * denominator — returning the literal advancing count would be misleading
+ * (it's not a "ratio"), so we surface "∞" instead. */
+export function formatAdRatio(advancing: number, declining: number): string {
+  if (advancing === 0 && declining === 0) return "—";
+  if (declining === 0) return "∞";
+  return (advancing / declining).toFixed(2);
+}
+
+/** Strip the "Nifty " prefix for compact sector cards, but keep "Nifty 50"
+ * and "Nifty Next 50" intact since dropping the prefix leaves an ambiguous
+ * bare number ("50"). */
+export function shortSectorName(name: string): string {
+  if (!name) return "";
+  if (/^Nifty\s+(?:Next\s+)?\d+$/i.test(name)) return name;
+  return name.replace(/^Nifty\s+/i, "");
+}
+
+/** Format a percentage change, falling through gracefully when null/undefined.
+ * Uses ?? (not ||) so a legitimate 0.00% does not get rewritten to "0". */
+export function formatPctChange(p: number | null | undefined): string {
+  const v = p ?? 0;
+  return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+}
+
 function CardLoader() {
   return (
     <span className="w-3 h-3 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin inline-block" />
   );
 }
 
-function StatCard({ title, value, sub, trend, loading }: any) {
+interface StatCardProps {
+  title:    string;
+  value:    string | number;
+  sub?:     string | number | null;
+  trend?:   "up" | "down";
+  loading?: boolean;
+}
+function StatCard({ title, value, sub, trend, loading }: StatCardProps) {
   const isUp = trend === "up";
   const isDown = trend === "down";
   return (
@@ -66,7 +99,15 @@ export default function Dashboard() {
   }
 
   const breadth = rotation?.marketBreadth;
-  const adRatio = breadth ? (breadth.advancing / (breadth.declining || 1)).toFixed(2) : "-";
+  // Memoise so the rapid spinner re-renders during refresh don't recompute
+  // these on every paint.
+  const adRatio = useMemo(
+    () => (breadth ? formatAdRatio(breadth.advancing, breadth.declining) : "-"),
+    [breadth?.advancing, breadth?.declining],
+  );
+  const breadthLabel = breadth?.breadthScore ?? null;
+  const buyNow = useMemo(() => rotation?.whereToBuyNow?.slice(0, 5) ?? [], [rotation?.whereToBuyNow]);
+  const sectorsTop = useMemo(() => rotation?.sectors?.slice(0, 8) ?? [], [rotation?.sectors]);
 
   return (
     <div className="space-y-6">
@@ -102,7 +143,7 @@ export default function Dashboard() {
         <StatCard loading={rotBusy} title="Market Phase" value={rotLoading ? "…" : (rotation?.rotationPhase?.split(" -")[0] || "N/A")} sub={rotation?.rotationPhase?.split(" - ")[1]} />
         <StatCard loading={rotBusy} title="Advancing" value={rotLoading ? "…" : breadth?.advancing ?? "-"} trend="up" sub="sectors gaining" />
         <StatCard loading={rotBusy} title="Declining" value={rotLoading ? "…" : breadth?.declining ?? "-"} trend="down" sub="sectors falling" />
-        <StatCard loading={rotBusy} title="A/D Ratio" value={rotLoading ? "…" : adRatio} sub={`Breadth: ${breadth?.breadthScore || "-"}%`} />
+        <StatCard loading={rotBusy} title="A/D Ratio" value={rotLoading ? "…" : adRatio} sub={`Breadth: ${breadthLabel ?? "-"}%`} />
       </div>
 
       <div className="grid md:grid-cols-2 gap-6">
@@ -117,16 +158,16 @@ export default function Dashboard() {
             <div className="space-y-2">
               {[1,2,3].map(i => <div key={i} className="h-8 bg-gray-100 dark:bg-gray-700 animate-pulse rounded" />)}
             </div>
-          ) : (rotation?.whereToBuyNow?.length ?? 0) > 0 ? (
+          ) : buyNow.length > 0 ? (
             <div className="space-y-2">
-              {rotation?.whereToBuyNow?.slice(0, 5).map((s: any, i: number) => (
-                <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-green-50 dark:bg-green-900/25">
+              {buyNow.map((s: any, i: number) => (
+                <div key={s.symbol ?? i} className="flex items-center justify-between p-2 rounded-lg bg-green-50 dark:bg-green-900/25">
                   <span className="text-sm font-medium text-gray-800 dark:text-gray-200 flex items-center gap-1">
                     {s.name}
                     {s.symbol && <ChartButton symbol={s.symbol} />}
                   </span>
                   <span className={`text-sm font-semibold ${(s.pChange ?? 0) >= 0 ? "text-green-600" : "text-red-500"}`}>
-                    {(s.pChange ?? 0) >= 0 ? "+" : ""}{s.pChange?.toFixed(2) ?? "0"}%
+                    {formatPctChange(s.pChange)}
                   </span>
                 </div>
               ))}
@@ -198,11 +239,11 @@ export default function Dashboard() {
               <p className="text-xs text-indigo-600 dark:text-indigo-400 mt-1">{rotation.recommendation}</p>
             </div>
             <div className="grid grid-cols-4 gap-2">
-              {rotation.sectors?.slice(0, 8).map((s: any, i: number) => (
-                <div key={i} className={`rounded-lg p-2.5 text-center ${s.pChange >= 0 ? "bg-green-50 dark:bg-green-900/25 border border-green-100 dark:border-green-800" : "bg-red-50 dark:bg-red-900/25 border border-red-100 dark:border-red-800"}`}>
-                  <p className="text-xs font-medium text-gray-700 dark:text-gray-300 truncate">{s.name.replace("Nifty ", "")}</p>
-                  <p className={`text-sm font-bold ${s.pChange >= 0 ? "text-green-600" : "text-red-500"}`}>
-                    {s.pChange >= 0 ? "+" : ""}{s.pChange?.toFixed(2) || "0"}%
+              {sectorsTop.map((s: any, i: number) => (
+                <div key={s.symbol ?? i} className={`rounded-lg p-2.5 text-center ${(s.pChange ?? 0) >= 0 ? "bg-green-50 dark:bg-green-900/25 border border-green-100 dark:border-green-800" : "bg-red-50 dark:bg-red-900/25 border border-red-100 dark:border-red-800"}`}>
+                  <p className="text-xs font-medium text-gray-700 dark:text-gray-300 truncate">{shortSectorName(s.name)}</p>
+                  <p className={`text-sm font-bold ${(s.pChange ?? 0) >= 0 ? "text-green-600" : "text-red-500"}`}>
+                    {formatPctChange(s.pChange)}
                   </p>
                 </div>
               ))}
