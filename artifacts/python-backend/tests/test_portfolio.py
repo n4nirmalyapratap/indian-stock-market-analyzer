@@ -148,7 +148,7 @@ def test_equity_curve_no_double_count_cash(client):
         # User id when DISABLE_AUTH=1 + no headers is "test_user" (see
         # `app/middleware/clerk_auth.py`) — match that so the portfolio is
         # found in the SQLite store.
-        result = asyncio.new_event_loop().run_until_complete(
+        result = asyncio.run(
             ps.equity_curve("test_user", pid, _StubPS(), days=180, benchmark="^NSEI"))
         series = result["series"]
         assert len(series) > 0, "equity_curve produced no points"

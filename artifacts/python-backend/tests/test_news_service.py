@@ -24,7 +24,9 @@ from app.services import news_service as ns
 # ─── helpers ──────────────────────────────────────────────────────────────────
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # asyncio.run() creates a fresh loop per call — safer than the deprecated
+    # get_event_loop() pattern which raises on Python 3.12+ without a loop.
+    return asyncio.run(coro)
 
 
 @pytest.fixture(autouse=True)
