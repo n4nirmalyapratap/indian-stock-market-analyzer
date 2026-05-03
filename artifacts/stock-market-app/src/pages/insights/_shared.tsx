@@ -137,7 +137,7 @@ export function Dropdown({ label, value, onChange, options }: {
  */
 export function MenuDropdown({
   label, value, options, onChange, placeholder = "Select…", clearable = false,
-  minButtonWidth = 0, maxButtonWidth = 280, customButton,
+  minButtonWidth = 0, maxButtonWidth = 280, customButton, renderOption, searchPlaceholder,
 }: {
   label?: string;
   value: string;
@@ -147,6 +147,10 @@ export function MenuDropdown({
   clearable?: boolean;
   minButtonWidth?: number;
   maxButtonWidth?: number;
+  /** Custom row renderer — receives the option and selected state. */
+  renderOption?: (opt: { value: string; label: string }, selected: boolean) => ReactNode;
+  /** Override the search box placeholder. */
+  searchPlaceholder?: string;
   /**
    * Optional custom trigger element. When provided, this element fully
    * replaces the default styled button. The component clones it to inject
@@ -291,7 +295,7 @@ export function MenuDropdown({
               value={q}
               onChange={e => setQ(e.target.value)}
               onKeyDown={onKeyDown}
-              placeholder="Search…"
+              placeholder={searchPlaceholder || "Search…"}
               aria-label={`Search ${label || "options"}`}
               className="w-full text-sm px-3 py-2 border-b border-gray-200 dark:border-gray-700 bg-transparent outline-none flex-shrink-0 placeholder:text-gray-400 text-gray-900 dark:text-white"
             />
@@ -319,7 +323,11 @@ export function MenuDropdown({
                       ? "text-gray-500 dark:text-gray-400 italic"
                       : "text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"}`}
                 >
-                  <span className="truncate">{o.label}</span>
+                  {renderOption && !isClear ? (
+                    <div className="flex-1 min-w-0">{renderOption(o, sel)}</div>
+                  ) : (
+                    <span className="truncate">{o.label}</span>
+                  )}
                   {sel && <Check className="w-4 h-4 text-indigo-600 dark:text-indigo-400 flex-shrink-0" />}
                 </button>
               );
