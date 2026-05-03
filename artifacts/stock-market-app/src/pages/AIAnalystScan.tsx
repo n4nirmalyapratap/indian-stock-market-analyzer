@@ -135,16 +135,25 @@ export default function AIAnalystScan() {
     const myScanId = ++scanIdRef.current;
     const isCurrent = () => scanIdRef.current === myScanId;
 
+    // Backend caps a single scan at 50 tickers — slice the watchlist and
+    // surface a note instead of failing the whole request.
+    const MAX_PER_SCAN = 50;
+    const allSymbols = active.symbols.map(s => s.toUpperCase());
+    const symbols = allSymbols.slice(0, MAX_PER_SCAN);
+    const trimmedNote = allSymbols.length > MAX_PER_SCAN
+      ? `Watchlist has ${allSymbols.length} tickers — scanning the first ${MAX_PER_SCAN}. Run again for the rest tomorrow.`
+      : null;
+
     setRunning(true);
-    setErr(null);
+    setErr(trimmedNote);
     setSummary(null);
-    setRows(active.symbols.map(s => ({ ticker: s.toUpperCase(), status: "queued" })));
+    setRows(symbols.map(s => ({ ticker: s, status: "queued" })));
 
     try {
       const resp = await fetch("/api/ai-analyst/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ tickers: active.symbols }),
+        body: JSON.stringify({ tickers: symbols }),
         signal: ctl.signal,
       });
       if (!isCurrent()) return; // superseded between fetch start and headers

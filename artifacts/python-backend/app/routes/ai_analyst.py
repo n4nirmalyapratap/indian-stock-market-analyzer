@@ -150,7 +150,7 @@ class ScanPayload(BaseModel):
     force: Optional[bool] = False
 
 
-_MAX_SCAN = 25  # generous upper bound for any reasonable watchlist
+_MAX_SCAN = 50  # accommodates the default Nifty 50 watchlist in one scan
 
 
 @router.post("/scan")
