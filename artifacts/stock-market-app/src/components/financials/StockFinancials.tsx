@@ -7,6 +7,8 @@ import {
 import { api } from "@/lib/api";
 import type { IncomeRow, BalanceSheetRow, CashFlowRow, DividendRow, EpsRow } from "@/lib/api";
 import { TrendingUp, TrendingDown, Minus } from "lucide-react";
+import DataFreshness from "@/components/DataFreshness";
+import type { MarketDataMeta } from "@/lib/marketData";
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 
@@ -612,9 +614,27 @@ export default function StockFinancials({ symbol }: { symbol: string }) {
   }
 
   const { overview: ov, incomeStatement, balanceSheet: _bs, cashFlow: _cf, dividends, eps } = data;
+  const freshnessMeta: MarketDataMeta | null = data.meta
+    ? {
+        source:      data.meta.source,
+        asOf:        data.meta.asOf ?? null,
+        marketState: (data.meta.marketState ?? undefined) as string | undefined,
+      }
+    : null;
 
   return (
     <div className="space-y-4" data-testid="stock-financials">
+      {/* Provenance pill — fundamentals are quarterly/annual so the
+          intraday/EOD distinction does not apply, but the user still
+          deserves to know the source and freshness. */}
+      {freshnessMeta && (
+        <DataFreshness
+          meta={freshnessMeta}
+          refreshKeys={["financials", symbol]}
+          label={`Fundamentals · ${freshnessMeta.source ?? "—"}`}
+        />
+      )}
+
       {/* Tab nav */}
       <div className="flex gap-1 overflow-x-auto border-b border-gray-100 pb-0">
         {TABS.map(t => (
