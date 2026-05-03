@@ -23,14 +23,24 @@ const VERDICT_STYLE: Record<Verdict, { bg: string; text: string; label: string }
 };
 
 const PERSONA_TINT: Record<string, string> = {
-  buffett: "from-amber-500 to-orange-500",
-  graham:  "from-slate-500 to-gray-700",
-  lynch:   "from-emerald-500 to-teal-600",
-  munger:  "from-yellow-500 to-amber-600",
-  klarman: "from-blue-500 to-indigo-600",
-  marks:   "from-purple-500 to-violet-600",
-  dalio:   "from-cyan-500 to-blue-600",
-  burry:   "from-rose-500 to-red-600",
+  // Global legends
+  buffett:        "from-amber-500 to-orange-500",
+  graham:         "from-slate-500 to-gray-700",
+  lynch:          "from-emerald-500 to-teal-600",
+  munger:         "from-yellow-500 to-amber-600",
+  klarman:        "from-blue-500 to-indigo-600",
+  marks:          "from-purple-500 to-violet-600",
+  dalio:          "from-cyan-500 to-blue-600",
+  burry:          "from-rose-500 to-red-600",
+  // Indian legends — saffron / green / blue palette nodding to the tricolour
+  jhunjhunwala:   "from-orange-500 to-red-500",
+  damani_rk:      "from-emerald-600 to-green-700",
+  agrawal:        "from-blue-600 to-indigo-700",
+  kedia:          "from-pink-500 to-rose-600",
+  veliyath:       "from-fuchsia-500 to-purple-600",
+  damani_ramesh:  "from-teal-500 to-emerald-600",
+  kacholia:       "from-yellow-500 to-orange-600",
+  khanna:         "from-lime-500 to-green-600",
 };
 
 function VerdictBadge({ verdict }: { verdict: Verdict }) {
@@ -231,8 +241,7 @@ function SearchLanding({ onSelect }: { onSelect: (sym: string) => void }) {
           Ask the legends about any Indian stock
         </h1>
         <p className="text-sm text-gray-500 dark:text-gray-400 max-w-lg mx-auto">
-          Eight famous investors — Buffett, Graham, Lynch, Munger, Klarman, Marks, Dalio, Burry —
-          run their documented checklists on any NSE stock and write a short AI thesis in their own voice.
+          Sixteen famous investors — eight global legends (Buffett, Graham, Lynch, Munger, Klarman, Marks, Dalio, Burry) plus eight Indian icons (Jhunjhunwala, Damani, Agrawal, Kedia, Veliyath, Ramesh Damani, Kacholia, Khanna) — run their documented checklists on any NSE stock and write a short AI thesis in their own voice.
         </p>
       </div>
 
@@ -376,7 +385,7 @@ function CouncilContent({ data, symbol, view, onChangeView, onOpenPersona }: {
               {verdictStyle.label}
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              Avg score {Math.round(data.council.avgScore * 100)}% across 8 personas
+              Avg score {Math.round(data.council.avgScore * 100)}% across {data.personas.length} personas
             </p>
           </div>
         </div>
@@ -458,7 +467,7 @@ function CouncilMatrix({ personas, onOpen }: {
         <div className="px-4 py-3 border-b border-gray-100 dark:border-white/10 flex items-center justify-between">
           <div>
             <h3 className="font-bold text-sm text-gray-900 dark:text-white">Council View — verdict consensus</h3>
-            <p className="text-[11px] text-gray-500 dark:text-gray-400">All 8 personas side-by-side. Click any cell for the AI thesis.</p>
+            <p className="text-[11px] text-gray-500 dark:text-gray-400">All {personas.length} personas side-by-side. Click any cell for the AI thesis.</p>
           </div>
           <div className="hidden md:flex items-center gap-2 text-[10px] text-gray-500">
             {(["STRONG_BUY","BUY","HOLD","AVOID","STRONG_AVOID"] as Verdict[]).map(v => (
