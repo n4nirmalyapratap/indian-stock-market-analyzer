@@ -64,6 +64,10 @@ def _closes_from_history(rows: list[dict]) -> list[float]:
 
 _executor = ThreadPoolExecutor(max_workers=16)
 _cache: dict[str, tuple[float, Any, int]] = {}  # (timestamp, value, cacheVersion)
+# In-flight deduplication for heatmap: maps cache_key → running asyncio Task.
+# Prevents thundering-herd where N simultaneous cold requests each spawn their
+# own full 500-symbol fetch. All waiters share a single task.
+_HEATMAP_IN_FLIGHT: dict[str, "asyncio.Task[dict]"] = {}
 DEFAULT_TTL = 300              # 5 min for yfinance / fast-changing data
 LONG_TTL    = 60 * 60 * 6      # 6 h for AMFI / BSE end-of-day data
 
@@ -466,27 +470,18 @@ async def list_indices():
     }
 
 
-@router.get("/heatmap")
-async def get_heatmap(
-    index: str = Query("NIFTY50"),
-    performance: str = Query("1d"),
-):
-    code = index.upper().replace(" ", "").replace("-", "")
-    cache_key = f"heatmap:{code}:{performance}"
-    # Heatmap data is daily-resolution. When the market is closed the close
-    # won't change until the next session, so we can hold the cache far
-    # longer. During market hours we still refresh frequently.
-    market_open = mcache.is_market_open()
-    ttl = 600 if market_open else LONG_TTL
-    cached = _cache_get(cache_key, ttl=ttl)
-    if cached is not None:
-        return cached
+async def _compute_heatmap_fresh(code: str, performance: str, cache_key: str) -> dict:
+    """Fetch all constituent quotes + index header and populate the cache.
 
+    Extracted from get_heatmap so it can run as a background asyncio Task for
+    stale-while-revalidate: the HTTP handler returns stale data immediately
+    while this coroutine silently refreshes the cache for the next request.
+    """
     symbols = INDEX_CONSTITUENTS.get(code)
     if not symbols:
         return {
             "available": False,
-            "message": f"Index '{index}' is not supported yet.",
+            "message": f"Index '{code}' is not supported yet.",
             "index": code,
             "label": INDEX_LABELS.get(code, code),
             "items": [],
@@ -529,7 +524,59 @@ async def get_heatmap(
         "meta": _meta("HEATMAP_ENGINE"),
     }
     _cache_set(cache_key, response)
+    _HEATMAP_IN_FLIGHT.pop(cache_key, None)
     return response
+
+
+@router.get("/heatmap")
+async def get_heatmap(
+    index: str = Query("NIFTY50"),
+    performance: str = Query("1d"),
+):
+    code = index.upper().replace(" ", "").replace("-", "")
+    cache_key = f"heatmap:{code}:{performance}"
+    # Heatmap data is daily-resolution. When the market is closed the close
+    # won't change until the next session, so we can hold the cache far
+    # longer. During market hours we still refresh frequently.
+    market_open = mcache.is_market_open()
+    ttl = 600 if market_open else LONG_TTL
+
+    # ── 1. Fresh cache — return immediately ──────────────────────────────────
+    fresh = _cache_get(cache_key, ttl=ttl)
+    if fresh is not None:
+        return fresh
+
+    # ── 2. Stale-while-revalidate ────────────────────────────────────────────
+    # If a slightly older entry exists (within 6× TTL: 1 h market-open, 36 h
+    # closed), serve it instantly and kick off a background task to refresh.
+    # The user never waits for a re-fetch after the very first cold load.
+    stale_window = ttl * 6
+    hit = _cache.get(cache_key)
+    if hit:
+        _ts, stale_val, _ver = hit
+        age = time.time() - _ts
+        ver_ok = (_ver == mcache.cache_version())
+        if ver_ok and age < stale_window:
+            inf = _HEATMAP_IN_FLIGHT.get(cache_key)
+            if inf is None or inf.done():
+                _HEATMAP_IN_FLIGHT[cache_key] = asyncio.ensure_future(
+                    _compute_heatmap_fresh(code, performance, cache_key)
+                )
+            return stale_val
+
+    # ── 3. In-flight deduplication ───────────────────────────────────────────
+    # If another request is already computing this exact heatmap, wait for it
+    # instead of spawning a duplicate set of 500 concurrent fetches.
+    inf = _HEATMAP_IN_FLIGHT.get(cache_key)
+    if inf is not None and not inf.done():
+        return await inf
+
+    # ── 4. True cold miss — compute, cache, return ───────────────────────────
+    task = asyncio.ensure_future(
+        _compute_heatmap_fresh(code, performance, cache_key)
+    )
+    _HEATMAP_IN_FLIGHT[cache_key] = task
+    return await task
 
 
 # ────────────────────────────────────────────────────────────────────────────
