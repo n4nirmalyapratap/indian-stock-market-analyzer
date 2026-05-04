@@ -9,6 +9,7 @@ import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 type Period = "1m" | "6m" | "1y" | "5y" | "10y";
 type Metric = "price" | "indexed" | "change";
+type FxMode = "local" | "usd";
 
 interface PointBag { date: string; [key: string]: number | string; }
 
@@ -81,21 +82,34 @@ const formatValue = (v: number | string | undefined, metric: Metric) => {
   return n.toFixed(2); // indexed → 100-based
 };
 
+// Indices whose home currency is not USD — used to decide whether to show
+// the USD toggle.
+const GLOBAL_INDEX_CODES = new Set([
+  "^GSPC","^DJI","^IXIC",
+  "^FTSE","^GDAXI","^FCHI","^STOXX50E",
+  "^N225","^HSI","000001.SS","^KS11","^AXJO",
+  "^BSESN",
+]);
+
 export default function MarketValuation() {
   const [period, setPeriod] = useState<Period>("5y");
   const [metric, setMetric] = useState<Metric>("indexed");
+  const [fx, setFx]         = useState<FxMode>("local");
   const [selected, setSelected] = useState<string[]>(["^NSEI", "^NSEBANK"]);
   const [adding, setAdding] = useState("");
 
   const codes = selected.join(",");
+
+  // Show the USD toggle only when at least one non-INR-only index is selected.
+  const hasMultiCurrency = selected.some(c => GLOBAL_INDEX_CODES.has(c));
 
   const palette = useChartPalette();
   const { border: cBorder, muted: cMuted, text: cText, surf: cSurf, accent: cAccent } = palette;
 
   const { data, isLoading, isFetching } = useQuery<ValuationResponse>(
     marketDataQueryOptions<ValuationResponse, { enabled: boolean; placeholderData: (prev: ValuationResponse | undefined) => ValuationResponse | undefined }>(
-      ["insights/index-valuation", codes, period, metric],
-      () => fetchApi(`/insights/index-valuation?indices=${encodeURIComponent(codes)}&period=${period}&metric=${metric}`),
+      ["insights/index-valuation", codes, period, metric, fx],
+      () => fetchApi(`/insights/index-valuation?indices=${encodeURIComponent(codes)}&period=${period}&metric=${metric}&fx=${fx}`),
       { enabled: codes.length > 0, placeholderData: (prev) => prev },
     ),
   );
@@ -182,13 +196,33 @@ export default function MarketValuation() {
         )}
       </div>
 
-      {/* Period & metric controls */}
+      {/* Period, metric & FX controls */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <PillTabs value={period} onChange={(v) => setPeriod(v as Period)} options={[
           {value:"1m",label:"1M"},{value:"6m",label:"6M"},{value:"1y",label:"1Y"},{value:"5y",label:"5Y"},{value:"10y",label:"10Y"},
         ]}/>
-        <PillTabs value={metric} onChange={(v) => setMetric(v as Metric)} options={METRIC_OPTIONS}/>
+        <div className="flex items-center gap-2 flex-wrap">
+          {hasMultiCurrency && (
+            <PillTabs
+              value={fx}
+              onChange={(v) => setFx(v as FxMode)}
+              options={[
+                { value: "local", label: "Local CCY" },
+                { value: "usd",   label: "USD" },
+              ]}
+            />
+          )}
+          <PillTabs value={metric} onChange={(v) => setMetric(v as Metric)} options={METRIC_OPTIONS}/>
+        </div>
       </div>
+
+      {/* USD conversion note */}
+      {fx === "usd" && hasMultiCurrency && (
+        <div className="mb-3 flex items-center gap-1.5 text-[11px] text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800/40 rounded-lg px-3 py-2">
+          <Info className="w-3.5 h-3.5 flex-shrink-0" />
+          All series converted to USD using daily FX rates — removes currency drag so you compare true USD returns.
+        </div>
+      )}
 
       {isLoading && <Loading />}
       {!isLoading && data && data.series.length === 0 && (

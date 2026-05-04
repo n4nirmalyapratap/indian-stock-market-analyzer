@@ -2106,7 +2106,9 @@ async def get_signals(
 # raw ticker so the chart still renders correctly (the frontend uses `code` as
 # the series key — `label` is purely for UI display).
 INDEX_LABEL_MAP = {
+    # India
     "^NSEI":                 "NIFTY 50",
+    "^BSESN":                "SENSEX",
     "^NSEBANK":              "NIFTY BANK",
     "^CNXIT":                "NIFTY IT",
     "^CNXFMCG":              "NIFTY FMCG",
@@ -2126,6 +2128,63 @@ INDEX_LABEL_MAP = {
     "^CNX100":               "NIFTY 100",
     "^CNX200":               "NIFTY 200",
     "^CRSLDX":               "NIFTY 500",
+    # Americas
+    "^GSPC":                 "S&P 500",
+    "^DJI":                  "Dow Jones",
+    "^IXIC":                 "NASDAQ",
+    # Europe
+    "^FTSE":                 "FTSE 100",
+    "^GDAXI":                "DAX",
+    "^FCHI":                 "CAC 40",
+    "^STOXX50E":             "Euro Stoxx 50",
+    # Asia Pacific
+    "^N225":                 "Nikkei 225",
+    "^HSI":                  "Hang Seng",
+    "000001.SS":             "Shanghai Comp.",
+    "^KS11":                 "KOSPI",
+    "^AXJO":                 "ASX 200",
+}
+
+# Home currency of every tracked index ticker
+INDEX_CURRENCY: dict[str, str] = {
+    # USD — no conversion needed
+    "^GSPC": "USD", "^DJI": "USD", "^IXIC": "USD",
+    # INR
+    "^NSEI": "INR", "^BSESN": "INR", "^NSEBANK": "INR",
+    "^CNXIT": "INR", "^CNXFMCG": "INR", "^CNXAUTO": "INR",
+    "^CNXPHARMA": "INR", "^CNXMETAL": "INR", "^CNXENERGY": "INR",
+    "^CNXREALTY": "INR", "^CNXMEDIA": "INR", "^CNXPSUBANK": "INR",
+    "^CNXPSE": "INR", "^CNXINFRA": "INR", "NIFTY_FIN_SERVICE.NS": "INR",
+    "^NSMIDCP": "INR", "^CNXSC": "INR", "^CNX100": "INR",
+    "^CNX200": "INR", "^CRSLDX": "INR",
+    # GBP
+    "^FTSE": "GBP",
+    # EUR
+    "^GDAXI": "EUR", "^FCHI": "EUR", "^STOXX50E": "EUR",
+    # JPY
+    "^N225": "JPY",
+    # HKD
+    "^HSI": "HKD",
+    # CNY
+    "000001.SS": "CNY",
+    # KRW
+    "^KS11": "KRW",
+    # AUD
+    "^AXJO": "AUD",
+}
+
+# Yahoo FX ticker + conversion direction for each non-USD currency.
+# "div" → USD = local_price / rate  (rate = foreign units per 1 USD, e.g. USDINR=X ≈ 84)
+# "mul" → USD = local_price * rate  (rate = USD per 1 foreign unit, e.g. GBPUSD=X ≈ 1.27)
+FX_TO_USD: dict[str, tuple[str, str]] = {
+    "INR": ("USDINR=X", "div"),
+    "JPY": ("USDJPY=X", "div"),
+    "HKD": ("USDHKD=X", "div"),
+    "CNY": ("USDCNY=X", "div"),
+    "KRW": ("USDKRW=X", "div"),
+    "GBP": ("GBPUSD=X", "mul"),
+    "EUR": ("EURUSD=X", "mul"),
+    "AUD": ("AUDUSD=X", "mul"),
 }
 
 
@@ -2157,15 +2216,40 @@ async def _fetch_index_history(code: str, period_days: int, period_yf: str) -> l
     return await asyncio.get_running_loop().run_in_executor(_executor, _yf_pull)
 
 
-async def _index_valuation(codes: list[str], period: str, metric: str) -> dict:
-    """Multi-index daily-close comparison chart. The `metric` controls how each
-    series is transformed:
-      * `price`   — raw close price (currency / index points)
-      * `indexed` — rebased to 100 at the first point in the window
-      * `change`  — percent change from the first point in the window
-    Series objects are keyed by the **ticker code** (not the display label) so
-    the frontend's <Line dataKey={code}/> always lines up regardless of which
-    indices are selected.
+def _fx_lookup(rates: dict[str, float], date: str) -> float | None:
+    """Return the FX rate for `date`, forward-filling from the last available
+    rate when the exact date is missing (e.g. market holidays, weekend gaps)."""
+    if not rates:
+        return None
+    rate = rates.get(date)
+    if rate:
+        return rate
+    # Forward-fill: latest rate on or before the requested date.
+    best: float | None = None
+    for d in sorted(rates):
+        if d <= date:
+            best = rates[d]
+        else:
+            break
+    return best
+
+
+async def _index_valuation(codes: list[str], period: str, metric: str,
+                           fx: str = "local") -> dict:
+    """Multi-index daily-close comparison chart.
+
+    metric:
+      * ``price``   — raw close price (local currency or USD when fx=usd)
+      * ``indexed`` — rebased to 100 at the first point in the window
+      * ``change``  — percent change from the first point in the window
+
+    fx:
+      * ``local``   — prices in each index's home currency (default)
+      * ``usd``     — every series converted to USD using daily FX rates so
+                      cross-market comparisons remove currency drag
+
+    Series are keyed by **ticker code** (not display label) so the frontend's
+    ``<Line dataKey={code}/>`` always lines up regardless of selection.
     """
     period_days = {"1m": 30, "6m": 180, "1y": 365, "5y": 365 * 5, "10y": 365 * 10}.get(period, 365 * 5)
     period_yf   = {"1m": "1mo", "6m": "6mo", "1y": "1y", "5y": "5y", "10y": "10y"}.get(period, "5y")
@@ -2174,80 +2258,136 @@ async def _index_valuation(codes: list[str], period: str, metric: str) -> dict:
     if metric not in ("price", "indexed", "change"):
         metric = "indexed"
 
-    # Fetch every index's history concurrently.
-    histories = await asyncio.gather(
-        *[_fetch_index_history(c, period_days, period_yf) for c in codes],
+    fx = (fx or "local").lower()
+    if fx not in ("local", "usd"):
+        fx = "local"
+
+    # ── Work out which FX series we need ──────────────────────────────────────
+    # currency → (yahoo_ticker, direction)
+    needed_fx: dict[str, tuple[str, str]] = {}
+    if fx == "usd":
+        for code in codes:
+            ccy = INDEX_CURRENCY.get(code, "UNK")
+            if ccy != "USD" and ccy in FX_TO_USD:
+                needed_fx[ccy] = FX_TO_USD[ccy]
+
+    # ── Fetch index histories + FX series concurrently ───────────────────────
+    fx_currencies  = list(needed_fx.keys())
+    fx_yf_tickers  = [needed_fx[c][0] for c in fx_currencies]
+    all_tickers    = list(codes) + fx_yf_tickers
+
+    all_rows = await asyncio.gather(
+        *[_fetch_index_history(t, period_days, period_yf) for t in all_tickers],
         return_exceptions=True,
     )
 
-    series_dict: dict[str, dict[str, float | str]] = {}
-    indices: list[dict] = []
-    for code, rows in zip(codes, histories):
-        if isinstance(rows, Exception) or not rows or len(rows) < 2:
-            continue
-        label = INDEX_LABEL_MAP.get(code, code)
-        base = float(rows[0].get("close") or 0.0) or 1.0
+    idx_rows = dict(zip(codes, all_rows[:len(codes)]))
+    raw_fx   = dict(zip(fx_currencies, all_rows[len(codes):]))
 
+    # Build date→rate lookup per currency (forward-fill ready).
+    fx_rates: dict[str, dict[str, float]] = {}
+    for ccy, rows in raw_fx.items():
+        if isinstance(rows, Exception) or not rows:
+            continue
+        fx_rates[ccy] = {}
         for r in rows:
             d = str(r.get("date", ""))
+            v = r.get("close")
+            if d and v:
+                fx_rates[ccy][d] = float(v)
+
+    # ── Build chart series ────────────────────────────────────────────────────
+    series_dict: dict[str, dict] = {}
+    indices_out: list[dict] = []
+
+    for code, rows in idx_rows.items():
+        if isinstance(rows, Exception) or not rows or len(rows) < 2:
+            continue
+
+        ccy       = INDEX_CURRENCY.get(code, "UNK") if fx == "usd" else "USD"
+        fx_dir    = needed_fx.get(ccy, (None, None))[1] if ccy != "USD" else None
+        ccy_rates = fx_rates.get(ccy) if fx_dir else None
+
+        # Convert each close to USD (or leave as-is for local / already-USD).
+        adjusted: list[tuple[str, float]] = []
+        for r in rows:
+            d     = str(r.get("date", ""))
             close = r.get("close")
             if not d or close is None:
                 continue
             close = float(close)
+            if fx_dir and ccy_rates:
+                rate = _fx_lookup(ccy_rates, d)
+                if not rate:
+                    continue          # skip dates with no FX data
+                close = close / rate if fx_dir == "div" else close * rate
+            adjusted.append((d, close))
+
+        if len(adjusted) < 2:
+            continue
+
+        base  = adjusted[0][1] or 1.0
+        label = INDEX_LABEL_MAP.get(code, code)
+
+        for d, close in adjusted:
             if metric == "price":
-                value = round(close, 2)
+                value = round(close, 4)
             elif metric == "indexed":
                 value = round(close / base * 100.0, 2)
-            else:  # "change"
+            else:   # "change"
                 value = round((close / base - 1.0) * 100.0, 2)
-            # Key by code, not label, so dataKey matches across all indices.
             series_dict.setdefault(d, {"date": d})[code] = value
 
-        last = float(rows[-1].get("close") or 0.0)
-        prev = float(rows[-2].get("close") or last)
-        change = last - prev
-        pct = (change / prev * 100.0) if prev else 0.0
-        indices.append({
+        last   = adjusted[-1][1]
+        prev   = adjusted[-2][1]
+        chg    = last - prev
+        pct    = (chg / prev * 100.0) if prev else 0.0
+        indices_out.append({
             "code":      code,
             "label":     label,
-            "lastPrice": round(last, 2),
-            "change":    round(change, 2),
+            "lastPrice": round(last, 4),
+            "change":    round(chg, 4),
             "changePct": round(pct, 2),
         })
 
     series = sorted(series_dict.values(), key=lambda r: r["date"])
 
+    fx_note = " Converted to USD using daily FX rates." if fx == "usd" else ""
     metric_msg = {
-        "price":   "Daily close prices in index points / currency.",
-        "indexed": "Each series rebased to 100 at the start of the window — compare relative performance.",
-        "change":  "Percent change from the start of the window.",
+        "price":   f"Daily close prices{'  (USD)' if fx == 'usd' else ' in local currency'}.{fx_note}",
+        "indexed": f"Each series rebased to 100 at the start of the window.{fx_note}",
+        "change":  f"Percent change from the start of the window.{fx_note}",
     }[metric]
 
     return {
         "available": True,
         "message":   metric_msg,
         "metric":    metric,
+        "fx":        fx,
         "series":    series,
-        "indices":   indices,
+        "indices":   indices_out,
     }
 
 
 @router.get("/index-valuation")
 async def get_index_valuation(
     indices: str = Query("^NSEI,^NSEBANK"),
-    period: str = Query("5y"),
-    metric: str = Query("indexed"),
+    period:  str = Query("5y"),
+    metric:  str = Query("indexed"),
+    fx:      str = Query("local"),
 ):
     codes = [c.strip() for c in indices.split(",") if c.strip()]
-    # Normalise metric early so the cache key reflects the resolved value.
-    m = (metric or "indexed").lower()
+    m  = (metric or "indexed").lower()
     if m not in ("price", "indexed", "change"):
         m = "indexed"
-    cache_key = f"index-val:{','.join(codes)}:{period}:{m}"
+    f  = (fx or "local").lower()
+    if f not in ("local", "usd"):
+        f = "local"
+    cache_key = f"index-val:{','.join(codes)}:{period}:{m}:{f}"
     cached = _cache_get(cache_key, ttl=LONG_TTL)
     if cached is not None:
         return {**cached, "meta": _meta("VALUATION_ENGINE")}
-    res = await _index_valuation(codes, period, m)
+    res = await _index_valuation(codes, period, m, fx=f)
     _cache_set(cache_key, res)
     return {**res, "meta": _meta("VALUATION_ENGINE")}
 
@@ -2256,10 +2396,11 @@ async def get_index_valuation(
 @router.get("/market-valuation")
 async def market_valuation(
     indices: str = Query("^NSEI,^NSEBANK"),
-    period: str = Query("5y"),
-    metric: str = Query("indexed"),
+    period:  str = Query("5y"),
+    metric:  str = Query("indexed"),
+    fx:      str = Query("local"),
 ):
-    return await get_index_valuation(indices=indices, period=period, metric=metric)
+    return await get_index_valuation(indices=indices, period=period, metric=metric, fx=fx)
 
 
 # ────────────────────────────────────────────────────────────────────────────
