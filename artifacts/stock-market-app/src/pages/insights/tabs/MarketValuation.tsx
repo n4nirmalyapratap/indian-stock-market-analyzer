@@ -20,9 +20,11 @@ interface ValuationResponse {
   indices: { code: string; label: string; lastPrice?: number; change?: number; changePct?: number; }[];
 }
 
-// Comprehensive list of NSE indices that have constituent data on yfinance.
+// Comprehensive list of indices available on yfinance.
 const ALL_INDEX_OPTIONS = [
+  // ── India ──
   { code: "^NSEI",                 label: "NIFTY 50" },
+  { code: "^BSESN",               label: "SENSEX" },
   { code: "^NSEBANK",              label: "NIFTY BANK" },
   { code: "^CNXIT",                label: "NIFTY IT" },
   { code: "^CNXFMCG",              label: "NIFTY FMCG" },
@@ -41,6 +43,21 @@ const ALL_INDEX_OPTIONS = [
   { code: "^CNX100",               label: "NIFTY 100" },
   { code: "^CNX200",               label: "NIFTY 200" },
   { code: "^CRSLDX",               label: "NIFTY 500" },
+  // ── Americas ──
+  { code: "^GSPC",                 label: "S&P 500 (US)" },
+  { code: "^DJI",                  label: "Dow Jones (US)" },
+  { code: "^IXIC",                 label: "NASDAQ (US)" },
+  // ── Europe ──
+  { code: "^FTSE",                 label: "FTSE 100 (UK)" },
+  { code: "^GDAXI",                label: "DAX (Germany)" },
+  { code: "^FCHI",                 label: "CAC 40 (France)" },
+  { code: "^STOXX50E",             label: "Euro Stoxx 50" },
+  // ── Asia Pacific ──
+  { code: "^N225",                 label: "Nikkei 225 (Japan)" },
+  { code: "^HSI",                  label: "Hang Seng (HK)" },
+  { code: "000001.SS",             label: "Shanghai Comp. (China)" },
+  { code: "^KS11",                 label: "KOSPI (South Korea)" },
+  { code: "^AXJO",                 label: "ASX 200 (Australia)" },
 ];
 
 // Distinct, accessible chart colors that work in both themes.
@@ -105,8 +122,8 @@ export default function MarketValuation() {
     ALL_INDEX_OPTIONS.find(o => o.code === code)?.label || code;
 
   const subtitle =
-    metric === "indexed" ? "Compare relative performance of NSE indices, rebased to 100 at the start of the window."
-    : metric === "price" ? "Daily closing levels of selected NSE indices."
+    metric === "indexed" ? "Compare relative performance of Indian and global indices, rebased to 100 at the start of the window."
+    : metric === "price" ? "Daily closing levels of selected indices."
     : "Percent change of each index from the start of the window.";
 
   return (
