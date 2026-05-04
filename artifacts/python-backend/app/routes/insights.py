@@ -186,7 +186,201 @@ NIFTY500 = list(dict.fromkeys(NIFTY200 + NIFTY_PHARMA + NIFTY_REALTY + NIFTY_MED
                               NIFTY_CONSUMER_DURABLES + NIFTY_PSU_BANK + NIFTY_PVT_BANK))
 FNO_STOCKS = NIFTY200
 
+# ── World indices ─────────────────────────────────────────────────────────────
+
+# United States (no exchange suffix — Yahoo Finance uses bare tickers)
+DOW30 = [
+    "AAPL","AMGN","AXP","BA","CAT","CRM","CSCO","CVX","DIS","DOW",
+    "GS","HD","HON","IBM","JNJ","JPM","KO","MCD","MMM","MRK",
+    "MSFT","NKE","PG","SHW","TRV","UNH","V","VZ","WMT","AMZN",
+]
+NASDAQ100 = [
+    "AAPL","MSFT","NVDA","AMZN","META","GOOGL","GOOG","TSLA","AVGO","COST",
+    "NFLX","TMUS","AMD","ADBE","PEP","QCOM","INTU","CSCO","TXN","AMAT",
+    "HON","AMGN","CMCSA","BKNG","ISRG","MU","PANW","ADI","LRCX","SBUX",
+    "GILD","KLAC","MDLZ","MELI","SNPS","REGN","CDNS","ABNB","PYPL","CTAS",
+    "VRTX","PCAR","CRWD","ORLY","NXPI","FTNT","CEG","WDAY","MNST","MCHP",
+    "CSX","ROP","ROST","IDXX","CPRT","CHTR","DXCM","AEP","MRVL","PAYX",
+    "BIIB","FAST","ODFL","VRSK","ADP","DLTR","EA","EXC","GEHC","ILMN",
+    "KDP","KHC","LULU","MAR","MRNA","TEAM","TTWO","ULTA","ZS","DDOG",
+    "ON","TTD","ARM","FANG","BKR","CSGP","ANSS","CTSH","WBD","ADSK",
+    "CDW","LIN","XEL","ZM","GFS","PDD","ASML","AZN","OKTA","SMCI",
+]
+SP500_TOP = list(dict.fromkeys([
+    # Technology
+    "AAPL","MSFT","NVDA","AMZN","META","GOOGL","GOOG","TSLA","AVGO","ORCL",
+    "AMD","ADBE","QCOM","CSCO","TXN","INTU","AMAT","KLAC","LRCX","MU",
+    "ADI","MRVL","SNPS","CDNS","PANW","CRWD","ZS","NOW","WDAY","FTNT",
+    "IBM","ACN","CTSH","CDW","ANSS","ADSK",
+    # Financials
+    "BRK-B","JPM","BAC","WFC","GS","MS","C","AXP","BLK","SCHW",
+    "CB","PGR","AON","MMC","ICE","CME","SPGI","MCO","V","MA",
+    "COF","USB","TFC","RF","HBAN","MTB","KEY","CFG","FITB",
+    # Healthcare
+    "UNH","JNJ","LLY","ABBV","MRK","PFE","TMO","ABT","AMGN","MDT",
+    "SYK","BSX","BMY","GILD","VRTX","REGN","BDX","ZTS","ISRG","HCA",
+    "CI","ELV","HUM","MOH","CNC","BIIB","ILMN","MRNA","IQV","MCK","CAH","ABC",
+    # Consumer Discretionary
+    "HD","MCD","NKE","SBUX","LOW","TJX","ROST","BKNG","MAR","CMG",
+    "RCL","CCL","YUM","DRI","EBAY","ABNB",
+    # Consumer Staples
+    "WMT","KO","PEP","PG","COST","MDLZ","MO","PM","KHC","GIS",
+    "EL","CLX","HRL","K","STZ","CL","KMB","MNST",
+    # Energy
+    "XOM","CVX","COP","EOG","PXD","OXY","SLB","MPC","PSX","VLO",
+    "DVN","FANG","APA","MRO","HES","BKR","HAL",
+    # Industrials
+    "HON","CAT","UNP","UPS","FDX","DE","EMR","MMM","GE","ETN",
+    "ITW","PH","ROK","CSX","NSC","RTX","LMT","NOC","GD","BA",
+    "CTAS","VRSK","RSG","WM","ROP","FAST","GNRC","AME",
+    # Materials
+    "LIN","APD","SHW","ECL","NEM","FCX","NUE","STLD","PKG","MOS","CF",
+    # Utilities
+    "NEE","DUK","SO","D","EXC","AEE","ES","WEC","DTE","PPL","AES","CMS",
+    # Real Estate
+    "PLD","AMT","CCI","EQIX","PSA","SPG","O","VICI","EQR","AVB",
+    # Communication
+    "T","VZ","TMUS","DIS","CMCSA","NFLX",
+]))
+
+# United Kingdom (London Stock Exchange — .L suffix)
+FTSE100 = [
+    "SHEL.L","AZN.L","HSBA.L","ULVR.L","BP.L","RIO.L","GSK.L","DGE.L","REL.L","NG.L",
+    "BATS.L","LSEG.L","LLOY.L","VOD.L","MNG.L","BARC.L","PRU.L","ABF.L","SSE.L","IHG.L",
+    "NWG.L","ANTO.L","WPP.L","BA.L","HLN.L","MKS.L","AUTO.L","ADM.L","EXPN.L","PHNX.L",
+    "IMB.L","AV.L","SGRO.L","SVT.L","CRH.L","LAND.L","FLTR.L","BHP.L","GLEN.L","AAL.L",
+    "TSCO.L","BDEV.L","SBRY.L","STAN.L","CRDA.L","JD.L","RKT.L","KGF.L","RTO.L","CNA.L",
+    "ITRK.L","SN.L","III.L","BRBY.L","SMIN.L","HLMA.L","FRES.L","BNZL.L","IMI.L","JMAT.L",
+    "LGEN.L","PSON.L","CPG.L","SKG.L","OCDO.L","ENT.L","PSN.L","DCC.L","SPX.L","BME.L",
+    "SMWH.L","TUI.L","WEIR.L","STJ.L","MONY.L","BT-A.L","MNDI.L","SMT.L","DPH.L","HOC.L",
+]
+
+# Germany (Frankfurt — .DE suffix)
+DAX40 = [
+    "SAP.DE","SIE.DE","ALV.DE","DTE.DE","MBG.DE","BAYN.DE","BMW.DE","VOW3.DE","ADS.DE","MUV2.DE",
+    "BAS.DE","DBK.DE","DHL.DE","ENR.DE","EOAN.DE","FME.DE","FRE.DE","HEI.DE","HEN3.DE","IFX.DE",
+    "LIN.DE","MRK.DE","MTX.DE","DHER.DE","PAH3.DE","PUM.DE","QIA.DE","RWE.DE","SHL.DE","SY1.DE",
+    "VNA.DE","ZAL.DE","CBK.DE","CON.DE","DB1.DE","G1A.DE","HLAG.DE","LEG.DE","P911.DE","BNR.DE",
+]
+
+# France (Euronext Paris — .PA suffix)
+CAC40 = [
+    "TTE.PA","MC.PA","OR.PA","SAN.PA","SAF.PA","AIR.PA","CS.PA","SU.PA","AI.PA","KER.PA",
+    "ORA.PA","DSY.PA","SGO.PA","DG.PA","BNP.PA","VIE.PA","VIV.PA","GLE.PA","CA.PA","RMS.PA",
+    "PUB.PA","EN.PA","STM.PA","ML.PA","RNO.PA","CAP.PA","ENGI.PA","ACA.PA","LR.PA","RI.PA",
+    "ERF.PA","BVI.PA","STLA.PA","EDEN.PA","ALO.PA","BN.PA","EL.PA","URW.PA","TEP.PA","WLN.PA",
+]
+
+# Euro Stoxx 50 (pan-European — mixed exchange suffixes)
+EUROSTOXX50 = list(dict.fromkeys([
+    "ASML.AS","ING.AS","PHIA.AS","AD.AS","UNA.AS","HEIA.AS","WKL.AS",          # NL
+    "SAP.DE","SIE.DE","ALV.DE","MUV2.DE","BAYN.DE","BAS.DE","DTE.DE",
+    "BMW.DE","VOW3.DE","ADS.DE","MBG.DE","DBK.DE","EOAN.DE","RWE.DE","PAH3.DE", # DE
+    "TTE.PA","MC.PA","OR.PA","SAN.PA","SAF.PA","AIR.PA","CS.PA",
+    "SU.PA","AI.PA","GLE.PA","BNP.PA",                                           # FR
+    "NESN.SW","NOVN.SW","ROG.SW","ABBN.SW",                                      # CH
+    "ENI.MI","ENEL.MI","ISP.MI","UCG.MI","G.MI",                                 # IT
+    "IBE.MC","ITX.MC","SAN.MC","BBVA.MC","REP.MC","TEF.MC",                      # ES
+    "KNEBV.HE","NOKIA.HE","ABI.BR",                                              # FI/BE
+]))
+
+# Japan (Tokyo Stock Exchange — .T suffix, numeric tickers)
+NIKKEI_TOP = [
+    "7203.T","6758.T","8306.T","6861.T","6367.T","7741.T","6501.T","4519.T","7267.T","7974.T",
+    "8316.T","4063.T","8411.T","6954.T","9984.T","4502.T","2914.T","6857.T","8035.T","4661.T",
+    "9432.T","9433.T","8058.T","6902.T","7011.T","5401.T","6301.T","2802.T","8001.T","7751.T",
+    "6503.T","9022.T","6702.T","4307.T","8802.T","9021.T","2503.T","4523.T","6098.T","3382.T",
+    "8766.T","6971.T","4704.T","3659.T","9613.T","7270.T","6762.T","4543.T","8309.T","6920.T",
+]
+
+# Hong Kong (HKEX — .HK suffix, zero-padded numeric tickers)
+HSI_STOCKS = [
+    "0700.HK","9988.HK","0941.HK","0005.HK","3690.HK","0939.HK","1299.HK","1398.HK","0388.HK","0002.HK",
+    "2318.HK","0011.HK","2020.HK","0883.HK","0762.HK","0016.HK","0175.HK","1177.HK","2382.HK","0823.HK",
+    "2628.HK","0012.HK","0066.HK","0003.HK","0006.HK","1113.HK","1109.HK","0267.HK","0019.HK","0688.HK",
+    "6862.HK","9999.HK","3988.HK","0981.HK","0992.HK","2269.HK","1810.HK","0669.HK","0027.HK","1972.HK",
+    "0291.HK","2388.HK","0001.HK","9618.HK","1024.HK","6690.HK","9888.HK","9961.HK","2331.HK","6060.HK",
+]
+
+# South Korea (KRX — .KS suffix, numeric tickers)
+KOSPI_TOP = [
+    "005930.KS","000660.KS","207940.KS","373220.KS","005380.KS","000270.KS","051910.KS",
+    "035420.KS","068270.KS","105560.KS","055550.KS","003550.KS","028260.KS","096770.KS",
+    "034730.KS","017670.KS","030200.KS","012330.KS","066570.KS","032830.KS","086790.KS",
+    "316140.KS","015760.KS","009150.KS","010130.KS","090430.KS","006400.KS","018260.KS",
+    "010950.KS","011070.KS",
+]
+
+# Australia (ASX — .AX suffix)
+ASX_TOP = [
+    "BHP.AX","CBA.AX","CSL.AX","NAB.AX","WBC.AX","ANZ.AX","WES.AX","MQG.AX","RIO.AX","FMG.AX",
+    "TLS.AX","WOW.AX","GMG.AX","TCL.AX","REA.AX","SHL.AX","COL.AX","ALL.AX","QBE.AX","ORG.AX",
+    "AMC.AX","STO.AX","SCG.AX","IAG.AX","ASX.AX","BXB.AX","XRO.AX","S32.AX","CPU.AX","ALD.AX",
+    "CGF.AX","DXS.AX","JHX.AX","ORI.AX","SVW.AX","TAH.AX","WPR.AX","BEN.AX","BOQ.AX","MIN.AX",
+    "WDS.AX","APA.AX","SUN.AX","MPL.AX","HVN.AX","NCM.AX","NHC.AX","IFL.AX","AGL.AX","NST.AX",
+]
+
+# China — Shanghai Stock Exchange (.SS suffix, numeric tickers)
+SSE_TOP = list(dict.fromkeys([
+    "600519.SS","601318.SS","601988.SS","600036.SS","600000.SS","601166.SS","600016.SS","601328.SS",
+    "600019.SS","601628.SS","600887.SS","600900.SS","601088.SS","601857.SS","600028.SS","600048.SS",
+    "601601.SS","601939.SS","601398.SS","600104.SS","600309.SS","601012.SS","600031.SS","601225.SS",
+    "600690.SS","600585.SS","601288.SS","600050.SS","603259.SS","601669.SS","601390.SS","601800.SS",
+    "600030.SS","600745.SS","601633.SS","601138.SS","600025.SS",
+]))
+
+# ── Human-readable names for numeric exchange tickers ────────────────────────
+# Used by _pretty() so heatmap tiles show company names, not numeric codes.
+WORLD_NAMES: dict[str, str] = {
+    # Japan (.T stripped)
+    "7203":"Toyota","6758":"Sony","8306":"MUFG","6861":"Keyence","6367":"Daikin",
+    "7741":"Hoya","6501":"Hitachi","4519":"Chugai Pharma","7267":"Honda","7974":"Nintendo",
+    "8316":"SMBC Group","4063":"Shin-Etsu Chem","8411":"Mizuho","6954":"Fanuc","9984":"SoftBank",
+    "4502":"Takeda","2914":"Japan Tobacco","6857":"Advantest","8035":"Tokyo Electron",
+    "4661":"Oriental Land","9432":"NTT","9433":"KDDI","8058":"Mitsubishi Corp","6902":"Denso",
+    "7011":"Mitsubishi Heavy","5401":"Nippon Steel","6301":"Komatsu","2802":"Ajinomoto",
+    "8001":"Itochu","7751":"Canon","6503":"Mitsubishi Elec","9022":"JR Central","6702":"Fujitsu",
+    "4307":"Nomura Research","8802":"Mitsubishi Estate","9021":"JR West","2503":"Kirin",
+    "4523":"Eisai","6098":"Recruit","3382":"Seven & I","8766":"Tokio Marine",
+    "6971":"Kyocera","4704":"Trend Micro","3659":"Nexon","9613":"NTT Data",
+    "7270":"Subaru","6762":"TDK","4543":"Terumo","8309":"SMTH","6920":"Lasertec",
+    # Hong Kong (.HK stripped)
+    "0700":"Tencent","9988":"Alibaba HK","0941":"China Mobile","0005":"HSBC HK","3690":"Meituan",
+    "0939":"CCB","1299":"AIA","1398":"ICBC","0388":"HK Exchanges","0002":"CLP",
+    "2318":"Ping An","0011":"Hang Seng Bank","2020":"ANTA Sports","0883":"CNOOC",
+    "0762":"China Unicom","0016":"Sun Hung Kai","0175":"Geely Auto","1177":"Sino Biopharm",
+    "2382":"Sunny Optical","0823":"Link REIT","2628":"China Life","0012":"Henderson Land",
+    "0066":"MTR Corp","0003":"HK & China Gas","0006":"Power Assets","1113":"CK Asset",
+    "1109":"CR Land","0267":"CITIC","0019":"Swire Pacific","0688":"COLI",
+    "6862":"Haidilao","9999":"NetEase HK","3988":"Bank of China HK","0981":"SMIC",
+    "0992":"Lenovo","2269":"WuXi Bio","1810":"Xiaomi","0669":"Techtronic",
+    "0027":"Galaxy Ent","1972":"Swire Properties","0291":"CR Beer","2388":"BOC HK",
+    "0001":"CK Hutchison","9618":"JD HK","1024":"Kuaishou","6690":"Haier Smart",
+    "9888":"Baidu HK","9961":"Trip.com","2331":"Li Ning","6060":"ZhongAn Online",
+    # Korea (.KS stripped)
+    "005930":"Samsung Elec","000660":"SK Hynix","207940":"Samsung Bio","373220":"LG Energy",
+    "005380":"Hyundai Motor","000270":"Kia","051910":"LG Chem","035420":"NAVER",
+    "068270":"Celltrion","105560":"KB Financial","055550":"Shinhan","003550":"LG Corp",
+    "028260":"Samsung C&T","096770":"SK Innovation","034730":"SK Inc","017670":"SK Telecom",
+    "030200":"KT","012330":"Hyundai Mobis","066570":"LG Electronics","032830":"Samsung Life",
+    "086790":"Hana Financial","316140":"Woori Financial","015760":"KEPCO",
+    "009150":"Samsung EM","010130":"Korea Zinc","090430":"Amorepacific",
+    "006400":"Samsung SDI","018260":"Samsung SDS","010950":"S-Oil","011070":"LG Innotek",
+    # China SSE (.SS stripped)
+    "600519":"Kweichow Moutai","601318":"Ping An A","601988":"BOC A","600036":"CMB",
+    "600000":"SPDB","601166":"Industrial Bank","600016":"Minsheng Bank","601328":"BoCom",
+    "600019":"Baoshan Steel","601628":"China Life A","600887":"Yili","600900":"Yangtze Power",
+    "601088":"China Shenhua","601857":"PetroChina A","600028":"Sinopec A","600048":"Poly Dev",
+    "601601":"CPIC A","601939":"CCB A","601398":"ICBC A","600104":"SAIC Motor",
+    "600309":"Wanhua Chem","601012":"LONGi Green","600031":"Sany Heavy","601225":"Shaanxi Coal",
+    "600690":"Haier A","600585":"Conch Cement","601288":"ABC A","600050":"China Unicom A",
+    "603259":"WuXi AppTec","601669":"Power Constr","601390":"China Railway",
+    "601800":"China Comm Const","600030":"CITIC Sec","600745":"Wingtech",
+    "601633":"SGMW","601138":"CSSC","600025":"Huaneng Renewables",
+}
+
 INDEX_CONSTITUENTS: dict[str, list[str]] = {
+    # ── India ──────────────────────────────────────────────────────────────────
     "NIFTY50":              NIFTY50,
     "SENSEX":               SENSEX,
     "FNO":                  FNO_STOCKS,
@@ -218,8 +412,24 @@ INDEX_CONSTITUENTS: dict[str, list[str]] = {
                               "BAJFINANCE.NS","BAJAJFINSV.NS","SHRIRAMFIN.NS","HDFCLIFE.NS","SBILIFE.NS",
                               "ICICIPRULI.NS","ICICIGI.NS","CHOLAFIN.NS","RECLTD.NS","PFC.NS","SBICARD.NS",
                               "JIOFIN.NS","HDFCAMC.NS","LICHSGFIN.NS","MUTHOOTFIN.NS"],
+    # ── Americas ───────────────────────────────────────────────────────────────
+    "DOW30":                DOW30,
+    "NASDAQ100":            NASDAQ100,
+    "SP500":                SP500_TOP,
+    # ── Europe ─────────────────────────────────────────────────────────────────
+    "FTSE100":              FTSE100,
+    "DAX40":                DAX40,
+    "CAC40":                CAC40,
+    "EUROSTOXX50":          EUROSTOXX50,
+    # ── Asia Pacific ───────────────────────────────────────────────────────────
+    "NIKKEI225":            NIKKEI_TOP,
+    "HANGSENG":             HSI_STOCKS,
+    "KOSPI":                KOSPI_TOP,
+    "ASX200":               ASX_TOP,
+    "SSE50":                SSE_TOP,
 }
 INDEX_LABELS = {
+    # India
     "NIFTY50":"Nifty 50","SENSEX":"Sensex","FNO":"F&O Stocks","NIFTYNEXT50":"Nifty Next 50",
     "NIFTY100":"Nifty 100","NIFTY200":"Nifty 200","NIFTY500":"Nifty 500",
     "NIFTYMIDCAP50":"Nifty Midcap 50","NIFTYMIDCAP100":"Nifty Midcap 100",
@@ -229,20 +439,58 @@ INDEX_LABELS = {
     "NIFTYPHARMA":"Nifty Pharma","NIFTYHEALTHCARE":"Nifty Healthcare","NIFTYAUTO":"Nifty Auto",
     "NIFTYMETAL":"Nifty Metal","NIFTYREALTY":"Nifty Realty","NIFTYMEDIA":"Nifty Media",
     "NIFTYCONSUMERDURABLES":"Nifty Consumer Durables","NIFTYCOMMODITIES":"Nifty Commodities",
-    "NIFTYCPSE":"Nifty CPSE","NIFTYENERGY":"Nifty Energy",
-    "NIFTYFINSERVICE":"Nifty Financial Services",
+    "NIFTYCPSE":"Nifty CPSE","NIFTYENERGY":"Nifty Energy","NIFTYFINSERVICE":"Nifty Financial Services",
+    # Americas
+    "DOW30":"Dow Jones 30","NASDAQ100":"NASDAQ 100","SP500":"S&P 500",
+    # Europe
+    "FTSE100":"FTSE 100","DAX40":"DAX 40","CAC40":"CAC 40","EUROSTOXX50":"Euro Stoxx 50",
+    # Asia Pacific
+    "NIKKEI225":"Nikkei 225","HANGSENG":"Hang Seng","KOSPI":"KOSPI","ASX200":"ASX 200","SSE50":"Shanghai 50",
 }
 INDEX_TICKER = {
+    # India
     "NIFTY50":"^NSEI","SENSEX":"^BSESN","NIFTYBANK":"^NSEBANK","NIFTYIT":"^CNXIT",
     "NIFTYAUTO":"^CNXAUTO","NIFTYFMCG":"^CNXFMCG","NIFTYPHARMA":"^CNXPHARMA",
     "NIFTYMETAL":"^CNXMETAL","NIFTYREALTY":"^CNXREALTY","NIFTYMEDIA":"^CNXMEDIA",
     "NIFTYENERGY":"^CNXENERGY","NIFTYFINSERVICE":"^NIFTY_FIN_SERVICE",
+    # Americas
+    "DOW30":"^DJI","NASDAQ100":"^IXIC","SP500":"^GSPC",
+    # Europe
+    "FTSE100":"^FTSE","DAX40":"^GDAXI","CAC40":"^FCHI","EUROSTOXX50":"^STOXX50E",
+    # Asia Pacific
+    "NIKKEI225":"^N225","HANGSENG":"^HSI","KOSPI":"^KS11","ASX200":"^AXJO","SSE50":"000001.SS",
 }
 PERIOD_MAP = {"1d":"5d","1w":"1mo","1m":"3mo","1y":"1y"}
 
 
+_EXCHANGE_SUFFIXES = (
+    ".NS", ".BO",                              # India
+    ".L",                                      # UK
+    ".DE",                                     # Germany
+    ".PA",                                     # France
+    ".AS",                                     # Netherlands
+    ".SW",                                     # Switzerland
+    ".HK",                                     # Hong Kong
+    ".T",                                      # Japan
+    ".KS",                                     # Korea
+    ".AX",                                     # Australia
+    ".SS", ".SZ",                              # China
+    ".MI",                                     # Italy
+    ".MC",                                     # Spain
+    ".HE",                                     # Finland
+    ".BR",                                     # Belgium
+    ".ST",                                     # Sweden
+)
+
+
 def _pretty(sym: str) -> str:
-    return sym.replace(".NS", "").replace(".BO", "")
+    """Return a human-readable display name for a Yahoo Finance ticker.
+    Strips exchange suffixes and looks up numeric codes in WORLD_NAMES."""
+    for sfx in _EXCHANGE_SUFFIXES:
+        if sym.endswith(sfx):
+            base = sym[:-len(sfx)]
+            return WORLD_NAMES.get(base, base)
+    return sym
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -329,8 +577,9 @@ _mcap_cache: dict[str, tuple[float, float]] = {}
 
 
 def _market_cap_cached(sym: str) -> float:
-    ysym = sym if (sym.endswith(".NS") or sym.endswith(".BO")) else f"{sym}.NS"
-    hit = _mcap_cache.get(ysym)
+    # Use the symbol as-is — all tickers already carry the correct Yahoo
+    # Finance exchange suffix (or are bare US tickers like "AAPL").
+    hit = _mcap_cache.get(sym)
     now = time.time()
     if hit and (now - hit[0]) < _MCAP_TTL:
         return hit[1]
@@ -345,10 +594,9 @@ async def _prefetch_market_caps(symbols: list[str]) -> None:
     now = time.time()
     stale: list[str] = []
     for s in symbols:
-        ysym = s if (s.endswith(".NS") or s.endswith(".BO")) else f"{s}.NS"
-        hit = _mcap_cache.get(ysym)
+        hit = _mcap_cache.get(s)
         if not hit or (now - hit[0]) >= _MCAP_TTL:
-            stale.append(ysym)
+            stale.append(s)
     if not stale:
         return
 
