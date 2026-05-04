@@ -95,6 +95,7 @@ export default function Dashboard() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["rotation"] }),
         queryClient.invalidateQueries({ queryKey: ["patterns-overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["global-indices"] }),
       ]);
     } finally {
       setRefreshing(false);
