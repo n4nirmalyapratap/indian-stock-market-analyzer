@@ -38,7 +38,7 @@ export function NavLink({ path, label, icon: Icon, open, indent = false }: {
       href={path}
       title={!open ? label : undefined}
       className={`flex items-center gap-2.5 transition rounded-lg mx-1.5
-        ${indent && open ? "pl-7 pr-2.5 py-1.5" : open ? "px-2.5 py-2" : "px-0 py-2 justify-center"}
+        ${indent && open ? "pl-7 pr-2.5 py-1" : open ? "px-2.5 py-1.5" : "px-0 py-1.5 justify-center"}
         ${active
           ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300"
           : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white"
@@ -73,18 +73,10 @@ function ThemeIconButton({ size = 15 }: { size?: number }) {
 
 function TopBar() {
   const [loc] = useLocation();
-
-  const isFullscreen =
-    loc.startsWith("/trading") ||
-    loc.startsWith("/chart") ||
-    loc.startsWith("/insights/heatmap");
-
-  if (isFullscreen) return null;
-
   const isSettings = loc === "/settings";
 
   return (
-    <div className="hidden md:flex h-10 flex-shrink-0 items-center justify-end gap-0.5 px-4">
+    <div className="hidden md:flex h-10 flex-shrink-0 items-center justify-end gap-0.5 px-4 flex-shrink-0">
       <ThemeIconButton />
       <Link
         href="/settings"
