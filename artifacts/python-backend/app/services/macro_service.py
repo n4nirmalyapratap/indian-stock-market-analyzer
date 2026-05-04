@@ -208,6 +208,72 @@ async def _fetch_fred_csv_fallback(series_id: str) -> list[dict[str, Any]]:
 _fetch_fred_csv = _fetch_fred_series
 
 
+# ── World Bank API — free, no key, annual observations ───────────────────────
+# Used as a fallback when FRED_API_KEY is unset and the CSV endpoint is
+# WAF-blocked (common on cloud IPs).  Annual data is coarser than FRED's
+# monthly series but is far better than returning nothing at all.
+#
+# WB indicator IDs verified at https://data.worldbank.org/indicator
+WB_SERIES: dict[str, str] = {
+    "cpi":  "FP.CPI.TOTL",           # CPI index (2010 = 100)  → YoY computed lag=1
+    "iip":  "NV.IND.TOTL.KD.ZG",     # Industry value-added growth % (pre-computed)
+    "gdp":  "NY.GDP.MKTP.KD.ZG",     # Real GDP growth % annual (pre-computed)
+}
+
+# WB series that arrive already as annual growth rates (no further _yoy needed).
+WB_PRECOMPUTED_GROWTH: set[str] = {"iip", "gdp"}
+
+
+async def _fetch_wb_series(wb_indicator: str, country: str = "IND",
+                           mrv: int = 72) -> list[dict[str, Any]]:
+    """
+    Fetch annual observations from the World Bank API (no key required).
+    Returns a list of {date, value} dicts sorted oldest → newest, same
+    schema as `_fetch_fred_series`, so callers can use them interchangeably.
+    Annual dates are normalised to ISO strings (e.g. "2023-01-01").
+    Returns empty list on any failure.
+    """
+    url = (
+        f"https://api.worldbank.org/v2/country/{country}/indicator/{wb_indicator}"
+        f"?format=json&mrv={mrv}&per_page={mrv}"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(
+                url, headers={"User-Agent": "NiftyNode/1.0 (+macro-wb)"}
+            )
+            if resp.status_code != 200:
+                log.warning("WB API non-200 for %s: %s", wb_indicator, resp.status_code)
+                return []
+            payload = resp.json()
+    except Exception as e:
+        log.warning("WB API fetch failed for %s: %s", wb_indicator, str(e)[:120])
+        return []
+
+    try:
+        if not isinstance(payload, list) or len(payload) < 2:
+            return []
+        items = payload[1] or []
+        out: list[dict[str, Any]] = []
+        for x in items:
+            if not isinstance(x, dict) or x.get("value") is None:
+                continue
+            raw_date = str(x.get("date") or "").strip()
+            if not raw_date:
+                continue
+            # WB returns year strings like "2023" → normalise to "2023-01-01"
+            date_s = f"{raw_date}-01-01" if len(raw_date) == 4 else raw_date
+            try:
+                out.append({"date": date_s, "value": float(x["value"])})
+            except (TypeError, ValueError):
+                continue
+        out.sort(key=lambda d: d["date"])
+        return out
+    except Exception as e:
+        log.warning("WB API parse failed for %s: %s", wb_indicator, str(e)[:120])
+        return []
+
+
 # ── Best-effort adapters for India-native sources ────────────────────────────
 # These reach out to RBI DBIE / MOSPI (Office of Economic Adviser) / CCIL.
 # Cloud IPs are often firewalled out, so each adapter has a strict 6s timeout
@@ -312,15 +378,30 @@ class MacroService:
         if cached is not None:
             return cached
 
-        # Fetch everything concurrently — failures degrade to {}.
-        repo_s, cpi_s, iip_s, yld_s, usdinr_q, brent_q = await asyncio.gather(
+        # Fetch FRED + Yahoo + World Bank fallbacks all in one round-trip.
+        # WB is fetched eagerly alongside FRED so there is no sequential penalty;
+        # it is only used when the corresponding FRED series comes back empty.
+        (repo_s, cpi_s, iip_s, yld_s, usdinr_q, brent_q,
+         wb_cpi_s, wb_iip_s) = await asyncio.gather(
             _fetch_fred_series(FRED_SERIES["repo"]),
             _fetch_fred_series(FRED_SERIES["cpi"]),
             _fetch_fred_series(FRED_SERIES["iip"]),
             _fetch_fred_series(FRED_SERIES["yield10"]),
             self._yahoo_quote("usdinr"),
             self._yahoo_quote("brent"),
+            _fetch_wb_series(WB_SERIES["cpi"]),   # annual CPI index fallback
+            _fetch_wb_series(WB_SERIES["iip"]),   # annual industry growth % fallback
         )
+
+        # Apply World Bank fallbacks for any FRED series that returned empty.
+        fred_cpi_ok = bool(cpi_s)   # capture before possible reassignment
+        fred_iip_ok = bool(iip_s)
+        cpi_from_wb = not fred_cpi_ok and bool(wb_cpi_s)
+        iip_from_wb = not fred_iip_ok and bool(wb_iip_s)
+        if cpi_from_wb:
+            cpi_s = wb_cpi_s
+        if iip_from_wb:
+            iip_s = wb_iip_s  # WB NV.IND.TOTL.KD.ZG is already annual growth %
 
         # Repo rate — value is in percent already; delta vs previous reading.
         repo_now, repo_prev = _last_two(repo_s)
@@ -332,9 +413,12 @@ class MacroService:
             repo_now["date"] if repo_now else None,
         )
 
-        # CPI — convert level to YoY % and take the change vs prior month YoY.
-        cpi_yoy_now = _yoy_change(cpi_s, lag=12)
-        cpi_yoy_prev = _yoy_change(cpi_s[:-1], lag=12) if len(cpi_s) > 13 else None
+        # CPI — convert level series to YoY %.
+        # FRED is monthly (lag=12); WB is annual index (lag=1 for annual YoY).
+        cpi_lag = 1 if cpi_from_wb else 12
+        cpi_min  = cpi_lag + 2
+        cpi_yoy_now  = _yoy_change(cpi_s, lag=cpi_lag)
+        cpi_yoy_prev = _yoy_change(cpi_s[:-1], lag=cpi_lag) if len(cpi_s) > cpi_min else None
         cpi_tile = self._tile(
             "cpi", "CPI YoY", "%",
             cpi_yoy_now,
@@ -343,15 +427,22 @@ class MacroService:
             cpi_s[-1]["date"] if cpi_s else None,
         )
 
-        # IIP — same YoY treatment.
-        iip_yoy_now = _yoy_change(iip_s, lag=12)
-        iip_yoy_prev = _yoy_change(iip_s[:-1], lag=12) if len(iip_s) > 13 else None
+        # IIP — FRED is monthly index (compute YoY); WB is already annual growth %.
+        if iip_from_wb:
+            iip_now, iip_prev = _last_two(iip_s)
+            iip_yoy_now  = iip_now["value"]  if iip_now  else None
+            iip_yoy_prev = iip_prev["value"] if iip_prev else None
+            iip_as_of    = iip_now["date"]   if iip_now  else None
+        else:
+            iip_yoy_now  = _yoy_change(iip_s, lag=12)
+            iip_yoy_prev = _yoy_change(iip_s[:-1], lag=12) if len(iip_s) > 13 else None
+            iip_as_of    = iip_s[-1]["date"] if iip_s else None
         iip_tile = self._tile(
             "iip", "IIP YoY", "%",
             iip_yoy_now,
             (iip_yoy_now - iip_yoy_prev) if iip_yoy_now is not None and iip_yoy_prev is not None else None,
             "pp",
-            iip_s[-1]["date"] if iip_s else None,
+            iip_as_of,
         )
 
         # USD/INR — live; delta is intraday % change from Yahoo.
@@ -387,7 +478,10 @@ class MacroService:
             "fetchedAt": _now_iso(),
             "sources": [
                 {"id": "fred",  "label": "FRED API",      "covers": "Repo, CPI, IIP, 10Y",
-                 "ok": bool(repo_s or cpi_s or iip_s or yld_s)},
+                 "ok": bool(repo_s or fred_cpi_ok or fred_iip_ok or yld_s)},
+                {"id": "worldbank", "label": "World Bank (fallback)",
+                 "covers": "CPI, IIP when FRED unavailable",
+                 "ok": bool(wb_cpi_s or wb_iip_s)},
                 {"id": "yahoo", "label": "Yahoo Finance", "covers": "USD/INR, Brent",
                  "ok": bool(usdinr_q or brent_q)},
             ],
@@ -413,9 +507,11 @@ class MacroService:
         if cached is not None:
             return cached
 
+        # Fetch FRED + Yahoo + World Bank fallbacks all in one round-trip.
         (repo_s, cpi_s, iip_s, gdp_s, yld10_s, yld3m_s, wpi_s,
          usdinr, dxy, brent, gold, vix,
-         rbi_probe, mospi_probe, ccil_probe) = await asyncio.gather(
+         rbi_probe, mospi_probe, ccil_probe,
+         wb_cpi_s, wb_iip_s, wb_gdp_s) = await asyncio.gather(
             _fetch_fred_series(FRED_SERIES["repo"]),
             _fetch_fred_series(FRED_SERIES["cpi"]),
             _fetch_fred_series(FRED_SERIES["iip"]),
@@ -431,14 +527,35 @@ class MacroService:
             _attempt_rbi_dbie(),
             _attempt_mospi_wpi(),
             _attempt_ccil_yields(),
+            _fetch_wb_series(WB_SERIES["cpi"]),   # annual CPI index fallback
+            _fetch_wb_series(WB_SERIES["iip"]),   # annual industry growth % fallback
+            _fetch_wb_series(WB_SERIES["gdp"]),   # annual GDP growth % fallback
         )
+
+        # Apply World Bank fallbacks for any FRED series that returned empty.
+        fred_ok_dash = bool(repo_s or cpi_s or yld10_s)  # capture before reassignment
+        cpi_from_wb = not cpi_s and bool(wb_cpi_s)
+        iip_from_wb = not iip_s and bool(wb_iip_s)
+        gdp_from_wb = not gdp_s and bool(wb_gdp_s)
+        if cpi_from_wb:
+            cpi_s = wb_cpi_s
+        if iip_from_wb:
+            iip_s = wb_iip_s   # already annual growth %
+        if gdp_from_wb:
+            gdp_s = wb_gdp_s   # already annual growth %
 
         # Trim to most recent ~6 years for chart readability.
         rate_timeline = repo_s[-72:] if repo_s else []
-        cpi_yoy = self._series_yoy(cpi_s, lag=12)[-72:]
-        iip_yoy = self._series_yoy(iip_s, lag=12)[-72:]
-        # GDP series (INDGDPRQPSMEI) is already a YoY % growth rate from FRED.
-        gdp_yoy = gdp_s[-24:] if gdp_s else []           # quarterly → 6 yr
+        # CPI: FRED monthly → lag=12; WB annual index → lag=1
+        cpi_lag = 1 if cpi_from_wb else 12
+        cpi_yoy = self._series_yoy(cpi_s, lag=cpi_lag)[-72:]
+        # IIP: FRED monthly → compute YoY; WB annual % → use directly
+        if iip_from_wb:
+            iip_yoy = iip_s[-24:]  # already annual growth %, last ~24 years
+        else:
+            iip_yoy = self._series_yoy(iip_s, lag=12)[-72:]
+        # GDP: FRED quarterly (already YoY); WB annual (already %) — both use directly
+        gdp_yoy = gdp_s[-24:] if gdp_s else []
         # WPI series (INDWPIATT01GPM) is already a period-over-period growth rate.
         wpi_yoy = wpi_s[-72:] if wpi_s else []
         yield_history = yld10_s[-72:] if yld10_s else []
@@ -457,9 +574,13 @@ class MacroService:
         # Honest per-source provenance.  `ok` says whether we actually got
         # usable data from that source on this fetch.
         sources = [
-            {"id": "fred", "label": "FRED API", "ok": bool(repo_s or cpi_s or yld10_s),
+            {"id": "fred", "label": "FRED API", "ok": fred_ok_dash,
              "covers": "Repo, CPI, IIP, GDP, Call Money & 10Y yields, WPI",
              "url": "https://fred.stlouisfed.org/"},
+            {"id": "worldbank", "label": "World Bank (fallback)",
+             "ok": bool(wb_cpi_s or wb_iip_s or wb_gdp_s),
+             "covers": "CPI, IIP, GDP when FRED unavailable",
+             "url": "https://data.worldbank.org/"},
             {"id": "yahoo", "label": "Yahoo Finance", "ok": bool(usdinr or brent or dxy),
              "covers": "USD/INR, DXY, Brent, Gold, India VIX",
              "url": "https://finance.yahoo.com/"},
