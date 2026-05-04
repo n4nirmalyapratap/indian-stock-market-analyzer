@@ -2926,3 +2926,94 @@ async def get_macro_dashboard():
             "fetchedAt": "", "sources": [],
         }
     return {**data, "meta": _meta(served_from="MACRO_DASHBOARD")}
+
+
+# ── World Market Indices ─────────────────────────────────────────────────────
+# Major global indices fetched via yfinance, cached for DEFAULT_TTL (5 min).
+# Failures degrade gracefully — individual indices surface null values.
+
+GLOBAL_INDICES_DEF: list[dict] = [
+    # Americas
+    {"symbol": "^GSPC",     "name": "S&P 500",      "region": "Americas",     "flag": "🇺🇸"},
+    {"symbol": "^DJI",      "name": "Dow Jones",     "region": "Americas",     "flag": "🇺🇸"},
+    {"symbol": "^IXIC",     "name": "NASDAQ",        "region": "Americas",     "flag": "🇺🇸"},
+    # Europe
+    {"symbol": "^FTSE",     "name": "FTSE 100",      "region": "Europe",       "flag": "🇬🇧"},
+    {"symbol": "^GDAXI",    "name": "DAX",           "region": "Europe",       "flag": "🇩🇪"},
+    {"symbol": "^FCHI",     "name": "CAC 40",        "region": "Europe",       "flag": "🇫🇷"},
+    {"symbol": "^STOXX50E", "name": "Euro Stoxx 50", "region": "Europe",       "flag": "🇪🇺"},
+    # Asia Pacific
+    {"symbol": "^N225",     "name": "Nikkei 225",    "region": "Asia Pacific", "flag": "🇯🇵"},
+    {"symbol": "^HSI",      "name": "Hang Seng",     "region": "Asia Pacific", "flag": "🇭🇰"},
+    {"symbol": "000001.SS", "name": "Shanghai",      "region": "Asia Pacific", "flag": "🇨🇳"},
+    {"symbol": "^KS11",     "name": "KOSPI",         "region": "Asia Pacific", "flag": "🇰🇷"},
+    {"symbol": "^AXJO",     "name": "ASX 200",       "region": "Asia Pacific", "flag": "🇦🇺"},
+    # India
+    {"symbol": "^NSEI",     "name": "Nifty 50",      "region": "India",        "flag": "🇮🇳"},
+    {"symbol": "^BSESN",    "name": "SENSEX",        "region": "India",        "flag": "🇮🇳"},
+]
+_GLOBAL_REGION_ORDER = ["Americas", "Europe", "Asia Pacific", "India"]
+
+
+def _fetch_global_indices_sync() -> list[dict]:
+    """Blocking yfinance fetch — called via asyncio.to_thread."""
+    import yfinance as yf  # noqa: PLC0415
+    symbols = [d["symbol"] for d in GLOBAL_INDICES_DEF]
+    results: list[dict] = []
+    try:
+        tkrs = yf.Tickers(" ".join(symbols))
+        for meta in GLOBAL_INDICES_DEF:
+            sym = meta["symbol"]
+            try:
+                t  = tkrs.tickers.get(sym)
+                fi = t.fast_info  # type: ignore[union-attr]
+                price = getattr(fi, "last_price",    None) or getattr(fi, "regular_market_price",            None)
+                prev  = getattr(fi, "previous_close", None) or getattr(fi, "regular_market_previous_close",  None)
+                if price and prev and prev != 0:
+                    chg  = price - prev
+                    pchg = (chg / prev) * 100.0
+                else:
+                    chg = pchg = None
+                results.append({
+                    **meta,
+                    "value":   round(float(price), 2) if price  is not None else None,
+                    "change":  round(float(chg),   2) if chg    is not None else None,
+                    "pChange": round(float(pchg),  2) if pchg   is not None else None,
+                })
+            except Exception as exc:
+                logger.debug("global-indices %s: %s", sym, exc)
+                results.append({**meta, "value": None, "change": None, "pChange": None})
+    except Exception as exc:
+        logger.warning("global-indices batch fetch failed: %s", exc)
+        results = [{**m, "value": None, "change": None, "pChange": None} for m in GLOBAL_INDICES_DEF]
+    return results
+
+
+@router.get("/global-indices")
+async def get_global_indices():
+    """Major world market indices grouped by region."""
+    cached = _cache_get("global_indices")
+    if cached is not None:
+        return cached
+
+    try:
+        flat = await asyncio.to_thread(_fetch_global_indices_sync)
+    except Exception as exc:
+        logger.warning("global-indices endpoint failed: %s", exc)
+        flat = [{**m, "value": None, "change": None, "pChange": None} for m in GLOBAL_INDICES_DEF]
+
+    by_region: dict[str, list] = {}
+    for idx in flat:
+        by_region.setdefault(idx["region"], []).append(idx)
+
+    payload = {
+        "regions": [
+            {"label": lbl, "indices": by_region.get(lbl, [])}
+            for lbl in _GLOBAL_REGION_ORDER
+            if lbl in by_region
+        ],
+        "asOf": _meta()["asOf"],
+        "meta": _meta(served_from="GLOBAL_INDICES"),
+    }
+    _cache_set("global_indices", payload)
+    return payload
