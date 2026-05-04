@@ -32,7 +32,6 @@ import { CustomAuthProvider, useCustomAuth } from "@/context/CustomAuthContext";
 import { setTokenGetter } from "@/lib/api";
 import { useMarketStateBoundary } from "@/lib/marketData";
 import { LayoutShell } from "@/LayoutShell";
-import { LogOut } from "lucide-react";
 
 const queryClient = new QueryClient({
   // refetchOnWindowFocus defaults to true so any market-data query (even
@@ -47,7 +46,7 @@ const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 // ── User profile ──────────────────────────────────────────────────────────────
 
 function UserProfile({ open }: { open: boolean }) {
-  const { user, logout } = useCustomAuth();
+  const { user } = useCustomAuth();
   if (!user) return null;
 
   const initials = (user.name || user.email)
@@ -55,13 +54,11 @@ function UserProfile({ open }: { open: boolean }) {
 
   if (!open) {
     return (
-      <button
-        onClick={logout}
-        title="Sign out"
-        className="w-full flex justify-center py-2 text-gray-400 hover:text-red-400 transition"
-      >
-        <LogOut className="w-4 h-4" />
-      </button>
+      <div className="w-full flex justify-center py-2">
+        <div className="w-7 h-7 rounded-full bg-indigo-500 flex items-center justify-center text-white text-xs font-bold">
+          {initials}
+        </div>
+      </div>
     );
   }
 
@@ -75,13 +72,6 @@ function UserProfile({ open }: { open: boolean }) {
           <p className="text-xs font-medium text-gray-900 dark:text-white truncate">{user.name || "User"}</p>
           <p className="text-[10px] text-gray-400 truncate">{user.email}</p>
         </div>
-        <button
-          onClick={logout}
-          title="Sign out"
-          className="text-gray-400 hover:text-red-400 transition flex-shrink-0"
-        >
-          <LogOut className="w-3.5 h-3.5" />
-        </button>
       </div>
     </div>
   );
