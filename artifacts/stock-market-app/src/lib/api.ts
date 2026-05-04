@@ -297,6 +297,27 @@ export interface MacroStripResponse {
   meta?:     unknown;
 }
 
+export interface GlobalIndex {
+  symbol:  string;
+  name:    string;
+  region:  string;
+  flag:    string;
+  value:   number | null;
+  change:  number | null;
+  pChange: number | null;
+}
+
+export interface GlobalIndicesRegion {
+  label:   string;
+  indices: GlobalIndex[];
+}
+
+export interface GlobalIndicesResponse {
+  regions: GlobalIndicesRegion[];
+  asOf:    string;
+  meta?:   unknown;
+}
+
 export interface MacroSeriesPoint {
   date:  string;
   value: number;
@@ -546,6 +567,7 @@ export const api = {
   // ── Macro Pulse ──
   macroStrip:     () => fetchApi<MacroStripResponse>("/insights/macro/strip"),
   macroDashboard: () => fetchApi<MacroDashboardResponse>("/insights/macro"),
+  globalIndices:  () => fetchApi<GlobalIndicesResponse>("/insights/global-indices"),
 
   patterns: (params?: { universe?: string; signal?: string; category?: string }) => {
     const filtered = Object.fromEntries(
