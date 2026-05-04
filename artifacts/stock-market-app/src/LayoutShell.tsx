@@ -4,7 +4,7 @@ import { useTheme } from "@/context/ThemeContext";
 import { BrandLogo } from "@/components/BrandLogo";
 import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
-   Microscope,ChevronDown,
+  Microscope,
   Brain, TrendingUp, CandlestickChart,
   Settings, ChevronRight, ChevronLeft, Sun, Moon,
   Newspaper, Gauge, Sparkles, Users, Briefcase, Calculator,
@@ -51,22 +51,54 @@ export function NavLink({ path, label, icon: Icon, open, indent = false }: {
 }
 
 
-export function ThemeToggle({ open }: { open: boolean }) {
+function ThemeIconButton({ size = 15 }: { size?: number }) {
   const { theme, toggleWithRipple } = useTheme();
   const isDark = theme === "dark";
   return (
     <button
       onClick={(e) => toggleWithRipple(e.clientX, e.clientY)}
       title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-      className={`w-full flex items-center gap-2.5 rounded-lg transition py-2
-        ${open ? "px-2.5 mx-1.5 w-[calc(100%-12px)]" : "px-0 justify-center"}
-        text-gray-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-800`}
+      className="w-8 h-8 flex items-center justify-center rounded-lg transition
+        text-gray-400 dark:text-gray-500
+        hover:text-indigo-600 dark:hover:text-indigo-400
+        hover:bg-white dark:hover:bg-gray-800/70"
     >
       {isDark
-        ? <Sun  className="w-4 h-4 flex-shrink-0" />
-        : <Moon className="w-4 h-4 flex-shrink-0" />}
-      {open && <span className="text-xs font-medium whitespace-nowrap">{isDark ? "Light mode" : "Dark mode"}</span>}
+        ? <Sun  style={{ width: size, height: size }} />
+        : <Moon style={{ width: size, height: size }} />}
     </button>
+  );
+}
+
+
+function TopBar() {
+  const [loc] = useLocation();
+
+  const isFullscreen =
+    loc.startsWith("/trading") ||
+    loc.startsWith("/chart") ||
+    loc.startsWith("/insights/heatmap");
+
+  if (isFullscreen) return null;
+
+  const isSettings = loc === "/settings";
+
+  return (
+    <div className="hidden md:flex h-10 flex-shrink-0 items-center justify-end gap-0.5 px-4">
+      <ThemeIconButton />
+      <Link
+        href="/settings"
+        title="Settings"
+        className={`w-8 h-8 flex items-center justify-center rounded-lg transition
+          hover:bg-white dark:hover:bg-gray-800/70
+          ${isSettings
+            ? "text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/20"
+            : "text-gray-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400"
+          }`}
+      >
+        <Settings className="w-[15px] h-[15px]" />
+      </Link>
+    </div>
   );
 }
 
@@ -86,9 +118,11 @@ export function LayoutShell({
   return (
     <div className="h-screen bg-gray-50 dark:bg-gray-950 flex overflow-hidden">
 
+      {/* ── Sidebar ───────────────────────────────────────────────────────── */}
       <aside className={`hidden md:flex flex-col bg-white dark:bg-gray-950 border-r border-gray-100 dark:border-white/[0.05] flex-shrink-0
         transition-all duration-200 ease-in-out ${open ? "w-52" : "w-[52px]"}`}>
 
+        {/* Brand */}
         <div className={`flex items-center gap-2.5 border-b border-gray-100 dark:border-white/[0.05] flex-shrink-0 h-[57px]
           ${open ? "px-4" : "justify-center"}`}>
           <BrandLogo className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
@@ -100,16 +134,15 @@ export function LayoutShell({
           )}
         </div>
 
-        <nav className="flex-1 py-2 space-y-0.5 overflow-y-auto overflow-x-hidden">
+        {/* Nav items — scrollbar hidden via CSS */}
+        <nav className="sidebar-nav flex-1 py-2 space-y-0.5 overflow-y-auto overflow-x-hidden">
           {MAIN_NAV.map((item) => (
             <NavLink key={item.path} {...item} open={open} />
           ))}
         </nav>
 
-        <div className="border-t border-gray-100 dark:border-white/[0.05] py-2 flex-shrink-0">
-          <NavLink path="/settings" label="Settings" icon={Settings} open={open} />
-
-          <ThemeToggle open={open} />
+        {/* Bottom — profile + collapse only */}
+        <div className="py-2 flex-shrink-0">
           <ProfileComponent open={open} />
 
           <button
@@ -127,15 +160,26 @@ export function LayoutShell({
         </div>
       </aside>
 
+      {/* ── Main content ──────────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col min-w-0 bg-gray-50 dark:bg-gray-950">
+
+        {/* Mobile top bar */}
         <div className="md:hidden bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 px-4 py-3 flex items-center gap-2">
           <BrandLogo className="w-7 h-7 rounded-full object-cover" />
           <span className="font-bold text-gray-900 dark:text-white text-sm flex-1">Nifty Node</span>
-          <ThemeToggle open={false} />
+          <ThemeIconButton size={16} />
+          <Link
+            href="/settings"
+            title="Settings"
+            className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-indigo-600 transition"
+          >
+            <Settings className="w-4 h-4" />
+          </Link>
         </div>
 
+        {/* Mobile nav tabs */}
         <div className="md:hidden bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 px-2 py-2 flex gap-1 overflow-x-auto">
-          {[...MAIN_NAV, { path: "/settings", label: "Settings", icon: Settings }].map(({ path, label, icon: Icon }) => {
+          {MAIN_NAV.map(({ path, label, icon: Icon }) => {
             const active = loc === path || (path !== "/" && loc.startsWith(path));
             return (
               <Link key={path} href={path}
@@ -149,7 +193,10 @@ export function LayoutShell({
           })}
         </div>
 
-        <main className={`flex-1 overflow-auto bg-gray-50 dark:bg-gray-950 ${(loc.startsWith("/trading") || loc.startsWith("/chart") || loc.startsWith("/insights/heatmap")) ? "p-0 overflow-hidden" : "p-4 md:p-6"}`}>
+        {/* Desktop top-right controls */}
+        <TopBar />
+
+        <main className={`flex-1 overflow-auto bg-gray-50 dark:bg-gray-950 ${(loc.startsWith("/trading") || loc.startsWith("/chart") || loc.startsWith("/insights/heatmap")) ? "p-0 overflow-hidden" : "p-4 md:p-6 md:pt-2"}`}>
           {children}
         </main>
       </div>
