@@ -607,6 +607,14 @@ html.dark .dark-drawer textarea::placeholder { color: #64748b !important; }
   mix-blend-mode: normal;
 }
 
+/* ── Sidebar nav — hide scrollbar, keep scroll functionality ────────────── */
+.sidebar-nav {
+  scrollbar-width: none;
+}
+.sidebar-nav::-webkit-scrollbar {
+  display: none;
+}
+
 @keyframes theme-ripple-reveal {
   from {
     clip-path: circle(0 at var(--ripple-x, 50%) var(--ripple-y, 50%));
