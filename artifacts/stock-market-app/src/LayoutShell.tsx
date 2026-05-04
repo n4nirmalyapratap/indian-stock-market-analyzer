@@ -1,31 +1,30 @@
-import { useState, useEffect, ComponentType, ReactNode } from "react";
+import { useState, useEffect, useRef, ComponentType, ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { useTheme } from "@/context/ThemeContext";
 import { BrandLogo } from "@/components/BrandLogo";
 import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
-  Microscope,
-  Brain, TrendingUp, CandlestickChart,
+  Microscope, Brain, TrendingUp, CandlestickChart,
   Settings, ChevronRight, ChevronLeft, Sun, Moon,
   Newspaper, Gauge, Sparkles, Users, Briefcase, Calculator,
 } from "lucide-react";
 
 export const MAIN_NAV = [
-  { path: "/",           label: "Dashboard",      icon: LayoutDashboard },
-  { path: "/trading",    label: "Chart Studio",   icon: CandlestickChart },
-  { path: "/sectors",    label: "Market Sectors", icon: BarChart3 },
-  { path: "/insights",   label: "Insights",       icon: Sparkles },
-  { path: "/sentiment",  label: "Sentiment",      icon: Gauge },
-  { path: "/news",       label: "News Feed",      icon: Newspaper },
-  { path: "/stocks",     label: "Stock Lookup",   icon: Search },
-  { path: "/dcf",        label: "DCF Value",      icon: Calculator },
-  { path: "/agents",     label: "Investor Council", icon: Users },
+  { path: "/",           label: "Dashboard",       icon: LayoutDashboard },
+  { path: "/trading",    label: "Chart Studio",    icon: CandlestickChart },
+  { path: "/sectors",    label: "Market Sectors",  icon: BarChart3 },
+  { path: "/insights",   label: "Insights",        icon: Sparkles },
+  { path: "/sentiment",  label: "Sentiment",       icon: Gauge },
+  { path: "/news",       label: "News Feed",       icon: Newspaper },
+  { path: "/stocks",     label: "Stock Lookup",    icon: Search },
+  { path: "/dcf",        label: "DCF Value",       icon: Calculator },
+  { path: "/agents",     label: "Investor Council",icon: Users },
   { path: "/ai-analyst", label: "Deep AI Analyst", icon: Microscope },
-  { path: "/patterns",   label: "Patterns",       icon: Scan },
-  { path: "/scanners",   label: "Scanners",       icon: Filter },
-  { path: "/hydra",      label: "AI Analyzer",    icon: Brain },
-  { path: "/options",    label: "Options Tester", icon: TrendingUp },
-  { path: "/portfolio",  label: "Portfolio",      icon: Briefcase },
+  { path: "/patterns",   label: "Patterns",        icon: Scan },
+  { path: "/scanners",   label: "Scanners",        icon: Filter },
+  { path: "/hydra",      label: "AI Analyzer",     icon: Brain },
+  { path: "/options",    label: "Options Tester",  icon: TrendingUp },
+  { path: "/portfolio",  label: "Portfolio",       icon: Briefcase },
 ];
 
 export function NavLink({ path, label, icon: Icon, open, indent = false }: {
@@ -51,6 +50,85 @@ export function NavLink({ path, label, icon: Icon, open, indent = false }: {
 }
 
 
+function LogoMenu({ open: sidebarOpen }: { open: boolean }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const { theme, toggleWithRipple } = useTheme();
+  const isDark = theme === "dark";
+  const [loc] = useLocation();
+  const isSettings = loc === "/settings";
+
+  useEffect(() => {
+    function onOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    if (menuOpen) document.addEventListener("mousedown", onOutside);
+    return () => document.removeEventListener("mousedown", onOutside);
+  }, [menuOpen]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setMenuOpen(o => !o)}
+        title="Menu"
+        className={`w-full flex items-center gap-2.5 border-b border-gray-100 dark:border-white/[0.05] flex-shrink-0 h-[57px]
+          transition hover:bg-gray-50 dark:hover:bg-gray-800/50
+          ${sidebarOpen ? "px-4" : "justify-center"}
+          ${menuOpen ? "bg-gray-50 dark:bg-gray-800/50" : ""}`}
+      >
+        <BrandLogo className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
+        {sidebarOpen && (
+          <div className="overflow-hidden flex-1 text-left">
+            <p className="font-bold text-gray-900 dark:text-white text-sm whitespace-nowrap">Nifty Node</p>
+            <p className="text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">Indian Stock Market</p>
+          </div>
+        )}
+      </button>
+
+      {menuOpen && (
+        <div className={`absolute z-50 top-[calc(100%+4px)] left-2
+          w-52 rounded-xl border border-gray-200 dark:border-white/[0.08]
+          bg-white dark:bg-gray-900 shadow-xl shadow-black/10 dark:shadow-black/40
+          py-1.5 overflow-hidden`}
+        >
+          <p className="px-3 pt-0.5 pb-1.5 text-[10px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500">
+            Preferences
+          </p>
+
+          <button
+            onClick={(e) => { toggleWithRipple(e.clientX, e.clientY); setMenuOpen(false); }}
+            className="w-full flex items-center gap-2.5 px-3 py-2 text-sm
+              text-gray-700 dark:text-gray-300
+              hover:bg-indigo-50 dark:hover:bg-indigo-500/10
+              hover:text-indigo-700 dark:hover:text-indigo-300 transition"
+          >
+            {isDark
+              ? <Sun  className="w-4 h-4 text-amber-500" />
+              : <Moon className="w-4 h-4 text-indigo-500" />}
+            <span>{isDark ? "Light mode" : "Dark mode"}</span>
+          </button>
+
+          <Link
+            href="/settings"
+            onClick={() => setMenuOpen(false)}
+            className={`flex items-center gap-2.5 px-3 py-2 text-sm transition
+              ${isSettings
+                ? "text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-500/10"
+                : "text-gray-700 dark:text-gray-300 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 hover:text-indigo-700 dark:hover:text-indigo-300"
+              }`}
+          >
+            <Settings className="w-4 h-4" />
+            <span>Settings</span>
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 export function LayoutShell({
   children,
   ProfileComponent,
@@ -65,15 +143,6 @@ export function LayoutShell({
 
   useEffect(() => { localStorage.setItem("sidebar-open", String(open)); }, [open]);
 
-  const isSettings = loc === "/settings";
-
-  const footerItemCls = (active = false) =>
-    `flex items-center gap-2.5 rounded-lg transition py-1.5
-     ${open ? "px-2.5 mx-1.5" : "px-0 justify-center w-full"}
-     ${active
-       ? "text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/20"
-       : "text-gray-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-800"}`;
-
   return (
     <div className="h-screen bg-gray-50 dark:bg-gray-950 flex overflow-hidden">
 
@@ -81,17 +150,8 @@ export function LayoutShell({
       <aside className={`hidden md:flex flex-col bg-white dark:bg-gray-950 border-r border-gray-100 dark:border-white/[0.05] flex-shrink-0
         transition-all duration-200 ease-in-out ${open ? "w-52" : "w-[52px]"}`}>
 
-        {/* Brand */}
-        <div className={`flex items-center gap-2.5 border-b border-gray-100 dark:border-white/[0.05] flex-shrink-0 h-[57px]
-          ${open ? "px-4" : "justify-center"}`}>
-          <BrandLogo className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
-          {open && (
-            <div className="overflow-hidden">
-              <p className="font-bold text-gray-900 dark:text-white text-sm whitespace-nowrap">Nifty Node</p>
-              <p className="text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">Indian Stock Market</p>
-            </div>
-          )}
-        </div>
+        {/* Logo — click to open preferences popover */}
+        <LogoMenu open={open} />
 
         {/* Nav items */}
         <nav className="sidebar-nav flex-1 py-2 space-y-0.5 overflow-y-auto overflow-x-hidden">
@@ -100,51 +160,20 @@ export function LayoutShell({
           ))}
         </nav>
 
-        {/* Bottom — profile · theme · settings · collapse */}
-        <div className="py-2 flex-shrink-0 space-y-0.5">
+        {/* Bottom — profile + collapse */}
+        <div className="py-2 flex-shrink-0">
           <ProfileComponent open={open} />
-
-          {/* Subtle divider */}
-          <div className={`my-1 ${open ? "mx-3 border-t border-gray-100 dark:border-white/[0.06]" : "mx-2 border-t border-gray-100 dark:border-white/[0.06]"}`} />
-
-          {/* Dark / Light toggle */}
-          <button
-            onClick={(e) => toggleWithRipple(e.clientX, e.clientY)}
-            title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-            className={footerItemCls()}
-          >
-            {isDark
-              ? <Sun  className="w-[18px] h-[18px] flex-shrink-0" />
-              : <Moon className="w-[18px] h-[18px] flex-shrink-0" />}
-            {open && (
-              <span className="text-sm font-medium whitespace-nowrap">
-                {isDark ? "Light mode" : "Dark mode"}
-              </span>
-            )}
-          </button>
-
-          {/* Settings */}
-          <Link
-            href="/settings"
-            title={!open ? "Settings" : undefined}
-            className={footerItemCls(isSettings)}
-          >
-            <Settings className="w-[18px] h-[18px] flex-shrink-0" />
-            {open && <span className="text-sm font-medium whitespace-nowrap">Settings</span>}
-          </Link>
-
-          {/* Collapse / expand */}
           <button
             onClick={() => setOpen(o => !o)}
             title={open ? "Collapse sidebar" : "Expand sidebar"}
-            className={`w-full flex items-center gap-2.5 rounded-lg transition py-1.5
-              ${open ? "px-2.5 mx-1.5 w-[calc(100%-12px)]" : "px-0 justify-center"}
+            className={`w-full flex items-center gap-2.5 rounded-lg transition py-2 mt-0.5
+              ${open ? "px-2.5 w-[calc(100%-12px)] mx-1.5" : "px-0 justify-center"}
               text-gray-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-800`}
           >
             {open
-              ? <ChevronLeft  className="w-[18px] h-[18px] flex-shrink-0" />
-              : <ChevronRight className="w-[18px] h-[18px] flex-shrink-0" />}
-            {open && <span className="text-sm font-medium text-gray-400 dark:text-gray-500 whitespace-nowrap">Collapse</span>}
+              ? <ChevronLeft  className="w-4 h-4 flex-shrink-0" />
+              : <ChevronRight className="w-4 h-4 flex-shrink-0" />}
+            {open && <span className="text-xs font-medium text-gray-400 dark:text-gray-500 whitespace-nowrap">Collapse</span>}
           </button>
         </div>
       </aside>
@@ -164,7 +193,6 @@ export function LayoutShell({
           </button>
           <Link
             href="/settings"
-            title="Settings"
             className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-indigo-600 transition"
           >
             <Settings className="w-4 h-4" />
@@ -187,7 +215,11 @@ export function LayoutShell({
           })}
         </div>
 
-        <main className={`flex-1 overflow-auto bg-gray-50 dark:bg-gray-950 ${(loc.startsWith("/trading") || loc.startsWith("/chart") || loc.startsWith("/insights/heatmap")) ? "p-0 overflow-hidden" : "p-4 md:p-6"}`}>
+        <main className={`flex-1 overflow-auto bg-gray-50 dark:bg-gray-950
+          ${(loc.startsWith("/trading") || loc.startsWith("/chart") || loc.startsWith("/insights/heatmap"))
+            ? "p-0 overflow-hidden"
+            : "p-4 md:p-6"}`}
+        >
           {children}
         </main>
       </div>
