@@ -34,34 +34,33 @@ _lock = threading.Lock()
 # ── KNOWN SECRETS (shown in admin UI with descriptions) ───────────────────────
 
 KNOWN_SECRETS: list[dict] = [
+    # ── Market Data ──────────────────────────────────────────────────────────
     {
-        "key":         "TELEGRAM_BOT_TOKEN",
-        "description": "Telegram bot token from @BotFather",
+        "key":         "FRED_API_KEY",
+        "description": "FRED (St. Louis Fed) API key. Free at fred.stlouisfed.org/docs/api/api_key.html. "
+                       "Enables Repo Rate, CPI, IIP, and India 10Y Yield tiles in Macro Pulse. "
+                       "Without this key, World Bank annual data is used as fallback for CPI/IIP/GDP.",
         "masked":      True,
     },
-    {
-        "key":         "WHATSAPP_ENABLED",
-        "description": "Set to 'true' to enable the WhatsApp bot integration",
-        "masked":      False,
-    },
+    # ── AI / LLM ─────────────────────────────────────────────────────────────
     {
         "key":         "AI_INTEGRATIONS_OPENROUTER_API_KEY",
-        "description": "OpenRouter API key (free-tier OK). Used for Gemma 4 / Qwen / Llama models",
+        "description": "OpenRouter API key. Get one free at openrouter.ai. Powers the AI Analyst and Macro commentary.",
         "masked":      True,
     },
     {
         "key":         "AI_INTEGRATIONS_OPENROUTER_BASE_URL",
-        "description": "OpenRouter base URL (leave blank to use Replit proxy default)",
+        "description": "OpenRouter base URL (default: https://openrouter.ai/api/v1). Leave blank on Replit to use the built-in proxy.",
         "masked":      False,
     },
     {
         "key":         "AI_INTEGRATIONS_OPENAI_API_KEY",
-        "description": "OpenAI API key. Used as the final fallback for the AI client",
+        "description": "OpenAI API key. Used as the final fallback for the AI client if OpenRouter is unavailable.",
         "masked":      True,
     },
     {
         "key":         "AI_INTEGRATIONS_OPENAI_BASE_URL",
-        "description": "OpenAI base URL (leave blank to use Replit proxy default)",
+        "description": "OpenAI base URL (leave blank to use api.openai.com).",
         "masked":      False,
     },
     {
@@ -77,6 +76,17 @@ KNOWN_SECRETS: list[dict] = [
     {
         "key":         "AI_ANALYST_DAILY_QUOTA",
         "description": "Deep AI Analyst: max fresh analyses per user per IST day (default: 3). Cached reports don't count.",
+        "masked":      False,
+    },
+    # ── Notifications ────────────────────────────────────────────────────────
+    {
+        "key":         "TELEGRAM_BOT_TOKEN",
+        "description": "Telegram bot token from @BotFather. Leave blank to disable Telegram alerts.",
+        "masked":      True,
+    },
+    {
+        "key":         "WHATSAPP_ENABLED",
+        "description": "Set to 'true' to enable the WhatsApp bot integration (requires Twilio setup).",
         "masked":      False,
     },
 ]
