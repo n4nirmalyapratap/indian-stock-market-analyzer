@@ -691,7 +691,13 @@ export default function Scanners() {
                     <summary className="text-xs text-amber-700 cursor-pointer">Show details</summary>
                     <ul className="mt-2 text-xs text-amber-700 space-y-0.5 max-h-40 overflow-y-auto font-mono">
                       {(result as any).scanErrors.slice(0, 50).map((e: any, i: number) => (
-                        <li key={i}>{e.symbol ?? "?"}: {e.error ?? e.message ?? "unknown"}</li>
+                        <li key={i}>{e.symbol ?? "?"}: {
+                          e.reason === "insufficient-history"
+                            ? `new listing — only ${e.got ?? "?"} bars available (need ${e.needed ?? "?"})`
+                            : e.reason === "insufficient-closes"
+                            ? "insufficient data"
+                            : e.error ?? e.message ?? e.reason ?? "unknown"
+                        }</li>
                       ))}
                       {(result as any).scanErrors.length > 50 && (
                         <li className="opacity-70">…and {(result as any).scanErrors.length - 50} more</li>
