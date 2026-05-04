@@ -97,7 +97,9 @@ async def get_india_risk_free_rate(force_refresh: bool = False) -> dict[str, Any
             and (now - _mem["ts"]) < CACHE_TTL_SECONDS):
         return _mem["value"]
 
-    api_key = os.environ.get("FRED_API_KEY", "").strip()
+    # Check DB-managed secrets first (set via admin UI), then env var, then .env.
+    from app.lib.secrets_store import get_secret as _get_secret
+    api_key = _get_secret("FRED_API_KEY", "").strip()
     if not api_key:
         result = (_stale_from_disk("FRED_API_KEY not configured")
                   or _hard_fallback("FRED_API_KEY not configured"))

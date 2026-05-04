@@ -112,7 +112,9 @@ async def _fetch_fred_series(series_id: str) -> list[dict[str, Any]]:
     timeout). This function is the only data-pull primitive the service
     uses; it must never raise so callers can degrade gracefully.
     """
-    api_key = os.environ.get("FRED_API_KEY", "").strip()
+    # Check DB-managed secrets first (set via admin UI), then env var, then .env.
+    from app.lib.secrets_store import get_secret as _get_secret
+    api_key = _get_secret("FRED_API_KEY", "").strip()
     if api_key:
         return await _fetch_fred_via_api(series_id, api_key)
     # No key configured — fall back to the CSV endpoint, which is usually
