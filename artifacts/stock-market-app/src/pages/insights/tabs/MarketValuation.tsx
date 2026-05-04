@@ -21,45 +21,49 @@ interface ValuationResponse {
   indices: { code: string; label: string; lastPrice?: number; change?: number; changePct?: number; }[];
 }
 
-// Comprehensive list of indices available on yfinance.
-const ALL_INDEX_OPTIONS = [
-  // ── India ──
-  { code: "^NSEI",                 label: "NIFTY 50" },
-  { code: "^BSESN",               label: "SENSEX" },
-  { code: "^NSEBANK",              label: "NIFTY BANK" },
-  { code: "^CNXIT",                label: "NIFTY IT" },
-  { code: "^CNXFMCG",              label: "NIFTY FMCG" },
-  { code: "^CNXAUTO",              label: "NIFTY AUTO" },
-  { code: "^CNXPHARMA",            label: "NIFTY PHARMA" },
-  { code: "^CNXMETAL",             label: "NIFTY METAL" },
-  { code: "^CNXENERGY",            label: "NIFTY ENERGY" },
-  { code: "^CNXREALTY",            label: "NIFTY REALTY" },
-  { code: "^CNXMEDIA",             label: "NIFTY MEDIA" },
-  { code: "^CNXPSUBANK",           label: "NIFTY PSU BANK" },
-  { code: "^CNXPSE",               label: "NIFTY PSE" },
-  { code: "^CNXINFRA",             label: "NIFTY INFRA" },
-  { code: "NIFTY_FIN_SERVICE.NS",  label: "NIFTY FINANCIAL SERVICES" },
-  { code: "^NSMIDCP",              label: "NIFTY MIDCAP 100" },
-  { code: "^CNXSC",                label: "NIFTY SMALLCAP 100" },
-  { code: "^CNX100",               label: "NIFTY 100" },
-  { code: "^CNX200",               label: "NIFTY 200" },
-  { code: "^CRSLDX",               label: "NIFTY 500" },
-  // ── Americas ──
-  { code: "^GSPC",                 label: "S&P 500 (US)" },
-  { code: "^DJI",                  label: "Dow Jones (US)" },
-  { code: "^IXIC",                 label: "NASDAQ (US)" },
-  // ── Europe ──
-  { code: "^FTSE",                 label: "FTSE 100 (UK)" },
-  { code: "^GDAXI",                label: "DAX (Germany)" },
-  { code: "^FCHI",                 label: "CAC 40 (France)" },
-  { code: "^STOXX50E",             label: "Euro Stoxx 50" },
-  // ── Asia Pacific ──
-  { code: "^N225",                 label: "Nikkei 225 (Japan)" },
-  { code: "^HSI",                  label: "Hang Seng (HK)" },
-  { code: "000001.SS",             label: "Shanghai Comp. (China)" },
-  { code: "^KS11",                 label: "KOSPI (South Korea)" },
-  { code: "^AXJO",                 label: "ASX 200 (Australia)" },
+const INDIA_INDEX_OPTIONS = [
+  { code: "^NSEI",                label: "NIFTY 50" },
+  { code: "^BSESN",              label: "SENSEX" },
+  { code: "^NSEBANK",             label: "NIFTY BANK" },
+  { code: "^CNXIT",               label: "NIFTY IT" },
+  { code: "^CNXFMCG",             label: "NIFTY FMCG" },
+  { code: "^CNXAUTO",             label: "NIFTY AUTO" },
+  { code: "^CNXPHARMA",           label: "NIFTY PHARMA" },
+  { code: "^CNXMETAL",            label: "NIFTY METAL" },
+  { code: "^CNXENERGY",           label: "NIFTY ENERGY" },
+  { code: "^CNXREALTY",           label: "NIFTY REALTY" },
+  { code: "^CNXMEDIA",            label: "NIFTY MEDIA" },
+  { code: "^CNXPSUBANK",          label: "NIFTY PSU BANK" },
+  { code: "^CNXPSE",              label: "NIFTY PSE" },
+  { code: "^CNXINFRA",            label: "NIFTY INFRA" },
+  { code: "NIFTY_FIN_SERVICE.NS", label: "NIFTY FINANCIAL SERVICES" },
+  { code: "^NSMIDCP",             label: "NIFTY MIDCAP 100" },
+  { code: "^CNXSC",               label: "NIFTY SMALLCAP 100" },
+  { code: "^CNX100",              label: "NIFTY 100" },
+  { code: "^CNX200",              label: "NIFTY 200" },
+  { code: "^CRSLDX",              label: "NIFTY 500" },
 ];
+
+const WORLD_INDEX_OPTIONS = [
+  // Americas
+  { code: "^GSPC",      label: "S&P 500 (US)" },
+  { code: "^DJI",       label: "Dow Jones (US)" },
+  { code: "^IXIC",      label: "NASDAQ (US)" },
+  // Europe
+  { code: "^FTSE",      label: "FTSE 100 (UK)" },
+  { code: "^GDAXI",     label: "DAX (Germany)" },
+  { code: "^FCHI",      label: "CAC 40 (France)" },
+  { code: "^STOXX50E",  label: "Euro Stoxx 50" },
+  // Asia Pacific
+  { code: "^N225",      label: "Nikkei 225 (Japan)" },
+  { code: "^HSI",       label: "Hang Seng (HK)" },
+  { code: "000001.SS",  label: "Shanghai Comp. (China)" },
+  { code: "^KS11",      label: "KOSPI (South Korea)" },
+  { code: "^AXJO",      label: "ASX 200 (Australia)" },
+];
+
+// Combined for labelFor() lookup
+const ALL_INDEX_OPTIONS = [...INDIA_INDEX_OPTIONS, ...WORLD_INDEX_OPTIONS];
 
 // Distinct, accessible chart colors that work in both themes.
 const CHART_COLORS = [
@@ -82,14 +86,8 @@ const formatValue = (v: number | string | undefined, metric: Metric) => {
   return n.toFixed(2); // indexed → 100-based
 };
 
-// Indices whose home currency is not USD — used to decide whether to show
-// the USD toggle.
-const GLOBAL_INDEX_CODES = new Set([
-  "^GSPC","^DJI","^IXIC",
-  "^FTSE","^GDAXI","^FCHI","^STOXX50E",
-  "^N225","^HSI","000001.SS","^KS11","^AXJO",
-  "^BSESN",
-]);
+// World indices set — used to detect multi-currency selections for the USD toggle
+const WORLD_INDEX_CODES = new Set(WORLD_INDEX_OPTIONS.map(o => o.code));
 
 export default function MarketValuation() {
   const [period, setPeriod] = useState<Period>("5y");
@@ -100,8 +98,8 @@ export default function MarketValuation() {
 
   const codes = selected.join(",");
 
-  // Show the USD toggle only when at least one non-INR-only index is selected.
-  const hasMultiCurrency = selected.some(c => GLOBAL_INDEX_CODES.has(c));
+  // Show the USD toggle only when at least one world index is selected.
+  const hasMultiCurrency = selected.some(c => WORLD_INDEX_CODES.has(c));
 
   const palette = useChartPalette();
   const { border: cBorder, muted: cMuted, text: cText, surf: cSurf, accent: cAccent } = palette;
@@ -120,8 +118,12 @@ export default function MarketValuation() {
   const isRefetching = isFetching && !isLoading;
   const valuationMeta = pickMeta(data);
 
-  const addable = useMemo(
-    () => ALL_INDEX_OPTIONS.filter(o => !selected.includes(o.code)),
+  const addableIndia = useMemo(
+    () => INDIA_INDEX_OPTIONS.filter(o => !selected.includes(o.code)),
+    [selected],
+  );
+  const addableWorld = useMemo(
+    () => WORLD_INDEX_OPTIONS.filter(o => !selected.includes(o.code)),
     [selected],
   );
 
@@ -182,16 +184,29 @@ export default function MarketValuation() {
           );
         })}
 
-        {/* Add another index */}
-        {addable.length > 0 && selected.length < 6 && (
+        {/* Add another index — India */}
+        {addableIndia.length > 0 && selected.length < 6 && (
           <MenuDropdown
-            label="+ Add"
-            value={adding as string}
-            onChange={(v) => add(v as string)}
-            options={addable.map(o => ({ value: o.code, label: o.label }))}
+            label="+ India"
+            value={adding}
+            onChange={(v) => add(v)}
+            options={addableIndia.map(o => ({ value: o.code, label: o.label }))}
             placeholder="Pick an index"
-            minButtonWidth={150}
-            maxButtonWidth={240}
+            minButtonWidth={130}
+            maxButtonWidth={220}
+          />
+        )}
+
+        {/* Add another index — World */}
+        {addableWorld.length > 0 && selected.length < 6 && (
+          <MenuDropdown
+            label="+ World"
+            value={adding}
+            onChange={(v) => add(v)}
+            options={addableWorld.map(o => ({ value: o.code, label: o.label }))}
+            placeholder="Pick an index"
+            minButtonWidth={130}
+            maxButtonWidth={220}
           />
         )}
       </div>
