@@ -74,20 +74,40 @@ function ThemeIconButton({ size = 15 }: { size?: number }) {
 function TopBar() {
   const [loc] = useLocation();
   const isSettings = loc === "/settings";
+  const isFullscreen =
+    loc.startsWith("/trading") ||
+    loc.startsWith("/chart") ||
+    loc.startsWith("/insights/heatmap");
 
+  const settingsClass = `w-8 h-8 flex items-center justify-center rounded-lg transition
+    hover:bg-white dark:hover:bg-gray-800/70
+    ${isSettings
+      ? "text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/20"
+      : "text-gray-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400"
+    }`;
+
+  /* Fullscreen views (Chart Studio, Chart, Heatmap) — float the controls as a
+     pill overlay in the top-right so they take ZERO vertical space and don't
+     push the drawing bar or chart canvas out of bounds. */
+  if (isFullscreen) {
+    return (
+      <div className="hidden md:flex absolute top-2 right-3 z-50 items-center gap-0.5
+        bg-white/90 dark:bg-gray-900/90 backdrop-blur-sm
+        rounded-xl px-0.5 py-0.5 shadow-sm
+        border border-gray-200/60 dark:border-white/[0.08]">
+        <ThemeIconButton />
+        <Link href="/settings" title="Settings" className={settingsClass}>
+          <Settings className="w-[15px] h-[15px]" />
+        </Link>
+      </div>
+    );
+  }
+
+  /* Regular pages — inline bar that takes 40px of height */
   return (
-    <div className="hidden md:flex h-10 flex-shrink-0 items-center justify-end gap-0.5 px-4 flex-shrink-0">
+    <div className="hidden md:flex h-10 flex-shrink-0 items-center justify-end gap-0.5 px-4">
       <ThemeIconButton />
-      <Link
-        href="/settings"
-        title="Settings"
-        className={`w-8 h-8 flex items-center justify-center rounded-lg transition
-          hover:bg-white dark:hover:bg-gray-800/70
-          ${isSettings
-            ? "text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/20"
-            : "text-gray-400 dark:text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400"
-          }`}
-      >
+      <Link href="/settings" title="Settings" className={settingsClass}>
         <Settings className="w-[15px] h-[15px]" />
       </Link>
     </div>
@@ -153,7 +173,7 @@ export function LayoutShell({
       </aside>
 
       {/* ── Main content ──────────────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col min-w-0 bg-gray-50 dark:bg-gray-950">
+      <div className="flex-1 flex flex-col min-w-0 bg-gray-50 dark:bg-gray-950 relative">
 
         {/* Mobile top bar */}
         <div className="md:hidden bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 px-4 py-3 flex items-center gap-2">
