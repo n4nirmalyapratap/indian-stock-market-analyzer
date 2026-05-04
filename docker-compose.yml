@@ -54,6 +54,18 @@ services:
       # This points to the persistent volume so the DB survives container restarts.
       DATA_DIR: "/app/data"
 
+      # ── FRED API Key — Macro Pulse (Repo Rate, CPI, IIP, 10Y Yield) ──────
+      FRED_API_KEY: "${FRED_API_KEY:-}"
+
+      # ── AI Analyst / OpenRouter ────────────────────────────────────────────
+      AI_INTEGRATIONS_OPENROUTER_API_KEY: "${AI_INTEGRATIONS_OPENROUTER_API_KEY:-}"
+      AI_INTEGRATIONS_OPENROUTER_BASE_URL: "${AI_INTEGRATIONS_OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}"
+      AI_INTEGRATIONS_OPENAI_API_KEY: "${AI_INTEGRATIONS_OPENAI_API_KEY:-}"
+      AI_INTEGRATIONS_OPENAI_BASE_URL: "${AI_INTEGRATIONS_OPENAI_BASE_URL:-}"
+      AI_MODEL:          "${AI_MODEL:-}"
+      AI_FALLBACK_MODEL: "${AI_FALLBACK_MODEL:-}"
+      FEATURE_AI_ANALYST: "${FEATURE_AI_ANALYST:-on}"
+
       # ── Optional integrations ─────────────────────────────────────────────
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
       TWILIO_ACCOUNT_SID: "${TWILIO_ACCOUNT_SID:-}"
