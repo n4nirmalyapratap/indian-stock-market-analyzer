@@ -136,8 +136,6 @@ export default function Dashboard() {
 
       <MacroStrip />
 
-      <GlobalIndicesPanel />
-
       {rotErr && (
         <div className="flex items-center gap-2 text-red-600 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg p-3 text-sm">
           <AlertCircle className="w-4 h-4" /> Unable to connect to API server. Make sure it's running.
@@ -150,6 +148,8 @@ export default function Dashboard() {
         <StatCard loading={rotBusy} title="Declining" value={rotLoading ? "…" : breadth?.declining ?? "-"} trend="down" sub="sectors falling" />
         <StatCard loading={rotBusy} title="A/D Ratio" value={rotLoading ? "…" : adRatio} sub={`Breadth: ${breadthLabel ?? "-"}%`} />
       </div>
+
+      <GlobalIndicesPanel />
 
       <div className="grid md:grid-cols-2 gap-6">
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm p-5 relative overflow-hidden">
