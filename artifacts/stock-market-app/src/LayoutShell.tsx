@@ -1,12 +1,14 @@
 import { useState, useEffect, useRef, ComponentType, ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { useTheme } from "@/context/ThemeContext";
+import { useCustomAuth } from "@/context/CustomAuthContext";
 import { BrandLogo } from "@/components/BrandLogo";
 import {
   LayoutDashboard, BarChart3, Search, Scan, Filter,
   Microscope, Brain, TrendingUp, CandlestickChart,
   Settings, ChevronRight, ChevronLeft, Sun, Moon,
   Newspaper, Gauge, Sparkles, Users, Briefcase, Calculator,
+  LogOut,
 } from "lucide-react";
 
 export const MAIN_NAV = [
@@ -54,6 +56,7 @@ function LogoMenu({ open: sidebarOpen }: { open: boolean }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const { theme, toggleWithRipple } = useTheme();
+  const { logout } = useCustomAuth();
   const isDark = theme === "dark";
   const [loc] = useLocation();
   const isSettings = loc === "/settings";
@@ -73,7 +76,7 @@ function LogoMenu({ open: sidebarOpen }: { open: boolean }) {
       <button
         onClick={() => setMenuOpen(o => !o)}
         title="Menu"
-        className={`w-full flex items-center gap-2.5 border-b border-gray-100 dark:border-white/[0.05] flex-shrink-0 h-[57px]
+        className={`cursor-pointer w-full flex items-center gap-2.5 border-b border-gray-100 dark:border-white/[0.05] flex-shrink-0 h-[57px]
           transition hover:bg-gray-50 dark:hover:bg-gray-800/50
           ${sidebarOpen ? "px-4" : "justify-center"}
           ${menuOpen ? "bg-gray-50 dark:bg-gray-800/50" : ""}`}
@@ -122,6 +125,18 @@ function LogoMenu({ open: sidebarOpen }: { open: boolean }) {
             <Settings className="w-4 h-4" />
             <span>Settings</span>
           </Link>
+
+          <div className="my-1 mx-3 border-t border-gray-100 dark:border-white/[0.06]" />
+
+          <button
+            onClick={() => { setMenuOpen(false); logout(); }}
+            className="w-full flex items-center gap-2.5 px-3 py-2 text-sm transition
+              text-red-500 dark:text-red-400
+              hover:bg-red-50 dark:hover:bg-red-500/10"
+          >
+            <LogOut className="w-4 h-4" />
+            <span>Log out</span>
+          </button>
         </div>
       )}
     </div>
