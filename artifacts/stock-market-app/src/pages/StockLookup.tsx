@@ -1,8 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearch, Link } from "wouter";
 import { api } from "@/lib/api";
-import { Search, TrendingUp, TrendingDown, AlertCircle, BarChart2, Activity, Users } from "lucide-react";
+import { Search, TrendingUp, TrendingDown, AlertCircle, BarChart2, Activity, Users, ArrowLeft } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
 import AIAnalystButton from "@/components/AIAnalystButton";
 import StockFinancials from "@/components/financials/StockFinancials";
@@ -17,6 +17,7 @@ export default function StockLookup() {
   const [input, setInput] = useState("");
   const [symbol, setSymbol] = useState("");
   const [view, setView] = useState<"technicals" | "financials">("technicals");
+  const cameFromLink = useRef(!!new URLSearchParams(window.location.search).get("symbol"));
 
   // Auto-search when ?symbol=XYZ is present in the URL (e.g. from Heatmap click)
   useEffect(() => {
@@ -45,9 +46,21 @@ export default function StockLookup() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Stock Analysis</h1>
-        <p className="text-sm text-gray-500">Enter any NSE symbol for technical and fundamental analysis</p>
+      <div className="flex items-center gap-3">
+        {cameFromLink.current && (
+          <button
+            onClick={() => window.history.back()}
+            title="Go back"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-white transition-colors flex-shrink-0"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back
+          </button>
+        )}
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Stock Analysis</h1>
+          <p className="text-sm text-gray-500">Enter any NSE symbol for technical and fundamental analysis</p>
+        </div>
       </div>
 
       <div className="flex gap-2">
