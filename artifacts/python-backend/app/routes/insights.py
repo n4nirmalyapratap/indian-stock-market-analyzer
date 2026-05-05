@@ -186,6 +186,32 @@ NIFTY500 = list(dict.fromkeys(NIFTY200 + NIFTY_PHARMA + NIFTY_REALTY + NIFTY_MED
                               NIFTY_CONSUMER_DURABLES + NIFTY_PSU_BANK + NIFTY_PVT_BANK))
 FNO_STOCKS = NIFTY200
 
+# ── Universe-cache derived lists (Mid-Cap 150 / Small-Cap 250) ───────────────
+# universe_cache.json classifies every NSE stock as Large/Mid/Small-Cap
+# (100 / 150 / 250 stocks respectively — mirrors NSE Nifty 100 / Midcap 150 /
+# Smallcap 250). Built at import time; no manual maintenance needed.
+def _load_cap_lists() -> tuple[list[str], list[str], list[str]]:
+    import json as _j, pathlib as _p
+    try:
+        cache = _p.Path(__file__).parents[1] / "lib" / "universe_cache.json"
+        cats = _j.loads(cache.read_text()).get("categories", {})
+        large = sorted(s for s, c in cats.items() if c == "Large-Cap")
+        mid   = sorted(s for s, c in cats.items() if c == "Mid-Cap")
+        small = sorted(s for s, c in cats.items() if c == "Small-Cap")
+        return (
+            [f"{s}.NS" for s in large],
+            [f"{s}.NS" for s in mid],
+            [f"{s}.NS" for s in small],
+        )
+    except Exception:
+        return [], [], []
+
+_LARGECAP_100, _MIDCAP_150, _SMALLCAP_250 = _load_cap_lists()
+# Nifty 500 = Large 100 + Midcap 150 + Smallcap 250 (official NSE definition)
+_NIFTY500_FULL = list(dict.fromkeys(_LARGECAP_100 + _MIDCAP_150 + _SMALLCAP_250))
+# Nifty 200 = Large 100 + top ~100 Midcap (alphabetical proxy)
+_NIFTY200_FULL = list(dict.fromkeys(_LARGECAP_100 + _MIDCAP_150[:100]))
+
 # ── World indices ─────────────────────────────────────────────────────────────
 
 # United States (no exchange suffix — Yahoo Finance uses bare tickers)
@@ -385,14 +411,23 @@ INDEX_CONSTITUENTS: dict[str, list[str]] = {
     "SENSEX":               SENSEX,
     "FNO":                  FNO_STOCKS,
     "NIFTYNEXT50":          NIFTYNEXT50,
-    "NIFTY100":             NIFTY100,
-    "NIFTY200":             NIFTY200,
-    "NIFTY500":             NIFTY500,
+    "NIFTY100":             _LARGECAP_100 or NIFTY100,
+    # Nifty 200 = Large 100 + Midcap 100 (200 stocks per NSE definition)
+    "NIFTY200":             _NIFTY200_FULL or NIFTY200,
+    # Nifty 500 = Large + Midcap 150 + Smallcap 250 (true 500-stock universe)
+    "NIFTY500":             _NIFTY500_FULL or NIFTY500,
+    # Mid-cap (full 150 from universe cache)
     "NIFTYMIDCAP50":        NIFTY_MIDCAP_50,
-    "NIFTYMIDCAP100":       NIFTY_MIDCAP_50 + NIFTY_MIDCAP_SELECT,
-    "NIFTYMIDCAP150":       NIFTY_MIDCAP_50 + NIFTY_MIDCAP_SELECT + NIFTY_REALTY + NIFTY_MEDIA,
+    "NIFTYMIDCAP100":       (_MIDCAP_150[:100] if _MIDCAP_150 else NIFTY_MIDCAP_50 + NIFTY_MIDCAP_SELECT),
+    "NIFTYMIDCAP150":       _MIDCAP_150 or (NIFTY_MIDCAP_50 + NIFTY_MIDCAP_SELECT + NIFTY_REALTY + NIFTY_MEDIA),
     "NIFTYMIDCAPSELECT":    NIFTY_MIDCAP_SELECT,
-    "NIFTYTOTALMARKET":     NIFTY500,
+    # Small-cap (250 / 100 / 50 slices from universe cache)
+    "NIFTYSMALLCAP250":     _SMALLCAP_250,
+    "NIFTYSMALLCAP100":     _SMALLCAP_250[:100],
+    "NIFTYSMALLCAP50":      _SMALLCAP_250[:50],
+    # Large + Mid combined
+    "NIFTYLARGEMIDCAP250":  list(dict.fromkeys(_LARGECAP_100 + _MIDCAP_150)),
+    "NIFTYTOTALMARKET":     _NIFTY500_FULL or NIFTY500,
     "NIFTYBANK":            NIFTYBANK,
     "NIFTYPVTBANK":         NIFTY_PVT_BANK,
     "NIFTYPSUBANK":         NIFTY_PSU_BANK,
@@ -429,12 +464,20 @@ INDEX_CONSTITUENTS: dict[str, list[str]] = {
     "SSE50":                SSE_TOP,
 }
 INDEX_LABELS = {
-    # India
+    # India — broad market
     "NIFTY50":"Nifty 50","SENSEX":"Sensex","FNO":"F&O Stocks","NIFTYNEXT50":"Nifty Next 50",
     "NIFTY100":"Nifty 100","NIFTY200":"Nifty 200","NIFTY500":"Nifty 500",
+    # Mid-cap
     "NIFTYMIDCAP50":"Nifty Midcap 50","NIFTYMIDCAP100":"Nifty Midcap 100",
     "NIFTYMIDCAP150":"Nifty Midcap 150","NIFTYMIDCAPSELECT":"Nifty Midcap Select",
-    "NIFTYTOTALMARKET":"Nifty Total Market","NIFTYBANK":"Nifty Bank","NIFTYPVTBANK":"Nifty Private Bank",
+    # Small-cap
+    "NIFTYSMALLCAP50":"Nifty Smallcap 50","NIFTYSMALLCAP100":"Nifty Smallcap 100",
+    "NIFTYSMALLCAP250":"Nifty Smallcap 250",
+    # Combined
+    "NIFTYLARGEMIDCAP250":"Nifty LargeMidcap 250",
+    "NIFTYTOTALMARKET":"Nifty Total Market",
+    # Sectoral
+    "NIFTYBANK":"Nifty Bank","NIFTYPVTBANK":"Nifty Private Bank",
     "NIFTYPSUBANK":"Nifty PSU Bank","NIFTYIT":"Nifty IT","NIFTYFMCG":"Nifty FMCG",
     "NIFTYPHARMA":"Nifty Pharma","NIFTYHEALTHCARE":"Nifty Healthcare","NIFTYAUTO":"Nifty Auto",
     "NIFTYMETAL":"Nifty Metal","NIFTYREALTY":"Nifty Realty","NIFTYMEDIA":"Nifty Media",
@@ -3138,7 +3181,7 @@ async def get_top_deliveries(
     sort: str = Query("delivPct"),
     minDelivPct: float = Query(0.0, ge=0.0, le=100.0),
     search: str = Query(""),
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(200, ge=1, le=2000),
 ):
     nse_task   = asyncio.create_task(_fetch_nse_bhavdata())
     scanx_task = asyncio.create_task(_fetch_scanx_top_deliveries())

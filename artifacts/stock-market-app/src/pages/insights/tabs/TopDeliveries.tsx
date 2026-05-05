@@ -65,24 +65,34 @@ interface TopDeliveriesResponse {
 }
 
 const INDEX_OPTIONS = [
-  { value: "NIFTY50",         label: "Nifty 50" },
-  { value: "NIFTYNEXT50",     label: "Nifty Next 50" },
-  { value: "NIFTY100",        label: "Nifty 100" },
-  { value: "NIFTY200",        label: "Nifty 200" },
-  { value: "NIFTY500",        label: "Nifty 500" },
-  { value: "NIFTYBANK",       label: "Nifty Bank" },
-  { value: "NIFTYIT",         label: "Nifty IT" },
-  { value: "NIFTYAUTO",       label: "Nifty Auto" },
-  { value: "NIFTYPHARMA",     label: "Nifty Pharma" },
-  { value: "NIFTYFMCG",       label: "Nifty FMCG" },
-  { value: "NIFTYMETAL",      label: "Nifty Metal" },
-  { value: "NIFTYENERGY",     label: "Nifty Energy" },
-  { value: "NIFTYREALTY",     label: "Nifty Realty" },
-  { value: "NIFTYFINSERVICE", label: "Nifty Fin Services" },
-  { value: "NIFTYMIDCAP100",  label: "Nifty Midcap 100" },
-  { value: "NIFTYMIDCAP150",  label: "Nifty Midcap 150" },
-  { value: "FNO",             label: "F&O Stocks" },
-  { value: "ALL",             label: "All Stocks" },
+  // ── Broad market ──────────────────────────────────────────
+  { value: "NIFTY50",              label: "Nifty 50" },
+  { value: "NIFTYNEXT50",          label: "Nifty Next 50" },
+  { value: "NIFTY100",             label: "Nifty 100" },
+  { value: "NIFTY200",             label: "Nifty 200" },
+  { value: "NIFTY500",             label: "Nifty 500" },
+  // ── Mid-cap ───────────────────────────────────────────────
+  { value: "NIFTYMIDCAP50",        label: "Nifty Midcap 50" },
+  { value: "NIFTYMIDCAP100",       label: "Nifty Midcap 100" },
+  { value: "NIFTYMIDCAP150",       label: "Nifty Midcap 150" },
+  // ── Small-cap ─────────────────────────────────────────────
+  { value: "NIFTYSMALLCAP50",      label: "Nifty Smallcap 50" },
+  { value: "NIFTYSMALLCAP100",     label: "Nifty Smallcap 100" },
+  { value: "NIFTYSMALLCAP250",     label: "Nifty Smallcap 250" },
+  // ── Combined ──────────────────────────────────────────────
+  { value: "NIFTYLARGEMIDCAP250",  label: "Nifty LargeMidcap 250" },
+  { value: "FNO",                  label: "F&O Stocks" },
+  { value: "ALL",                  label: "All Stocks" },
+  // ── Sectoral ──────────────────────────────────────────────
+  { value: "NIFTYBANK",            label: "Nifty Bank" },
+  { value: "NIFTYIT",              label: "Nifty IT" },
+  { value: "NIFTYAUTO",            label: "Nifty Auto" },
+  { value: "NIFTYPHARMA",          label: "Nifty Pharma" },
+  { value: "NIFTYFMCG",            label: "Nifty FMCG" },
+  { value: "NIFTYMETAL",           label: "Nifty Metal" },
+  { value: "NIFTYENERGY",          label: "Nifty Energy" },
+  { value: "NIFTYREALTY",          label: "Nifty Realty" },
+  { value: "NIFTYFINSERVICE",      label: "Nifty Fin Services" },
 ];
 
 const SORT_OPTIONS = [
@@ -145,7 +155,7 @@ export default function TopDeliveries() {
   params.set("sort", sort);
   params.set("minDelivPct", minPct);
   if (search) params.set("search", search);
-  params.set("limit", "200");
+  params.set("limit", "1000");
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<TopDeliveriesResponse>({
     queryKey: ["insights/top-deliveries", indexCode, sort, minPct, search],
