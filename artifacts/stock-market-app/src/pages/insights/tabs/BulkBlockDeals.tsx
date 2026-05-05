@@ -7,6 +7,7 @@ import {
 import {
   Briefcase, Search, X, ArrowUpRight, ArrowDownRight, RefreshCw, TrendingUp, Calendar,
 } from "lucide-react";
+import ChartButton from "@/components/ChartButton";
 
 interface Deal {
   date: string;
@@ -234,8 +235,11 @@ function HighlightCard({ deal }: { deal: Deal }) {
         <StockLogo logo={deal.logo} symbol={deal.symbol} size={36}/>
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-1">
-            <div className="text-sm font-semibold text-gray-900 dark:text-white truncate" title={deal.company}>
-              {deal.company}
+            <div className="flex items-center gap-1 min-w-0">
+              <span className="text-sm font-semibold text-gray-900 dark:text-white truncate" title={deal.company}>
+                {deal.company}
+              </span>
+              {deal.symbol && <ChartButton symbol={deal.symbol} />}
             </div>
             <SideBadge side={deal.side}/>
           </div>
@@ -274,6 +278,7 @@ function DealRow({ deal }: { deal: Deal }) {
             {deal.company}
           </span>
           <DealTypePill type={deal.dealType}/>
+          {deal.symbol && <ChartButton symbol={deal.symbol} />}
         </div>
         <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
           {deal.symbol} · {deal.exchange}
