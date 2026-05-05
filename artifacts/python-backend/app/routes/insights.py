@@ -1772,6 +1772,18 @@ def _compute_risk(nav_series: list[tuple[str, float]],
     return res
 
 
+def _sanitize_floats(obj):
+    """Recursively replace NaN / ±Inf with None so json.dumps never crashes."""
+    import math
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_floats(v) for v in obj]
+    return obj
+
+
 def _downsample(series: list[dict], target: int = 240) -> list[dict]:
     if len(series) <= target:
         return series
@@ -2086,6 +2098,7 @@ async def get_mf_scheme(code: str):
         "holdings": holdings,  # {months, categories: [{name, rows: [...]}]}
         "holdingsSource": "scanx" if (holdings.get("categories")) else None,
     }
+    res = _sanitize_floats(res)
     _cache_set(cache_key, res)
     return res
 
