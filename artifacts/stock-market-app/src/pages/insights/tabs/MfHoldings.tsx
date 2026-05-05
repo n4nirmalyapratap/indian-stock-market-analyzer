@@ -9,6 +9,7 @@ import {
   PieChart, ChevronDown, ExternalLink, RefreshCw,
   ArrowUpRight, ArrowDownRight, Sparkles, Building2, Search, Layers, X,
 } from "lucide-react";
+import ChartButton from "@/components/ChartButton";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend,
@@ -574,7 +575,10 @@ function HoldingsPanel({ holdings, amcLogo }: { holdings: Holdings; amcLogo?: st
                     <div className="flex items-center gap-2 min-w-0">
                       <StockLogo logo={r.logo} symbol={r.symbol}/>
                       <div className="min-w-0">
-                        <div className="font-medium text-gray-900 dark:text-white truncate max-w-[200px]" title={r.name}>{r.name || r.symbol}</div>
+                        <div className="flex items-center gap-1 min-w-0">
+                          <span className="font-medium text-gray-900 dark:text-white truncate max-w-[180px]" title={r.name}>{r.name || r.symbol}</span>
+                          {r.symbol && <ChartButton symbol={r.symbol} />}
+                        </div>
                         <div className="text-[10px] text-gray-500 dark:text-gray-400">{r.symbol || r.isin}</div>
                       </div>
                     </div>

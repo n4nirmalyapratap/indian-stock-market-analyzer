@@ -5,6 +5,7 @@ import {
   PageHeader, Loading, EmptyState, ErrorState, PillTabs, Card,
 } from "../_shared";
 import { CalendarClock, Search, X } from "lucide-react";
+import ChartButton from "@/components/ChartButton";
 
 const EVENT_TYPE_META: Record<string, { label: string; dot: string }> = {
   dividend:     { label: "Dividend",     dot: "bg-violet-500" },
@@ -142,9 +143,12 @@ export default function CorpEvents() {
                             </span>
                           </td>
                           <td className="px-4 py-3">
-                            <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
-                              {ev.symbol || "—"}
-                            </span>
+                            <div className="flex items-center gap-1">
+                              <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                                {ev.symbol || "—"}
+                              </span>
+                              {ev.symbol && <ChartButton symbol={ev.symbol} />}
+                            </div>
                           </td>
                           <td className="px-4 py-3 max-w-[240px] truncate text-gray-900 dark:text-white">
                             {ev.company || "—"}

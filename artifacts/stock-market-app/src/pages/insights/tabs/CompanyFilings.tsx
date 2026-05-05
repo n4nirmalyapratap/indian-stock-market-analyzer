@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
 import { PageHeader, Card, Loading, EmptyState, MenuDropdown, ErrorState } from "../_shared";
 import { FileText, ExternalLink, RefreshCw } from "lucide-react";
+import ChartButton from "@/components/ChartButton";
 
 type FilingType = "corporate" | "insider" | "shareholding";
 type FilingSource = "all" | "bse" | "nse";
@@ -320,7 +321,10 @@ export default function CompanyFilings() {
                 {filtered.map((e) => (
                   <tr key={e.id} className="border-t border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition">
                     <td className="px-4 py-2.5">
-                      <div className="font-medium text-gray-900 dark:text-white">{e.company || "—"}</div>
+                      <div className="flex items-center gap-1">
+                        <span className="font-medium text-gray-900 dark:text-white">{e.company || "—"}</span>
+                        {e.symbol && <ChartButton symbol={e.symbol} />}
+                      </div>
                       {e.symbol && <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">{e.symbol}</div>}
                     </td>
                     <td className="px-4 py-2.5">

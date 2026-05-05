@@ -9,6 +9,7 @@ import {
   TrendingUp, Package, Sparkles, IndianRupee, Layers,
   ListFilter, Check, Trophy, CalendarCheck,
 } from "lucide-react";
+import ChartButton from "@/components/ChartButton";
 
 interface DeliveryItem {
   symbol: string;
@@ -544,8 +545,11 @@ function HighlightCard({ item, rank }: { item: DeliveryItem; rank: number }) {
           </span>
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold text-gray-900 dark:text-white truncate" title={item.name}>
-            {item.name}
+          <div className="flex items-center gap-1 min-w-0">
+            <span className="text-sm font-semibold text-gray-900 dark:text-white truncate" title={item.name}>
+              {item.name}
+            </span>
+            <ChartButton symbol={item.symbol} />
           </div>
           <div className="text-[10px] text-gray-500 dark:text-gray-400 truncate">
             {item.symbol}{item.sector ? ` · ${item.sector}` : ""}
@@ -585,7 +589,10 @@ function DeliveryRow({ item }: { item: DeliveryItem }) {
       <StockLogo logo={item.logo} symbol={item.symbol} size={36}/>
 
       <div className="min-w-0">
-        <div className="text-sm font-semibold text-gray-900 dark:text-white truncate" title={item.name}>{item.name}</div>
+        <div className="flex items-center gap-1 min-w-0">
+          <span className="text-sm font-semibold text-gray-900 dark:text-white truncate" title={item.name}>{item.name}</span>
+          <ChartButton symbol={item.symbol} />
+        </div>
         <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
           {item.symbol} · {item.exchange}
           {item.sector && <span className="hidden lg:inline"> · {item.sector}</span>}
