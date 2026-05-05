@@ -654,7 +654,7 @@ async def run_backtest(
     start_date: str,
     end_date: str,
     lots: int = 1,
-    lot_size: int = 75,
+    lot_size: int = 65,
     entry_dte: int = 30,
     roll_dte: int   = 0,
     otm_pct: float  = 0.05,
