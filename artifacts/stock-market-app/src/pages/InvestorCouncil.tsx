@@ -373,7 +373,7 @@ export default function InvestorCouncil() {
     <div className="space-y-6 max-w-7xl mx-auto">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
-          {cameFromLink.current && (
+          {cameFromLink.current ? (
             <button
               onClick={() => window.history.back()}
               title="Go back"
@@ -382,13 +382,14 @@ export default function InvestorCouncil() {
               <ArrowLeft className="w-4 h-4" />
               Back
             </button>
+          ) : (
+            <button
+              onClick={() => navigate("/agents")}
+              className="text-xs text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-1"
+            >
+              <ArrowLeft className="w-3 h-3" /> Different stock
+            </button>
           )}
-          <button
-            onClick={() => navigate("/agents")}
-            className="text-xs text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-1"
-          >
-            <ArrowLeft className="w-3 h-3" /> Different stock
-          </button>
         </div>
         <button
           onClick={() => navigate(`/stocks?symbol=${encodeURIComponent(symbol)}`)}

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useSearch, Link } from "wouter";
+import { useSearch, useLocation, Link } from "wouter";
 import { api } from "@/lib/api";
 import { Search, TrendingUp, TrendingDown, AlertCircle, BarChart2, Activity, Users, ArrowLeft } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
@@ -14,12 +14,13 @@ const NIFTY100_QUICK = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNIL
 
 export default function StockLookup() {
   const search = useSearch();
+  const [, navigate] = useLocation();
   const [input, setInput] = useState("");
   const [symbol, setSymbol] = useState("");
   const [view, setView] = useState<"technicals" | "financials">("technicals");
   const cameFromLink = useRef(!!new URLSearchParams(window.location.search).get("symbol"));
 
-  // Auto-search when ?symbol=XYZ is present in the URL (e.g. from Heatmap click)
+  // Auto-search when ?symbol=XYZ is present in the URL (e.g. from Heatmap click or back-nav)
   useEffect(() => {
     const params = new URLSearchParams(search);
     const sym = (params.get("symbol") || "").toUpperCase().trim();
@@ -36,11 +37,11 @@ export default function StockLookup() {
     enabled: !!symbol,
   });
 
+  // Push symbol into the URL so back-navigation always restores the looked-up stock
   function handleSearch(sym?: string) {
     const s = (sym || input).toUpperCase().trim();
     if (s) {
-      setSymbol(s);
-      setView("technicals");
+      navigate(`/stocks?symbol=${encodeURIComponent(s)}`, { replace: false });
     }
   }
 
