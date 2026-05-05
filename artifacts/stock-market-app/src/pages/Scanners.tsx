@@ -285,9 +285,10 @@ function ScannerCard({ scanner, isRunning, isSelected, onRun, onEdit, onDuplicat
 
           {/* Universe badges */}
           <div className="flex gap-1 mt-1.5 flex-wrap">
-            {scanner.universe?.map((u: string) => (
-              <span key={u} className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-md">{u}</span>
-            ))}
+            {scanner.universe?.map((u: string) => {
+              const LABELS: Record<string, string> = { NIFTY100: "Large Cap", MIDCAP: "Mid Cap", SMALLCAP: "Small Cap", MICROCAP: "Micro Cap", ALL: "All" };
+              return <span key={u} className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-md">{LABELS[u] ?? u}</span>;
+            })}
             <span className="text-xs text-gray-400">{scanner.conditions?.length} condition{scanner.conditions?.length !== 1 ? "s" : ""}</span>
           </div>
 
@@ -523,8 +524,13 @@ export default function Scanners() {
                 <div className="flex flex-wrap gap-6">
                   <div>
                     <p className="text-xs font-semibold text-gray-600 mb-2">Stock Universe *</p>
-                    <div className="flex gap-2">
-                      {["NIFTY100", "MIDCAP", "SMALLCAP"].map(u => {
+                    <div className="flex gap-2 flex-wrap">
+                      {([
+                        { key: "NIFTY100", label: "Large Cap" },
+                        { key: "MIDCAP",   label: "Mid Cap"   },
+                        { key: "SMALLCAP", label: "Small Cap" },
+                        { key: "MICROCAP", label: "Micro Cap" },
+                      ] as const).map(({ key: u, label }) => {
                         const active = draft.universe.includes(u);
                         return (
                           <button key={u} onClick={() => setDraft(d => ({
@@ -536,7 +542,7 @@ export default function Scanners() {
                                 ? "bg-indigo-600 text-white border-indigo-600"
                                 : "bg-white text-gray-600 border-gray-200 hover:border-indigo-300"
                             }`}
-                          >{u}</button>
+                          >{label}</button>
                         );
                       })}
                     </div>
