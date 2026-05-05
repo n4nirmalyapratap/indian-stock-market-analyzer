@@ -937,7 +937,7 @@ function SmartBuilderTab({
   async function useStrategy(rec: SuggestedStrategy) {
     let info = spotInfo;
     if (!info) info = await doFetchSpot();
-    const ls = info?.lot_size ?? 75;
+    const ls = info?.lot_size ?? 65;
     const iv = info?.hv30     ?? 0.20;
     const newLegs: Leg[] = rec.legs.map(l => ({
       id: crypto.randomUUID(), action: l.action, option_type: l.option_type,
