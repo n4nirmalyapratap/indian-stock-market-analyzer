@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
 import { api } from "@/lib/api";
@@ -349,6 +349,7 @@ export default function InvestorCouncil() {
   const [, params]  = useRoute("/agents/:symbol");
   const [, navigate] = useLocation();
   const symbol = params?.symbol?.toUpperCase() || "";
+  const cameFromLink = useRef(document.referrer !== "" || window.history.length > 1);
 
   const [openPersona, setOpenPersona] = useState<string | null>(null);
   const [view, setView] = useState<"cards" | "matrix">("cards");
@@ -371,12 +372,24 @@ export default function InvestorCouncil() {
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <button
-          onClick={() => navigate("/agents")}
-          className="text-xs text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-1"
-        >
-          <ArrowLeft className="w-3 h-3" /> Different stock
-        </button>
+        <div className="flex items-center gap-3">
+          {cameFromLink.current && (
+            <button
+              onClick={() => window.history.back()}
+              title="Go back"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-white transition-colors flex-shrink-0"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Back
+            </button>
+          )}
+          <button
+            onClick={() => navigate("/agents")}
+            className="text-xs text-gray-500 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-1"
+          >
+            <ArrowLeft className="w-3 h-3" /> Different stock
+          </button>
+        </div>
         <button
           onClick={() => navigate(`/stocks?symbol=${encodeURIComponent(symbol)}`)}
           className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
