@@ -212,6 +212,63 @@ _NIFTY500_FULL = list(dict.fromkeys(_LARGECAP_100 + _MIDCAP_150 + _SMALLCAP_250)
 # Nifty 200 = Large 100 + top ~100 Midcap (alphabetical proxy)
 _NIFTY200_FULL = list(dict.fromkeys(_LARGECAP_100 + _MIDCAP_150[:100]))
 
+
+# ── Comprehensive stock → sector reverse lookup ───────────────────────────────
+# Built at import time from universe.py SECTOR_SYMBOLS (which itself merges
+# the live universe_cache sectoral data at import). Used as a fallback when
+# scanx.trade doesn't have sector info for a symbol (very common for smallcaps).
+_SECTOR_NAME_CLEAN: dict[str, str] = {
+    "NIFTY IT":                 "Information Technology",
+    "NIFTY BANK":               "Banking",
+    "NIFTY PSU BANK":           "PSU Banks",
+    "NIFTY AUTO":               "Automobiles",
+    "NIFTY PHARMA":             "Pharmaceuticals",
+    "NIFTY FMCG":               "FMCG",
+    "NIFTY METAL":              "Metals & Mining",
+    "NIFTY REALTY":             "Real Estate",
+    "NIFTY ENERGY":             "Energy",
+    "NIFTY MEDIA":              "Media & Entertainment",
+    "NIFTY FINANCIAL SERVICES": "Financial Services",
+    "NIFTY CONSUMER DURABLES":  "Consumer Durables",
+    "NIFTY OIL AND GAS":        "Oil & Gas",
+    "NIFTY OIL & GAS":          "Oil & Gas",
+    "NIFTY HEALTHCARE INDEX":   "Healthcare",
+    "NIFTY HEALTHCARE":         "Healthcare",
+    "NIFTY INFRASTRUCTURE":     "Infrastructure",
+    "NIFTY CHEMICALS":          "Chemicals",
+    "NIFTY CEMENT":             "Cement",
+    "NIFTY DEFENCE":            "Defence",
+}
+# Broad market / cap-tier indices — NOT sector labels, skip them
+_SECTOR_SKIP = {
+    "NIFTY 50", "NIFTY 100", "NIFTY 200", "NIFTY 500",
+    "NIFTY MIDCAP 50", "NIFTY MIDCAP 100", "NIFTY MIDCAP 150", "NIFTY MIDCAP SELECT",
+    "NIFTY SMALLCAP 50", "NIFTY SMALLCAP 100", "NIFTY SMALLCAP 250",
+    "NIFTY MICROCAP 250", "NIFTY LARGEMIDCAP 250",
+}
+
+def _build_stock_sector_map() -> dict[str, str]:
+    """Return {bare_symbol: display_sector} for every stock we can classify."""
+    try:
+        from ..lib.universe import SECTOR_SYMBOLS as _SS
+    except Exception:
+        return {}
+    out: dict[str, str] = {}
+    for index_name, syms in _SS.items():
+        if index_name in _SECTOR_SKIP:
+            continue
+        sector = _SECTOR_NAME_CLEAN.get(index_name)
+        if not sector:
+            continue
+        for sym in syms:
+            bare = sym.replace(".NS", "").replace(".BO", "")
+            if bare not in out:  # first-assigned wins
+                out[bare] = sector
+    return out
+
+_STOCK_SECTOR_MAP: dict[str, str] = _build_stock_sector_map()
+logger.info("sector map: %d stocks classified across sectors", len(_STOCK_SECTOR_MAP))
+
 # ── World indices ─────────────────────────────────────────────────────────────
 
 # United States (no exchange suffix — Yahoo Finance uses bare tickers)
@@ -3201,6 +3258,11 @@ async def get_top_deliveries(
                 if sx.get("sector"): r["sector"] = sx["sector"]
                 if sx.get("name") and sx["name"] != r["symbol"]:
                     r["name"] = sx["name"]
+        # Fallback sector from our comprehensive symbol→sector map for anything
+        # scanx didn't cover (common for mid/small/micro-cap stocks).
+        for r in primary_rows:
+            if not r.get("sector"):
+                r["sector"] = _STOCK_SECTOR_MAP.get(r["symbol"])
         if scanx_rows:
             sources.append("scanx.trade")
     else:
