@@ -1304,7 +1304,7 @@ export default function OptionsStrategyTester() {
   // ── Add leg ─────────────────────────────────────────────────────────────────
   function addLeg(partial?: Partial<Leg>) {
     const atm  = spotInfo?.atm  ?? 0;
-    const ls   = spotInfo?.lot_size ?? 75;
+    const ls   = spotInfo?.lot_size ?? 65;
     const hv   = spotInfo?.hv30 ?? 0.20;
     const newLeg: Leg = {
       id:          crypto.randomUUID(),
@@ -1472,7 +1472,7 @@ export default function OptionsStrategyTester() {
       {/* Symbol bar */}
       {(() => {
         const INDICES = [
-          { sym: "NIFTY",      label: "NIFTY 50",     lot: 75, exch: "NSE" },
+          { sym: "NIFTY",      label: "NIFTY 50",     lot: 65, exch: "NSE" },
           { sym: "BANKNIFTY",  label: "BANK NIFTY",   lot: 30, exch: "NSE" },
           { sym: "FINNIFTY",   label: "FIN NIFTY",    lot: 65,  exch: "NSE" },
           { sym: "MIDCPNIFTY", label: "MIDCAP NIFTY", lot: 120, exch: "NSE" },
@@ -1501,9 +1501,10 @@ export default function OptionsStrategyTester() {
             {/* Segmented control */}
             <div className="bg-gray-50 border-b border-gray-100 p-2">
               <div className="bg-gray-100 rounded-xl p-1 flex gap-0.5">
-                {INDICES.map(({ sym, label, lot, exch }) => {
+                {INDICES.map(({ sym, label, lot: staticLot, exch }) => {
                   const active = symbol === sym;
                   const fetching = active && loadingSpot;
+                  const lot = active && spotInfo ? spotInfo.lot_size : staticLot;
                   return (
                     <button
                       key={sym}
