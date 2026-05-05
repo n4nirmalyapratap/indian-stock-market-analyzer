@@ -39,10 +39,13 @@ class LotSizeRule:
 # Symbols are stored in their canonical (upper) form.  Index aliases (^NSEI etc.)
 # are resolved through SYMBOL_ALIASES below before lookup.
 LOT_SIZE_RULES: list[LotSizeRule] = [
-    # NIFTY 50 — current 75 (revised from 50, then 25, then 75 over the years)
-    LotSizeRule("NIFTY",      75, date(2023,  4, 28), None,
+    # NIFTY 50 — revised to 65 for Jan 2026 series (NSE quarterly lot revision)
+    LotSizeRule("NIFTY",      65, date(2026,  1,  1), None,
+                "NSE/FAOP/64012 (2025-11)",
+                "Lot reduced 75→65 to keep notional value in SEBI Rs 15-20 lakh band"),
+    LotSizeRule("NIFTY",      75, date(2023,  4, 28), date(2026,  1,  1),
                 "NSE/FAOP/56321 (2023-04)",
-                "Quarterly lot revision under SEBI master circular"),
+                "Pre-Jan-2026 lot size"),
     LotSizeRule("BANKNIFTY",  30, date(2024, 11, 25), None,
                 "NSE/FAOP/63112 (2024-10)",
                 "Lot revision aligned with notional value Rs 15-20 lakh"),

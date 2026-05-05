@@ -37,11 +37,12 @@ def get_default_risk_free_rate() -> float:
     RISK_FREE_RATE = _rfr_cached()
     return RISK_FREE_RATE
 
-# NSE lot sizes (current as of 2024-25)
+# NSE lot sizes — fallback only; sebi_registry is the live source of truth.
+# Updated to Jan 2026 revision: NIFTY 75→65 (NSE/FAOP/64012, 2025-11).
 LOT_SIZES: dict[str, int] = {
-    "NIFTY":       75,
-    "NIFTY50":     75,
-    "^NSEI":       75,
+    "NIFTY":       65,
+    "NIFTY50":     65,
+    "^NSEI":       65,
     "BANKNIFTY":   30,
     "^NSEBANK":    30,
     "FINNIFTY":    65,   # SEBI/HO/MRD/MRD-PoD-2/P/CIR/2024/113 — effective Nov 2024
