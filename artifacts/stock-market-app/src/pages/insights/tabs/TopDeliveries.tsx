@@ -141,12 +141,23 @@ function fmtDate(iso: string | null): string {
 
 /* ─────────────────────────── component ──────────────────────────── */
 
+const SS_KEY = "topDeliveries_filters";
+function loadFilters() {
+  try { return JSON.parse(sessionStorage.getItem(SS_KEY) || "{}"); } catch { return {}; }
+}
+
 export default function TopDeliveries() {
-  const [indexCode, setIndexCode]   = useState("NIFTY50");
-  const [sort, setSort]             = useState("delivPct");
-  const [minPct, setMinPct]         = useState("0");
-  const [search, setSearch]         = useState("");
-  const [sectorFilter, setSectorFilter] = useState<string | null>(null);
+  const _saved = loadFilters();
+  const [indexCode, setIndexCode]   = useState(_saved.indexCode ?? "NIFTY50");
+  const [sort, setSort]             = useState(_saved.sort ?? "delivPct");
+  const [minPct, setMinPct]         = useState(_saved.minPct ?? "0");
+  const [search, setSearch]         = useState(_saved.search ?? "");
+  const [sectorFilter, setSectorFilter] = useState<string | null>(_saved.sectorFilter ?? null);
+
+  // Persist filters to sessionStorage whenever they change
+  useEffect(() => {
+    sessionStorage.setItem(SS_KEY, JSON.stringify({ indexCode, sort, minPct, search, sectorFilter }));
+  }, [indexCode, sort, minPct, search, sectorFilter]);
 
   // Reset sector filter whenever the underlying universe changes.
   const onIndexChange = (v: string) => { setSectorFilter(null); setIndexCode(v); };
