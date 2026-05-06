@@ -66,6 +66,7 @@ export default function ChartButton({ symbol, className = "", hideLookup = false
           type="button"
           onClick={(e) => {
             e.stopPropagation();
+            sessionStorage.setItem("_stockLookupRef", "1");
             navigate(`/stocks?symbol=${encodeURIComponent(clean)}`);
           }}
           title={`Look up ${clean}`}

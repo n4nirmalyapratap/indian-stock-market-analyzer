@@ -18,7 +18,13 @@ export default function StockLookup() {
   const [input, setInput] = useState("");
   const [symbol, setSymbol] = useState("");
   const [view, setView] = useState<"technicals" | "financials">("technicals");
-  const cameFromLink = useRef(!!new URLSearchParams(window.location.search).get("symbol"));
+  // True only when ChartButton explicitly set the flag — cleared immediately so
+  // coming back from Investor Council (or any other back-nav) never re-shows it.
+  const cameFromLink = useRef((() => {
+    const v = sessionStorage.getItem("_stockLookupRef") === "1";
+    sessionStorage.removeItem("_stockLookupRef");
+    return v;
+  })());
 
   // Auto-search when ?symbol=XYZ is present in the URL (e.g. from Heatmap click or back-nav)
   useEffect(() => {
