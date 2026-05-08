@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.middleware.clerk_auth import ClerkAuthMiddleware
+from app.middleware.clerk_auth import AppAuthMiddleware
 from app.routes.health import router as health_router
 from app.routes.sectors import router as sectors_router
 from app.routes.stocks import router as stocks_router
@@ -33,6 +33,7 @@ from app.routes.insights import router as insights_router
 from app.routes.agents import router as agents_router
 from app.routes.portfolio import router as portfolio_router
 from app.routes.ai_analyst import router as ai_analyst_router
+from app.lib.auth_store import ensure_primary_schema
 from app.services.log_buffer import setup_ring_buffer
 from app.services.market_cache_service import is_market_open, cache_status
 from app.services import market_cache_service as _mcs
@@ -217,6 +218,8 @@ def _verify_critical_dependencies() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    ensure_primary_schema()
+
     # Verify all critical data-source packages are importable. Loud failure
     # beats silent fallback — see _verify_critical_dependencies for the why.
     _verify_critical_dependencies()
@@ -427,7 +430,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(ClerkAuthMiddleware)
+app.add_middleware(AppAuthMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

@@ -174,6 +174,9 @@ function AdminApp() {
   const [token, setToken] = useState<string | null>(() => getAdminToken());
 
   const handleSignOut = useCallback(() => {
+    try {
+      (window as any).google?.accounts?.id?.disableAutoSelect?.();
+    } catch {}
     clearAdminToken();
     setToken(null);
     queryClient.clear();

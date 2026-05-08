@@ -42,7 +42,11 @@ export type AppUser = {
   id: string;
   email: string;
   name: string;
+  picture_url?: string;
+  auth_provider?: string;
+  is_admin?: boolean;
   created_at: number;
+  last_login_at?: number;
 };
 
 export type LogRecord = {
@@ -52,12 +56,33 @@ export type LogRecord = {
   msg: string;
 };
 
+export type WhatsAppCommand = {
+  name: string;
+  summary?: string;
+  category?: string;
+  invocations?: number;
+};
+
+export type WhatsAppStatus = {
+  status: string;
+  enabled: boolean;
+  qrCode: string | null;
+  sessionActive: boolean;
+  lastActive: string | null;
+  totalMessages: number;
+  capabilities: string[];
+  commands: string[];
+  totalCommands?: number;
+  invocationCounts?: Record<string, number>;
+  commandRegistry?: WhatsAppCommand[];
+};
+
 export const api = {
-  login: (username: string, password: string) =>
-    fetchAdmin<{ token: string; expires_in: number }>("/admin/login", {
+  googleLogin: (credential: string) =>
+    fetchAdmin<{ token: string; expires_in: number }>("/admin/google-login", {
       method: "POST",
       headers: J,
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ credential }),
     }),
 
   health: () =>
@@ -73,19 +98,8 @@ export const api = {
       whatsapp_configured: boolean;
     }>("/admin/status"),
 
-  // Custom auth (email+password) users
   adminAppUsers: () =>
     fetchAdmin<{ users: AppUser[]; total: number }>("/admin/users/app"),
-
-  adminCreateUser: (email: string, password: string, name: string) =>
-    fetchAdmin<{ id: string; email: string; name: string }>("/admin/users/create", {
-      method: "POST",
-      headers: J,
-      body: JSON.stringify({ email, password, name }),
-    }),
-
-  adminDeleteAppUser: (userId: string) =>
-    fetchAdmin<{ deleted: string }>(`/admin/users/app/${userId}`, { method: "DELETE" }),
 
   // Structured logs from in-memory ring buffer
   adminLogs: (lines = 200, level = "", search = "") => {
@@ -99,16 +113,7 @@ export const api = {
   },
 
   whatsappStatus: () =>
-    fetchAdmin<{
-      status: string;
-      enabled: boolean;
-      qrCode: string | null;
-      sessionActive: boolean;
-      lastActive: string | null;
-      totalMessages: number;
-      capabilities: string[];
-      commands: string[];
-    }>("/whatsapp/status"),
+    fetchAdmin<WhatsAppStatus>("/whatsapp/status"),
 
   whatsappMessages: () =>
     fetchAdmin<Array<{ from: string; text: string; timestamp: string; response: string }>>("/whatsapp/messages"),

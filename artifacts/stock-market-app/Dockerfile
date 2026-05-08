@@ -19,6 +19,8 @@ WORKDIR /workspace
 
 RUN npm install -g pnpm
 
+ARG VITE_GOOGLE_CLIENT_ID=""
+
 # Workspace manifests — cached as long as these don't change
 COPY package.json pnpm-workspace.yaml ./
 COPY tsconfig.json tsconfig.base.json ./
@@ -28,7 +30,7 @@ COPY artifacts/stock-market-app/ ./artifacts/stock-market-app/
 
 RUN pnpm install --no-frozen-lockfile
 
-ENV PORT=3000 BASE_PATH=/ NODE_ENV=production
+ENV PORT=3000 BASE_PATH=/ NODE_ENV=production VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID}
 
 RUN pnpm --filter @workspace/stock-market-app run build
 
@@ -40,6 +42,8 @@ WORKDIR /workspace
 
 RUN npm install -g pnpm
 
+ARG VITE_GOOGLE_CLIENT_ID=""
+
 COPY package.json pnpm-workspace.yaml ./
 COPY tsconfig.json tsconfig.base.json ./
 
@@ -48,7 +52,7 @@ COPY artifacts/admin-dashboard/ ./artifacts/admin-dashboard/
 
 RUN pnpm install --no-frozen-lockfile
 
-ENV PORT=3001 BASE_PATH=/admin NODE_ENV=production
+ENV PORT=3001 BASE_PATH=/admin NODE_ENV=production VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID}
 
 RUN pnpm --filter @workspace/admin-dashboard run build
 
