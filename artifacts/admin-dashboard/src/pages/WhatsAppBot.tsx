@@ -88,7 +88,7 @@ export default function WhatsAppBot({ embedded = false }: { embedded?: boolean }
         </div>
       )}
 
-      {status?.commandRegistry?.length > 0 && (
+      {!!status?.commandRegistry?.length && (
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
           <div className="flex items-center justify-between mb-3">
             <p className="text-sm font-semibold text-gray-700">Bot Command Reference</p>
@@ -99,7 +99,7 @@ export default function WhatsAppBot({ embedded = false }: { embedded?: boolean }
           </div>
           <div className="space-y-3">
             {Object.entries(
-              (status.commandRegistry as any[]).reduce((acc: any, c: any) => {
+              ((status?.commandRegistry ?? []) as any[]).reduce((acc: any, c: any) => {
                 (acc[c.category] = acc[c.category] || []).push(c);
                 return acc;
               }, {}),

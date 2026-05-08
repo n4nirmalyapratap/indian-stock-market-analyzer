@@ -25,7 +25,7 @@ def _check_admin_token(token: str) -> bool:
         return False
 
 
-class ClerkAuthMiddleware(BaseHTTPMiddleware):
+class AppAuthMiddleware(BaseHTTPMiddleware):
     SKIP_PATHS = {"/api/healthz"}
 
     async def dispatch(self, request: Request, call_next):
@@ -71,9 +71,15 @@ class ClerkAuthMiddleware(BaseHTTPMiddleware):
         custom_payload = _verify_custom_token(token)
         if custom_payload:
             request.state.user_id = custom_payload.get("sub", "custom")
+            request.state.user_email = custom_payload.get("email")
+            request.state.is_admin = bool(custom_payload.get("is_admin"))
             return await call_next(request)
 
         return JSONResponse(
             status_code=401,
             content={"error": "Invalid or expired session. Please sign in again."},
         )
+
+
+# Backward-compatible export to avoid touching every import/test at once.
+ClerkAuthMiddleware = AppAuthMiddleware

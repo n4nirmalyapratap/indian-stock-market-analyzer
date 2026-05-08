@@ -414,8 +414,8 @@ function PivotTable({ pivots, isFetching }: { pivots: TSummary["pivots"]; isFetc
   const [active, setActive] = useState<PivotType>("classic");
   const data = pivots[active];
   const levels = "r3" in data
-    ? (["R3","R2","R1","P","S1","S2","S3"] as string[]).map(l => ({ label: l, val: (data as Record<string,number>)[l.toLowerCase()] }))
-    : (["R1","P","S1"] as string[]).map(l => ({ label: l, val: (data as Record<string,number>)[l.toLowerCase()] }));
+    ? (["R3","R2","R1","P","S1","S2","S3"] as string[]).map(l => ({ label: l, val: (data as unknown as Record<string, number>)[l.toLowerCase()] }))
+    : (["R1","P","S1"] as string[]).map(l => ({ label: l, val: (data as unknown as Record<string, number>)[l.toLowerCase()] }));
 
   return (
     <div className="relative overflow-hidden rounded-xl"
