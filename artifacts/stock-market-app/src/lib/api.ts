@@ -281,7 +281,10 @@ export interface ConsensusScreenerResponse {
   thresholdPct:   number;
   thresholdCount: number;
   totalScreened:  number;
-  cachedAt:       string;
+  universeSize:   number;
+  cachedAt:       string | null;
+  scanInProgress: boolean;
+  scanProgress:   { done: number; total: number } | null;
 }
 
 // ── Macro Pulse (India macro indicators) ─────────────────────────────────────
@@ -575,8 +578,10 @@ export const api = {
   agentsList: () =>
     fetchApi<AgentsListResponse>("/agents"),
 
-  agentConsensusScreener: () =>
-    fetchApi<ConsensusScreenerResponse>("/agents/screener/consensus"),
+  agentConsensusScreener: (refresh = false) =>
+    fetchApi<ConsensusScreenerResponse>(
+      `/agents/screener/consensus${refresh ? "?refresh=1" : ""}`
+    ),
 
   agentCouncil: (symbol: string) =>
     fetchApi<CouncilResponse>(`/agents/${encodeURIComponent(symbol)}`),

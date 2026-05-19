@@ -11,7 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
+import threading
 import time
+from datetime import datetime, timezone
+from pathlib import Path
+
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
@@ -20,6 +25,7 @@ from ..services.stocks_service import StocksService
 from ..services.nse_service import NseService
 from ..services.yahoo_service import YahooService
 from ..lib.symbol_map import yahoo_candidates
+from ..lib.universe import NIFTY100, MIDCAP, SMALLCAP
 
 logger = logging.getLogger(__name__)
 
@@ -102,19 +108,95 @@ async def list_agents():
             "count":    len(agents_service.PERSONAS)}
 
 
-# ── Consensus screener (registered BEFORE /{symbol} to avoid routing conflict) ─
+# ── Consensus screener (SQLite-backed, background scan) ──────────────────────
+#
+# Architecture:
+#   * Universe spans large + mid + top small-cap (~350 symbols) from
+#     app/lib/universe.py. Scanning all 2 449 NSE listings would take 15+ min
+#     of yfinance round-trips, so we cap intelligently to keep scans under 2 min.
+#   * Results persist in market_cache/agents_screener.db (WAL SQLite) so they
+#     survive backend restarts and only one full scan happens per 24 h.
+#   * GET returns cached rows IMMEDIATELY and kicks off a background scan if
+#     the cache is empty or stale. The response includes a progress block so the
+#     UI can poll and show a live "scanning 120/350" indicator.
 
-_SCREENER_UNIVERSE = [
-    "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","ITC","SBIN","BAJFINANCE",
-    "HINDUNILVR","MARUTI","WIPRO","ASIANPAINT","LT","SUNPHARMA","TITAN",
-    "KOTAKBANK","AXISBANK","NESTLEIND","ULTRACEMCO","TATAMOTORS","TATASTEEL",
-    "ONGC","POWERGRID","NTPC","COALINDIA","JSWSTEEL","TECHM","HCLTECH",
-    "ADANIENT","DRREDDY",
-]
-_SCREENER_THRESHOLD = 14          # out of 16 personas — 87.5%
-_SCREENER_TTL_S     = 4 * 3600   # cache for 4 hours
+_SCREENER_UNIVERSE: list[str] = list(dict.fromkeys(
+    [s for s in (NIFTY100 + MIDCAP + SMALLCAP[:100]) if s and isinstance(s, str)]
+))
+_SCREENER_THRESHOLD   = 14          # of 16 personas — 87.5%
+_SCREENER_TTL_S       = 24 * 3600   # full re-scan once per day
+_SCREENER_CONCURRENCY = 8           # parallel yfinance requests (rate-limit safe)
+_SCREENER_DB          = Path(__file__).parent.parent.parent / "market_cache" / "agents_screener.db"
 
-_screener_cache: dict = {}        # {"result": {...}, "ts": float}
+_SCAN_LOCK  = threading.Lock()
+_SCAN_STATE = {"in_progress": False, "done": 0, "total": 0, "started_at": 0.0}
+
+
+def _db_conn() -> sqlite3.Connection:
+    _SCREENER_DB.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(_SCREENER_DB, timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
+def _db_init() -> None:
+    with _db_conn() as c:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS picks (
+                symbol           TEXT PRIMARY KEY,
+                name             TEXT,
+                sector           TEXT,
+                last_price       REAL,
+                buy_count        INTEGER NOT NULL DEFAULT 0,
+                avoid_count      INTEGER NOT NULL DEFAULT 0,
+                hold_count       INTEGER NOT NULL DEFAULT 0,
+                avg_score        REAL    NOT NULL DEFAULT 0,
+                council_verdict  TEXT,
+                updated_at       REAL    NOT NULL
+            )
+        """)
+        c.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+
+
+def _db_upsert(row: dict) -> None:
+    with _db_conn() as c:
+        c.execute("""
+            INSERT INTO picks(symbol, name, sector, last_price, buy_count, avoid_count,
+                              hold_count, avg_score, council_verdict, updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(symbol) DO UPDATE SET
+                name=excluded.name, sector=excluded.sector, last_price=excluded.last_price,
+                buy_count=excluded.buy_count, avoid_count=excluded.avoid_count,
+                hold_count=excluded.hold_count, avg_score=excluded.avg_score,
+                council_verdict=excluded.council_verdict, updated_at=excluded.updated_at
+        """, (
+            row["symbol"], row.get("name"), row.get("sector"), row.get("lastPrice"),
+            row["buyCount"], row["avoidCount"], row["holdCount"],
+            row["avgScore"], row["councilVerdict"], time.time(),
+        ))
+
+
+def _db_meta_set(key: str, value: str) -> None:
+    with _db_conn() as c:
+        c.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+
+
+def _db_meta_get(key: str) -> str | None:
+    with _db_conn() as c:
+        cur = c.execute("SELECT value FROM meta WHERE key=?", (key,))
+        r = cur.fetchone()
+        return r["value"] if r else None
+
+
+def _db_read_all() -> list[dict]:
+    with _db_conn() as c:
+        cur = c.execute("SELECT * FROM picks")
+        return [dict(r) for r in cur.fetchall()]
 
 
 async def _run_one(symbol: str) -> dict | None:
@@ -123,7 +205,7 @@ async def _run_one(symbol: str) -> dict | None:
         detail, err = await _load_stock(symbol)
         if err is not None or detail is None:
             return None
-        result = agents_service.run_council(detail)
+        result  = agents_service.run_council(detail)
         council = result.get("council", {})
         return {
             "symbol":         result.get("symbol", symbol),
@@ -133,53 +215,126 @@ async def _run_one(symbol: str) -> dict | None:
             "buyCount":       council.get("buyCount", 0),
             "avoidCount":     council.get("avoidCount", 0),
             "holdCount":      council.get("holdCount", 0),
-            "total":          sum([council.get("buyCount", 0),
-                                   council.get("avoidCount", 0),
-                                   council.get("holdCount", 0)]),
             "avgScore":       round(council.get("avgScore", 0), 4),
             "councilVerdict": council.get("verdict", "HOLD"),
         }
     except Exception as exc:
-        logger.warning("screener: failed for %s: %s", symbol, exc)
+        logger.debug("screener: failed for %s: %s", symbol, exc)
         return None
 
 
+async def _background_scan() -> None:
+    """Iterate the universe with bounded concurrency, upserting rows as they
+    finish so the UI sees results stream in during polling."""
+    logger.info("agents.screener: starting scan of %d symbols (concurrency=%d)",
+                len(_SCREENER_UNIVERSE), _SCREENER_CONCURRENCY)
+    sem = asyncio.Semaphore(_SCREENER_CONCURRENCY)
+
+    async def _worker(sym: str) -> None:
+        async with sem:
+            row = await _run_one(sym)
+            if row:
+                try:
+                    _db_upsert(row)
+                except Exception as exc:
+                    logger.warning("agents.screener: db upsert failed for %s: %s", sym, exc)
+            _SCAN_STATE["done"] += 1
+
+    try:
+        await asyncio.gather(*[_worker(s) for s in _SCREENER_UNIVERSE],
+                             return_exceptions=True)
+        _db_meta_set("last_scan_at", str(time.time()))
+        _db_meta_set("last_scan_universe", str(len(_SCREENER_UNIVERSE)))
+        logger.info("agents.screener: scan complete in %ds",
+                    int(time.time() - _SCAN_STATE["started_at"]))
+    finally:
+        with _SCAN_LOCK:
+            _SCAN_STATE["in_progress"] = False
+
+
+def _maybe_kick_scan(force: bool = False) -> None:
+    """Start a background scan if the cache is stale/empty and no scan is
+    already running. Claims the in-progress flag inside the lock to avoid the
+    race where two simultaneous requests both kick off a scan."""
+    with _SCAN_LOCK:
+        if _SCAN_STATE["in_progress"]:
+            return
+        if not force:
+            last     = _db_meta_get("last_scan_at")
+            last_ts  = float(last) if last else 0.0
+            if last_ts > 0 and (time.time() - last_ts) < _SCREENER_TTL_S:
+                return
+        _SCAN_STATE.update(
+            in_progress=True, done=0,
+            total=len(_SCREENER_UNIVERSE), started_at=time.time(),
+        )
+    try:
+        asyncio.create_task(_background_scan())
+    except RuntimeError as exc:
+        logger.error("agents.screener: cannot start scan: %s", exc)
+        with _SCAN_LOCK:
+            _SCAN_STATE["in_progress"] = False
+
+
+def _row_to_pick(r: dict) -> dict:
+    return {
+        "symbol":         r["symbol"],
+        "name":           r["name"],
+        "sector":         r["sector"],
+        "lastPrice":      r["last_price"],
+        "buyCount":       r["buy_count"],
+        "avoidCount":     r["avoid_count"],
+        "holdCount":      r["hold_count"],
+        "total":          r["buy_count"] + r["avoid_count"] + r["hold_count"],
+        "avgScore":       r["avg_score"],
+        "councilVerdict": r["council_verdict"] or "HOLD",
+    }
+
+
 @router.get("/screener/consensus")
-async def get_consensus_screener():
-    """Screen the Nifty 50 universe for near-unanimous council consensus.
+async def get_consensus_screener(refresh: int = 0):
+    """Screen large + mid + small-cap NSE stocks for near-unanimous council
+    consensus.
 
-    Returns stocks where ≥ 87.5% (14/16) of personas agree on BUY or AVOID.
-    Results are cached for 4 hours — first call may take 5-15 s while yfinance
-    fetches fundamentals; subsequent calls return instantly.
+    Returns whatever is currently cached in SQLite IMMEDIATELY (so the UI never
+    waits more than a few ms), plus a status block telling the client whether a
+    background scan is in progress. Pass ``?refresh=1`` to force a re-scan.
     """
-    cached = _screener_cache.get("result")
-    if cached and (time.time() - _screener_cache.get("ts", 0)) < _SCREENER_TTL_S:
-        return cached
+    _db_init()
+    _maybe_kick_scan(force=bool(refresh))
 
-    tasks = [_run_one(sym) for sym in _SCREENER_UNIVERSE]
-    all_results = await asyncio.gather(*tasks)
-    screened = [r for r in all_results if r is not None]
+    rows = _db_read_all()
 
-    buy_picks   = sorted(
-        [r for r in screened if r["buyCount"]   >= _SCREENER_THRESHOLD],
-        key=lambda r: r["avgScore"], reverse=True,
+    buy_picks = sorted(
+        [_row_to_pick(r) for r in rows if r["buy_count"]   >= _SCREENER_THRESHOLD],
+        key=lambda x: x["avgScore"], reverse=True,
     )
     avoid_picks = sorted(
-        [r for r in screened if r["avoidCount"] >= _SCREENER_THRESHOLD],
-        key=lambda r: r["avgScore"],
+        [_row_to_pick(r) for r in rows if r["avoid_count"] >= _SCREENER_THRESHOLD],
+        key=lambda x: x["avgScore"],
     )
 
-    result = {
+    last = _db_meta_get("last_scan_at")
+    cached_at = (
+        datetime.fromtimestamp(float(last), timezone.utc)
+                .isoformat().replace("+00:00", "Z")
+        if last else None
+    )
+
+    return {
         "buyPicks":       buy_picks,
         "avoidPicks":     avoid_picks,
         "thresholdPct":   round(_SCREENER_THRESHOLD / 16 * 100, 1),
         "thresholdCount": _SCREENER_THRESHOLD,
-        "totalScreened":  len(screened),
-        "cachedAt":       __import__("datetime").datetime.utcnow().isoformat() + "Z",
+        "totalScreened":  len(rows),
+        "universeSize":   len(_SCREENER_UNIVERSE),
+        "cachedAt":       cached_at,
+        "scanInProgress": _SCAN_STATE["in_progress"],
+        "scanProgress":   (
+            {"done": _SCAN_STATE["done"], "total": _SCAN_STATE["total"]}
+            if _SCAN_STATE["in_progress"] else None
+        ),
     }
-    _screener_cache["result"] = result
-    _screener_cache["ts"]     = time.time()
-    return result
 
 
 @router.get("/{symbol}")

@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import {
   ArrowLeft, CheckCircle2, XCircle, MinusCircle, Sparkles,
   TrendingUp, TrendingDown, Loader2, Quote, LayoutGrid, Grid3x3,
-  Users, ShieldAlert, ChevronRight,
+  Users, ShieldAlert, ChevronRight, RefreshCw,
 } from "lucide-react";
 
 // ─── Types — re-exported from shared api types so they stay in sync ──────────
@@ -364,67 +364,126 @@ function ConsensusCard({
   );
 }
 
+function formatRelativeAgo(iso: string | null): string {
+  if (!iso) return "never";
+  const ts = new Date(iso).getTime();
+  if (Number.isNaN(ts)) return "unknown";
+  const mins = Math.floor((Date.now() - ts) / 60000);
+  if (mins < 1)    return "just now";
+  if (mins < 60)   return `${mins} min ago`;
+  if (mins < 1440) return `${Math.floor(mins / 60)} h ago`;
+  return `${Math.floor(mins / 1440)} d ago`;
+}
+
 function ConsensusSpotlight({ onSelect }: { onSelect: (sym: string) => void }) {
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ["agent-consensus-screener"],
     queryFn:  () => api.agentConsensusScreener(),
-    staleTime: 4 * 3600 * 1000,
+    staleTime: 60 * 1000,
+    // Poll every 6 s while the backend is mid-scan so the UI streams in results.
+    refetchInterval: (q) => (q.state.data?.scanInProgress ? 6000 : false),
     retry: 1,
   });
 
-  if (isLoading) {
-    return (
-      <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-white/10 rounded-2xl p-6 flex flex-col items-center gap-3">
-        <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
-        <p className="text-sm text-gray-500 dark:text-gray-400">
-          Screening {30} Nifty stocks across all 16 personas…
-          <span className="block text-xs text-gray-400 dark:text-gray-500 mt-1">First load takes 10–20 s; cached for 4 h after that.</span>
-        </p>
-      </div>
-    );
-  }
-
-  if (error || !data) return null;
-
-  const pct = data.thresholdPct;
+  const pct           = data?.thresholdPct ?? 87.5;
+  const universeSize  = data?.universeSize ?? 350;
+  const scanning      = !!data?.scanInProgress;
+  const progress      = data?.scanProgress;
+  const progressPct   = progress ? Math.round((progress.done / Math.max(progress.total, 1)) * 100) : 0;
+  const hasNoData     = !data || data.totalScreened === 0;
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2">
+      {/* Header / status row */}
+      <div className="flex items-center gap-2 flex-wrap">
         <Users className="w-4 h-4 text-indigo-500" />
         <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300">Council Consensus Spotlight</h2>
         <span className="text-[11px] text-gray-400 dark:text-gray-500">
-          ≥ {pct}% of 16 personas agree · {data.totalScreened} stocks screened
+          ≥ {pct}% of 16 personas agree · large + mid + small cap
         </span>
+
+        <span className="flex-1" />
+
+        {scanning && (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            Scanning {progress?.done ?? 0} / {progress?.total ?? universeSize}
+            <span className="text-indigo-500 dark:text-indigo-400">({progressPct}%)</span>
+          </span>
+        )}
+
+        {data && (
+          <span className="text-[11px] text-gray-500 dark:text-gray-400">
+            {data.totalScreened} screened · updated {formatRelativeAgo(data.cachedAt)}
+          </span>
+        )}
+
+        <button
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 disabled:opacity-50"
+          title="Refresh"
+        >
+          <RefreshCw className={`w-3 h-3 ${isFetching ? "animate-spin" : ""}`} />
+          Refresh
+        </button>
       </div>
 
-      <div className="flex gap-3 flex-col sm:flex-row">
-        <ConsensusCard
-          title="Strong Buy Consensus"
-          subtitle={`${data.buyPicks.length} stock${data.buyPicks.length !== 1 ? "s" : ""} · ≥${pct}% say BUY`}
-          icon={<TrendingUp className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />}
-          picks={data.buyPicks}
-          emptyMsg={`No stock currently has ≥${pct}% buy consensus. Market is mixed.`}
-          accentClass="border-emerald-200 dark:border-emerald-500/20 bg-emerald-50/50 dark:bg-emerald-500/5"
-          chipClass="bg-white dark:bg-gray-900 border-emerald-100 dark:border-emerald-500/15 hover:border-emerald-400 dark:hover:border-emerald-400"
-          countClass="bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
-          onSelect={onSelect}
-        />
-        <ConsensusCard
-          title="Strong Avoid Consensus"
-          subtitle={`${data.avoidPicks.length} stock${data.avoidPicks.length !== 1 ? "s" : ""} · ≥${pct}% say AVOID`}
-          icon={<ShieldAlert className="w-4 h-4 text-red-500 dark:text-red-400 shrink-0" />}
-          picks={data.avoidPicks}
-          emptyMsg={`No stock currently has ≥${pct}% avoid consensus. Market is mixed.`}
-          accentClass="border-red-200 dark:border-red-500/20 bg-red-50/50 dark:bg-red-500/5"
-          chipClass="bg-white dark:bg-gray-900 border-red-100 dark:border-red-500/15 hover:border-red-400 dark:hover:border-red-400"
-          countClass="bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-300"
-          onSelect={onSelect}
-        />
-      </div>
+      {/* Error banner — never hide the section, just inform */}
+      {error && (
+        <div className="px-3 py-2 rounded-lg text-xs bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-500/20">
+          Couldn't reach the screener. Showing the last cached results below.
+        </div>
+      )}
+
+      {/* Empty-but-scanning state — first load only */}
+      {hasNoData && !error && (scanning || isLoading) && (
+        <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-white/10 rounded-2xl p-6 flex flex-col items-center gap-3">
+          <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
+          <p className="text-sm text-gray-500 dark:text-gray-400 text-center">
+            First-ever scan in progress — running all 16 personas on {universeSize} large, mid, and small-cap stocks.
+            <span className="block text-xs text-gray-400 dark:text-gray-500 mt-1">
+              Takes about 60–120 seconds. After that, results are cached for 24 hours and load instantly.
+            </span>
+            {progress && (
+              <span className="block text-xs text-indigo-600 dark:text-indigo-400 mt-2 font-semibold">
+                {progress.done} / {progress.total} done ({progressPct}%)
+              </span>
+            )}
+          </p>
+        </div>
+      )}
+
+      {/* Cards — always show when we have *any* data, even if both lists are empty */}
+      {data && data.totalScreened > 0 && (
+        <div className="flex gap-3 flex-col sm:flex-row">
+          <ConsensusCard
+            title="Strong Buy Consensus"
+            subtitle={`${data.buyPicks.length} stock${data.buyPicks.length !== 1 ? "s" : ""} · ≥${pct}% say BUY`}
+            icon={<TrendingUp className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />}
+            picks={data.buyPicks}
+            emptyMsg={`No stock currently meets the ≥${pct}% buy bar across ${data.totalScreened} screened.`}
+            accentClass="border-emerald-200 dark:border-emerald-500/20 bg-emerald-50/50 dark:bg-emerald-500/5"
+            chipClass="bg-white dark:bg-gray-900 border-emerald-100 dark:border-emerald-500/15 hover:border-emerald-400 dark:hover:border-emerald-400"
+            countClass="bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
+            onSelect={onSelect}
+          />
+          <ConsensusCard
+            title="Strong Avoid Consensus"
+            subtitle={`${data.avoidPicks.length} stock${data.avoidPicks.length !== 1 ? "s" : ""} · ≥${pct}% say AVOID`}
+            icon={<ShieldAlert className="w-4 h-4 text-red-500 dark:text-red-400 shrink-0" />}
+            picks={data.avoidPicks}
+            emptyMsg={`No stock currently meets the ≥${pct}% avoid bar across ${data.totalScreened} screened.`}
+            accentClass="border-red-200 dark:border-red-500/20 bg-red-50/50 dark:bg-red-500/5"
+            chipClass="bg-white dark:bg-gray-900 border-red-100 dark:border-red-500/15 hover:border-red-400 dark:hover:border-red-400"
+            countClass="bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-300"
+            onSelect={onSelect}
+          />
+        </div>
+      )}
 
       <p className="text-[10px] text-gray-400 dark:text-gray-600 text-center">
-        Click any stock to open its full Council report · verdicts are deterministic, not AI-generated
+        Click any stock to open its full Council report · verdicts are deterministic checklist scores, not AI-generated
       </p>
     </div>
   );
