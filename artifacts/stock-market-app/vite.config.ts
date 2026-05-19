@@ -7,9 +7,13 @@ import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 const port = Number(process.env.PORT || 5000);
 const basePath = process.env.BASE_PATH || "/";
 const apiProxyTarget = process.env.VITE_API_PROXY_TARGET || "http://localhost:8090";
+const googleClientId = process.env.VITE_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || "";
 
 export default defineConfig({
   base: basePath,
+  define: {
+    "import.meta.env.VITE_GOOGLE_CLIENT_ID": JSON.stringify(googleClientId),
+  },
   plugins: [
     react(),
     tailwindcss(),
