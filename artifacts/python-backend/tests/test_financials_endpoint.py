@@ -132,7 +132,7 @@ def _mock_ticker(info=None, financials=None, quarterly_financials=None,
 
 # ── App fixture ──────────────────────────────────────────────────────────────
 
-_TEST_SECRET = "test-secret-for-financials"
+_TEST_SECRET = "test-secret-for-financials-endpoint-32chars+"
 
 
 def _test_token() -> str:
@@ -157,7 +157,7 @@ def client():
     token = _test_token()
     # Patch both the env var and the cached secret so the middleware validates our token
     with patch.dict(os.environ, {"SESSION_SECRET": _TEST_SECRET}), \
-         patch("app.routes.auth._secret", return_value=_TEST_SECRET):
+         patch("app.lib.auth_tokens._secret", return_value=_TEST_SECRET):
         yield TestClient(app, headers={"Authorization": f"Bearer {token}"})
 
 

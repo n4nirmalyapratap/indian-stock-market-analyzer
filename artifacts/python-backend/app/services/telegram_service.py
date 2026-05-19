@@ -282,10 +282,26 @@ class TelegramService:
     async def set_webhook(self, webhook_url: str) -> dict:
         if not self.configured:
             return {"success": False, "error": "TELEGRAM_BOT_TOKEN not set"}
+        # Pass the secret-token to Telegram so it echoes it back via the
+        # X-Telegram-Bot-Api-Secret-Token header on every webhook delivery.
+        # Refuse to register the webhook unless the secret is configured —
+        # otherwise any third party with the public webhook URL could spoof
+        # updates and trigger the bot.
+        secret = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
+        if not secret:
+            return {
+                "success": False,
+                "error": (
+                    "TELEGRAM_WEBHOOK_SECRET is not set. Generate one with "
+                    "`python -c \"import secrets; print(secrets.token_urlsafe(32))\"` "
+                    "and set it in the backend environment before registering a webhook."
+                ),
+            }
         try:
             url = f"https://api.telegram.org/bot{self.token}/setWebhook"
+            payload = {"url": webhook_url, "secret_token": secret}
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(url, json={"url": webhook_url})
+                resp = await client.post(url, json=payload)
                 data = resp.json()
                 return {
                     "success": data.get("ok", False),

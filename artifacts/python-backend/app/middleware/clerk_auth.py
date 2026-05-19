@@ -26,7 +26,18 @@ def _check_admin_token(token: str) -> bool:
 
 
 class AppAuthMiddleware(BaseHTTPMiddleware):
-    SKIP_PATHS = {"/api/healthz"}
+    # Public, but each is responsible for its own authorization:
+    #   /api/healthz                — health probe
+    #   /api/telegram/webhook       — verifies X-Telegram-Bot-Api-Secret-Token
+    #   /api/whatsapp/twilio        — verifies X-Twilio-Signature
+    # These webhooks cannot send a Bearer token (Telegram/Twilio originate
+    # them), so the middleware must let them through and the handler verifies
+    # the per-provider signature instead.
+    SKIP_PATHS = {
+        "/api/healthz",
+        "/api/telegram/webhook",
+        "/api/whatsapp/twilio",
+    }
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path

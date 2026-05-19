@@ -127,8 +127,34 @@ function AppRoutes() {
 function TokenInjector() {
   const { token } = useCustomAuth();
   useEffect(() => {
-    if (token) setTokenGetter(async () => token!);
+    // Always update the getter so logout (token === null) actually clears
+    // the closure. Without this, the API client kept returning the previous
+    // token after logout for one render cycle.
+    setTokenGetter(async () => token);
   }, [token]);
+  return null;
+}
+
+
+// ── 401 auto-logout listener ──────────────────────────────────────────────────
+// If any React Query call fails with 401 (stale JWT, server-side secret
+// rotation, account disabled, etc.) we clear the auth state and bounce the
+// user back to the Google sign-in screen instead of leaving them looking at
+// an empty dashboard while the network panel fills with 401s.
+
+function AuthErrorListener() {
+  const { logout } = useCustomAuth();
+  useEffect(() => {
+    return queryClient.getQueryCache().subscribe((event) => {
+      if (event.type !== "updated") return;
+      const action = (event as { action?: { type?: string } }).action;
+      if (action?.type !== "error") return;
+      const err = event.query.state.error as { status?: number } | null;
+      if (err?.status === 401) {
+        logout();
+      }
+    });
+  }, [logout]);
   return null;
 }
 
@@ -159,6 +185,7 @@ function AuthGate() {
   return (
     <>
       <TokenInjector />
+      <AuthErrorListener />
       <MarketStateBoundary />
       <AppRoutes />
       <GlobalAssistant />

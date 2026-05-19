@@ -7,6 +7,14 @@ import os
 # Make sure the backend root is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+# Provide a default SESSION_SECRET for tests so the strict secret validation
+# in app/lib/auth_tokens.py doesn't refuse to mint tokens. Individual tests
+# can still patch this with their own value.
+os.environ.setdefault(
+    "SESSION_SECRET",
+    "test-only-session-secret-do-not-use-in-production-32chars+",
+)
+
 import pytest
 
 

@@ -64,6 +64,95 @@ def ensure_primary_schema() -> None:
                     )
                     """
                 )
+
+                # ── Portfolio tables (migrated from artifacts/python-backend/
+                # market_cache/portfolio.db). UUID-string IDs preserved so the
+                # external API contract stays identical. inserted_at gives us a
+                # deterministic tiebreaker for transactions sharing the same
+                # traded_at ISO string (replaces SQLite's implicit `rowid`).
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS portfolios (
+                        id            TEXT PRIMARY KEY,
+                        user_id       TEXT NOT NULL,
+                        name          TEXT NOT NULL,
+                        base_currency TEXT NOT NULL DEFAULT 'INR',
+                        cash          DOUBLE PRECISION NOT NULL DEFAULT 0,
+                        created_at    BIGINT NOT NULL,
+                        updated_at    BIGINT NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_portfolios_user "
+                    "ON portfolios(user_id)"
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS portfolio_transactions (
+                        id            TEXT PRIMARY KEY,
+                        portfolio_id  TEXT NOT NULL
+                                      REFERENCES portfolios(id) ON DELETE CASCADE,
+                        symbol        TEXT NOT NULL,
+                        side          TEXT NOT NULL
+                                      CHECK (side IN ('BUY','SELL','DIVIDEND')),
+                        qty           DOUBLE PRECISION NOT NULL,
+                        price         DOUBLE PRECISION NOT NULL,
+                        fees          DOUBLE PRECISION NOT NULL DEFAULT 0,
+                        traded_at     TEXT NOT NULL,
+                        source        TEXT NOT NULL DEFAULT 'manual',
+                        note          TEXT,
+                        inserted_at   BIGINT NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_tx_portfolio "
+                    "ON portfolio_transactions(portfolio_id)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_tx_symbol "
+                    "ON portfolio_transactions(portfolio_id, symbol)"
+                )
+
+                # ── AI Analyst tables (migrated from artifacts/python-backend/
+                # market_cache/ai_analyst.db).
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS ai_analyst_quota (
+                        user_id       TEXT NOT NULL,
+                        run_date_ist  TEXT NOT NULL,
+                        runs_used     INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY (user_id, run_date_ist)
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS ai_analyst_saved (
+                        id            BIGSERIAL PRIMARY KEY,
+                        user_id       TEXT NOT NULL,
+                        scope_type    TEXT NOT NULL,
+                        scope_key     TEXT NOT NULL,
+                        tickers_json  TEXT NOT NULL,
+                        label         TEXT,
+                        verdict       TEXT,
+                        confidence    TEXT,
+                        headline      TEXT,
+                        report_json   TEXT NOT NULL,
+                        models_used   TEXT NOT NULL DEFAULT '',
+                        sources_used  TEXT NOT NULL DEFAULT '',
+                        wall_clock_ms BIGINT NOT NULL DEFAULT 0,
+                        created_at    BIGINT NOT NULL,
+                        updated_at    BIGINT NOT NULL,
+                        UNIQUE (user_id, scope_type, scope_key)
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_saved_user_updated "
+                    "ON ai_analyst_saved(user_id, scope_type, updated_at DESC)"
+                )
         _SCHEMA_READY = True
 
 

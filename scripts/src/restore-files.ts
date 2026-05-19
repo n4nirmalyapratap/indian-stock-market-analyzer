@@ -31,9 +31,20 @@ const FILES_TO_RESTORE = [
 ];
 
 async function main() {
+  // By default we never overwrite existing local edits — only restore files
+  // that are MISSING from the workspace. Pass `--overwrite` to force-replace
+  // every protected file with the GitHub copy (use with care).
+  const overwrite = process.argv.includes("--overwrite");
   const connectors = new ReplitConnectors();
 
   for (const file of FILES_TO_RESTORE) {
+    const dest = path.join(ROOT, file);
+
+    if (fs.existsSync(dest) && !overwrite) {
+      console.log(`⏭️   Skipped ${file} (exists locally; pass --overwrite to replace)`);
+      continue;
+    }
+
     const resp = await connectors.proxy(
       "github",
       `/repos/${OWNER}/${REPO}/contents/${file}?ref=${REF}`,
@@ -46,7 +57,6 @@ async function main() {
     }
 
     const decoded = Buffer.from(data.content, "base64").toString("utf8");
-    const dest = path.join(ROOT, file);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.writeFileSync(dest, decoded, "utf8");
     console.log(`✅  Restored ${file}  (${data.size} bytes)`);

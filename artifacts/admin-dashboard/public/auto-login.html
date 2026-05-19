@@ -2,10 +2,25 @@
 <html><head><meta charset="utf-8"><title>auto-login</title></head><body>
 <script>
 (function(){
+  // Validate the redirect target before navigating. We accept ONLY same-origin
+  // absolute paths (start with `/` but not `//` or `/\`), to prevent open
+  // redirects and javascript:/data: URI injection.
+  function safeTarget(raw) {
+    if (typeof raw !== "string" || raw.length === 0) return "/ai-analyst";
+    if (raw.length > 200) return "/ai-analyst";
+    if (raw.charAt(0) !== "/") return "/ai-analyst";
+    // Disallow protocol-relative ("//evil.com") and backslash-relative paths
+    if (raw.charAt(1) === "/" || raw.charAt(1) === "\\") return "/ai-analyst";
+    // Disallow embedded scheme markers like `/x:javascript:...`
+    if (raw.indexOf(":") !== -1) return "/ai-analyst";
+    return raw;
+  }
   var p = new URLSearchParams(location.search);
   var t = p.get("t");
-  var to = p.get("to") || "/ai-analyst";
-  if (t) sessionStorage.setItem("admin_token", t);
+  var to = safeTarget(p.get("to"));
+  if (t && /^[A-Za-z0-9._\-]{16,512}$/.test(t)) {
+    sessionStorage.setItem("admin_token", t);
+  }
   location.replace(to);
 })();
 </script>

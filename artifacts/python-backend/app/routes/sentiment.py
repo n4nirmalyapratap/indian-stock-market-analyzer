@@ -8,6 +8,7 @@ GET /api/sentiment/refresh  → force refresh (bypasses 15-min cache)
 from __future__ import annotations
 
 import logging
+import time as _time
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
@@ -16,6 +17,13 @@ from ..services import market_cache_service as _disk
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sentiment", tags=["sentiment"])
+
+# /refresh wipes the engine cache and force-fetches Yahoo + RSS. We throttle
+# the wipe so a stuck client or hostile caller can't repeatedly evict the
+# in-memory cache. Engine TTL is 15 min; a 30 s server-side cooldown still
+# lets human clicks through.
+_MIN_REFRESH_INTERVAL = 30.0
+_last_refresh_at: float = 0.0
 
 
 def _meta() -> dict:
@@ -46,9 +54,12 @@ async def get_market_sentiment():
         if isinstance(data, dict):
             data.setdefault("meta", _meta())
         return data
-    except Exception as e:
-        logger.error("Market sentiment error: %s", e)
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    except Exception:
+        logger.exception("Market sentiment error")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Market sentiment is temporarily unavailable."},
+        )
 
 
 @router.get("/sectors")
@@ -57,15 +68,37 @@ async def get_sector_sentiments():
     try:
         data = await engine.get_sector_sentiments()
         return {"sectors": data, "count": len(data), "meta": _meta()}
-    except Exception as e:
-        logger.error("Sector sentiment error: %s", e)
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    except Exception:
+        logger.exception("Sector sentiment error")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Sector sentiment is temporarily unavailable."},
+        )
 
 
 @router.get("/refresh")
 async def refresh_sentiment():
-    """Force-refresh the sentiment cache (bypasses TTL)."""
+    """Force-refresh the sentiment cache (bypasses TTL).
+
+    Throttled so the cache can't be wiped more than once every
+    ``_MIN_REFRESH_INTERVAL`` seconds across all callers — if you hit it
+    again sooner you get the cached snapshot back with ``throttled: true``,
+    not an error. The frontend handles either response identically.
+    """
+    global _last_refresh_at
+    now = _time.time()
     try:
+        if now - _last_refresh_at < _MIN_REFRESH_INTERVAL:
+            data = await engine.get_market_sentiment()
+            sectors = await engine.get_sector_sentiments()
+            return {
+                "status": "throttled",
+                "throttled": True,
+                "retryAfterSeconds": int(_MIN_REFRESH_INTERVAL - (now - _last_refresh_at)),
+                "market": data,
+                "sectors": sectors,
+            }
+        _last_refresh_at = now
         engine.clear_cache()
         data = await engine.get_market_sentiment(force_refresh=True)
         sectors = await engine.get_sector_sentiments(force_refresh=True)
@@ -74,6 +107,11 @@ async def refresh_sentiment():
             "market": data,
             "sectors": sectors,
         }
-    except Exception as e:
-        logger.error("Sentiment refresh error: %s", e)
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    except Exception:
+        # Stop returning raw exception text in the body — log it and surface
+        # a generic message instead.
+        logger.exception("Sentiment refresh failed")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Sentiment refresh failed; please try again shortly."},
+        )

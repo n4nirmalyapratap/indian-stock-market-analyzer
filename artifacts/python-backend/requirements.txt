@@ -1,28 +1,44 @@
-python-dotenv>=1.0.0
-fastapi>=0.110.0
-uvicorn[standard]>=0.27.0
-httpx>=0.27.0
-pandas>=2.0.0
-numpy>=1.26.0
-ta>=0.11.0
-spacy>=3.8.0
-python-multipart>=0.0.9
-openpyxl>=3.1.0
-yfinance>=0.2.48
-scipy>=1.11.0
-statsmodels>=0.14.0
+# ── Indian Stock Market Analyzer — Python backend dependencies ──────────────
+#
+# All entries use a `>=lower,<upper` range so a single compromised release
+# can't auto-install on the next `pip install`. To produce a fully-pinned
+# lock file (recommended for production), run:
+#   pip-compile --output-file=requirements.lock requirements.txt
+#   pip install -r requirements.lock
+#
+# Notes on minimums:
+#   - cryptography>=42.0.4  fixes CVE-2024-26130 (NULL pointer in PKCS12)
+#                            and CVE-2023-50782 (Bleichenbacher).
+#   - lxml>=5.2.1            fixes CVE-2024-30171 (HTML parsing).
+#   - python-multipart>=0.0.9 fixes CVE-2024-24762 (DoS via boundary parsing).
+#   - numpy<2.0              keep on 1.x until pandas/yfinance/spacy are
+#                             confirmed compatible with numpy 2.x in your env.
+
+python-dotenv>=1.0.0,<2.0.0
+fastapi>=0.115.0,<0.118.0
+uvicorn[standard]>=0.27.0,<0.36.0
+httpx>=0.27.0,<0.29.0
+pandas>=2.2.0,<3.0.0
+numpy>=1.26.0,<2.0.0
+ta>=0.11.0,<0.13.0
+spacy>=3.8.0,<3.9.0
+python-multipart>=0.0.9,<0.0.20
+openpyxl>=3.1.0,<4.0.0
+yfinance>=0.2.48,<0.3.0
+scipy>=1.11.0,<2.0.0
+statsmodels>=0.14.0,<0.16.0
 # pandas_ta is intentionally NOT pinned — it's a thin local shim at
 # ./pandas_ta/__init__.py that wraps the `ta` library above. Vendored in
 # the repo so Docker / pip install needs nothing extra for it. The boot
 # check in main.py still verifies it's importable.
-pydantic>=2.0.0
-feedparser>=6.0.0
-vaderSentiment>=3.3.2
-nsepython>=2.97
-PyJWT>=2.8.0
-cryptography>=41.0.0
-bcrypt>=4.0.0
-google-auth>=2.39.0
-psycopg[binary]>=3.2.9
-openai>=1.0.0
-lxml>=5.0.0
+pydantic>=2.5.0,<3.0.0
+feedparser>=6.0.0,<7.0.0
+vaderSentiment>=3.3.2,<4.0.0
+nsepython>=2.97,<3.0.0
+PyJWT>=2.8.0,<3.0.0
+cryptography>=42.0.4,<46.0.0
+bcrypt>=4.0.0,<5.0.0
+google-auth>=2.39.0,<3.0.0
+psycopg[binary]>=3.2.9,<4.0.0
+openai>=1.0.0,<2.0.0
+lxml>=5.2.1,<6.0.0
