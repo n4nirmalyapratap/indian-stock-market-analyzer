@@ -8,6 +8,7 @@ import AIAnalystButton from "@/components/AIAnalystButton";
 import StockFinancials from "@/components/financials/StockFinancials";
 import TechnicalSummary from "@/components/technicals/TechnicalSummary";
 import DataFreshness from "@/components/DataFreshness";
+import { StockCombobox } from "@/components/StockCombobox";
 import { marketDataQueryOptions, pickMeta } from "@/lib/marketData";
 
 const NIFTY100_QUICK = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","ITC","SBIN","BHARTIARTL","KOTAKBANK","BAJFINANCE","AXISBANK","MARUTI","HCLTECH","WIPRO","TITAN","SUNPHARMA"];
@@ -71,14 +72,13 @@ export default function StockLookup() {
       </div>
 
       <div className="flex gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
+        <div className="flex-1">
+          <StockCombobox
             value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && handleSearch()}
-            placeholder="Enter NSE symbol (e.g., RELIANCE)"
-            className="w-full pl-9 pr-4 py-2.5 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-300 text-sm"
+            onChange={setInput}
+            onSelect={(s) => { setInput(s.symbol); handleSearch(s.symbol); }}
+            onSubmit={() => handleSearch()}
+            placeholder="Enter NSE symbol (e.g., RELIANCE) or company name"
           />
         </div>
         <button

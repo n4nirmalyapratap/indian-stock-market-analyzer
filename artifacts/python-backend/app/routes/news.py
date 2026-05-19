@@ -1,8 +1,19 @@
-from fastapi import APIRouter, Query
+import time as _time
+
+from fastapi import APIRouter, Query, Request
 from ..services import news_service
 from ..services import market_cache_service as _disk
 
 router = APIRouter(prefix="/news", tags=["news"])
+
+
+# /refresh is callable by any authenticated user (the frontend auto-fires it
+# every 8 minutes via NewsFeed.tsx), but we throttle the cache-wipe so a
+# stuck client or hostile caller can't repeatedly evict the in-memory news
+# cache. _MIN_REFRESH_INTERVAL ≪ frontend interval (8 minutes), so a typical
+# user-initiated click still goes through.
+_MIN_REFRESH_INTERVAL = 30.0  # seconds
+_last_refresh_at: float = 0.0
 
 
 def _meta(source: str = "NSE", as_of_iso: str | None = None) -> dict:
@@ -54,7 +65,20 @@ async def get_stats():
 
 
 @router.post("/refresh")
-async def refresh():
+async def refresh(request: Request):
+    global _last_refresh_at
+    now = _time.time()
+    if now - _last_refresh_at < _MIN_REFRESH_INTERVAL:
+        # Throttled — too soon since the previous refresh. Return 200 with a
+        # `throttled: true` marker so the frontend timer keeps ticking
+        # smoothly without flagging an error.
+        return {
+            "ok": True,
+            "throttled": True,
+            "retryAfterSeconds": int(_MIN_REFRESH_INTERVAL - (now - _last_refresh_at)),
+            "message": "Cache refresh skipped — recently refreshed",
+        }
+    _last_refresh_at = now
     await news_service.invalidate_cache()
     # Eagerly re-warm the feed cache so the next /stats request
     # doesn't race against an empty cache and return all zeros.

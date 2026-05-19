@@ -15,19 +15,12 @@ Usage:
 from __future__ import annotations
 
 import os
-import sqlite3
 import logging
 import threading
 import time
-from typing import Optional
 
 log = logging.getLogger(__name__)
-
-_DATA_DIR = os.environ.get(
-    "DATA_DIR",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."),
-)
-_DB_PATH = os.path.join(_DATA_DIR, "users.db")
+from app.lib.auth_store import ensure_primary_schema, get_conn
 
 _lock = threading.Lock()
 
@@ -96,26 +89,9 @@ _KNOWN_MAP = {s["key"]: s for s in KNOWN_SECRETS}
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
-def _get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
 def _ensure_table() -> None:
     with _lock:
-        conn = _get_conn()
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS app_secrets (
-                key         TEXT PRIMARY KEY,
-                value       TEXT NOT NULL DEFAULT '',
-                description TEXT NOT NULL DEFAULT '',
-                masked      INTEGER NOT NULL DEFAULT 1,
-                updated_at  INTEGER NOT NULL
-            )
-        """)
-        conn.commit()
-        conn.close()
+        ensure_primary_schema()
 
 
 _table_ready = False
@@ -137,11 +113,10 @@ def get_secret(key: str, default: str = "") -> str:
     """
     try:
         _ready()
-        conn = _get_conn()
-        row = conn.execute(
-            "SELECT value FROM app_secrets WHERE key = ?", (key,)
-        ).fetchone()
-        conn.close()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT value FROM app_secrets WHERE key = %s", (key,))
+                row = cur.fetchone()
         if row and row["value"]:
             return row["value"]
     except Exception as exc:
@@ -159,29 +134,27 @@ def set_secret(key: str, value: str, description: str = "", masked: bool = True)
     now  = int(time.time())
 
     with _lock:
-        conn = _get_conn()
-        conn.execute("""
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
             INSERT INTO app_secrets (key, value, description, masked, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT(key) DO UPDATE SET
-                value      = excluded.value,
-                description= excluded.description,
-                masked     = excluded.masked,
-                updated_at = excluded.updated_at
-        """, (key, value, desc, int(msk), now))
-        conn.commit()
-        conn.close()
+                value = EXCLUDED.value,
+                description = EXCLUDED.description,
+                masked = EXCLUDED.masked,
+                updated_at = EXCLUDED.updated_at
+        """, (key, value, desc, bool(msk), now))
 
 
 def delete_secret(key: str) -> bool:
     """Delete a DB secret (env var fallback still applies after deletion)."""
     _ready()
     with _lock:
-        conn = _get_conn()
-        cur = conn.execute("DELETE FROM app_secrets WHERE key = ?", (key,))
-        conn.commit()
-        conn.close()
-        return cur.rowcount > 0
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM app_secrets WHERE key = %s", (key,))
+                return cur.rowcount > 0
 
 
 def list_secrets(reveal: bool = False) -> list[dict]:
@@ -191,12 +164,13 @@ def list_secrets(reveal: bool = False) -> list[dict]:
     If `reveal=False`, masked values are replaced with '***'.
     """
     _ready()
-    conn = _get_conn()
-    db_rows = {
-        r["key"]: dict(r)
-        for r in conn.execute("SELECT * FROM app_secrets").fetchall()
-    }
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM app_secrets")
+            db_rows = {
+                r["key"]: dict(r)
+                for r in cur.fetchall()
+            }
 
     result: list[dict] = []
     seen: set[str] = set()

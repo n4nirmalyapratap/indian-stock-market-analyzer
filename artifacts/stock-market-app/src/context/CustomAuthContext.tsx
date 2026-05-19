@@ -4,14 +4,15 @@ export interface CustomUser {
   id: string;
   email: string;
   name: string;
+  pictureUrl?: string;
+  isAdmin?: boolean;
 }
 
 interface CustomAuthCtx {
   user: CustomUser | null;
   token: string | null;
   isLoaded: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, name: string) => Promise<void>;
+  loginWithGoogle: (credential: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -48,32 +49,26 @@ export function CustomAuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
-  const login = useCallback(async (email: string, password: string) => {
-    const res = await fetch("/api/auth/login", {
+  const loginWithGoogle = useCallback(async (credential: string) => {
+    const res = await fetch("/api/auth/google", {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ email, password }),
+      body:    JSON.stringify({ credential }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Login failed");
     _persist(data.token, data.user);
   }, []);
 
-  const register = useCallback(async (email: string, password: string, name: string) => {
-    const res = await fetch("/api/auth/register", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ email, password, name }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || "Registration failed");
-    _persist(data.token, data.user);
+  const logout = useCallback(() => {
+    try {
+      (window as any).google?.accounts?.id?.disableAutoSelect?.();
+    } catch {}
+    _clear();
   }, []);
 
-  const logout = useCallback(() => _clear(), []);
-
   return (
-    <CustomAuthContext.Provider value={{ user, token, isLoaded: true, login, register, logout }}>
+    <CustomAuthContext.Provider value={{ user, token, isLoaded: true, loginWithGoogle, logout }}>
       {children}
     </CustomAuthContext.Provider>
   );

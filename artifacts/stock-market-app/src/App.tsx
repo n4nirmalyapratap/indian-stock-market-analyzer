@@ -25,6 +25,7 @@ import InsightsLayout from "@/pages/insights/InsightsLayout";
 import AIAnalyst from "@/pages/AIAnalyst";
 import AIAnalystCompare from "@/pages/AIAnalystCompare";
 import AIAnalystScan from "@/pages/AIAnalystScan";
+import AIAnalystTrackRecord from "@/pages/AIAnalystTrackRecord";
 import SavedAnalyses from "@/pages/SavedAnalyses";
 import GlobalAssistant from "@/components/GlobalAssistant";
 import { ThemeProvider } from "@/context/ThemeContext";
@@ -105,10 +106,11 @@ function AppRoutes() {
         <Route path="/hydra"           component={HydraAlpha} />
         <Route path="/agents/:symbol"  component={InvestorCouncil} />
         <Route path="/agents"          component={InvestorCouncil} />
-        <Route path="/ai-analyst/saved"   component={SavedAnalyses} />
-        <Route path="/ai-analyst/scan"    component={AIAnalystScan} />
-        <Route path="/ai-analyst/compare" component={AIAnalystCompare} />
-        <Route path="/ai-analyst/:ticker" component={AIAnalyst} />
+        <Route path="/ai-analyst/saved"        component={SavedAnalyses} />
+        <Route path="/ai-analyst/scan"         component={AIAnalystScan} />
+        <Route path="/ai-analyst/compare"      component={AIAnalystCompare} />
+        <Route path="/ai-analyst/track-record" component={AIAnalystTrackRecord} />
+        <Route path="/ai-analyst/:ticker"      component={AIAnalyst} />
         <Route path="/ai-analyst"      component={AIAnalyst} />
         <Route path="/options"         component={OptionsStrategyTester} />
         <Route path="/portfolio"       component={Portfolio} />
@@ -127,8 +129,34 @@ function AppRoutes() {
 function TokenInjector() {
   const { token } = useCustomAuth();
   useEffect(() => {
-    if (token) setTokenGetter(async () => token!);
+    // Always update the getter so logout (token === null) actually clears
+    // the closure. Without this, the API client kept returning the previous
+    // token after logout for one render cycle.
+    setTokenGetter(async () => token);
   }, [token]);
+  return null;
+}
+
+
+// ── 401 auto-logout listener ──────────────────────────────────────────────────
+// If any React Query call fails with 401 (stale JWT, server-side secret
+// rotation, account disabled, etc.) we clear the auth state and bounce the
+// user back to the Google sign-in screen instead of leaving them looking at
+// an empty dashboard while the network panel fills with 401s.
+
+function AuthErrorListener() {
+  const { logout } = useCustomAuth();
+  useEffect(() => {
+    return queryClient.getQueryCache().subscribe((event) => {
+      if (event.type !== "updated") return;
+      const action = (event as { action?: { type?: string } }).action;
+      if (action?.type !== "error") return;
+      const err = event.query.state.error as { status?: number } | null;
+      if (err?.status === 401) {
+        logout();
+      }
+    });
+  }, [logout]);
   return null;
 }
 
@@ -159,6 +187,7 @@ function AuthGate() {
   return (
     <>
       <TokenInjector />
+      <AuthErrorListener />
       <MarketStateBoundary />
       <AppRoutes />
       <GlobalAssistant />

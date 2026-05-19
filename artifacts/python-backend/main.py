@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.middleware.clerk_auth import ClerkAuthMiddleware
+from app.middleware.clerk_auth import AppAuthMiddleware
 from app.routes.health import router as health_router
 from app.routes.sectors import router as sectors_router
 from app.routes.stocks import router as stocks_router
@@ -33,6 +33,8 @@ from app.routes.insights import router as insights_router
 from app.routes.agents import router as agents_router
 from app.routes.portfolio import router as portfolio_router
 from app.routes.ai_analyst import router as ai_analyst_router
+from app.routes.search import router as search_router
+from app.lib.auth_store import ensure_primary_schema
 from app.services.log_buffer import setup_ring_buffer
 from app.services.market_cache_service import is_market_open, cache_status
 from app.services import market_cache_service as _mcs
@@ -217,9 +219,17 @@ def _verify_critical_dependencies() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    ensure_primary_schema()
+
     # Verify all critical data-source packages are importable. Loud failure
     # beats silent fallback — see _verify_critical_dependencies for the why.
     _verify_critical_dependencies()
+
+    # Refuse to start if SESSION_SECRET is missing/weak/a known placeholder.
+    # Without this, every JWT is signed with a public string and admin tokens
+    # are forgeable. See app/lib/auth_tokens.py for the placeholder list.
+    from app.lib.auth_tokens import validate_session_secret
+    validate_session_secret()
 
     # Attach the ring-buffer AFTER uvicorn has configured logging (it resets
     # the root logger on startup, so setup_ring_buffer() in run.py is too early).
@@ -238,11 +248,12 @@ async def lifespan(app: FastAPI):
     rfr_task        = asyncio.create_task(_risk_free_rate_scheduler())
     bhav_task       = asyncio.create_task(_bhavcopy_refresh_scheduler())
     alerts_task     = asyncio.create_task(_bot_alerts_tick_loop())
+    backtest_task   = asyncio.create_task(_ai_backtest_scheduler())
     try:
         yield
     finally:
         for t in (poll_task, universe_task, warmup_task, transition_task,
-                  fixer_task, rfr_task, bhav_task, alerts_task):
+                  fixer_task, rfr_task, bhav_task, alerts_task, backtest_task):
             t.cancel()
             try:
                 await t
@@ -361,6 +372,29 @@ async def _bhavcopy_refresh_scheduler() -> None:
             break
 
 
+async def _ai_backtest_scheduler() -> None:
+    """Evaluate every BUY/SELL verdict from the AI Analyst against actual
+    price moves at 1d / 5d / 30d horizons. Runs ~6h after startup and then
+    every 24h so the post-close prices are settled before we measure.
+    """
+    from app.services import ai_backtest_service
+    # Wait a few hours after startup so the first run lands after market close.
+    await asyncio.sleep(6 * 3600)
+    price_service = _PriceService(_NseService(), _YahooService())
+    while True:
+        try:
+            logger.info("AI backtest: scheduled run starting…")
+            result = await ai_backtest_service.evaluate_pending(price_service)
+            logger.info("AI backtest: %s", result)
+        except Exception as exc:
+            logger.warning("AI backtest scheduler error: %s", exc)
+        try:
+            await asyncio.sleep(24 * 3600)
+        except asyncio.CancelledError:
+            logger.info("AI backtest scheduler stopped.")
+            break
+
+
 async def _universe_scheduler() -> None:
     """
     Refresh the stock universe once per day at 16:05 IST (10:35 UTC)
@@ -427,11 +461,37 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(ClerkAuthMiddleware)
+app.add_middleware(AppAuthMiddleware)
+
+# ── CORS ───────────────────────────────────────────────────────────────────
+# Origins are pinned. We always allow the local-dev hosts so the app keeps
+# working in `pnpm dev`, and read additional production origins from the
+# CORS_ALLOWED_ORIGINS env var (comma-separated). Setting this to "*" is
+# intentionally NOT supported — wildcard CORS combined with token-bearing
+# fetches lets any third-party site drive the API on the user's behalf.
+# ───────────────────────────────────────────────────────────────────────────
+_DEFAULT_DEV_ORIGINS = [
+    "http://localhost:3002",   # stock-market-app (per artifact.toml)
+    "http://localhost:5000",   # stock-market-app fallback
+    "http://localhost:5173",   # admin-dashboard (Vite default)
+    "http://localhost:5174",   # alt Vite port
+    "http://localhost:8080",   # nginx-frontend
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:5000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://127.0.0.1:8080",
+]
+_extra_origins = [
+    o.strip()
+    for o in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",")
+    if o.strip() and o.strip() != "*"
+]
+_ALLOWED_ORIGINS = _DEFAULT_DEV_ORIGINS + _extra_origins
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Admin-Token"],
@@ -468,3 +528,4 @@ app.include_router(insights_router,         prefix="/api")
 app.include_router(agents_router,            prefix="/api")
 app.include_router(portfolio_router,         prefix="/api")
 app.include_router(ai_analyst_router,         prefix="/api")
+app.include_router(search_router,              prefix="/api")

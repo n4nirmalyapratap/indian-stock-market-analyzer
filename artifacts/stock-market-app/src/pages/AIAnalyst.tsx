@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { useCustomAuth } from "@/context/CustomAuthContext";
 import { friendlyError, friendlyMessage, sanitizeTicker } from "@/lib/friendlyError";
+import { StockCombobox } from "@/components/StockCombobox";
 import {
   RadialBarChart, RadialBar, PolarAngleAxis,
 } from "recharts";
@@ -429,14 +430,16 @@ export default function AIAnalyst() {
 
       {/* Input row */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-xl p-4 flex flex-wrap items-center gap-2">
-        <input
-          value={ticker}
-          onChange={e => setTicker(e.target.value.toUpperCase())}
-          onKeyDown={e => e.key === "Enter" && !running && start(false)}
-          placeholder="NSE ticker (e.g. RELIANCE, TCS, INFY)"
-          className="flex-1 min-w-[200px] px-3 py-2 text-sm bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          disabled={running}
-        />
+        <div className="flex-1 min-w-[200px]">
+          <StockCombobox
+            value={ticker}
+            onChange={setTicker}
+            onSelect={(s) => setTicker(s.symbol)}
+            onSubmit={() => !running && start(false)}
+            placeholder="NSE ticker or company name (e.g. RELIANCE, Tata Steel)"
+            disabled={running}
+          />
+        </div>
         <button
           onClick={() => start(false)}
           disabled={running || !ticker.trim()}
@@ -466,6 +469,10 @@ export default function AIAnalyst() {
         <Link href="/ai-analyst/saved"
               className="px-3 py-2 text-sm border border-gray-200 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg text-indigo-600 dark:text-indigo-400 inline-flex items-center gap-1.5">
           <Bookmark className="w-3.5 h-3.5" /> Saved analyses
+        </Link>
+        <Link href="/ai-analyst/track-record"
+              className="px-3 py-2 text-sm border border-gray-200 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg text-gray-600 dark:text-gray-300">
+          Track record →
         </Link>
       </div>
 

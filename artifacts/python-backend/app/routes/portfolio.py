@@ -24,7 +24,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Request, Body, UploadFile, File
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..services import portfolio_service as ps
 from ..services import portfolio_optimizer_service as opt
@@ -42,7 +42,17 @@ _price = PriceService(_nse, _yahoo)
 
 
 def _user_id(request: Request) -> str:
-    return getattr(request.state, "user_id", None) or "anonymous"
+    """Return the authenticated user_id from middleware, or raise 401.
+
+    Falling back to a literal "anonymous" string would put every unauthed
+    caller into the same shared portfolio bucket — a cross-tenant data leak
+    if any /api/portfolio/* path ever escapes the auth middleware.
+    """
+    from fastapi import HTTPException
+    uid = getattr(request.state, "user_id", None)
+    if not uid:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    return uid
 
 
 # ── Pydantic input schemas ───────────────────────────────────────────────────
@@ -69,14 +79,18 @@ class TxReq(BaseModel):
 
 
 class ImportReq(BaseModel):
-    csv: str
+    # Cap the in-body CSV at ~10 MB so a giant string can't OOM the worker.
+    # A human tradebook is well under 1 MB.
+    csv: str = Field(..., max_length=10 * 1024 * 1024)
 
 
 class OptimizeReq(BaseModel):
     method:        str   = "markowitz"  # 'markowitz' | 'cvar' | 'min_vol'
     confidence:    float = 0.95
     riskFreeRate:  float = 0.07
-    universe:      Optional[list[str]] = None      # extra symbols to consider
+    # Cap to 200 extra symbols — enough for a watchlist, prevents O(n²)
+    # covariance from stalling the worker on attacker-controlled lists.
+    universe:      Optional[list[str]] = Field(default=None, max_length=200)
     points:        int   = 25
     targetWeights: Optional[dict[str, float]] = None  # if user already chose
 
@@ -169,9 +183,17 @@ async def import_file(pid: str, request: Request, file: UploadFile = File(...)):
     Excel workbooks are flattened to CSV (first sheet only) before parsing
     so the same column conventions apply (Zerodha / Upstox / generic
     symbol,side,qty,price,date)."""
-    raw = await file.read()
+    # Cap the upload at 10 MB to prevent memory-exhaustion DoS. A real
+    # tradebook for a human is well under 1 MB even after years of trading.
+    _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+    raw = await file.read(_MAX_UPLOAD_BYTES + 1)
     if not raw:
         return JSONResponse(status_code=400, content={"error": "Empty file"})
+    if len(raw) > _MAX_UPLOAD_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content={"error": f"File too large (>{_MAX_UPLOAD_BYTES // (1024 * 1024)} MB)."},
+        )
     name = (file.filename or "").lower()
     try:
         if name.endswith(".xlsx") or name.endswith(".xlsm"):
@@ -190,6 +212,232 @@ async def import_file(pid: str, request: Request, file: UploadFile = File(...)):
         return JSONResponse(status_code=404, content=res)
     res["source_filename"] = file.filename
     return res
+
+
+# ── Vision-LLM import (broker screenshot) ────────────────────────────────────
+# Two-step flow so the user can review/edit before any row hits the DB:
+#   POST /{pid}/extract-from-image    — Vision model parses screenshot → preview
+#   POST /{pid}/apply-extracted       — user-confirmed rows → real transactions
+
+class ExtractedHolding(BaseModel):
+    """A single row pulled out of a broker screenshot. Confidence is the
+    model's own self-reported confidence in this row (0-1)."""
+    symbol:     str   = Field(..., max_length=24)
+    qty:        float = Field(..., gt=0)
+    avgPrice:   float = Field(..., ge=0)
+    confidence: float = Field(..., ge=0, le=1)
+    rawName:    Optional[str] = Field(default=None, max_length=80)
+
+
+class ApplyExtractedReq(BaseModel):
+    """User-confirmed rows to commit as BUY transactions. Frontend only
+    sends rows the user kept (un-checked rows are dropped)."""
+    holdings: list[ExtractedHolding] = Field(..., min_length=1, max_length=200)
+    tradedAt: Optional[str] = Field(default=None, max_length=32)
+    source:   str = Field(default="screenshot", max_length=32)
+
+
+@router.post("/{pid}/extract-from-image")
+async def extract_from_image(
+    pid: str,
+    request: Request,
+    file: UploadFile = File(...),
+):
+    """Extract holdings from an uploaded broker portfolio screenshot.
+
+    Does NOT touch the database. Returns extracted rows + per-row confidence
+    so the frontend can show a preview-and-confirm panel; the user picks
+    which rows to keep and then POSTs them back to ``apply-extracted``.
+    """
+    # Verify portfolio belongs to caller before spending an AI call.
+    uid = _user_id(request)
+    if not ps.get_portfolio(uid, pid):
+        return JSONResponse(status_code=404, content={"error": "portfolio not found"})
+
+    # Cap at 5 MB — typical screenshots are under 500 KB; anything 5 MB+ is
+    # either a screen recording dropped in by mistake or an attack.
+    _MAX_IMAGE_BYTES = 5 * 1024 * 1024
+    raw = await file.read(_MAX_IMAGE_BYTES + 1)
+    if not raw:
+        return JSONResponse(status_code=400, content={"error": "Empty file"})
+    if len(raw) > _MAX_IMAGE_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content={"error": f"Image too large (>{_MAX_IMAGE_BYTES // (1024 * 1024)} MB)."},
+        )
+
+    # Detect MIME from filename + magic bytes. We only accept jpg/png/webp;
+    # GIF / SVG / TIFF are rejected so we don't pass exotic formats to the
+    # Vision API only to get back an empty response.
+    name = (file.filename or "").lower()
+    mime: Optional[str] = None
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        mime = "image/png"
+    elif raw[:3] == b"\xff\xd8\xff" or name.endswith((".jpg", ".jpeg")):
+        mime = "image/jpeg"
+    elif raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        mime = "image/webp"
+    elif name.endswith(".png"):
+        mime = "image/png"
+    elif name.endswith(".webp"):
+        mime = "image/webp"
+    if mime is None:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Unsupported image format. Use JPG, PNG, or WebP."},
+        )
+
+    import base64 as _b64
+    from ..services import ai_client  # noqa: PLC0415
+
+    img_b64 = _b64.b64encode(raw).decode("ascii")
+    prompt = _EXTRACT_PROMPT
+    try:
+        raw_response = await ai_client.ask_vision(
+            prompt,
+            image_b64=img_b64,
+            image_mime=mime,
+            system=_EXTRACT_SYSTEM,
+            max_tokens=2048,
+            temperature=0.1,
+        )
+    except Exception:
+        logger.exception("extract_from_image: vision call failed")
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Vision model is temporarily unavailable; please retry."},
+        )
+
+    holdings = _parse_vision_response(raw_response)
+    return {
+        "filename":  file.filename,
+        "rowsFound": len(holdings),
+        "holdings":  holdings,
+    }
+
+
+@router.post("/{pid}/apply-extracted")
+async def apply_extracted(pid: str, req: ApplyExtractedReq, request: Request):
+    """Persist user-confirmed extracted rows as BUY transactions.
+
+    Each row becomes a single BUY at the supplied avgPrice/qty. We don't
+    invent a side/fees — broker screenshots show net holdings only. If the
+    user wants the cash side to balance they can edit the portfolio cash
+    afterwards.
+    """
+    uid = _user_id(request)
+    if not ps.get_portfolio(uid, pid):
+        return JSONResponse(status_code=404, content={"error": "portfolio not found"})
+
+    inserted = 0
+    errors: list[str] = []
+    for h in req.holdings:
+        try:
+            ps.add_transaction(
+                uid, pid,
+                symbol   = h.symbol,
+                side     = "BUY",
+                qty      = h.qty,
+                price    = h.avgPrice,
+                fees     = 0.0,
+                traded_at= req.tradedAt,
+                source   = req.source,
+                note     = f"from screenshot (confidence {h.confidence:.2f})",
+            )
+            inserted += 1
+        except Exception as exc:
+            errors.append(f"{h.symbol}: {exc}")
+
+    return {
+        "rowsApplied": inserted,
+        "rowsRejected": len(req.holdings) - inserted,
+        "errors": errors,
+    }
+
+
+# ── Vision prompt + response parser ──────────────────────────────────────────
+
+_EXTRACT_SYSTEM = (
+    "You are a careful data-extraction assistant. The user will upload a "
+    "screenshot of their stock-broker holdings page (Zerodha Kite, Groww, "
+    "Upstox, ICICI Direct, HDFC Securities, or any other Indian retail "
+    "broker). Extract the holdings table as JSON. Be precise; do not "
+    "invent rows. If a value is ambiguous lower the confidence."
+)
+
+_EXTRACT_PROMPT = (
+    "Extract every holding row visible in this screenshot. For each row "
+    "return:\n"
+    "  - symbol     : NSE-style ticker (e.g. RELIANCE, TCS, HDFCBANK). Strip "
+    "exchange suffixes like .NS / .BO / -EQ. If only a company name is shown, "
+    "map it to the NSE ticker if obvious.\n"
+    "  - qty        : positive number\n"
+    "  - avgPrice   : the average buy price per share, in INR. Do NOT use the "
+    "current market price.\n"
+    "  - confidence : 0-1 self-reported confidence in this row. Penalise "
+    "rows where the ticker mapping was guessed, the OCR was blurry, or the "
+    "broker UI made columns ambiguous.\n"
+    "  - rawName    : the exact company name as shown on screen (helpful for "
+    "the user to verify)\n\n"
+    "Respond with ONLY a JSON object of the form:\n"
+    '  {"holdings": [{"symbol": "...", "qty": ..., "avgPrice": ..., '
+    '"confidence": ..., "rawName": "..."}]}\n'
+    "No prose, no markdown fences, no commentary. If the screenshot has no "
+    "holdings table return {\"holdings\": []}."
+)
+
+
+def _parse_vision_response(text: str) -> list[dict]:
+    """Best-effort parse of the vision model's response.
+
+    Strips markdown fences, finds the first JSON object, and validates each
+    row through the Pydantic schema. Bad rows are dropped silently — the
+    frontend will surface the count rather than blowing up the whole call.
+    """
+    import json as _json
+    import re as _re
+
+    if not text:
+        return []
+
+    # Strip ```json ... ``` fences a model might still emit despite the prompt.
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = _re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = _re.sub(r"\s*```\s*$", "", cleaned)
+
+    try:
+        payload = _json.loads(cleaned)
+    except Exception:
+        # As a last resort, look for the outermost {...} block.
+        match = _re.search(r"\{.*\}", cleaned, _re.DOTALL)
+        if not match:
+            return []
+        try:
+            payload = _json.loads(match.group(0))
+        except Exception:
+            return []
+
+    rows = payload.get("holdings") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return []
+
+    out: list[dict] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        try:
+            validated = ExtractedHolding(
+                symbol     = str(r.get("symbol") or "").strip().upper(),
+                qty        = float(r.get("qty") or 0),
+                avgPrice   = float(r.get("avgPrice") or 0),
+                confidence = max(0.0, min(1.0, float(r.get("confidence") or 0))),
+                rawName    = (str(r.get("rawName")).strip() if r.get("rawName") else None),
+            )
+        except Exception:
+            continue
+        out.append(validated.model_dump())
+    return out
 
 
 # ── Live valuation ───────────────────────────────────────────────────────────
