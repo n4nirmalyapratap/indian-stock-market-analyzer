@@ -187,14 +187,19 @@ function AdminApp() {
     queryClient.clear();
   }
 
-  // Auto-detect expired/invalid session: any 401 from any query → back to login
+  // Auto-detect expired/invalid session: any 401 from any query → back to login.
+  // Only react to actual error events (not every cache update). Without the
+  // action-type guard, a query that had a 401 in its history kept re-firing
+  // sign-out on every subsequent successful update because state.error is
+  // sticky until the next failure.
   useEffect(() => {
     return queryClient.getQueryCache().subscribe((event) => {
-      if (event.type === "updated") {
-        const err = event.query.state.error as any;
-        if (err?.status === 401) {
-          handleSignOut();
-        }
+      if (event.type !== "updated") return;
+      const action = (event as { action?: { type?: string } }).action;
+      if (action?.type !== "error") return;
+      const err = event.query.state.error as { status?: number } | null;
+      if (err?.status === 401) {
+        handleSignOut();
       }
     });
   }, [handleSignOut]);

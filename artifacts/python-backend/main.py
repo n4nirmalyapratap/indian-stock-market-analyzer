@@ -224,6 +224,12 @@ async def lifespan(app: FastAPI):
     # beats silent fallback — see _verify_critical_dependencies for the why.
     _verify_critical_dependencies()
 
+    # Refuse to start if SESSION_SECRET is missing/weak/a known placeholder.
+    # Without this, every JWT is signed with a public string and admin tokens
+    # are forgeable. See app/lib/auth_tokens.py for the placeholder list.
+    from app.lib.auth_tokens import validate_session_secret
+    validate_session_secret()
+
     # Attach the ring-buffer AFTER uvicorn has configured logging (it resets
     # the root logger on startup, so setup_ring_buffer() in run.py is too early).
     # Also hook uvicorn's own loggers explicitly — they set propagate=False.
@@ -432,9 +438,35 @@ app = FastAPI(
 
 app.add_middleware(AppAuthMiddleware)
 
+# ── CORS ───────────────────────────────────────────────────────────────────
+# Origins are pinned. We always allow the local-dev hosts so the app keeps
+# working in `pnpm dev`, and read additional production origins from the
+# CORS_ALLOWED_ORIGINS env var (comma-separated). Setting this to "*" is
+# intentionally NOT supported — wildcard CORS combined with token-bearing
+# fetches lets any third-party site drive the API on the user's behalf.
+# ───────────────────────────────────────────────────────────────────────────
+_DEFAULT_DEV_ORIGINS = [
+    "http://localhost:3002",   # stock-market-app (per artifact.toml)
+    "http://localhost:5000",   # stock-market-app fallback
+    "http://localhost:5173",   # admin-dashboard (Vite default)
+    "http://localhost:5174",   # alt Vite port
+    "http://localhost:8080",   # nginx-frontend
+    "http://127.0.0.1:3002",
+    "http://127.0.0.1:5000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://127.0.0.1:8080",
+]
+_extra_origins = [
+    o.strip()
+    for o in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",")
+    if o.strip() and o.strip() != "*"
+]
+_ALLOWED_ORIGINS = _DEFAULT_DEV_ORIGINS + _extra_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Admin-Token"],

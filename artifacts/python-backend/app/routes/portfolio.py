@@ -24,7 +24,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Request, Body, UploadFile, File
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..services import portfolio_service as ps
 from ..services import portfolio_optimizer_service as opt
@@ -42,7 +42,17 @@ _price = PriceService(_nse, _yahoo)
 
 
 def _user_id(request: Request) -> str:
-    return getattr(request.state, "user_id", None) or "anonymous"
+    """Return the authenticated user_id from middleware, or raise 401.
+
+    Falling back to a literal "anonymous" string would put every unauthed
+    caller into the same shared portfolio bucket — a cross-tenant data leak
+    if any /api/portfolio/* path ever escapes the auth middleware.
+    """
+    from fastapi import HTTPException
+    uid = getattr(request.state, "user_id", None)
+    if not uid:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    return uid
 
 
 # ── Pydantic input schemas ───────────────────────────────────────────────────
@@ -69,14 +79,18 @@ class TxReq(BaseModel):
 
 
 class ImportReq(BaseModel):
-    csv: str
+    # Cap the in-body CSV at ~10 MB so a giant string can't OOM the worker.
+    # A human tradebook is well under 1 MB.
+    csv: str = Field(..., max_length=10 * 1024 * 1024)
 
 
 class OptimizeReq(BaseModel):
     method:        str   = "markowitz"  # 'markowitz' | 'cvar' | 'min_vol'
     confidence:    float = 0.95
     riskFreeRate:  float = 0.07
-    universe:      Optional[list[str]] = None      # extra symbols to consider
+    # Cap to 200 extra symbols — enough for a watchlist, prevents O(n²)
+    # covariance from stalling the worker on attacker-controlled lists.
+    universe:      Optional[list[str]] = Field(default=None, max_length=200)
     points:        int   = 25
     targetWeights: Optional[dict[str, float]] = None  # if user already chose
 
@@ -169,9 +183,17 @@ async def import_file(pid: str, request: Request, file: UploadFile = File(...)):
     Excel workbooks are flattened to CSV (first sheet only) before parsing
     so the same column conventions apply (Zerodha / Upstox / generic
     symbol,side,qty,price,date)."""
-    raw = await file.read()
+    # Cap the upload at 10 MB to prevent memory-exhaustion DoS. A real
+    # tradebook for a human is well under 1 MB even after years of trading.
+    _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+    raw = await file.read(_MAX_UPLOAD_BYTES + 1)
     if not raw:
         return JSONResponse(status_code=400, content={"error": "Empty file"})
+    if len(raw) > _MAX_UPLOAD_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content={"error": f"File too large (>{_MAX_UPLOAD_BYTES // (1024 * 1024)} MB)."},
+        )
     name = (file.filename or "").lower()
     try:
         if name.endswith(".xlsx") or name.endswith(".xlsm"):

@@ -68,7 +68,7 @@ def client():
     from main import app
     token = _test_token()
     with patch.dict(os.environ, {"SESSION_SECRET": _TEST_SECRET}), \
-         patch("app.routes.auth._secret", return_value=_TEST_SECRET):
+         patch("app.lib.auth_tokens._secret", return_value=_TEST_SECRET):
         yield TestClient(app, headers={"Authorization": f"Bearer {token}"})
 
 
