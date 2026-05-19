@@ -327,6 +327,24 @@ COMPANY_MAP: dict[str, str] = dict(INDICES_COMPANY_MAP)
 ALL_SYMBOLS: list[str] = INDICES + _merge(NIFTY100, MIDCAP, SMALLCAP, MICROCAP)
 
 
+# Tracks whether the live AMFI / NSE-membership cache was successfully loaded
+# at import time. False ⇒ scanners and screener are running on the hardcoded
+# fallback universe (potentially months out of date — surfaced in the UI as a
+# stale-universe banner so users don't think they're scanning the live market).
+is_live_universe: bool = False
+universe_loaded_at: str | None = None
+
+
+def universe_freshness() -> dict:
+    """Public freshness contract for the universe — read by /scanners and /stocks endpoints."""
+    return {
+        "isLiveUniverse":   is_live_universe,
+        "loadedAt":         universe_loaded_at,
+        "totalSymbols":     len(ALL_SYMBOLS),
+        "totalSectors":     len(SECTOR_SYMBOLS),
+    }
+
+
 def build_universe(universes: list[str]) -> list[str]:
     out: list[str] = []
     if "NIFTY100" in universes:
@@ -416,10 +434,19 @@ try:
     _cached = _load_cache()
     if _cached:
         _apply_live_data(_cached)
+        is_live_universe = True
+        from datetime import datetime as _dt, timezone as _tz
+        universe_loaded_at = _dt.now(_tz.utc).isoformat()
         import logging as _log
         _log.getLogger(__name__).info(
             "universe: loaded live data — %d symbols, %d sectors",
             len(ALL_SYMBOLS), len(SECTOR_SYMBOLS),
+        )
+    else:
+        import logging as _log
+        _log.getLogger(__name__).warning(
+            "universe: live cache empty — falling back to hardcoded lists "
+            "(may be months out of date; users will see stale-universe banner)"
         )
 except Exception as _e:
     import logging as _log

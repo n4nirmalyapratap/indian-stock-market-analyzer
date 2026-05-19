@@ -466,12 +466,13 @@ def _reply_lot_size(ctx: dict) -> str:
         "|--|--|\n"
         "| NIFTY 50 | **75** |\n"
         "| BANK NIFTY | **30** |\n"
-        "| FINNIFTY | **40** |\n"
-        "| MIDCPNIFTY | **75** |\n"
+        "| FINNIFTY | **65** |\n"
+        "| MIDCPNIFTY | **120** |\n"
         "| SENSEX | **10** |\n"
         "| BANKEX | **15** |\n\n"
         "**Example:** 1 lot of NIFTY Iron Condor at ₹100 net credit = ₹100 × 75 = ₹7,500 collected\n\n"
-        "Lot sizes are set by SEBI/NSE and revised periodically to keep notional value consistent."
+        "Lot sizes are set by SEBI/NSE and revised periodically to keep notional value consistent. "
+        "FINNIFTY and MIDCPNIFTY were revised in Nov 2024 (SEBI/HO/MRD/MRD-PoD-2/P/CIR/2024/113)."
     )
 
 

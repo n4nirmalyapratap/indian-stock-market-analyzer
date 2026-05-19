@@ -1,0 +1,40 @@
+🔴 CRITICAL — these mislead the user about what they're seeing
+1. Pattern detection confidence scores are FAKE (patterns_service.py lines 217-413)
+Every pattern returns a hardcoded confidence (72, 65, 78, 70, 82, etc.) that looks data-driven but is literally just a number I/the author typed in. A "Hammer" on RELIANCE and a "Hammer" on TCS get the same 72 regardless of strength. Same for target prices (price * 1.04 for everything).
+
+2. Pattern scanner only covers 28 of 100+ stocks (patterns_service.py:139-141)
+
+universe_map = [(NIFTY100[:15], "NIFTY100"), (MIDCAP[:8], "MIDCAP"), (SMALLCAP[:5], "SMALLCAP")]
+
+User thinks they're seeing market-wide patterns. They're seeing the first 28 stocks alphabetically (or whatever the list order is).
+
+3. Sector "Correlation" silently becomes a single-point proxy (analytics_service.py:98-103)
+When historical fetch fails, it falls back to a single live pChange number per sector. A list of length 1 can't be correlated — but it ships a "correlation matrix" anyway. Same dishonesty pattern as the news audit caught.
+
+4. Pattern scan loop swallows every per-symbol exception silently (patterns_service.py:153-154)
+If 20 of 28 symbols fail to fetch, the user sees 8-symbol coverage with no warning.
+
+5. Stock detail: 200 OK with empty analysis when history fetch fails (stocks_service.py:31-46)
+Quote shows, technicals say "Insufficient data". User can't tell if it's a real lack of bars or a silent fetch failure.
+
+🟠 MAJOR — wrong/misleading but less load-bearing
+6. Pattern detectedAt lies about freshness — set to utcnow() at scan time, then cached 30 min. A pattern shown as "detected just now" can actually be 29 min old.
+
+7. Risk/Reward formula has incomplete guards (stocks_service.py:195-196) — only guards (price - ns) > 0; doesn't guard nr <= price (returns negative R/R as if it were valid). Doesn't surface "no valid R/R available".
+
+8. Breadth adRatio falls back to float(advances) when declines==0 (analytics_service.py:192) — dimensionally wrong. Should be None or Inf, not a number that looks like a ratio.
+
+9. StockFinancials tab has NO source/freshness label (frontend) — every other panel got a <DataFreshness> pill in the news audit; this one didn't. User doesn't know if numbers are TTM, last FY, MRQ, or 6 months stale from Yahoo.
+
+10. Sector correlation uses simple returns instead of log returns (analytics_service.py:89-92) — biases correlation matrix in periods with large moves. Industry standard for correlation is log returns.
+
+🟡 MINOR — magic numbers / smaller honesty gaps
+11. Pattern target/stop multipliers hardcoded (price * 1.04, price - atr, etc.) — not data-driven, no rationale surfaced to user.
+
+12. Momentum-score weights 0.6 * |pc| + 0.4 * vol/1M — magic coefficients (analytics_service.py:244).
+
+13. Pivot points use df.iloc[-2] — if [-1] is an unsealed intraday candle, "yesterday's pivots" become "two-days-ago's pivots".
+
+14. Yahoo fetcher has 10-15s timeout but no retry, no circuit breaker — single transient blip = empty data.
+
+15. pandas_ta shim's BBands / MACD column naming and seed-EMA convention can drift ~0.1% from TradingView. Not a bug, but worth a comment.

@@ -6,7 +6,7 @@ import {
   LayoutTemplate, PanelRight, X, Search,
   ChevronDown, Calendar,
 } from "lucide-react";
-import ChartPanel, { type DrawingTool, type Drawing, type ChartType } from "@/components/trading/ChartPanel";
+import ChartPanel, { type DrawingTool, type Drawing, type ChartType, INDICATOR_CATALOG } from "@/components/trading/ChartPanel";
 import WatchlistPanel, { type WatchlistPanelHandle } from "@/components/trading/WatchlistPanel";
 import LeftDrawingBar from "@/components/trading/LeftDrawingBar";
 import { useTheme } from "@/context/ThemeContext";
@@ -182,7 +182,8 @@ const RANGES: RangeEntry[] = [
   { label: "6M",  p: "6mo", i: "1d"  },
   { label: "YTD", p: "ytd", i: "1d"  }, // resolved dynamically
   { label: "1Y",  p: "1y",  i: "1d"  },
-  { label: "All", p: "5y",  i: "1wk" },
+  { label: "5Y",  p: "5y",  i: "1wk" },
+  { label: "All", p: "max", i: "1wk" },
 ];
 
 // ─── Layout modes ────────────────────────────────────────────────────────────
@@ -196,14 +197,12 @@ const LAYOUTS: { mode: LayoutMode; label: string; icon: React.ReactNode; panels:
 ];
 
 // ─── Indicators ──────────────────────────────────────────────────────────────
-const IND_OPTS = [
-  { key: "ema9",   label: "EMA 9",   color: "#f59e0b" },
-  { key: "ema21",  label: "EMA 21",  color: "#6366f1" },
-  { key: "ema50",  label: "EMA 50",  color: "#10b981" },
-  { key: "ema200", label: "EMA 200", color: "#ef4444" },
-  { key: "sma50",  label: "SMA 50",  color: "#a78bfa" },
-  { key: "bb",     label: "BB (20)", color: "#3b82f6" },
-];
+// Group catalog entries for the menu (preserves catalog order within groups).
+const IND_GROUPS: { name: string; items: typeof INDICATOR_CATALOG }[] = (() => {
+  const order = ["Moving Averages", "Channels & Bands", "Trend / Volatility", "Oscillators", "Volume"] as const;
+  return order.map(name => ({ name, items: INDICATOR_CATALOG.filter(i => i.group === name) }))
+    .filter(g => g.items.length > 0);
+})();
 
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
@@ -263,8 +262,11 @@ const SearchModal = forwardRef<SearchModalHandle, {
     debounce.current = setTimeout(async () => {
       setLoading(true);
       try {
-        const d = await fetchApi<{ results: unknown[] }>(`/stocks/search?q=${encodeURIComponent(val.trim())}`);
-        setResults(d.results ?? []); setActiveIdx(0);
+        const d = await fetchApi<{ results: SearchResult[] }>(`/stocks/search?q=${encodeURIComponent(val.trim())}`);
+        const results = Array.isArray(d?.results)
+          ? d.results.filter((r): r is SearchResult => !!r && typeof r === "object" && typeof (r as SearchResult).symbol === "string")
+          : [];
+        setResults(results); setActiveIdx(0);
       } catch { setResults([]); }
       finally { setLoading(false); }
     }, 160);
@@ -590,11 +592,27 @@ export default function TradingPlatform() {
   const { theme } = useTheme();
   const [drawingTool, setDrawingTool] = useState<string>("none");
   const [indicators, setIndicators] = useState<Set<string>>(new Set());
-  const [showRSI, setShowRSI] = useState(false);
-  const [showMACD, setShowMACD] = useState(false);
   const [showWatchlist, setShowWatchlist] = useState(true);
   const [showLayouts, setShowLayouts] = useState(false);
   const [showIndMenu, setShowIndMenu] = useState(false);
+  const indMenuRef = useRef<HTMLDivElement | null>(null);
+  const layoutMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // Close popovers on outside click or Escape so they don't linger.
+  useEffect(() => {
+    if (!showIndMenu && !showLayouts) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (showIndMenu && indMenuRef.current && !indMenuRef.current.contains(t))    setShowIndMenu(false);
+      if (showLayouts && layoutMenuRef.current && !layoutMenuRef.current.contains(t)) setShowLayouts(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setShowIndMenu(false); setShowLayouts(false); }
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [showIndMenu, showLayouts]);
 
   const [customPeriodCfg, setCustomPeriodCfg] = useState<{ p: string; i: string; start?: string; end?: string } | null>(null);
   const [activeRange, setActiveRange] = useState<string | null>(null);
@@ -818,7 +836,7 @@ export default function TradingPlatform() {
         <div className="w-px h-5" style={{ background: PT.divider }} />
 
         {/* Indicators */}
-        <div className="relative">
+        <div className="relative" ref={indMenuRef}>
           <button
             onClick={() => setShowIndMenu(v => !v)}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors"
@@ -830,41 +848,59 @@ export default function TradingPlatform() {
             )}
           </button>
           {showIndMenu && (
-            <div className="absolute top-full left-0 mt-1 z-50 rounded shadow-2xl p-3 w-52" style={{ background: PT.dropBg, border: `1px solid ${PT.dropBor}` }}>
-              <div className="text-[11px] font-semibold mb-2" style={{ color: PT.secTxt }}>Moving Averages</div>
-              {IND_OPTS.map(opt => (
-                <label key={opt.key} className="flex items-center gap-2.5 py-1 cursor-pointer group">
-                  <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${indicators.has(opt.key) ? "bg-indigo-600 border-indigo-600" : "border-gray-600 group-hover:border-gray-400"}`}>
-                    {indicators.has(opt.key) && <div className="w-2 h-2 rounded-sm" style={{ background: "#fff" }} />}
-                  </div>
-                  <input type="checkbox" checked={indicators.has(opt.key)} onChange={() => toggleIndicator(opt.key)} className="hidden" />
-                  <div className="w-3 h-0.5 rounded" style={{ background: opt.color }} />
-                  <span className="text-xs" style={{ color: PT.itemTxt }}>{opt.label}</span>
-                </label>
+            <div className="absolute top-full left-0 mt-1 z-50 rounded shadow-2xl p-3 w-64 max-h-[70vh] overflow-y-auto" style={{ background: PT.dropBg, border: `1px solid ${PT.dropBor}` }}>
+              {IND_GROUPS.map((g, gi) => (
+                <div key={g.name} className={gi > 0 ? "mt-3 pt-2" : ""} style={gi > 0 ? { borderTop: `1px solid ${PT.dropBor}` } : {}}>
+                  <div className="text-[11px] font-semibold mb-1.5" style={{ color: PT.secTxt }}>{g.name}</div>
+                  {g.items.map(opt => {
+                    const active = indicators.has(opt.key);
+                    return (
+                      <div key={opt.key} className="flex items-center gap-2 py-1 group">
+                        <button
+                          type="button"
+                          onClick={() => toggleIndicator(opt.key)}
+                          className="flex items-center gap-2 flex-1 text-left cursor-pointer"
+                        >
+                          <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${active ? "bg-indigo-600 border-indigo-600" : "border-gray-600 group-hover:border-gray-400"}`}>
+                            {active && <div className="w-2 h-2 rounded-sm" style={{ background: "#fff" }} />}
+                          </div>
+                          <div className="w-3 h-0.5 rounded shrink-0" style={{ background: opt.pillColor }} />
+                          <span className="text-xs" style={{ color: PT.itemTxt }}>{opt.label}</span>
+                        </button>
+                        {active && (
+                          <button
+                            type="button"
+                            title={`Remove ${opt.label}`}
+                            onClick={(e) => { e.stopPropagation(); toggleIndicator(opt.key); }}
+                            className="w-4 h-4 flex items-center justify-center rounded text-gray-500 hover:text-red-400 hover:bg-red-500/15"
+                          >
+                            <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                              <path d="M2 2 L8 8 M8 2 L2 8" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               ))}
-              <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${PT.dropBor}` }}>
-                <div className="text-[11px] font-semibold mb-2" style={{ color: PT.secTxt }}>Oscillators</div>
-                {[
-                  { key: "rsi", label: "RSI (14)", active: showRSI, toggle: () => setShowRSI(v => !v) },
-                  { key: "macd", label: "MACD (12,26,9)", active: showMACD, toggle: () => setShowMACD(v => !v) },
-                ].map(opt => (
-                  <label key={opt.key} className="flex items-center gap-2.5 py-1 cursor-pointer group">
-                    <div
-                      onClick={opt.toggle}
-                      className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${opt.active ? "bg-indigo-600 border-indigo-600" : "border-gray-600 group-hover:border-gray-400"}`}
-                    >
-                      {opt.active && <div className="w-2 h-2 rounded-sm" style={{ background: "#fff" }} />}
-                    </div>
-                    <span className="text-xs" style={{ color: PT.itemTxt }}>{opt.label}</span>
-                  </label>
-                ))}
-              </div>
+              {indicators.size > 0 && (
+                <div className="mt-3 pt-2 flex justify-end" style={{ borderTop: `1px solid ${PT.dropBor}` }}>
+                  <button
+                    type="button"
+                    onClick={() => setIndicators(new Set())}
+                    className="text-[11px] px-2 py-1 rounded text-gray-400 hover:text-red-400 hover:bg-red-500/10"
+                  >
+                    Clear all
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
 
         {/* Layout selector */}
-        <div className="relative">
+        <div className="relative" ref={layoutMenuRef}>
           <button
             onClick={() => setShowLayouts(v => !v)}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors"
@@ -877,7 +913,7 @@ export default function TradingPlatform() {
               {LAYOUTS.map(l => (
                 <button
                   key={l.mode}
-                  onClick={() => setLayout(l.mode)}
+                  onClick={() => { setLayout(l.mode); setShowLayouts(false); }}
                   title={l.label}
                   className="w-9 h-9 flex items-center justify-center rounded transition-colors"
                   style={layoutMode === l.mode ? { background: "#6366f1", color: "#ffffff" } : { color: PT.iconTxt }}
@@ -1008,8 +1044,8 @@ export default function TradingPlatform() {
                   })())}
                   chartType={chartType}
                   indicators={indicators}
-                  showRSI={showRSI}
-                  showMACD={showMACD}
+                  onIndicatorRemove={toggleIndicator}
+                  onClearIndicators={() => setIndicators(new Set())}
                   isActive={panel.id === activePanelId}
                   drawings={panel.drawings}
                   onDrawingAdd={(d) => addDrawing(panel.id, d)}

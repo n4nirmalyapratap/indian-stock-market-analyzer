@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 
 from .nse_service import NseService
 from .yahoo_service import YahooService
@@ -18,59 +19,85 @@ class StocksService:
         self.price = PriceService(nse, yahoo)
 
     async def get_stock_details(self, symbol: str) -> dict:
+        from . import market_cache_service as _disk
+
         upper = symbol.upper()
-        quote_data = None
-        history = []
+        history: list[dict] = []
+        history_error: Optional[str] = None
 
-        try:
-            nse_quote = await self.nse.get_stock_quote(upper)
-            if nse_quote and nse_quote.get("priceInfo"):
-                p = nse_quote["priceInfo"]
-                info = nse_quote.get("info") or nse_quote.get("metadata") or {}
-                week_high = p.get("weekHighLow", {}) or {}
-                quote_data = {
-                    "symbol": upper,
-                    "companyName": info.get("companyName", upper),
-                    "industry": info.get("industry"),
-                    "sector": info.get("sector"),
-                    "lastPrice": p.get("lastPrice"),
-                    "change": p.get("change"),
-                    "pChange": p.get("pChange"),
-                    "open": p.get("open"),
-                    "dayHigh": p.get("intraDayHighLow", {}).get("max") or p.get("dayHigh"),
-                    "dayLow": p.get("intraDayHighLow", {}).get("min") or p.get("dayLow"),
-                    "previousClose": p.get("previousClose"),
-                    "volume": p.get("totalTradedVolume"),
-                    "fiftyTwoWeekHigh": week_high.get("max"),
-                    "fiftyTwoWeekLow": week_high.get("min"),
-                    "source": "NSE",
-                }
-        except Exception as e:
-            logger.warning("NSE quote fetch failed for %s: %s", upper, e)
-
-        if not quote_data:
-            quote_data = await self.yahoo.get_quote(upper)
-        if not quote_data:
-            return {"error": f"Stock {upper} not found", "symbol": upper}
-
+        # CLOSE-TRANSITION CONSISTENCY: fetch & seal HISTORY first so that the
+        # subsequent quote call sees an EOD-sealed snapshot and overlays the
+        # official close. This guarantees `quote.lastPrice` equals
+        # `historicalData[-1].close` in the same response, even on the very
+        # first request after market close.
         try:
             # PriceService: NSE primary → Yahoo fallback → disk cache when market closed
-            h = await self.price.get_historical_data(upper, 300)  # 300 days ≈ 210 trading days — enough for EMA 200
+            # 500 calendar days ≈ 350 trading days — comfortable head-room for
+            # EMA-200 plus the ~10 bars of look-back the entry-recommendation
+            # uses for crossover confirmation. 300 was the bare minimum and
+            # left no slack when Yahoo dropped a few non-trading days.
+            h = await self.price.get_historical_data(upper, 500)
             if h:
                 history = h
+            else:
+                history_error = "Provider returned no historical bars"
         except Exception as e:
             logger.warning("Historical data fetch failed for %s: %s", upper, e)
+            history_error = f"{type(e).__name__}: {e}"
+
+        # Single source of truth for the quote (NSE primary, Yahoo fallback)
+        quote_meta = await self.price.get_quote_with_meta(upper)
+        if not quote_meta:
+            return {"error": f"Stock {upper} not found", "symbol": upper}
+        quote_data = quote_meta["quote"]
 
         closes = [d["close"] for d in history if d.get("close")]
         analysis = self._analyze(history, closes) if len(closes) > 20 else None
+
+        # Honest analysis-availability surface. The previous payload silently
+        # collapsed "fetch failed" and "stock too new" into the same string —
+        # callers had no way to distinguish a transient provider outage from
+        # a structurally insufficient history.
+        if analysis is not None:
+            analysis_available  = True
+            analysis_error: Optional[str] = None
+            insight             = self._build_insight(quote_data, analysis)
+            entry_rec           = self._build_entry(quote_data, analysis)
+        else:
+            analysis_available  = False
+            if history_error:
+                analysis_error = f"Historical data fetch failed — {history_error}"
+            elif len(closes) <= 20:
+                analysis_error = f"Insufficient history ({len(closes)} bars; need >20 for EMA/RSI/MACD)"
+            else:
+                analysis_error = "Insufficient historical data"
+            insight   = analysis_error
+            entry_rec = None
+
+        # Pull provenance from disk for the historical block
+        hist_meta = _disk.load_with_meta(upper, 300) or {}
 
         return {
             **quote_data,
             "symbol": upper,
             "technicalAnalysis": analysis,
-            "insight": self._build_insight(quote_data, analysis) if analysis else "Insufficient historical data",
-            "entryRecommendation": self._build_entry(quote_data, analysis) if analysis else None,
+            "analysisAvailable": analysis_available,
+            "analysisError":     analysis_error,
+            "insight": insight,
+            "entryRecommendation": entry_rec,
             "historicalData": history[-30:],
+            "meta": {
+                "source":           quote_meta.get("source"),
+                "asOf":             quote_meta.get("asOf"),
+                "marketState":      quote_meta.get("marketState"),
+                "eodSealed":        bool(quote_meta.get("eodSealed")),
+                "eodDate":          quote_meta.get("eodDate"),
+                "cacheVersion":     _disk.cache_version(),
+                "historySource":    hist_meta.get("source") or "LIVE",
+                "historyAsOf":      hist_meta.get("savedAt"),
+                "historyEodSealed": bool(hist_meta.get("eodSealed")),
+                "historyEodDate":   hist_meta.get("eodDate"),
+            },
         }
 
     def _analyze(self, ohlcv: list[dict], closes: list[float]) -> dict:
@@ -85,21 +112,27 @@ class StocksService:
         sr     = detect_sr(ohlcv, 10)
 
         lc   = closes[-1]
-        le9  = ema9[-1]  if ema9  else 0
-        le21 = ema21[-1] if ema21 else 0
-        le50 = ema50[-1] if ema50 else 0
-        le200= ema200[-1]if ema200 else 0
-        lr   = rsi[-1]   if rsi   else 50
-        lh   = macd["histogram"][-1] if macd["histogram"] else 0
-        lbu  = bb["upper"][-1]  if bb["upper"]  else lc
-        lbl  = bb["lower"][-1]  if bb["lower"]  else lc
-        lbm  = bb["middle"][-1] if bb["middle"] else lc
-        latr = atr[-1]          if atr          else lc * 0.015
+        # When history is too short to compute the indicator, return None so
+        # the UI can render "—" instead of pretending the EMA equals 0 (which
+        # makes the price look infinitely above the average). Trend defaults
+        # to NEUTRAL when EMA50 is missing.
+        le9  = ema9[-1]   if ema9   else None
+        le21 = ema21[-1]  if ema21  else None
+        le50 = ema50[-1]  if ema50  else None
+        le200= ema200[-1] if ema200 else None
+        lr   = rsi[-1]    if rsi    else None
+        lh   = macd["histogram"][-1] if macd["histogram"] else None
+        lbu  = bb["upper"][-1]  if bb["upper"]  else None
+        lbl  = bb["lower"][-1]  if bb["lower"]  else None
+        lbm  = bb["middle"][-1] if bb["middle"] else None
+        latr = atr[-1]          if atr          else None
 
-        if lc > le50:
-            trend = "STRONG_BULLISH" if lc > le200 else "BULLISH"
+        if le50 is None:
+            trend = "NEUTRAL"
+        elif lc > le50:
+            trend = "STRONG_BULLISH" if (le200 is not None and lc > le200) else "BULLISH"
         elif lc < le50:
-            trend = "STRONG_BEARISH" if lc < le200 else "BEARISH"
+            trend = "STRONG_BEARISH" if (le200 is not None and lc < le200) else "BEARISH"
         else:
             trend = "NEUTRAL"
 
@@ -108,19 +141,34 @@ class StocksService:
         nearest_support    = supports_below[-1]    if supports_below    else None
         nearest_resistance = resistances_above[0]  if resistances_above else None
 
-        bw = f"{(lbu - lbl) / lbm * 100:.2f}" if lbm else "0"
-        bb_pos = "ABOVE_UPPER" if lc > lbu else "BELOW_LOWER" if lc < lbl else "INSIDE"
+        bw = f"{(lbu - lbl) / lbm * 100:.2f}" if (lbm and lbu is not None and lbl is not None) else None
+        if lbu is None or lbl is None:
+            bb_pos = "UNKNOWN"
+        else:
+            bb_pos = "ABOVE_UPPER" if lc > lbu else "BELOW_LOWER" if lc < lbl else "INSIDE"
+
+        # RSI/MACD None-guards — when history is too short to compute the
+        # indicator we surface UNKNOWN instead of fabricating an OVERBOUGHT
+        # zone from a None comparison (Python 3 raises TypeError on None>70).
+        if lr is None:
+            rsi_zone = "UNKNOWN"
+        else:
+            rsi_zone = "OVERBOUGHT" if lr > 70 else "OVERSOLD" if lr < 30 else "NEUTRAL"
+        if lh is None:
+            macd_cross = "UNKNOWN"
+        else:
+            macd_cross = "BULLISH" if lh > 0 else "BEARISH"
 
         return {
             "currentPrice": lc,
             "ema": {"ema9": le9, "ema21": le21, "ema50": le50, "ema200": le200},
-            "rsi": lr,
-            "rsiZone": "OVERBOUGHT" if lr > 70 else "OVERSOLD" if lr < 30 else "NEUTRAL",
+            "rsi": round(lr, 2) if lr is not None else None,
+            "rsiZone": rsi_zone,
             "macd": {
-                "value": macd["macd"][-1] if macd["macd"] else 0,
-                "signal": macd["signal"][-1] if macd["signal"] else 0,
+                "value": macd["macd"][-1] if macd["macd"] else None,
+                "signal": macd["signal"][-1] if macd["signal"] else None,
                 "histogram": lh,
-                "crossover": "BULLISH" if lh > 0 else "BEARISH",
+                "crossover": macd_cross,
             },
             "bollingerBands": {
                 "upper": lbu, "middle": lbm, "lower": lbl,
@@ -145,8 +193,15 @@ class StocksService:
         }
         if analysis["trend"] in trend_map:
             parts.append(trend_map[analysis["trend"]])
-        parts.append(f"RSI at {analysis['rsi']:.1f} — {analysis['rsiZone']}")
-        parts.append(f"MACD {analysis['macd']['crossover'].lower()} momentum")
+        # Honest copy when the indicator couldn't be computed — say so instead
+        # of crashing with a NoneType format error or printing "RSI at None".
+        if analysis.get("rsi") is not None:
+            parts.append(f"RSI at {analysis['rsi']:.1f} — {analysis['rsiZone']}")
+        else:
+            parts.append("RSI unavailable (insufficient history)")
+        cross = analysis["macd"]["crossover"]
+        if cross != "UNKNOWN":
+            parts.append(f"MACD {cross.lower()} momentum")
         if analysis.get("nearestSupport"):
             parts.append(f"Support at ₹{analysis['nearestSupport']:.2f}")
         if analysis.get("nearestResistance"):
@@ -157,17 +212,23 @@ class StocksService:
         bull = bear = 0
         if "BULL" in analysis["trend"]:
             bull += 1
-        else:
+        elif "BEAR" in analysis["trend"]:
             bear += 1
-        if analysis["rsi"] < 50:
-            bull += 1
-        else:
-            bear += 1
+        # else NEUTRAL — score neither side rather than silently counting it as bearish
+
+        rsi_val = analysis.get("rsi")
+        if rsi_val is not None:
+            if rsi_val < 50:
+                bull += 1
+            else:
+                bear += 1
         if analysis["macd"]["crossover"] == "BULLISH":
             bull += 1
-        else:
+        elif analysis["macd"]["crossover"] == "BEARISH":
             bear += 1
         bb_pos = analysis["bollingerBands"]["position"]
+        # Bollinger contributes weight 2 — explicitly documented because its
+        # vote effectively double-counts vs the EMA / RSI / MACD legs above.
         if bb_pos == "BELOW_LOWER":
             bull += 2
         elif bb_pos == "ABOVE_UPPER":
@@ -178,16 +239,20 @@ class StocksService:
         confidence = abs(bull - bear) / total * 100 if total else 0
 
         entry_call = "WAIT"
-        if signal == "BULLISH" and confidence > 30 and analysis["rsiZone"] != "OVERBOUGHT":
+        if signal == "BULLISH" and confidence > 30 and analysis["rsiZone"] not in ("OVERBOUGHT", "UNKNOWN"):
             entry_call = "ENTRY_CALL"
-        elif signal == "BEARISH" and confidence > 30 and analysis["rsiZone"] != "OVERSOLD":
+        elif signal == "BEARISH" and confidence > 30 and analysis["rsiZone"] not in ("OVERSOLD", "UNKNOWN"):
             entry_call = "ENTRY_PUT"
 
         ns = analysis.get("nearestSupport")
         nr = analysis.get("nearestResistance")
         price = analysis["currentPrice"]
-        rr = None
-        if nr and ns and (price - ns) > 0:
+        rr: Optional[str] = None
+        # R/R is only meaningful when the resistance sits *above* the price AND
+        # the support sits *below* it. The previous guard only checked the
+        # support side, so a resistance that was already breached (nr ≤ price)
+        # would yield a zero or negative reward leg dressed up as a real ratio.
+        if nr is not None and ns is not None and nr > price > ns:
             rr = f"{(nr - price) / (price - ns):.2f}"
 
         return {

@@ -943,3 +943,182 @@ class TestRunPairsBacktest:
         result = self.run("A", "B", rows_a, rows_b,
                           hedge_ratio=1.0, mu=0.0, sigma_eq=2.0)
         assert result["totalDays"] == 100
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  TH-8  hydra_forecast — recent volatility window (FIX-8)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestHistoricalVolatilityWindow:
+    def setup_method(self):
+        from app.services.hydra_forecast_service import _historical_volatility
+        self.vol = _historical_volatility
+
+    def test_volatility_uses_recent_returns_not_ancient(self):
+        """A series that is calm early then volatile late must report HIGH vol."""
+        # 200 calm days + 20 volatile days at the end
+        np.random.seed(1)
+        calm     = list(100 + np.cumsum(np.random.randn(200) * 0.01))
+        volatile = list(calm[-1] + np.cumsum(np.random.randn(20) * 5.0))
+        series   = calm + volatile
+        v_recent = self.vol(series, window=20)
+        # And a series that is volatile early then calm late must report LOW vol.
+        series_rev = volatile + calm
+        v_old      = self.vol(series_rev, window=20)
+        assert v_recent > 5 * v_old, (
+            f"recent vol {v_recent:.4f} should dwarf stale-end vol {v_old:.4f}"
+        )
+
+    def test_volatility_short_series_falls_back_to_full(self):
+        v = self.vol([100.0, 101.0, 102.0], window=20)
+        assert v > 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  TH-9  hydra_forecast — EWM is a real smoother, not closes[-1] (FIX-9)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestEwmForecastSmoothing:
+    def setup_method(self):
+        from app.services.hydra_forecast_service import _ewm_forecast
+        self.ewm = _ewm_forecast
+
+    def test_ewm_on_constant_series_returns_constant(self):
+        preds = self.ewm([100.0] * 50, horizon=5, alpha=0.3)
+        assert all(p == pytest.approx(100.0) for p in preds)
+
+    def test_ewm_lags_below_last_close_on_strong_uptrend(self):
+        """For a strictly rising series the smoothed level must be below last close
+        (the broken implementation returned closes[-1] exactly)."""
+        closes = _rising(100, start=100.0, step=1.0)
+        preds  = self.ewm(closes, horizon=3, alpha=0.2)
+        assert all(p < closes[-1] for p in preds), \
+            f"EWM level {preds[0]:.2f} should lag last close {closes[-1]:.2f}"
+        # All predictions are flat at the smoothed level (simple-exp-smoothing).
+        assert preds[0] == pytest.approx(preds[-1])
+
+    def test_ewm_lags_above_last_close_on_strong_downtrend(self):
+        closes = list(range(200, 100, -1))   # 200 → 101
+        preds  = self.ewm(closes, horizon=3, alpha=0.2)
+        assert all(p > closes[-1] for p in preds)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  TH-10 hydra_db_service — adjusted vs raw close (FIX-7)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestDbAdjustedVsRawClose:
+    def setup_method(self, method=None):
+        import importlib, sys, tempfile, os
+        # Use an isolated temp DB so we don't touch the real hydra_prices.db
+        self.tmpdir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.tmpdir, "test_hydra_prices.db")
+        from app.services import hydra_db_service as db_mod
+        self._orig_path = db_mod.DB_PATH
+        db_mod.DB_PATH = self.db_path
+        self.db = db_mod
+
+    def teardown_method(self, method=None):
+        import shutil
+        self.db.DB_PATH = self._orig_path
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_schema_includes_raw_close_column(self):
+        conn = self.db.ensure_schema()
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(daily_prices)").fetchall()]
+        conn.close()
+        assert "raw_close" in cols
+        assert "close" in cols
+
+    def test_get_history_exposes_both_close_and_raw_close(self):
+        conn = self.db.ensure_schema()
+        # Simulate a 2-for-1 split: pre-split raw=200, adj=100; post-split raw=adj=100.
+        rows = [
+            {"date": "2025-01-01", "open": 200, "high": 205, "low": 198,
+             "close": 100.0, "raw_close": 200.0, "volume": 1000},
+            {"date": "2025-01-02", "open": 100, "high": 102, "low":  99,
+             "close": 101.0, "raw_close": 101.0, "volume": 1500},
+        ]
+        self.db._upsert_rows(conn, "TESTSPLIT", rows)
+        conn.close()
+        out = self.db.get_history("TESTSPLIT", days=3650)
+        assert len(out) == 2
+        # Pre-split day: OHLC and raw_close form a consistent candle (raw 198–205, raw_close 200)
+        pre = out[0]
+        assert pre["low"] <= pre["rawClose"] <= pre["high"]
+        # …while `close` is the adjusted value (100), divorced from the raw OHLC band.
+        assert pre["close"] == pytest.approx(100.0)
+        assert pre["rawClose"] == pytest.approx(200.0)
+
+    def test_legacy_db_without_raw_close_column_is_migrated(self):
+        """Old DBs created before FIX-7 must auto-gain the raw_close column."""
+        import sqlite3
+        # Hand-create a legacy schema without raw_close
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("""
+            CREATE TABLE daily_prices (
+                ticker TEXT, date TEXT, open REAL, high REAL,
+                low REAL, close REAL, volume INTEGER,
+                PRIMARY KEY (ticker, date)
+            )
+        """)
+        conn.commit()
+        conn.close()
+        # ensure_schema must ALTER TABLE to add the missing column
+        conn2 = self.db.ensure_schema()
+        cols = [r[1] for r in conn2.execute("PRAGMA table_info(daily_prices)").fetchall()]
+        conn2.close()
+        assert "raw_close" in cols
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  TH-11 hydra_pairs — scan_pairs no longer breaks early (FIX-10)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestScanPairsNoEarlyBreak:
+    def setup_method(self):
+        from app.services.hydra_pairs_service import scan_pairs
+        self.scan = scan_pairs
+
+    def test_scan_evaluates_every_combination(self):
+        """FIX-10: with the early-break removed, scan_pairs must call the
+        cointegration test on every C(n,2) pair, not bail after the first
+        max_pairs hits. We verify this by counting cointegration calls."""
+        from app.services import hydra_pairs_service as pairs_mod
+        symbols = ["S1", "S2", "S3", "S4", "S5", "S6"]      # 15 unique pairs
+        history = {s: _rising(80, start=100.0 + i, step=0.5)
+                   for i, s in enumerate(symbols)}
+        calls = {"n": 0}
+        original = pairs_mod._engle_granger_pvalue
+        def counting_pvalue(a, b):
+            calls["n"] += 1
+            return 0.001   # always cointegrated → triggers max_pairs short-circuit in old code
+        pairs_mod._engle_granger_pvalue = counting_pvalue
+        try:
+            result = pairs_mod.scan_pairs(symbols, history,
+                                          p_threshold=0.05, max_pairs=3)
+        finally:
+            pairs_mod._engle_granger_pvalue = original
+        # Old code would have stopped after ~3-4 pairs; FIX-10 evaluates all 15.
+        assert calls["n"] == 15, f"Expected 15 cointegration calls, got {calls['n']}"
+        # Final return is still capped at max_pairs.
+        assert len(result) == 3
+
+    def test_scan_results_sorted_by_pvalue_ascending(self):
+        """Sanity: returned pairs are sorted best-first."""
+        from app.services import hydra_pairs_service as pairs_mod
+        symbols = ["S1", "S2", "S3", "S4"]
+        history = {s: _rising(80, start=100.0 + i, step=0.5)
+                   for i, s in enumerate(symbols)}
+        # Assign decreasing p-values per call so later pairs are "better".
+        seq = iter([0.04, 0.03, 0.02, 0.01, 0.005, 0.001])
+        original = pairs_mod._engle_granger_pvalue
+        pairs_mod._engle_granger_pvalue = lambda a, b: next(seq)
+        try:
+            result = pairs_mod.scan_pairs(symbols, history,
+                                          p_threshold=0.05, max_pairs=10)
+        finally:
+            pairs_mod._engle_granger_pvalue = original
+        ps = [r["pValue"] for r in result]
+        assert ps == sorted(ps), f"pairs not sorted ascending: {ps}"
+        assert ps[0] == pytest.approx(0.001)

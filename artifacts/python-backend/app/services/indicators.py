@@ -1,5 +1,17 @@
 """
 Technical indicator calculations using pandas_ta.
+
+KNOWN DRIFT vs TradingView (~0.1% on EMA-derived series):
+The local `pandas_ta` shim wraps the `ta` library, which uses Wilder's
+smoothing seeded from the SMA of the first `length` bars (e.g. EMA(9)
+seeds from the SMA of bars 1-9, then applies the recursive smoother).
+TradingView seeds the EMA from the first single bar's close. Over a
+multi-year series the two converge, but the most recent values can drift
+by ~0.05-0.15% — most visible on Bollinger Bands middle line, MACD
+fast/slow EMAs, and ADX. This is intentional: matching TradingView would
+require a private patched copy of `ta`, and the drift is well below the
+noise of intraday quote latency. Treat indicators here as Wilder-style,
+not TV-style.
 """
 import sys
 import os
@@ -75,7 +87,11 @@ def calculate_vwap(ohlcv: list[dict]) -> list[float]:
     cum_vol = 0.0
     for d in ohlcv:
         tp = (d["high"] + d["low"] + d["close"]) / 3
-        vol = d["volume"] or 0
+        # `.get` so a missing key doesn't KeyError; coerce None → 0 so the
+        # bar contributes nothing rather than poisoning the running sum.
+        # When *every* bar lacks volume, `cum_vol` stays 0 and we fall back
+        # to typical price — which is the documented degenerate case.
+        vol = d.get("volume") or 0
         cum_tp_vol += tp * vol
         cum_vol += vol
         vwap.append(cum_tp_vol / cum_vol if cum_vol > 0 else tp)

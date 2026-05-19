@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import * as echarts from "echarts";
-import { calcEMA, calcSMA, calcRSI, calcMACD, calcBollingerBands } from "@/lib/indicators";
+import {
+  calcEMA, calcSMA, calcWMA, calcHMA, calcVWMA, calcDEMA, calcTEMA,
+  calcRSI, calcMACD, calcBollingerBands, calcDonchian, calcKeltner,
+  calcATR, calcPSAR, calcSupertrend,
+  calcStochastic, calcStochRSI, calcCCI, calcWilliamsR, calcMFI,
+  calcOBV, calcROC, calcAO, calcCMF, calcTRIX, calcADX,
+} from "@/lib/indicators";
 import { fetchApi } from "@/lib/api";
 
 export type DrawingTool =
@@ -40,9 +46,9 @@ interface Props {
   drawingTool: DrawingTool;
   chartType: ChartType;
   indicators: Set<string>;
-  showRSI: boolean;
-  showMACD: boolean;
   isActive: boolean;
+  onIndicatorRemove?: (key: string) => void;
+  onClearIndicators?: () => void;
   drawings: Drawing[];
   onDrawingAdd: (d: Drawing) => void;
   onDrawingErase: (id: string) => void;
@@ -77,14 +83,230 @@ function getThemeColors(theme: "dark" | "light") {
   };
 }
 
-const IND_META: Record<string, { label: string; color: string }> = {
-  ema9:   { label: "EMA 9",   color: "#f59e0b" },
-  ema21:  { label: "EMA 21",  color: "#6366f1" },
-  ema50:  { label: "EMA 50",  color: "#10b981" },
-  ema200: { label: "EMA 200", color: "#ef4444" },
-  sma50:  { label: "SMA 50",  color: "#a78bfa" },
-  bb:     { label: "BB (20)", color: "#3b82f6" },
-};
+// ─── Indicator catalog ──────────────────────────────────────────────────────
+// One entry per supported indicator. `compute()` returns ECharts series specs
+// (without xAxis/yAxisIndex — those are assigned dynamically by the chart
+// renderer) plus a `cache` map of named series for pill-value lookup.
+
+export interface IndicatorInput {
+  highs: number[]; lows: number[]; closes: number[]; volumes: number[];
+}
+
+export interface IndicatorComputed {
+  // ECharts series specs minus xAxis/yAxisIndex (added by renderer)
+  series: Record<string, any>[];
+  // Named cached series for pill value display (key -> array)
+  cache: Record<string, (number | null)[]>;
+}
+
+export interface IndicatorDef {
+  key: string;
+  label: string;
+  pillColor: string;
+  group: "Moving Averages" | "Channels & Bands" | "Trend / Volatility" | "Oscillators" | "Volume";
+  paneOwn: boolean;        // true = own sub-pane (oscillator); false = overlay on price
+  needsVolume?: boolean;   // skip if symbol has zero volume (e.g. some indices)
+  yMin?: number; yMax?: number;
+  guides?: { value: number; color: string }[];
+  pillSeries?: string;     // cache key to display in pill (default "main")
+  pillDigits?: number;     // decimals for pill (default 2 for oscillators, price-aware otherwise)
+  compute(in_: IndicatorInput): IndicatorComputed;
+}
+
+// Helper for a simple single-line overlay
+function lineSeries(name: string, data: (number | null)[], color: string, width = 1.5, dashed = false) {
+  return {
+    name, type: "line", data, showSymbol: false, connectNulls: false,
+    lineStyle: { color, width, ...(dashed ? { type: "dashed" } : {}) },
+  };
+}
+
+const IND_CATALOG: IndicatorDef[] = [
+  // ─── Moving Averages ─────────────────────────────────────────────────────
+  { key: "ema9",   label: "EMA 9",   pillColor: "#f59e0b", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcEMA(closes, 9);   return { series: [lineSeries("EMA 9",   v, "#f59e0b")], cache: { main: v } }; } },
+  { key: "ema21",  label: "EMA 21",  pillColor: "#6366f1", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcEMA(closes, 21);  return { series: [lineSeries("EMA 21",  v, "#6366f1")], cache: { main: v } }; } },
+  { key: "ema50",  label: "EMA 50",  pillColor: "#10b981", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcEMA(closes, 50);  return { series: [lineSeries("EMA 50",  v, "#10b981")], cache: { main: v } }; } },
+  { key: "ema200", label: "EMA 200", pillColor: "#ef4444", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcEMA(closes, 200); return { series: [lineSeries("EMA 200", v, "#ef4444")], cache: { main: v } }; } },
+  { key: "sma20",  label: "SMA 20",  pillColor: "#22d3ee", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcSMA(closes, 20);  return { series: [lineSeries("SMA 20",  v, "#22d3ee")], cache: { main: v } }; } },
+  { key: "sma50",  label: "SMA 50",  pillColor: "#a78bfa", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcSMA(closes, 50);  return { series: [lineSeries("SMA 50",  v, "#a78bfa")], cache: { main: v } }; } },
+  { key: "wma20",  label: "WMA 20",  pillColor: "#facc15", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcWMA(closes, 20);  return { series: [lineSeries("WMA 20",  v, "#facc15")], cache: { main: v } }; } },
+  { key: "hma20",  label: "HMA 20",  pillColor: "#a3e635", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcHMA(closes, 20);  return { series: [lineSeries("HMA 20",  v, "#a3e635")], cache: { main: v } }; } },
+  { key: "vwma20", label: "VWMA 20", pillColor: "#fb7185", group: "Moving Averages", paneOwn: false, needsVolume: true,
+    compute: ({ closes, volumes }) => { const v = calcVWMA(closes, volumes, 20); return { series: [lineSeries("VWMA 20", v, "#fb7185")], cache: { main: v } }; } },
+  { key: "dema21", label: "DEMA 21", pillColor: "#f472b6", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcDEMA(closes, 21); return { series: [lineSeries("DEMA 21", v, "#f472b6")], cache: { main: v } }; } },
+  { key: "tema21", label: "TEMA 21", pillColor: "#fdba74", group: "Moving Averages", paneOwn: false,
+    compute: ({ closes }) => { const v = calcTEMA(closes, 21); return { series: [lineSeries("TEMA 21", v, "#fdba74")], cache: { main: v } }; } },
+
+  // ─── Channels & Bands ────────────────────────────────────────────────────
+  { key: "bb", label: "BB (20,2)", pillColor: "#3b82f6", group: "Channels & Bands", paneOwn: false, pillSeries: "middle",
+    compute: ({ closes }) => {
+      const b = calcBollingerBands(closes);
+      return {
+        series: [
+          lineSeries("BB+", b.upper,  "#3b82f6", 1, true),
+          lineSeries("BBm", b.middle, "#64748b", 1, true),
+          lineSeries("BB-", b.lower,  "#3b82f6", 1, true),
+        ],
+        cache: { upper: b.upper, middle: b.middle, lower: b.lower },
+      };
+    } },
+  { key: "donchian", label: "Donchian (20)", pillColor: "#0ea5e9", group: "Channels & Bands", paneOwn: false, pillSeries: "middle",
+    compute: ({ highs, lows }) => {
+      const d = calcDonchian(highs, lows);
+      return {
+        series: [
+          lineSeries("DC+", d.upper,  "#0ea5e9", 1, true),
+          lineSeries("DCm", d.middle, "#64748b", 1, true),
+          lineSeries("DC-", d.lower,  "#0ea5e9", 1, true),
+        ],
+        cache: { upper: d.upper, middle: d.middle, lower: d.lower },
+      };
+    } },
+  { key: "keltner", label: "Keltner (20)", pillColor: "#22c55e", group: "Channels & Bands", paneOwn: false, pillSeries: "middle",
+    compute: ({ highs, lows, closes }) => {
+      const k = calcKeltner(highs, lows, closes);
+      return {
+        series: [
+          lineSeries("KC+", k.upper,  "#22c55e", 1, true),
+          lineSeries("KCm", k.middle, "#64748b", 1, true),
+          lineSeries("KC-", k.lower,  "#22c55e", 1, true),
+        ],
+        cache: { upper: k.upper, middle: k.middle, lower: k.lower },
+      };
+    } },
+
+  // ─── Trend overlays ──────────────────────────────────────────────────────
+  { key: "psar", label: "PSAR", pillColor: "#eab308", group: "Trend / Volatility", paneOwn: false,
+    compute: ({ highs, lows }) => {
+      const v = calcPSAR(highs, lows);
+      return {
+        // Plot SAR dots — small scatter via "line" with symbols only
+        series: [{
+          name: "PSAR", type: "scatter", data: v.map(p => p === null ? "-" : p),
+          symbolSize: 3, itemStyle: { color: "#eab308" },
+        }],
+        cache: { main: v },
+      };
+    } },
+  { key: "supertrend", label: "Supertrend (10,3)", pillColor: "#a855f7", group: "Trend / Volatility", paneOwn: false,
+    compute: ({ highs, lows, closes }) => {
+      const st = calcSupertrend(highs, lows, closes, 10, 3);
+      // Split into up/down line segments so trend reversal isn't a single zig-zag
+      const upArr:   (number | null)[] = st.trend.map((v, i) => st.isUp[i] === true  ? v : null);
+      const downArr: (number | null)[] = st.trend.map((v, i) => st.isUp[i] === false ? v : null);
+      return {
+        series: [
+          lineSeries("ST↑", upArr,   "#22c55e", 1.8),
+          lineSeries("ST↓", downArr, "#ef4444", 1.8),
+        ],
+        cache: { main: st.trend },
+      };
+    } },
+
+  // ─── Oscillators (each gets own sub-pane) ────────────────────────────────
+  { key: "rsi", label: "RSI (14)", pillColor: "#f59e0b", group: "Oscillators", paneOwn: true,
+    yMin: 0, yMax: 100, guides: [{ value: 70, color: "rgba(239,68,68,0.35)" }, { value: 30, color: "rgba(38,166,154,0.35)" }],
+    compute: ({ closes }) => { const v = calcRSI(closes); return { series: [lineSeries("RSI", v, "#f59e0b")], cache: { main: v } }; } },
+  { key: "macd", label: "MACD (12,26,9)", pillColor: "#2962ff", group: "Oscillators", paneOwn: true, pillSeries: "macd",
+    compute: ({ closes }) => {
+      const m = calcMACD(closes);
+      return {
+        series: [
+          lineSeries("MACD",   m.macd,   "#2962ff", 1.3),
+          lineSeries("Signal", m.signal, "#ff6d00", 1.3),
+          { name: "Hist", type: "bar", barMaxWidth: 5,
+            data: m.histogram.map(v => ({ value: v, itemStyle: { color: (v ?? 0) >= 0 ? "rgba(38,166,154,0.7)" : "rgba(239,83,80,0.7)" } })) },
+        ],
+        cache: { macd: m.macd, signal: m.signal, hist: m.histogram },
+      };
+    } },
+  { key: "stoch", label: "Stoch (14,3)", pillColor: "#06b6d4", group: "Oscillators", paneOwn: true,
+    yMin: 0, yMax: 100, guides: [{ value: 80, color: "rgba(239,68,68,0.35)" }, { value: 20, color: "rgba(38,166,154,0.35)" }],
+    pillSeries: "k",
+    compute: ({ highs, lows, closes }) => {
+      const s = calcStochastic(highs, lows, closes);
+      return {
+        series: [lineSeries("%K", s.k, "#06b6d4", 1.4), lineSeries("%D", s.d, "#f97316", 1.2)],
+        cache: { k: s.k, d: s.d },
+      };
+    } },
+  { key: "stochrsi", label: "Stoch RSI", pillColor: "#84cc16", group: "Oscillators", paneOwn: true,
+    yMin: 0, yMax: 100, guides: [{ value: 80, color: "rgba(239,68,68,0.35)" }, { value: 20, color: "rgba(38,166,154,0.35)" }],
+    pillSeries: "k",
+    compute: ({ closes }) => {
+      const s = calcStochRSI(closes);
+      return {
+        series: [lineSeries("%K", s.k, "#84cc16", 1.4), lineSeries("%D", s.d, "#f97316", 1.2)],
+        cache: { k: s.k, d: s.d },
+      };
+    } },
+  { key: "cci", label: "CCI (20)", pillColor: "#c084fc", group: "Oscillators", paneOwn: true,
+    guides: [{ value: 100, color: "rgba(239,68,68,0.35)" }, { value: -100, color: "rgba(38,166,154,0.35)" }, { value: 0, color: "rgba(120,123,134,0.35)" }],
+    compute: ({ highs, lows, closes }) => { const v = calcCCI(highs, lows, closes); return { series: [lineSeries("CCI", v, "#c084fc")], cache: { main: v } }; } },
+  { key: "willr", label: "Williams %R", pillColor: "#fb923c", group: "Oscillators", paneOwn: true,
+    yMin: -100, yMax: 0, guides: [{ value: -20, color: "rgba(239,68,68,0.35)" }, { value: -80, color: "rgba(38,166,154,0.35)" }],
+    compute: ({ highs, lows, closes }) => { const v = calcWilliamsR(highs, lows, closes); return { series: [lineSeries("Wm%R", v, "#fb923c")], cache: { main: v } }; } },
+  { key: "atr", label: "ATR (14)", pillColor: "#94a3b8", group: "Oscillators", paneOwn: true,
+    compute: ({ highs, lows, closes }) => { const v = calcATR(highs, lows, closes); return { series: [lineSeries("ATR", v, "#94a3b8")], cache: { main: v } }; } },
+  { key: "adx", label: "ADX (14)", pillColor: "#f43f5e", group: "Oscillators", paneOwn: true,
+    yMin: 0, yMax: 100, guides: [{ value: 25, color: "rgba(120,123,134,0.35)" }],
+    pillSeries: "adx",
+    compute: ({ highs, lows, closes }) => {
+      const a = calcADX(highs, lows, closes);
+      return {
+        series: [
+          lineSeries("ADX", a.adx, "#f43f5e", 1.5),
+          lineSeries("+DI", a.plusDI,  "#22c55e", 1.1),
+          lineSeries("-DI", a.minusDI, "#ef4444", 1.1),
+        ],
+        cache: { adx: a.adx, plusDI: a.plusDI, minusDI: a.minusDI },
+      };
+    } },
+  { key: "mfi", label: "MFI (14)", pillColor: "#14b8a6", group: "Oscillators", paneOwn: true, needsVolume: true,
+    yMin: 0, yMax: 100, guides: [{ value: 80, color: "rgba(239,68,68,0.35)" }, { value: 20, color: "rgba(38,166,154,0.35)" }],
+    compute: ({ highs, lows, closes, volumes }) => { const v = calcMFI(highs, lows, closes, volumes); return { series: [lineSeries("MFI", v, "#14b8a6")], cache: { main: v } }; } },
+  { key: "roc", label: "ROC (12)", pillColor: "#7dd3fc", group: "Oscillators", paneOwn: true,
+    guides: [{ value: 0, color: "rgba(120,123,134,0.35)" }],
+    compute: ({ closes }) => { const v = calcROC(closes); return { series: [lineSeries("ROC", v, "#7dd3fc")], cache: { main: v } }; } },
+  { key: "trix", label: "TRIX (14)", pillColor: "#bef264", group: "Oscillators", paneOwn: true,
+    guides: [{ value: 0, color: "rgba(120,123,134,0.35)" }],
+    compute: ({ closes }) => { const v = calcTRIX(closes); return { series: [lineSeries("TRIX", v, "#bef264")], cache: { main: v } }; } },
+  { key: "ao", label: "Awesome Osc.", pillColor: "#e879f9", group: "Oscillators", paneOwn: true,
+    compute: ({ highs, lows }) => {
+      const v = calcAO(highs, lows);
+      // Bar chart, green when rising vs prev, red when falling
+      const data = v.map((cur, i) => {
+        const prev = i > 0 ? v[i - 1] : null;
+        const up = cur !== null && prev !== null ? cur >= prev : (cur ?? 0) >= 0;
+        return { value: cur, itemStyle: { color: up ? "rgba(38,166,154,0.7)" : "rgba(239,83,80,0.7)" } };
+      });
+      return {
+        series: [{ name: "AO", type: "bar", data, barMaxWidth: 5 }],
+        cache: { main: v },
+      };
+    } },
+  { key: "cmf", label: "CMF (20)", pillColor: "#fcd34d", group: "Oscillators", paneOwn: true, needsVolume: true,
+    guides: [{ value: 0, color: "rgba(120,123,134,0.35)" }],
+    compute: ({ highs, lows, closes, volumes }) => { const v = calcCMF(highs, lows, closes, volumes); return { series: [lineSeries("CMF", v, "#fcd34d")], cache: { main: v } }; } },
+  { key: "obv", label: "OBV", pillColor: "#fda4af", group: "Volume", paneOwn: true,
+    compute: ({ closes, volumes }) => { const v = calcOBV(closes, volumes); return { series: [lineSeries("OBV", v, "#fda4af")], cache: { main: v } }; } },
+];
+
+const IND_BY_KEY: Record<string, IndicatorDef> = Object.fromEntries(IND_CATALOG.map(d => [d.key, d]));
+
+// Public catalog for menu rendering in TradingPlatform (typed metadata only)
+export const INDICATOR_CATALOG = IND_CATALOG.map(d => ({
+  key: d.key, label: d.label, pillColor: d.pillColor, group: d.group, paneOwn: d.paneOwn, needsVolume: !!d.needsVolume,
+}));
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
@@ -143,7 +365,7 @@ function fmtPrice(v: number): string {
 }
 
 // ── Heikin Ashi transform ─────────────────────────────────────────────────────
-function computeHA(cs: Candle[]): Candle[] {
+export function computeHA(cs: Candle[]): Candle[] {
   const out: Candle[] = [];
   for (let i = 0; i < cs.length; i++) {
     const c = cs[i];
@@ -186,7 +408,7 @@ function getGridBounds(chart: echarts.ECharts, candles: Candle[]) {
 }
 
 // Extend a ray (px,py) in direction (nx,ny) until it hits the box boundary [x0,y0,x1,y1]
-function extendRay(px: number, py: number, nx: number, ny: number, x0: number, y0: number, x1: number, y1: number): [number, number] {
+export function extendRay(px: number, py: number, nx: number, ny: number, x0: number, y0: number, x1: number, y1: number): [number, number] {
   let tMin = 1e9;
   if (nx > 0)  tMin = Math.min(tMin, (x1 - px) / nx);
   if (nx < 0)  tMin = Math.min(tMin, (x0 - px) / nx);
@@ -498,7 +720,7 @@ function shapeToPixels(
 
 // ── Eraser hit-testing ────────────────────────────────────────────────────────
 
-function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+export function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
   const dx = x2 - x1, dy = y2 - y1;
   const len2 = dx * dx + dy * dy;
   if (len2 === 0) return Math.hypot(px - x1, py - y1);
@@ -506,7 +728,7 @@ function distToSegment(px: number, py: number, x1: number, y1: number, x2: numbe
   return Math.hypot(px - x1 - t * dx, py - y1 - t * dy);
 }
 
-function distToRect(px: number, py: number, rx: number, ry: number, rw: number, rh: number): number {
+export function distToRect(px: number, py: number, rx: number, ry: number, rw: number, rh: number): number {
   const insideX = px >= rx && px <= rx + rw;
   const insideY = py >= ry && py <= ry + rh;
   if (insideX && insideY) return Math.min(px - rx, rx + rw - px, py - ry, ry + rh - py);
@@ -783,8 +1005,8 @@ interface HoverCandle {
 
 export default function ChartPanel({
   symbol, symbolName, periodCfg, drawingTool, chartType, indicators,
-  showRSI, showMACD, isActive, drawings, onDrawingAdd, onDrawingErase, onClearDrawings, onActivate,
-  onDrawingDone, onDrawingUpdate, theme,
+  isActive, drawings, onDrawingAdd, onDrawingErase, onClearDrawings, onActivate,
+  onDrawingDone, onDrawingUpdate, theme, onIndicatorRemove, onClearIndicators,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef       = useRef<SVGSVGElement>(null);
@@ -800,6 +1022,8 @@ export default function ChartPanel({
     px0: number; py0: number; px1: number; py1: number;
   } | null>(null);
   const indicatorDataRef = useRef<Record<string, (number | null)[]>>({});
+  const renderChartRef   = useRef<(() => void) | null>(null);
+  const fetchDataRef     = useRef<(() => void) | null>(null);
   const drawingToolRef = useRef<DrawingTool>(drawingTool);
   const intervalRef    = useRef<string>(periodCfg.i);
   const chartTypeRef   = useRef<ChartType>(chartType);
@@ -810,6 +1034,15 @@ export default function ChartPanel({
   useEffect(() => { chartTypeRef.current = chartType; }, [chartType]);
 
   const [loading, setLoading]           = useState(true);
+  const [loadError, setLoadError]       = useState<string | null>(null);
+  const [loadingMore, setLoadingMore]   = useState(false);
+  const loadingMoreRef                  = useRef(false);
+  const noMoreHistoryRef                = useRef(false);
+  // Monotonic request epoch — incremented whenever the symbol or window
+  // changes. In-flight fetches compare against this on completion and
+  // discard their result if a newer request has been issued, preventing
+  // stale data from overwriting the current chart.
+  const requestEpochRef                 = useRef(0);
   const [hoverCandle, setHoverCandle]   = useState<HoverCandle | null>(null);
   const [hoverIdx, setHoverIdx]         = useState(-1);
   const [lastCandle, setLastCandle]     = useState<{ c: number; pct: number } | null>(null);
@@ -999,58 +1232,88 @@ export default function ChartPanel({
     const closes   = wcs.map(c => c.close);
     const ohlc     = wcs.map(c => [c.open, c.close, c.low, c.high]);
 
-    const hasSub = showRSI || showMACD;
+    // ── Identify selected overlays vs oscillators (each oscillator gets own pane) ──
+    const hasVol = cs.some(c => (c.volume ?? 0) > 0);
+    const selectedDefs = [...indicators]
+      .map(k => IND_BY_KEY[k])
+      .filter((d): d is IndicatorDef => !!d && (!d.needsVolume || hasVol));
+    const overlayDefs    = selectedDefs.filter(d => !d.paneOwn);
+    const oscillatorDefs = selectedDefs.filter(d =>  d.paneOwn);
+    const N_OSC = oscillatorDefs.length;
 
-    // ── Grid layout: main chart / volume / sub-panel ──────────────────────
-    // Main chart — ends well above volume so x-axis labels don't overlap bars
-    // Volume — dates shown only here when no sub-panel, hidden otherwise
-    const mainHeight = hasSub ? "48%" : "68%";
-    const mainBottom = hasSub ? "44%" : "24%";
-    const volTop     = hasSub ? "54%" : "76%";
-    const volHeight  = hasSub ? "8%"  : "16%";
-    const subTop     = "68%";
-    const subHeight  = "26%";
+    // ── Grid layout: FIXED slot count, dynamic heights ─────────────────────
+    // We always emit (2 + MAX_OSC_SLOTS) grids/axes so that ECharts can tween
+    // grid coordinates between renders — adding the first oscillator pane or
+    // removing the last one only resizes existing components rather than
+    // creating/destroying them, which preserves the animation.
+    const MAX_OSC_SLOTS = 5;
+    const TOP_PCT = 4;
+    const BOT_PCT = 4;
+    const AVAIL   = 100 - TOP_PCT - BOT_PCT;
+    const PRICE_W = 4;
+    const VOL_W   = 1;
+    const OSC_W   = 1.6;
+    const totalW  = PRICE_W + VOL_W + N_OSC * OSC_W;
+    const usedHeights = [
+      PRICE_W * AVAIL / totalW,
+      VOL_W   * AVAIL / totalW,
+      ...Array(N_OSC).fill(OSC_W * AVAIL / totalW),
+    ];
+    // Pad remaining oscillator slots with zero-height (collapsed) grids.
+    const heights = [...usedHeights, ...Array(MAX_OSC_SLOTS - N_OSC).fill(0)];
+    const tops: number[] = []; { let acc = TOP_PCT; for (const h of heights) { tops.push(acc); acc += h; } }
+    const totalGrids = 2 + MAX_OSC_SLOTS;
+    const lastUsedIdx = 1 + N_OSC; // bottom-most VISIBLE pane (vol when no osc, else last osc)
 
     // Prices on right side — narrow left margin, wider right margin for labels
     const GL = 8, GR = 70;
-    const grids: object[] = [
-      { top: "4%",  left: GL, right: GR, height: mainHeight },
-      { top: volTop, left: GL, right: GR, height: volHeight  },
-    ];
-    if (hasSub) grids.push({ top: subTop, left: GL, right: GR, height: subHeight });
+    const grids: object[] = heights.map((h, i) => ({
+      top: `${tops[i].toFixed(2)}%`, left: GL, right: GR, height: `${h.toFixed(2)}%`,
+      // No `show: true` — ECharts would draw a visible border around the pane.
+      // Zero-height padding slots are already invisible.
+    }));
 
-    // x-axis: labels ONLY on the bottom-most grid
+    // x-axis: labels ONLY on the bottom-most VISIBLE grid
     const xBase = { axisLine: { lineStyle: { color: T.grid } }, axisTick: { show: false } };
-    const xAxes: object[] = [
-      { ...xBase, gridIndex: 0, data: dates, axisLabel: { show: false }, splitLine: { lineStyle: { color: T.grid } }, axisPointer: { label: { show: false } } },
-      { ...xBase, gridIndex: 1, data: dates, axisLabel: hasSub ? { show: false } : { color: T.text, fontSize: 9, margin: 6, formatter: (v: string) => fmtXLabel(v, showTime) }, splitLine: { show: false }, axisPointer: hasSub ? { label: { show: false } } : {} },
-    ];
-    if (hasSub) {
-      xAxes.push({ ...xBase, gridIndex: 2, data: dates, axisLabel: { color: T.text, fontSize: 9, margin: 6, formatter: (v: string) => fmtXLabel(v, showTime) }, splitLine: { lineStyle: { color: T.grid } } });
-    }
+    const xAxes: object[] = grids.map((_, i) => {
+      const used = i <= lastUsedIdx;
+      return {
+        ...xBase, gridIndex: i, data: dates,
+        show: used,
+        axisLabel: used && i === lastUsedIdx
+          ? { color: T.text, fontSize: 9, margin: 6, formatter: (v: string) => fmtXLabel(v, showTime) }
+          : { show: false },
+        splitLine: used && (i === 0 || i > 1) ? { lineStyle: { color: T.grid } } : { show: false },
+        axisPointer: used && i === lastUsedIdx ? {} : { label: { show: false } },
+      };
+    });
 
     // y-axis — all positioned on the RIGHT side
     const yBase = { axisLine: { show: false }, axisTick: { show: false }, position: "right" };
-    const yAxes: object[] = [
-      {
-        ...yBase, gridIndex: 0, scale: true,
-        axisLabel: { color: T.text, fontSize: 10, margin: 6 },
-        splitLine: { lineStyle: { color: T.grid } },
-      },
-      {
-        ...yBase, gridIndex: 1, scale: true,
-        axisLabel: { show: true, color: T.text, fontSize: 9, margin: 6, formatter: (v: number) => fmtVol(v) },
-        splitLine: { show: false },
-        splitNumber: 2,
-      },
-    ];
-    if (hasSub) {
-      yAxes.push({
-        ...yBase, gridIndex: 2, scale: true,
-        axisLabel: { color: T.text, fontSize: 9, margin: 6 },
-        splitLine: { lineStyle: { color: T.grid } },
-        splitNumber: 3,
-      });
+    const yAxes: object[] = [];
+    for (let i = 0; i < totalGrids; i++) {
+      if (i === 0) {
+        yAxes.push({ ...yBase, gridIndex: 0, scale: true,
+          axisLabel: { color: T.text, fontSize: 10, margin: 6 },
+          splitLine: { lineStyle: { color: T.grid } } });
+      } else if (i === 1) {
+        yAxes.push({ ...yBase, gridIndex: 1, scale: true,
+          axisLabel: { show: true, color: T.text, fontSize: 9, margin: 6, formatter: (v: number) => fmtVol(v) },
+          splitLine: { show: false }, splitNumber: 2 });
+      } else {
+        const oscIdx = i - 2;
+        const d = oscIdx < N_OSC ? oscillatorDefs[oscIdx] : null;
+        const used = !!d;
+        yAxes.push({
+          ...yBase, gridIndex: i, scale: true,
+          show: used,
+          ...(d?.yMin !== undefined ? { min: d.yMin } : {}),
+          ...(d?.yMax !== undefined ? { max: d.yMax } : {}),
+          axisLabel: used ? { color: T.text, fontSize: 9, margin: 6 } : { show: false },
+          splitLine: used ? { lineStyle: { color: T.grid } } : { show: false },
+          splitNumber: 3,
+        });
+      }
     }
 
     // ── Price series — varies by chart type ──────────────────────────────────
@@ -1110,53 +1373,52 @@ export default function ChartPanel({
     // Reset indicator cache for this render
     indicatorDataRef.current = {};
 
-    const MA = [
-      { key: "ema9",   label: "EMA 9",   color: "#f59e0b", fn: () => calcEMA(closes, 9)   },
-      { key: "ema21",  label: "EMA 21",  color: "#6366f1", fn: () => calcEMA(closes, 21)  },
-      { key: "ema50",  label: "EMA 50",  color: "#10b981", fn: () => calcEMA(closes, 50)  },
-      { key: "ema200", label: "EMA 200", color: "#ef4444", fn: () => calcEMA(closes, 200) },
-      { key: "sma50",  label: "SMA 50",  color: "#a78bfa", fn: () => calcSMA(closes, 50)  },
-    ];
-    for (const m of MA) {
-      if (!indicators.has(m.key)) continue;
-      const vals = m.fn().map(v => v ?? null);
-      indicatorDataRef.current[m.key] = vals;
-      series.push({ name: m.label, type: "line", xAxisIndex: 0, yAxisIndex: 0, data: vals, lineStyle: { color: m.color, width: 1.5 }, showSymbol: false, connectNulls: false });
-    }
-    if (indicators.has("bb")) {
-      const bb = calcBollingerBands(closes);
-      indicatorDataRef.current["bb_upper"]  = bb.upper.map(v => v ?? null);
-      indicatorDataRef.current["bb_middle"] = bb.middle.map(v => v ?? null);
-      indicatorDataRef.current["bb_lower"]  = bb.lower.map(v => v ?? null);
-      series.push(
-        { name: "BB+", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: indicatorDataRef.current["bb_upper"],  lineStyle: { color: "#3b82f6", width: 1, type: "dashed" }, showSymbol: false },
-        { name: "BBm", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: indicatorDataRef.current["bb_middle"], lineStyle: { color: "#64748b", width: 1, type: "dashed" }, showSymbol: false },
-        { name: "BB-", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: indicatorDataRef.current["bb_lower"],  lineStyle: { color: "#3b82f6", width: 1, type: "dashed" }, showSymbol: false },
-      );
-    }
-    if (showRSI && !showMACD) {
-      const rv = calcRSI(closes);
-      indicatorDataRef.current["rsi"] = rv.map(v => v !== null ? +(v as number).toFixed(2) as any : null);
-      series.push(
-        { name: "RSI",  type: "line", xAxisIndex: 2, yAxisIndex: 2, data: indicatorDataRef.current["rsi"], lineStyle: { color: "#f59e0b", width: 1.5 }, showSymbol: false },
-        { name: "OB",   type: "line", xAxisIndex: 2, yAxisIndex: 2, data: dates.map(() => 70), lineStyle: { color: "rgba(239,68,68,0.35)", width: 1, type: "dashed" }, showSymbol: false },
-        { name: "OS",   type: "line", xAxisIndex: 2, yAxisIndex: 2, data: dates.map(() => 30), lineStyle: { color: "rgba(38,166,154,0.35)", width: 1, type: "dashed" }, showSymbol: false },
-      );
-    }
-    if (showMACD) {
-      const mac = calcMACD(closes);
-      indicatorDataRef.current["macd"]   = mac.macd.map(v => v !== null ? +(v as number).toFixed(4) as any : null);
-      indicatorDataRef.current["signal"] = mac.signal.map(v => v !== null ? +(v as number).toFixed(4) as any : null);
-      series.push(
-        { name: "MACD",   type: "line", xAxisIndex: 2, yAxisIndex: 2, data: indicatorDataRef.current["macd"],   lineStyle: { color: "#2962ff", width: 1.3 }, showSymbol: false },
-        { name: "Signal", type: "line", xAxisIndex: 2, yAxisIndex: 2, data: indicatorDataRef.current["signal"], lineStyle: { color: "#ff6d00", width: 1.3 }, showSymbol: false },
-        { name: "Hist",   type: "bar",  xAxisIndex: 2, yAxisIndex: 2, barMaxWidth: 5,
-          data: mac.histogram.map(v => ({ value: v !== null ? +(v as number).toFixed(4) : null, itemStyle: { color: (v ?? 0) >= 0 ? "rgba(38,166,154,0.7)" : "rgba(239,83,80,0.7)" } })) },
-      );
+    // ── Compute & emit catalog-driven series ────────────────────────────────
+    const highs   = wcs.map(c => c.high);
+    const lows    = wcs.map(c => c.low);
+    const volumes = cs.map(c => c.volume ?? 0);
+    const indInput = { highs, lows, closes, volumes };
+
+    // Overlays attach to the price pane (xAxisIndex 0 / yAxisIndex 0).
+    for (const def of overlayDefs) {
+      const { series: specs, cache } = def.compute(indInput);
+      for (const k in cache) indicatorDataRef.current[`${def.key}.${k}`] = cache[k];
+      for (const s of specs) series.push({ ...s, xAxisIndex: 0, yAxisIndex: 0 });
     }
 
+    // Each oscillator gets its own pane. Pane index = 2 + position in oscillatorDefs.
+    for (let i = 0; i < oscillatorDefs.length; i++) {
+      const def = oscillatorDefs[i];
+      const paneIdx = 2 + i;
+      const { series: specs, cache } = def.compute(indInput);
+      for (const k in cache) indicatorDataRef.current[`${def.key}.${k}`] = cache[k];
+      for (const s of specs) series.push({ ...s, xAxisIndex: paneIdx, yAxisIndex: paneIdx });
+      // Reference guides (e.g. RSI 70/30, ADX 25, Stoch 80/20)
+      if (def.guides) {
+        for (const g of def.guides) {
+          series.push({
+            name: `${def.key}_g_${g.value}`, type: "line", xAxisIndex: paneIdx, yAxisIndex: paneIdx,
+            data: dates.map(() => g.value), showSymbol: false,
+            lineStyle: { color: g.color, width: 1, type: "dashed" }, silent: true,
+          });
+        }
+      }
+    }
+
+    // Preserve current zoom range so toggling indicators doesn't snap the chart back
+    const prevOpt = chart.getOption() as any;
+    const prevZoom = Array.isArray(prevOpt?.dataZoom) && prevOpt.dataZoom[0]
+      ? { start: prevOpt.dataZoom[0].start, end: prevOpt.dataZoom[0].end }
+      : null;
+
     chart.setOption({
-      backgroundColor: T.bg, animation: false,
+      backgroundColor: T.bg,
+      // Smooth in/out as panes appear/disappear and series add/remove
+      animation: true,
+      animationDuration: 220,
+      animationDurationUpdate: 220,
+      animationEasing: "cubicOut",
+      animationEasingUpdate: "cubicOut",
       tooltip: {
         trigger: "axis",
         axisPointer: {
@@ -1180,40 +1442,205 @@ export default function ChartPanel({
       },
       axisPointer: { link: [{ xAxisIndex: "all" }] },
       dataZoom: [
-        { type: "inside", xAxisIndex: hasSub ? [0, 1, 2] : [0, 1], start: 60, end: 100, zoomOnMouseWheel: true, moveOnMouseMove: true },
+        {
+          type: "inside",
+          xAxisIndex: grids.map((_, i) => i),
+          // Preserve user's current zoom range across indicator toggles
+          start: prevZoom?.start ?? 60,
+          end:   prevZoom?.end   ?? 100,
+          zoomOnMouseWheel: true,
+          moveOnMouseMove: true,
+        },
       ],
       grid: grids, xAxis: xAxes, yAxis: yAxes, series,
-    }, true);
+    }, { replaceMerge: ["grid", "xAxis", "yAxis", "series", "dataZoom"] });
 
-    requestAnimationFrame(() => paintSvg());
-  }, [indicators, showRSI, showMACD, paintSvg]);
+    // Repaint via ref so renderChart's identity doesn't depend on paintSvg
+    // (which itself depends on `drawings`) — otherwise drawing on the chart
+    // would cascade back through fetchData and trigger a re-fetch.
+    requestAnimationFrame(() => paintSvgRef.current?.());
+  }, [indicators]);
 
   // ── Fetch ──────────────────────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
     if (!symbol) return;
+    // Bump epoch — any in-flight prepend or base fetch from a previous
+    // symbol/window will see the mismatch on completion and bail out.
+    const epoch = ++requestEpochRef.current;
     setLoading(true);
+    setLoadError(null);
     try {
       const qs = periodCfg.start && periodCfg.end
         ? `start=${periodCfg.start}&end=${periodCfg.end}&interval=${periodCfg.i}`
         : `period=${periodCfg.p}&interval=${periodCfg.i}`;
       const data = await fetchApi<{ candles: unknown[] }>(`/stocks/${encodeURIComponent(symbol)}/history?${qs}`);
-      candles.current = data.candles ?? [];
+      if (epoch !== requestEpochRef.current) return;  // superseded
+      // Runtime-validate the candle shape — backend changes shouldn't silently
+      // corrupt the chart with NaN OHLC values.
+      const raw = Array.isArray(data?.candles) ? data.candles : [];
+      const validated: Candle[] = [];
+      for (const c of raw) {
+        if (!c || typeof c !== "object") continue;
+        const o = (c as Candle).open, h = (c as Candle).high, l = (c as Candle).low,
+              cl = (c as Candle).close, t = (c as Candle).time, v = (c as Candle).volume;
+        if (
+          typeof t === "number" && Number.isFinite(t) &&
+          typeof o === "number" && Number.isFinite(o) &&
+          typeof h === "number" && Number.isFinite(h) &&
+          typeof l === "number" && Number.isFinite(l) &&
+          typeof cl === "number" && Number.isFinite(cl)
+        ) {
+          validated.push({ time: t, open: o, high: h, low: l, close: cl, volume: typeof v === "number" ? v : 0 });
+        }
+      }
+      candles.current = validated;
+      if (validated.length === 0) {
+        setLoadError(raw.length > 0 ? "Received malformed price data." : "No price data available for this symbol.");
+      }
       // Compute last close + daily change
       const cs = candles.current;
       if (cs.length >= 2) {
         const last = cs[cs.length - 1];
         const prev = cs[cs.length - 2];
-        setLastCandle({ c: last.close, pct: ((last.close - prev.close) / prev.close) * 100 });
+        setLastCandle({ c: last.close, pct: prev.close !== 0 ? ((last.close - prev.close) / prev.close) * 100 : 0 });
       } else if (cs.length === 1) {
         setLastCandle({ c: cs[0].close, pct: 0 });
+      } else {
+        setLastCandle(null);
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      if (epoch !== requestEpochRef.current) return;  // superseded
+      candles.current = [];
+      setLastCandle(null);
+      setLoadError(err instanceof Error ? err.message : "Failed to load price data.");
     } finally {
-      setLoading(false);
+      if (epoch === requestEpochRef.current) setLoading(false);
     }
-    renderChart();
-  }, [symbol, periodCfg, renderChart]);
+    // Render via ref so fetchData's identity doesn't track renderChart —
+    // keeps the [symbol, periodCfg] effect from re-firing on indicator
+    // toggles or drawing edits.
+    // Reset infinite-scroll state when the symbol or window changes —
+    // the new fetch is the new baseline.
+    noMoreHistoryRef.current = false;
+    renderChartRef.current?.();
+  }, [symbol, periodCfg]);
+
+  // ── Pan-to-load-more (infinite scroll left) ────────────────────────────────
+  // Fetches an older chunk of daily/weekly/monthly history when the user
+  // pans to the leftmost edge, prepends it to candles.current, and shifts
+  // the dataZoom window to keep the visible candles visually anchored.
+  const loadMoreHistory = useCallback(async () => {
+    if (loadingMoreRef.current || noMoreHistoryRef.current) return;
+    if (!symbol) return;
+    const cur = candles.current;
+    if (cur.length < 2) return;
+    // Only meaningful for daily-or-larger candles — intraday range is capped
+    // by Yahoo to the last few days, so paging back doesn't help there.
+    const intvl = intervalRef.current;
+    if (!["1d", "1wk", "1mo"].includes(intvl)) return;
+
+    const oldestSec = cur[0].time;
+    const endStr = new Date(oldestSec * 1000).toISOString().slice(0, 10);
+    // Chunk size: ~2y for 1d, ~10y for 1wk/1mo (Yahoo serves whatever exists
+    // in that window — possibly less, which signals "no older data").
+    const daysBack = intvl === "1d" ? 730 : 3650;
+    const startStr = new Date((oldestSec - daysBack * 86400) * 1000)
+      .toISOString().slice(0, 10);
+
+    // Snapshot baseline so we can verify nothing changed under us during
+    // the await. If the user switches symbol/range mid-fetch, we discard.
+    const baselineEpoch    = requestEpochRef.current;
+    const baselineSymbol   = symbol;
+    const baselineInterval = intvl;
+    const baselineOldest   = oldestSec;
+
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    try {
+      const qs = `start=${startStr}&end=${endStr}&interval=${intvl}`;
+      const data = await fetchApi<{ candles: unknown[] }>(
+        `/stocks/${encodeURIComponent(symbol)}/history?${qs}`
+      );
+      // Bail if a newer request superseded us, or the chart's baseline
+      // shifted (different symbol/interval/oldest) — committing now would
+      // corrupt the current chart with data from a stale context.
+      if (
+        baselineEpoch    !== requestEpochRef.current ||
+        baselineSymbol   !== symbol ||
+        baselineInterval !== intervalRef.current ||
+        candles.current.length === 0 ||
+        candles.current[0].time !== baselineOldest
+      ) {
+        return;
+      }
+      const raw = Array.isArray(data?.candles) ? data.candles : [];
+      const olderValidated: Candle[] = [];
+      for (const c of raw) {
+        if (!c || typeof c !== "object") continue;
+        const o = (c as Candle).open, h = (c as Candle).high, l = (c as Candle).low,
+              cl = (c as Candle).close, t = (c as Candle).time, v = (c as Candle).volume;
+        if (
+          typeof t === "number" && Number.isFinite(t) &&
+          typeof o === "number" && Number.isFinite(o) &&
+          typeof h === "number" && Number.isFinite(h) &&
+          typeof l === "number" && Number.isFinite(l) &&
+          typeof cl === "number" && Number.isFinite(cl) &&
+          t < oldestSec   // strictly older than what we already have
+        ) {
+          olderValidated.push({ time: t, open: o, high: h, low: l, close: cl, volume: typeof v === "number" ? v : 0 });
+        }
+      }
+      olderValidated.sort((a, b) => a.time - b.time);
+      if (olderValidated.length === 0) {
+        noMoreHistoryRef.current = true;
+        return;
+      }
+      const addedCount = olderValidated.length;
+      const prevTotal  = cur.length;
+      candles.current  = [...olderValidated, ...cur];
+      const newTotal   = candles.current.length;
+
+      // Re-render with the larger dataset, then shift the dataZoom window
+      // so the same candles remain on screen (no visual jump).
+      const chart = chartRef.current;
+      let prevStartPct = 0, prevEndPct = 100;
+      if (chart) {
+        const opt = chart.getOption() as { dataZoom?: { start?: number; end?: number }[] };
+        const dz0 = (opt.dataZoom || [])[0];
+        if (dz0) {
+          prevStartPct = dz0.start ?? 0;
+          prevEndPct   = dz0.end   ?? 100;
+        }
+      }
+      // Map the previously-visible window (in old indices) to new indices.
+      const oldStartIdx = (prevStartPct / 100) * (prevTotal - 1);
+      const oldEndIdx   = (prevEndPct   / 100) * (prevTotal - 1);
+      const newStartIdx = oldStartIdx + addedCount;
+      const newEndIdx   = oldEndIdx   + addedCount;
+      const newStartPct = (newStartIdx / (newTotal - 1)) * 100;
+      const newEndPct   = (newEndIdx   / (newTotal - 1)) * 100;
+
+      renderChartRef.current?.();
+      // Apply the shifted window after the re-render so the user sees the
+      // same candles in the same positions, just with more room to pan left.
+      requestAnimationFrame(() => {
+        chartRef.current?.dispatchAction({
+          type: "dataZoom",
+          start: newStartPct,
+          end:   newEndPct,
+        });
+      });
+    } catch {
+      // Network failure or 404 — don't lock out future attempts permanently;
+      // the user can scroll right and try again.
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }, [symbol]);
+
+  const loadMoreHistoryRef = useRef<(() => void) | null>(null);
+  useEffect(() => { loadMoreHistoryRef.current = loadMoreHistory; }, [loadMoreHistory]);
 
   // ── Init ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1222,7 +1649,19 @@ export default function ChartPanel({
     const chart = echarts.init(div, null, { renderer: "canvas" });
     chartRef.current = chart;
 
-    chart.on("dataZoom", () => { requestAnimationFrame(() => paintSvgRef.current?.()); });
+    chart.on("dataZoom", () => {
+      requestAnimationFrame(() => paintSvgRef.current?.());
+      // Pan-to-load-more: when the visible window reaches the very left edge,
+      // ask for an older chunk. Throttled by loadingMoreRef inside the
+      // callback so rapid drag events don't trigger parallel fetches.
+      try {
+        const opt = chart.getOption() as { dataZoom?: { start?: number; end?: number }[] };
+        const dz0 = (opt.dataZoom || [])[0];
+        if (dz0 && (dz0.start ?? 0) <= 1.5) {
+          loadMoreHistoryRef.current?.();
+        }
+      } catch { /* defensive */ }
+    });
     chart.on("rendered",  () => { requestAnimationFrame(() => paintSvgRef.current?.()); });
 
     // Update OHLCV header on crosshair move
@@ -1249,17 +1688,21 @@ export default function ChartPanel({
     });
     ro.observe(div);
 
-    fetchData();
+    // Initial fetch is driven by the [symbol, periodCfg] effect below, which
+    // fires on mount via fetchDataRef. Avoids a double fetch on first render.
     return () => { ro.disconnect(); chart.dispose(); chartRef.current = null; };
   }, []);
 
-  useEffect(() => { fetchData(); }, [symbol, periodCfg]);
-  useEffect(() => { renderChart(); }, [indicators, showRSI, showMACD, chartType]);
-  useEffect(() => { if (candles.current.length) renderChart(); }, [theme]);
-  useEffect(() => { paintSvg(); }, [drawings]);
-  // Keep paintSvgRef pointing at the latest closure so echarts event handlers
-  // (registered once at init) always repaint with up-to-date drawings/state.
-  useEffect(() => { paintSvgRef.current = paintSvg; }, [paintSvg]);
+  // Sync stable refs so long-lived listeners and cross-callback calls always
+  // see the latest closures, without bloating effect dep arrays into cascades.
+  useEffect(() => { paintSvgRef.current   = paintSvg;   }, [paintSvg]);
+  useEffect(() => { renderChartRef.current = renderChart; }, [renderChart]);
+  useEffect(() => { fetchDataRef.current  = fetchData;  }, [fetchData]);
+
+  useEffect(() => { fetchDataRef.current?.();  }, [symbol, periodCfg]);
+  useEffect(() => { renderChartRef.current?.(); }, [indicators, chartType]);
+  useEffect(() => { if (candles.current.length) renderChartRef.current?.(); }, [theme]);
+  useEffect(() => { paintSvgRef.current?.(); }, [drawings]);
 
   // ── Drawing helpers ────────────────────────────────────────────────────────
   const getXY = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -1638,7 +2081,7 @@ export default function ChartPanel({
     return i >= 0 && i < arr.length ? arr[i] : null;
   };
 
-  const hasAnyInd = indicators.size > 0 || showRSI || showMACD;
+  const hasAnyInd = indicators.size > 0;
   const TC = getThemeColors(theme);
 
   return (
@@ -1673,52 +2116,42 @@ export default function ChartPanel({
               <span className="text-[11px]" style={{ color: priceColor }}>{lastCandle.pct >= 0 ? "+" : ""}{lastCandle.pct.toFixed(2)}%</span>
             </div>
           )}
-          {/* Row 3: active indicator pills (TradingView-style) */}
+          {/* Row 3: active indicator pills (TradingView-style) — click X to remove */}
           {hasAnyInd && (
-            <div className="flex items-center gap-2.5 mt-0.5 flex-wrap">
+            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
               {[...indicators].map(key => {
-                const meta = IND_META[key];
-                if (!meta) return null;
-                if (key === "bb") {
-                  const mid = indVal("bb_middle");
-                  return (
-                    <span key={key} className="flex items-center gap-1 text-[10px]">
-                      <span style={{ color: meta.color }} className="font-medium">{meta.label}</span>
-                      {mid !== null && <span className="text-gray-400">{fmtPrice(mid)}</span>}
-                    </span>
-                  );
-                }
-                const val = indVal(key);
+                const def = IND_BY_KEY[key];
+                if (!def) return null;
+                const seriesKey = def.pillSeries ?? "main";
+                const val = indVal(`${def.key}.${seriesKey}`);
+                const digits = def.pillDigits ?? (def.paneOwn ? 2 : undefined);
+                const display = val === null
+                  ? null
+                  : digits !== undefined
+                    ? (val as number).toFixed(digits)
+                    : fmtPrice(val as number);
                 return (
-                  <span key={key} className="flex items-center gap-1 text-[10px]">
-                    <span style={{ color: meta.color }} className="font-medium">{meta.label}</span>
-                    {val !== null && <span className="text-gray-400">{fmtPrice(val)}</span>}
+                  <span key={key} className="group flex items-center gap-1 text-[10px] rounded px-1.5 py-0.5 hover:bg-white/5">
+                    <span style={{ color: def.pillColor }} className="font-medium">{def.label}</span>
+                    {display !== null && <span className="text-gray-400">{display}</span>}
+                    <button
+                      type="button"
+                      title={`Remove ${def.label}`}
+                      onClick={(e) => { e.stopPropagation(); onIndicatorRemove?.(key); }}
+                      className="ml-0.5 w-3.5 h-3.5 flex items-center justify-center rounded-sm text-gray-500 hover:text-red-400 hover:bg-red-500/15 opacity-60 group-hover:opacity-100 transition-opacity"
+                    >
+                      <svg viewBox="0 0 10 10" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                        <path d="M2 2 L8 8 M8 2 L2 8" />
+                      </svg>
+                    </button>
                   </span>
                 );
               })}
-              {showRSI && !showMACD && (() => {
-                const val = indVal("rsi");
-                return (
-                  <span className="flex items-center gap-1 text-[10px]">
-                    <span style={{ color: "#f59e0b" }} className="font-medium">RSI</span>
-                    {val !== null && <span className="text-gray-400">{(val as number).toFixed(2)}</span>}
-                  </span>
-                );
-              })()}
-              {showMACD && (() => {
-                const m = indVal("macd"), s = indVal("signal");
-                return (
-                  <span className="flex items-center gap-1.5 text-[10px]">
-                    <span style={{ color: "#2962ff" }} className="font-medium">MACD</span>
-                    {m !== null && <span className="text-gray-400">{(m as number).toFixed(2)}</span>}
-                    {s !== null && <span style={{ color: "#ff6d00" }}>{(s as number).toFixed(2)}</span>}
-                  </span>
-                );
-              })()}
             </div>
           )}
         </div>
         {loading && <span className="ml-auto text-[10px] text-gray-600 animate-pulse self-center">Loading…</span>}
+        {!loading && loadingMore && <span className="ml-auto text-[10px] text-gray-500 animate-pulse self-center">Loading older candles…</span>}
       </div>
 
       {/* ── Chart + SVG overlay ──────────────────────────────────────────── */}
@@ -1734,6 +2167,20 @@ export default function ChartPanel({
         <div ref={containerRef} className="absolute inset-0" />
         {loading && (
           <div className="absolute inset-0 z-30 pointer-events-none transition-opacity" style={{ background: TC.dimBg }} />
+        )}
+        {!loading && loadError && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">
+            <div
+              className="px-4 py-2 rounded-md text-xs font-medium border"
+              style={{
+                background: theme === "dark" ? "rgba(127,29,29,0.85)" : "rgba(254,226,226,0.95)",
+                color: theme === "dark" ? "#fecaca" : "#991b1b",
+                borderColor: theme === "dark" ? "rgba(248,113,113,0.4)" : "rgba(248,113,113,0.5)",
+              }}
+            >
+              {loadError}
+            </div>
+          </div>
         )}
         <svg ref={svgRef} className="absolute inset-0" style={{ pointerEvents: "none", zIndex: 10 }} />
         {/* Overlay: only shown while actively drawing or dragging a drawing.
@@ -1816,15 +2263,17 @@ export default function ChartPanel({
             onMouseDown={e => e.stopPropagation()}
           >
             {[
-              { label: "Reset zoom",    action: () => { chartRef.current?.dispatchAction({ type: "dataZoom", start: 60, end: 100 }); setCtxMenu(null); } },
-              { label: "Clear drawings",action: () => { onClearDrawings?.(); setCtxMenu(null); } },
-              { label: "Reload data",   action: () => { fetchData(); setCtxMenu(null); } },
+              { label: "Reset zoom",             action: () => { chartRef.current?.dispatchAction({ type: "dataZoom", start: 60, end: 100 }); setCtxMenu(null); } },
+              { label: "Remove all indicators",  action: () => { onClearIndicators?.(); setCtxMenu(null); }, disabled: indicators.size === 0 },
+              { label: "Clear drawings",         action: () => { onClearDrawings?.(); setCtxMenu(null); } },
+              { label: "Reload data",            action: () => { fetchData(); setCtxMenu(null); } },
             ].map((item, i) => (
               <button
                 key={item.label}
-                className="w-full text-left px-4 py-1.5 text-xs transition-colors"
+                disabled={!!item.disabled}
+                className="w-full text-left px-4 py-1.5 text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 style={{ color: TC.tipText, ...(i === 1 ? { borderTop: `1px solid ${TC.ctxBor}`, borderBottom: `1px solid ${TC.ctxBor}` } : {}) }}
-                onMouseEnter={e => (e.currentTarget.style.background = TC.grid)}
+                onMouseEnter={e => { if (!item.disabled) e.currentTarget.style.background = TC.grid; }}
                 onMouseLeave={e => (e.currentTarget.style.background = "")}
                 onClick={item.action}
               >{item.label}</button>
