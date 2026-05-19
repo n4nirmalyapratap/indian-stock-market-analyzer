@@ -4,8 +4,7 @@ import { Link } from "wouter";
 import {
   Newspaper, TrendingUp, TrendingDown, Minus, Search, RefreshCw,
   ExternalLink, Clock, Zap, BarChart2, ChevronDown, ChevronUp,
-  Radio, Building2,
-  Film, List, X,
+  Radio, Building2, Film, List, X,
 } from "lucide-react";
 import { api, NewsArticle } from "@/lib/api";
 import { useTheme } from "@/context/ThemeContext";
@@ -24,17 +23,38 @@ function timeAgo(iso: string): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function sentimentColor(s: string, isDark: boolean) {
-  if (s === "bullish") return { border: "#16a34a", bg: isDark ? "rgba(22,163,74,0.08)" : "#f0fdf4", text: "#16a34a" };
-  if (s === "bearish") return { border: "#dc2626", bg: isDark ? "rgba(220,38,38,0.08)" : "#fef2f2", text: "#dc2626" };
-  return { border: isDark ? "#334155" : "#e2e8f0", bg: isDark ? "#1e293b" : "#fff", text: isDark ? "#94a3b8" : "#6b7280" };
+function sentimentConfig(s: string) {
+  if (s === "bullish") return {
+    border: "#22c55e",
+    glow: "rgba(34,197,94,0.15)",
+    bg: "rgba(34,197,94,0.06)",
+    chip: "rgba(34,197,94,0.12)",
+    chipBorder: "rgba(34,197,94,0.22)",
+    text: "#4ade80",
+    Icon: TrendingUp,
+    label: "Bullish",
+  };
+  if (s === "bearish") return {
+    border: "#ef4444",
+    glow: "rgba(239,68,68,0.15)",
+    bg: "rgba(239,68,68,0.06)",
+    chip: "rgba(239,68,68,0.12)",
+    chipBorder: "rgba(239,68,68,0.22)",
+    text: "#f87171",
+    Icon: TrendingDown,
+    label: "Bearish",
+  };
+  return {
+    border: "#334155",
+    glow: "rgba(99,102,241,0.06)",
+    bg: "rgba(15,30,55,0.4)",
+    chip: "rgba(100,116,139,0.12)",
+    chipBorder: "rgba(100,116,139,0.2)",
+    text: "#64748b",
+    Icon: Minus,
+    label: "Neutral",
+  };
 }
-
-const SENTIMENT_ICONS: Record<string, React.ReactNode> = {
-  bullish: <TrendingUp  className="w-3 h-3" />,
-  bearish: <TrendingDown className="w-3 h-3" />,
-  neutral: <Minus       className="w-3 h-3" />,
-};
 
 const CATEGORY_META: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
   all:       { label: "All News",  icon: <Newspaper className="w-3.5 h-3.5" />,  color: "#6366f1" },
@@ -45,32 +65,23 @@ const CATEGORY_META: Record<string, { label: string; icon: React.ReactNode; colo
 
 // ── Ticker Banner ─────────────────────────────────────────────────────────────
 
-function TickerBanner({ articles, isDark }: { articles: NewsArticle[]; isDark: boolean }) {
+function TickerBanner({ articles }: { articles: NewsArticle[] }) {
   const headlines = articles.slice(0, 12).map(a => a.title);
   if (!headlines.length) return null;
-
   const text = headlines.join("   ·   ");
-
   return (
-    <div
-      className="relative overflow-hidden rounded-xl flex items-center gap-3 px-4 py-2.5"
-      style={{ background: isDark ? "#0f172a" : "#1e1b4b", minHeight: 40 }}
-    >
-      <div className="flex items-center gap-1.5 shrink-0 z-10">
+    <div className="relative overflow-hidden flex items-center gap-0 rounded-2xl" style={{ background: "linear-gradient(90deg, #0e1829 0%, #0a1020 100%)", border: "1px solid #162244", minHeight: 44 }}>
+      {/* LIVE badge */}
+      <div className="flex items-center gap-2 px-4 py-2.5 shrink-0 border-r" style={{ borderColor: "#162244", background: "rgba(99,102,241,0.08)" }}>
         <span className="relative flex h-2.5 w-2.5">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-60" />
           <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
         </span>
-        <span className="text-xs font-bold text-white tracking-widest uppercase">Live</span>
+        <span className="text-xs font-black tracking-widest text-white uppercase">Live</span>
       </div>
-      <div className="overflow-hidden flex-1 relative">
-        <div
-          className="whitespace-nowrap text-xs font-medium text-white/90"
-          style={{
-            animation: "tickerScroll 60s linear infinite",
-            display: "inline-block",
-          }}
-        >
+      {/* Scroll text */}
+      <div className="overflow-hidden flex-1 px-4">
+        <div className="whitespace-nowrap text-xs font-medium" style={{ color: "#94a3b8", animation: "tickerScroll 60s linear infinite", display: "inline-block" }}>
           {text}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{text}
         </div>
       </div>
@@ -80,45 +91,42 @@ function TickerBanner({ articles, isDark }: { articles: NewsArticle[]; isDark: b
 
 // ── Market Mood Bar ───────────────────────────────────────────────────────────
 
-function MoodBar({
-  bullish, bearish, neutral, mood, isDark,
-}: { bullish: number; bearish: number; neutral: number; mood: string; isDark: boolean }) {
+function MoodBar({ bullish, bearish, neutral, mood }: { bullish: number; bearish: number; neutral: number; mood: string }) {
   const total = bullish + bearish + neutral || 1;
   const bPct = Math.round((bullish / total) * 100);
   const rPct = Math.round((bearish / total) * 100);
   const nPct = 100 - bPct - rPct;
 
+  const moodConf = mood === "bullish"
+    ? { label: "Bullish", color: "#22c55e", bg: "rgba(34,197,94,0.12)", border: "rgba(34,197,94,0.25)", Icon: TrendingUp }
+    : mood === "bearish"
+    ? { label: "Bearish", color: "#ef4444", bg: "rgba(239,68,68,0.12)", border: "rgba(239,68,68,0.25)", Icon: TrendingDown }
+    : { label: "Neutral", color: "#64748b", bg: "rgba(100,116,139,0.12)", border: "rgba(100,116,139,0.2)", Icon: Minus };
+
   return (
-    <div className="rounded-2xl border p-4" style={{ background: isDark ? "#1e293b" : "#fff", borderColor: isDark ? "#334155" : "#e2e8f0" }}>
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <Radio className="w-4 h-4" style={{ color: "#6366f1" }} />
-          <span className="text-sm font-semibold" style={{ color: isDark ? "#f1f5f9" : "#111827" }}>
-            Market Mood Sensor
-          </span>
+    <div className="rounded-2xl p-4" style={{ background: "#0a1020", border: "1px solid #162244" }}>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2.5">
+          <div className="p-1.5 rounded-lg" style={{ background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.2)" }}>
+            <Radio className="w-3.5 h-3.5" style={{ color: "#818cf8" }} />
+          </div>
+          <span className="text-sm font-semibold" style={{ color: "#e2e8f0" }}>Market Mood Sensor</span>
         </div>
-        <div
-          className="flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full"
-          style={{
-            background: mood === "bullish" ? "#dcfce7" : mood === "bearish" ? "#fee2e2" : isDark ? "#334155" : "#f3f4f6",
-            color: mood === "bullish" ? "#15803d" : mood === "bearish" ? "#b91c1c" : isDark ? "#94a3b8" : "#6b7280",
-          }}
-        >
-          {mood === "bullish" ? <TrendingUp className="w-3 h-3" /> : mood === "bearish" ? <TrendingDown className="w-3 h-3" /> : <Minus className="w-3 h-3" />}
-          {mood.charAt(0).toUpperCase() + mood.slice(1)}
+        <div className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full" style={{ background: moodConf.bg, color: moodConf.color, border: `1px solid ${moodConf.border}` }}>
+          <moodConf.Icon className="w-3 h-3" />{moodConf.label}
         </div>
       </div>
 
-      <div className="h-3 rounded-full overflow-hidden flex gap-0.5">
-        <div style={{ width: `${bPct}%`, background: "#16a34a", transition: "width 1s ease", borderRadius: "6px 0 0 6px" }} />
-        <div style={{ width: `${nPct}%`, background: isDark ? "#475569" : "#d1d5db", transition: "width 1s ease" }} />
-        <div style={{ width: `${rPct}%`, background: "#dc2626", transition: "width 1s ease", borderRadius: "0 6px 6px 0" }} />
+      <div className="h-3 rounded-full overflow-hidden flex gap-0.5" style={{ background: "#162244" }}>
+        <div style={{ width: `${bPct}%`, background: "linear-gradient(90deg,#15803d,#22c55e)", transition: "width 1s ease", borderRadius: "6px 0 0 6px" }} />
+        <div style={{ width: `${nPct}%`, background: "#1e3a5f", transition: "width 1s ease" }} />
+        <div style={{ width: `${rPct}%`, background: "linear-gradient(90deg,#ef4444,#b91c1c)", transition: "width 1s ease", borderRadius: "0 6px 6px 0" }} />
       </div>
 
-      <div className="flex justify-between mt-2 text-xs" style={{ color: isDark ? "#94a3b8" : "#6b7280" }}>
-        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-600 inline-block" />{bPct}% Bullish</span>
-        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: isDark ? "#475569" : "#d1d5db" }} />{nPct}% Neutral</span>
-        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-600 inline-block" />{rPct}% Bearish</span>
+      <div className="flex justify-between mt-3 text-xs" style={{ color: "#4a6080" }}>
+        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-green-500 inline-block" />{bPct}% Bullish</span>
+        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block" style={{ background: "#1e3a5f" }} />{nPct}% Neutral</span>
+        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" />{rPct}% Bearish</span>
       </div>
     </div>
   );
@@ -126,63 +134,58 @@ function MoodBar({
 
 // ── News Card ─────────────────────────────────────────────────────────────────
 
-function NewsCard({ article, isDark, index }: { article: NewsArticle; isDark: boolean; index: number }) {
+function NewsCard({ article, index }: { article: NewsArticle; index: number }) {
   const [expanded, setExpanded] = useState(false);
-  const colors = sentimentColor(article.sentiment, isDark);
+  const s = sentimentConfig(article.sentiment);
 
   return (
     <div
-      className="rounded-xl border overflow-hidden cursor-pointer transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5"
+      className="rounded-2xl overflow-hidden cursor-pointer group transition-all duration-200"
       style={{
-        background: colors.bg,
-        borderLeft: `3px solid ${colors.border}`,
-        borderTop: `1px solid ${isDark ? "#334155" : "#e2e8f0"}`,
-        borderRight: `1px solid ${isDark ? "#334155" : "#e2e8f0"}`,
-        borderBottom: `1px solid ${isDark ? "#334155" : "#e2e8f0"}`,
+        background: s.bg,
+        border: `1px solid ${s.border}30`,
+        borderLeft: `4px solid ${s.border}`,
+        boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
         animationDelay: `${index * 40}ms`,
       }}
-      onClick={() => setExpanded(e => !e)}
+      onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = `0 4px 24px ${s.glow}, 0 1px 3px rgba(0,0,0,0.3)`; (e.currentTarget as HTMLDivElement).style.transform = "translateY(-1px)"; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = "0 1px 3px rgba(0,0,0,0.3)"; (e.currentTarget as HTMLDivElement).style.transform = "translateY(0)"; }}
+      onClick={() => setExpanded(v => !v)}
     >
-      <div className="p-3.5">
+      <div className="p-4">
         <div className="flex items-start gap-3">
           <div className="flex-1 min-w-0">
-            <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
-              <span
-                className="text-xs font-bold px-2 py-0.5 rounded-md text-white"
-                style={{ background: article.sourceColor }}
-              >
+            {/* Meta row */}
+            <div className="flex flex-wrap items-center gap-2 mb-2">
+              <span className="text-xs font-black px-2.5 py-1 rounded-lg text-white" style={{ background: article.sourceColor }}>
                 {article.sourceShort}
               </span>
-              <span
-                className="flex items-center gap-0.5 text-xs font-semibold px-1.5 py-0.5 rounded-md"
-                style={{ background: colors.border + "20", color: colors.border }}
-              >
-                {SENTIMENT_ICONS[article.sentiment]}
-                {article.sentiment}
+              <span className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-lg" style={{ background: s.chip, color: s.text, border: `1px solid ${s.chipBorder}` }}>
+                <s.Icon className="w-3 h-3" />{s.label}
               </span>
-              <span className="text-xs" style={{ color: isDark ? "#64748b" : "#9ca3af" }}>
-                {timeAgo(article.published)}
+              <span className="flex items-center gap-1 text-xs" style={{ color: "#4a6080" }}>
+                <Clock className="w-3 h-3" />{timeAgo(article.published)}
               </span>
             </div>
 
-            <p className="text-sm font-semibold leading-snug" style={{ color: isDark ? "#f1f5f9" : "#111827" }}>
+            {/* Title */}
+            <p className="text-sm font-semibold leading-snug" style={{ color: "#dde8f8" }}>
               {article.title}
             </p>
 
+            {/* Summary */}
             {expanded && article.summary && (
-              <p className="text-xs mt-2 leading-relaxed" style={{ color: isDark ? "#94a3b8" : "#6b7280" }}>
+              <p className="text-xs mt-2.5 leading-relaxed" style={{ color: "#4a6080" }}>
                 {article.summary}
               </p>
             )}
 
+            {/* Tickers */}
             {article.tickers.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-2">
+              <div className="flex flex-wrap gap-1.5 mt-2.5">
                 {article.tickers.map(t => (
                   <Link key={t} href={`/stocks?q=${t}`} onClick={e => e.stopPropagation()}>
-                    <span
-                      className="text-xs font-mono font-bold px-1.5 py-0.5 rounded cursor-pointer hover:opacity-80 transition-opacity"
-                      style={{ background: isDark ? "#334155" : "#f3f4f6", color: "#6366f1" }}
-                    >
+                    <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-md cursor-pointer hover:opacity-80 transition-opacity" style={{ background: "rgba(99,102,241,0.12)", color: "#818cf8", border: "1px solid rgba(99,102,241,0.2)" }}>
                       {t}
                     </span>
                   </Link>
@@ -191,20 +194,16 @@ function NewsCard({ article, isDark, index }: { article: NewsArticle; isDark: bo
             )}
           </div>
 
-          <div className="flex flex-col items-end gap-2 shrink-0">
-            <a
-              href={article.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={e => e.stopPropagation()}
-              className="p-1.5 rounded-lg transition-colors hover:bg-indigo-100 dark:hover:bg-indigo-900/30"
-              style={{ color: "#6366f1" }}
-            >
+          {/* Right actions */}
+          <div className="flex flex-col items-end gap-2.5 shrink-0">
+            <a href={article.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+              className="p-1.5 rounded-lg transition-all opacity-50 group-hover:opacity-100"
+              style={{ color: "#818cf8" }}>
               <ExternalLink className="w-3.5 h-3.5" />
             </a>
-            <button style={{ color: isDark ? "#475569" : "#d1d5db" }}>
+            <span style={{ color: "#334155" }}>
               {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-            </button>
+            </span>
           </div>
         </div>
       </div>
@@ -212,14 +211,13 @@ function NewsCard({ article, isDark, index }: { article: NewsArticle; isDark: bo
   );
 }
 
-
 // ── Loading Skeletons ─────────────────────────────────────────────────────────
 
-function LoadingCards({ isDark }: { isDark: boolean }) {
+function LoadingCards() {
   return (
     <div className="space-y-3">
       {[...Array(5)].map((_, i) => (
-        <div key={i} className="h-24 rounded-xl animate-pulse" style={{ background: isDark ? "#1e293b" : "#f3f4f6", animationDelay: `${i * 100}ms` }} />
+        <div key={i} className="h-20 rounded-2xl animate-pulse" style={{ background: "linear-gradient(90deg, #0a1020 25%, #0e1829 50%, #0a1020 75%)", backgroundSize: "200% 100%", animation: `shimmer 1.5s infinite ${i * 0.1}s`, borderLeft: "4px solid #162244", border: "1px solid #162244" }} />
       ))}
     </div>
   );
@@ -230,43 +228,36 @@ function LoadingCards({ isDark }: { isDark: boolean }) {
 function SectionLoader({ active }: { active: boolean }) {
   if (!active) return null;
   return (
-    <span
-      style={{
-        position: "absolute", top: 10, right: 10,
-        width: 14, height: 14,
-        border: "2.5px solid #818cf8",
-        borderTopColor: "transparent",
-        borderRadius: "50%",
-        display: "inline-block",
-        animation: "spin 0.75s linear infinite",
-        zIndex: 2,
-      }}
-    />
+    <span style={{
+      position: "absolute", top: 10, right: 10,
+      width: 14, height: 14,
+      border: "2.5px solid #6366f1",
+      borderTopColor: "transparent",
+      borderRadius: "50%",
+      display: "inline-block",
+      animation: "spin 0.75s linear infinite",
+      zIndex: 2,
+    }} />
   );
 }
 
 // ── Refresh Countdown ─────────────────────────────────────────────────────────
 
-function RefreshCountdown({
-  seconds, onRefresh, isDark, isRefreshing,
-}: { seconds: number; onRefresh: () => void; isDark: boolean; isRefreshing: boolean }) {
+function RefreshCountdown({ seconds, onRefresh, isRefreshing }: { seconds: number; onRefresh: () => void; isRefreshing: boolean }) {
   const pct = (seconds / (8 * 60)) * 100;
   return (
     <button
       onClick={onRefresh}
       disabled={isRefreshing}
-      className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg transition-all hover:brightness-90 disabled:opacity-60"
-      style={{ background: isDark ? "#1e293b" : "#f3f4f6", color: isDark ? "#94a3b8" : "#6b7280" }}
+      className="flex items-center gap-2 text-xs px-3 py-2 rounded-xl transition-all disabled:opacity-60"
+      style={{ background: "#0a1020", color: "#4a6080", border: "1px solid #162244" }}
       title={isRefreshing ? "Refreshing…" : `Auto-refresh in ${Math.floor(seconds / 60)}m ${seconds % 60}s`}
     >
-      <RefreshCw
-        className="w-3.5 h-3.5"
-        style={{ animation: isRefreshing ? "spin 0.7s linear infinite" : "none" }}
-      />
+      <RefreshCw className="w-3.5 h-3.5" style={{ animation: isRefreshing ? "spin 0.7s linear infinite" : "none", color: isRefreshing ? "#818cf8" : undefined }} />
       <span>{isRefreshing ? "Refreshing…" : "Refresh"}</span>
       {!isRefreshing && (
-        <div className="w-8 h-1 rounded-full overflow-hidden" style={{ background: isDark ? "#334155" : "#e2e8f0" }}>
-          <div className="h-full rounded-full bg-indigo-500 transition-all duration-1000" style={{ width: `${pct}%` }} />
+        <div className="w-8 h-1 rounded-full overflow-hidden" style={{ background: "#162244" }}>
+          <div className="h-full rounded-full transition-all duration-1000" style={{ width: `${pct}%`, background: "linear-gradient(90deg,#6366f1,#818cf8)" }} />
         </div>
       )}
     </button>
@@ -307,8 +298,6 @@ function getReelOrbs(article: NewsArticle): [string, string] {
   return                          s === "bullish" ? ["rgba(251,146,60,0.45)",  green]  : s === "bearish" ? ["rgba(251,146,60,0.4)",  red]  : ["rgba(251,146,60,0.35)",  neu];
 }
 
-// Curated Picsum photo IDs that look finance/business/market appropriate.
-// Picsum serves from a fast CDN — images load in ~80–150ms, no generation needed.
 const REEL_PHOTO_POOLS: Record<string, Record<string, number[]>> = {
   market: {
     bullish: [1067,1070,1074,1075,1076,273,277,1,7,20,39,48,67,119,180],
@@ -328,15 +317,12 @@ const REEL_PHOTO_POOLS: Record<string, Record<string, number[]>> = {
 };
 
 function getFallbackImageUrl(article: NewsArticle): string {
-  const pool = REEL_PHOTO_POOLS[article.category]?.[article.sentiment]
-    ?? REEL_PHOTO_POOLS.market.neutral;
-  // Derive a stable index from the article id
+  const pool = REEL_PHOTO_POOLS[article.category]?.[article.sentiment] ?? REEL_PHOTO_POOLS.market.neutral;
   const n = Math.abs(parseInt(article.id.replace(/\D/g, "").slice(0, 6) || "1", 10));
   const id = pool[n % pool.length];
   return `https://picsum.photos/id/${id}/800/500`;
 }
 
-// Preload image URLs eagerly so they are cache-warm before the user scrolls to them
 function preloadImages(urls: string[]) {
   urls.forEach(src => {
     if (!src) return;
@@ -356,15 +342,11 @@ function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: ()
     cardRefs.current[clamped]?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [articles.length]);
 
-  // Preload images for current + next 4 cards so they're ready before swipe
   useEffect(() => {
-    const urls = articles
-      .slice(current, current + 5)
-      .map(a => a.image_url || getFallbackImageUrl(a));
+    const urls = articles.slice(current, current + 5).map(a => a.image_url || getFallbackImageUrl(a));
     preloadImages(urls);
   }, [current, articles]);
 
-  // Also eagerly preload first 5 on mount
   useEffect(() => {
     const urls = articles.slice(0, 5).map(a => a.image_url || getFallbackImageUrl(a));
     preloadImages(urls);
@@ -403,7 +385,6 @@ function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: ()
 
   return (
     <div className="relative rounded-2xl overflow-hidden" style={{ height: "calc(100vh - 120px)" }}>
-      {/* Top bar overlay */}
       <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-4 py-3 pointer-events-none"
         style={{ background: "linear-gradient(to bottom, rgba(0,0,0,0.65) 0%, transparent 100%)" }}>
         <div className="flex items-center gap-2">
@@ -422,7 +403,6 @@ function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: ()
         </div>
       </div>
 
-      {/* Progress dots — right side */}
       <div className="absolute right-3 top-1/2 -translate-y-1/2 z-30 flex flex-col gap-1.5 items-center">
         {articles.slice(0, DOTS_MAX).map((_, i) => (
           <button key={i} onClick={() => goTo(i)}
@@ -438,7 +418,6 @@ function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: ()
         )}
       </div>
 
-      {/* Snap-scroll container */}
       <div
         ref={containerRef}
         onScroll={handleScroll}
@@ -451,6 +430,7 @@ function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: ()
           const cat  = catLabel(article.category);
           const fallbackSrc = getFallbackImageUrl(article);
           const imgSrc = article.image_url || fallbackSrc;
+          const s = sentimentConfig(article.sentiment);
           return (
             <div
               key={article.id}
@@ -458,28 +438,17 @@ function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: ()
               className="relative flex flex-col overflow-hidden"
               style={{ height: "100%", scrollSnapAlign: "start", flexShrink: 0, background: getReelGradient(article) }}
             >
-              {/* Full-bleed background image — fades in on load; gradient shows as placeholder */}
-              <img
-                src={imgSrc}
-                alt=""
-                aria-hidden
+              <img src={imgSrc} alt="" aria-hidden
                 className="absolute inset-0 w-full h-full object-cover"
                 style={{ zIndex: 0, opacity: 0, transition: "opacity 0.4s ease" }}
                 onLoad={e => { e.currentTarget.style.opacity = "1"; }}
                 onError={e => {
                   const el = e.currentTarget;
-                  if (el.src !== fallbackSrc) {
-                    el.src = fallbackSrc;
-                  } else {
-                    // Picsum also failed — show gradient only (keep opacity 0)
-                    el.style.display = "none";
-                  }
+                  if (el.src !== fallbackSrc) { el.src = fallbackSrc; } else { el.style.display = "none"; }
                 }}
               />
-              {/* Dark gradient overlay for text readability */}
               <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 1,
                 background: "linear-gradient(to bottom, rgba(0,0,0,0.25) 0%, rgba(0,0,0,0.45) 35%, rgba(0,0,0,0.82) 70%, rgba(0,0,0,0.95) 100%)" }} />
-              {/* Decorative blurred orbs on top of image */}
               <div className="absolute inset-0 pointer-events-none overflow-hidden" style={{ zIndex: 1 }}>
                 <div style={{ position: "absolute", top: "-15%", right: "-8%", width: "55%", height: "55%", borderRadius: "50%",
                   background: `radial-gradient(circle, ${orb1} 0%, transparent 70%)`, filter: "blur(50px)", opacity: 0.5 }} />
@@ -487,67 +456,36 @@ function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: ()
                   background: `radial-gradient(circle, ${orb2} 0%, transparent 70%)`, filter: "blur(45px)", opacity: 0.5 }} />
               </div>
 
-              {/* Card content */}
               <div className="relative z-10 flex flex-col h-full px-6 pt-16 pb-5">
-                {/* Source + meta row */}
                 <div className="flex items-center justify-between mb-6">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold px-2.5 py-1 rounded-lg text-white"
-                      style={{ background: article.sourceColor ?? "#6366f1" }}>
+                    <span className="text-xs font-bold px-2.5 py-1 rounded-lg text-white" style={{ background: article.sourceColor ?? "#6366f1" }}>
                       {article.sourceShort}
                     </span>
-                    <span className="text-xs font-bold px-2.5 py-1 rounded-lg border"
-                      style={{ color: sent.color, background: sent.bg, borderColor: sent.color + "40" }}>
+                    <span className="text-xs font-bold px-2.5 py-1 rounded-lg border" style={{ color: sent.color, background: sent.bg, borderColor: sent.color + "40" }}>
                       {sent.txt}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold px-2 py-0.5 rounded-md"
-                      style={{ color: cat.color, background: cat.color + "20" }}>{cat.txt}</span>
-                    <span className="text-xs text-white/45 flex items-center gap-1">
-                      <Clock className="w-3 h-3" />{timeAgo(article.published)}
-                    </span>
+                    <span className="text-xs font-bold px-2 py-0.5 rounded-md" style={{ color: cat.color, background: cat.color + "20" }}>{cat.txt}</span>
                   </div>
                 </div>
 
-                {/* Spacer pushes content to bottom 40% */}
-                <div className="flex-1" />
-
-                {/* Hero headline */}
-                <h2 className="text-[22px] md:text-[28px] font-black leading-tight text-white mb-3"
-                  style={{ textShadow: "0 2px 20px rgba(0,0,0,0.6)" }}>
-                  {article.title}
-                </h2>
-
-                {/* Summary */}
-                {article.summary && (
-                  <p className="text-sm leading-relaxed text-white/70 mb-4 line-clamp-3">
-                    {article.summary}
-                  </p>
-                )}
-
-                {/* Ticker chips */}
-                {article.tickers.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mb-4">
-                    {article.tickers.map(t => (
-                      <Link key={t} href={`/stocks?q=${t}`}>
-                        <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-lg cursor-pointer hover:opacity-80 transition"
-                          style={{ background: "rgba(255,255,255,0.1)", color: "#c7d2fe", border: "1px solid rgba(255,255,255,0.18)" }}>
-                          {t}
-                        </span>
-                      </Link>
-                    ))}
-                  </div>
-                )}
-
-                {/* Bottom bar */}
-                <div className="flex items-center justify-between pt-3 border-t border-white/10">
-                  <span className="text-xs text-white/30 hidden sm:block">↑↓ scroll · arrow keys · ESC to exit</span>
-                  <div className="flex items-center gap-2 ml-auto">
+                <div className="flex-1 flex flex-col justify-end">
+                  <h2 className="text-2xl font-black leading-tight text-white mb-3 drop-shadow-lg">{article.title}</h2>
+                  {article.summary && (
+                    <p className="text-sm leading-relaxed mb-4" style={{ color: "rgba(255,255,255,0.7)" }}>{article.summary}</p>
+                  )}
+                  {article.tickers.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      {article.tickers.map(t => (
+                        <span key={t} className="text-xs font-mono font-bold px-2.5 py-1 rounded-lg text-white" style={{ background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.2)" }}>{t}</span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-3">
                     {i > 0 && (
-                      <button onClick={() => goTo(i - 1)}
-                        className="flex items-center gap-1 text-xs text-white/60 hover:text-white transition px-3 py-1.5 rounded-lg"
-                        style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)" }}>
+                      <button onClick={() => goTo(i - 1)} className="flex items-center gap-1 text-xs text-white/60 hover:text-white transition px-3 py-1.5 rounded-lg" style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)" }}>
                         <ChevronUp className="w-3.5 h-3.5" /> Prev
                       </button>
                     )}
@@ -557,16 +495,13 @@ function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: ()
                       Read Full Story <ExternalLink className="w-3.5 h-3.5" />
                     </a>
                     {i < articles.length - 1 && (
-                      <button onClick={() => goTo(i + 1)}
-                        className="flex items-center gap-1 text-xs text-white/60 hover:text-white transition px-3 py-1.5 rounded-lg"
-                        style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)" }}>
+                      <button onClick={() => goTo(i + 1)} className="flex items-center gap-1 text-xs text-white/60 hover:text-white transition px-3 py-1.5 rounded-lg" style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)" }}>
                         Next <ChevronDown className="w-3.5 h-3.5" />
                       </button>
                     )}
                   </div>
                 </div>
 
-                {/* Swipe hint for first card */}
                 {i === current && i < articles.length - 1 && (
                   <div className="flex flex-col items-center mt-3 text-white/25 text-[11px]">
                     <ChevronDown className="w-4 h-4 animate-bounce" />
@@ -584,9 +519,6 @@ function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: ()
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Bulk/Block Deals and Corp. Events used to live here as tabs but they're
-// analytical data — not headlines — so they were moved into the Insights
-// page (`/insights/bulk-block-deals` and `/insights/corp-events`).
 type Tab = "all" | "market" | "corporate" | "general";
 const TABS: Tab[] = ["all", "market", "corporate", "general"];
 
@@ -602,10 +534,13 @@ export default function NewsFeed() {
   const [countdown, setCountdown] = useState(8 * 60);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const hdrTxt = isDark ? "#f1f5f9" : "#111827";
-  const muTxt  = isDark ? "#94a3b8" : "#6b7280";
-  const bg     = isDark ? "#0f172a" : "#f8fafc";
-  const borderCol = isDark ? "#334155" : "#e2e8f0";
+  // Light-mode palette (dark mode uses the same rich values defined inline)
+  const bg          = isDark ? "#04091a" : "#f1f5f9";
+  const cardBg      = isDark ? "#0a1020" : "#ffffff";
+  const borderCol   = isDark ? "#162244" : "#e2e8f0";
+  const hdrTxt      = isDark ? "#e2e8f0" : "#0f172a";
+  const muTxt       = isDark ? "#4a6080" : "#64748b";
+  const inputBg     = isDark ? "#0a1020" : "#ffffff";
 
   const { data: feed, isLoading: feedLoading, isFetching: feedFetching } = useQuery(
     marketDataQueryOptions(
@@ -618,22 +553,19 @@ export default function NewsFeed() {
   const { data: stats, isFetching: statsFetching } = useQuery({
     queryKey: ["newsStats"],
     queryFn:  api.newsStats,
-    staleTime: 0,               // always re-fetch fresh — backend has its own 8-min TTL
-    refetchOnMount: "always",   // never serve cached zeros after a backend restart
+    staleTime: 0,
+    refetchOnMount: "always",
     placeholderData: keepPreviousData,
   });
 
   const refreshMutation = useMutation({ mutationFn: api.newsRefresh });
 
-  // Stable ref so the interval never needs to re-register
   const refreshFnRef = useRef<() => void>(() => {});
   refreshFnRef.current = useCallback(() => {
     refreshMutation.mutate(undefined, {
       onSuccess: () => {
         qc.invalidateQueries({ queryKey: ["newsFeed"] });
         qc.invalidateQueries({ queryKey: ["newsStats"] });
-        // Deals + Events live in Insights now; their queries are owned by
-        // those tabs and aren't refreshed from this page.
         setCountdown(8 * 60);
       },
     });
@@ -649,7 +581,7 @@ export default function NewsFeed() {
       });
     }, 1000);
     return () => clearInterval(id);
-  }, []); // empty deps — interval never re-registers
+  }, []);
 
   useEffect(() => {
     clearTimeout(debounceRef.current ?? undefined);
@@ -673,60 +605,76 @@ export default function NewsFeed() {
           100% { transform: translateX(-50%); }
         }
         @keyframes slideIn {
-          from { opacity: 0; transform: translateY(12px); }
+          from { opacity: 0; transform: translateY(10px); }
           to   { opacity: 1; transform: translateY(0); }
         }
         @keyframes spin {
           from { transform: rotate(0deg); }
           to   { transform: rotate(360deg); }
         }
+        @keyframes shimmer {
+          0%   { background-position: -200% 0; }
+          100% { background-position: 200% 0; }
+        }
         .news-card-enter {
           animation: slideIn 0.3s ease forwards;
         }
       `}</style>
 
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      {/* ── Header ─────────────────────────────────────────────────── */}
+      <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2" style={{ color: hdrTxt }}>
-            <Newspaper className="w-6 h-6 text-indigo-500" />
-            Market News Feed
+          <h1 className="text-2xl font-black flex items-center gap-2.5" style={{ color: hdrTxt }}>
+            <div className="p-1.5 rounded-xl" style={{ background: isDark ? "rgba(99,102,241,0.12)" : "#eef2ff", border: isDark ? "1px solid rgba(99,102,241,0.2)" : "1px solid #c7d2fe" }}>
+              <Newspaper className="w-5 h-5" style={{ color: "#818cf8" }} />
+            </div>
+            <span style={isDark ? { background: "linear-gradient(90deg,#c7d2fe,#a5b4fc)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" } : {}}>
+              Market News Feed
+            </span>
           </h1>
-          <p className="text-sm mt-0.5" style={{ color: muTxt }}>
+          <p className="text-sm mt-1 ml-10" style={{ color: muTxt }}>
             Live headlines from ET, Livemint, Moneycontrol + NSE data
           </p>
         </div>
         <div className="flex items-center gap-2">
           <DataFreshness meta={feedMeta} hideRefresh />
-          <RefreshCountdown seconds={countdown} onRefresh={handleRefresh} isDark={isDark} isRefreshing={refreshMutation.isPending} />
+          <RefreshCountdown seconds={countdown} onRefresh={handleRefresh} isRefreshing={refreshMutation.isPending} />
         </div>
       </div>
 
-      {/* Live ticker */}
-      {articles.length > 0 && <TickerBanner articles={articles} isDark={isDark} />}
+      {/* ── Live ticker ─────────────────────────────────────────────── */}
+      {articles.length > 0 && <TickerBanner articles={articles} />}
 
-      {/* Stats row */}
+      {/* ── Stats row ───────────────────────────────────────────────── */}
       {stats && (
         <div className="relative grid grid-cols-2 md:grid-cols-4 gap-3">
           <SectionLoader active={statsFetching} />
-          <div className="rounded-xl border p-3" style={{ background: isDark ? "#1e293b" : "#fff", borderColor: borderCol }}>
-            <div className="text-xs mb-1" style={{ color: muTxt }}>Total Articles</div>
-            <div className="text-2xl font-bold" style={{ color: hdrTxt }}>{stats.totalArticles}</div>
+
+          {/* Total */}
+          <div className="rounded-2xl p-4" style={{ background: cardBg, border: `1px solid ${borderCol}`, borderTop: "3px solid #6366f1" }}>
+            <div className="text-xs font-medium mb-1" style={{ color: muTxt }}>Total Articles</div>
+            <div className="text-2xl font-black" style={{ color: isDark ? "#c7d2fe" : "#4f46e5" }}>{stats.totalArticles}</div>
           </div>
-          <div className="rounded-xl border p-3" style={{ background: isDark ? "#1e293b" : "#fff", borderColor: borderCol }}>
-            <div className="text-xs mb-1" style={{ color: muTxt }}>Bullish Signals</div>
-            <div className="text-2xl font-bold text-green-600">{stats.sentiments.bullish}</div>
+
+          {/* Bullish */}
+          <div className="rounded-2xl p-4" style={{ background: isDark ? "rgba(34,197,94,0.05)" : "#f0fdf4", border: `1px solid ${isDark ? "rgba(34,197,94,0.15)" : "#bbf7d0"}`, borderTop: "3px solid #22c55e" }}>
+            <div className="text-xs font-medium mb-1" style={{ color: muTxt }}>Bullish Signals</div>
+            <div className="text-2xl font-black text-green-500">{stats.sentiments.bullish}</div>
           </div>
-          <div className="rounded-xl border p-3" style={{ background: isDark ? "#1e293b" : "#fff", borderColor: borderCol }}>
-            <div className="text-xs mb-1" style={{ color: muTxt }}>Bearish Signals</div>
-            <div className="text-2xl font-bold text-red-600">{stats.sentiments.bearish}</div>
+
+          {/* Bearish */}
+          <div className="rounded-2xl p-4" style={{ background: isDark ? "rgba(239,68,68,0.05)" : "#fef2f2", border: `1px solid ${isDark ? "rgba(239,68,68,0.15)" : "#fecaca"}`, borderTop: "3px solid #ef4444" }}>
+            <div className="text-xs font-medium mb-1" style={{ color: muTxt }}>Bearish Signals</div>
+            <div className="text-2xl font-black text-red-500">{stats.sentiments.bearish}</div>
           </div>
-          <div className="rounded-xl border p-3" style={{ background: isDark ? "#1e293b" : "#fff", borderColor: borderCol }}>
-            <div className="text-xs mb-1" style={{ color: muTxt }}>Sources</div>
-            <div className="flex flex-wrap gap-1 mt-1">
+
+          {/* Sources */}
+          <div className="rounded-2xl p-4" style={{ background: cardBg, border: `1px solid ${borderCol}`, borderTop: "3px solid #7c3aed" }}>
+            <div className="text-xs font-medium mb-2" style={{ color: muTxt }}>Sources</div>
+            <div className="flex flex-wrap gap-1">
               {sourceStats.map(s => (
-                <span key={s.name} className="text-xs px-1.5 py-0.5 rounded font-mono"
-                  style={{ background: isDark ? "#334155" : "#f3f4f6", color: "#6366f1" }}>
+                <span key={s.name} className="text-xs px-2 py-0.5 rounded-lg font-mono font-semibold"
+                  style={{ background: isDark ? "rgba(99,102,241,0.12)" : "#eef2ff", color: isDark ? "#818cf8" : "#4f46e5", border: isDark ? "1px solid rgba(99,102,241,0.2)" : "1px solid #c7d2fe" }}>
                   {s.name} {s.count}
                 </span>
               ))}
@@ -735,8 +683,8 @@ export default function NewsFeed() {
         </div>
       )}
 
-      {/* Mood bar */}
-      {stats && (
+      {/* ── Mood bar ────────────────────────────────────────────────── */}
+      {stats && isDark && (
         <div className="relative">
           <SectionLoader active={statsFetching} />
           <MoodBar
@@ -744,12 +692,42 @@ export default function NewsFeed() {
             bearish={stats.sentiments.bearish}
             neutral={stats.sentiments.neutral}
             mood={stats.marketMood}
-            isDark={isDark}
           />
         </div>
       )}
+      {stats && !isDark && (
+        <div className="relative rounded-2xl border p-4" style={{ background: "#fff", borderColor: "#e2e8f0" }}>
+          <SectionLoader active={statsFetching} />
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Radio className="w-4 h-4 text-indigo-500" />
+              <span className="text-sm font-semibold text-gray-800">Market Mood Sensor</span>
+            </div>
+            {stats.marketMood === "bullish" ? <span className="flex items-center gap-1 text-xs font-bold px-3 py-1 rounded-full bg-green-100 text-green-700"><TrendingUp className="w-3 h-3"/>Bullish</span>
+            : stats.marketMood === "bearish" ? <span className="flex items-center gap-1 text-xs font-bold px-3 py-1 rounded-full bg-red-100 text-red-700"><TrendingDown className="w-3 h-3"/>Bearish</span>
+            : <span className="flex items-center gap-1 text-xs font-bold px-3 py-1 rounded-full bg-gray-100 text-gray-600"><Minus className="w-3 h-3"/>Neutral</span>}
+          </div>
+          {(() => {
+            const total = stats.sentiments.bullish + stats.sentiments.bearish + stats.sentiments.neutral || 1;
+            const bP = Math.round((stats.sentiments.bullish / total) * 100);
+            const rP = Math.round((stats.sentiments.bearish / total) * 100);
+            return (
+              <>
+                <div className="h-3 rounded-full overflow-hidden flex gap-0.5 bg-gray-100">
+                  <div style={{ width: `${bP}%`, background: "#22c55e", borderRadius: "6px 0 0 6px" }} />
+                  <div style={{ width: `${100-bP-rP}%`, background: "#d1d5db" }} />
+                  <div style={{ width: `${rP}%`, background: "#ef4444", borderRadius: "0 6px 6px 0" }} />
+                </div>
+                <div className="flex justify-between mt-2 text-xs text-gray-400">
+                  <span>{bP}% Bullish</span><span>{100-bP-rP}% Neutral</span><span>{rP}% Bearish</span>
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
 
-      {/* Tabs */}
+      {/* ── Tabs ────────────────────────────────────────────────────── */}
       <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-hide">
         {TABS.map(tab => {
           const meta = CATEGORY_META[tab];
@@ -758,12 +736,12 @@ export default function NewsFeed() {
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all duration-150 shrink-0"
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all duration-150 shrink-0"
               style={{
-                background: isActive ? meta.color : isDark ? "#1e293b" : "#fff",
+                background: isActive ? meta.color : isDark ? "#0a1020" : "#fff",
                 color:      isActive ? "#fff" : muTxt,
                 border:     `1px solid ${isActive ? meta.color : borderCol}`,
-                boxShadow:  isActive ? `0 0 0 3px ${meta.color}22` : "none",
+                boxShadow:  isActive ? `0 0 0 3px ${meta.color}25, 0 2px 8px ${meta.color}30` : "none",
               }}
             >
               {meta.icon}
@@ -773,47 +751,45 @@ export default function NewsFeed() {
         })}
       </div>
 
-      {/* Search + view toggle (hidden in reels mode — the reels overlay has
-          its own "List" exit button). */}
+      {/* ── Search + view toggle ────────────────────────────────────── */}
       {!reelsMode && (
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: muTxt }} />
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: muTxt }} />
             <input
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Search headlines, companies, sectors…"
-              className="w-full pl-9 pr-4 py-2.5 rounded-xl text-sm border outline-none transition-all"
+              className="w-full pl-10 pr-4 py-2.5 rounded-xl text-sm outline-none transition-all"
               style={{
-                background: isDark ? "#1e293b" : "#fff",
-                borderColor: search ? "#6366f1" : borderCol,
+                background: inputBg,
+                border: `1.5px solid ${search ? "#6366f1" : borderCol}`,
                 color: hdrTxt,
+                boxShadow: search ? "0 0 0 3px rgba(99,102,241,0.1)" : "none",
               }}
             />
             {search && (
-              <button className="absolute right-3 top-1/2 -translate-y-1/2 text-xs" style={{ color: muTxt }} onClick={() => setSearch("")}>
-                clear
+              <button className="absolute right-3 top-1/2 -translate-y-1/2" style={{ color: muTxt }} onClick={() => setSearch("")}>
+                <X className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
           <button
             onClick={() => setReelsMode(r => !r)}
-            title={reelsMode ? "Switch to list view" : "Switch to reels (TikTok-style) view"}
-            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2.5 rounded-xl border transition-all shrink-0"
+            title={reelsMode ? "Switch to list view" : "Switch to reels view"}
+            className="flex items-center gap-1.5 text-xs font-semibold px-4 py-2.5 rounded-xl transition-all shrink-0"
             style={{
-              background: reelsMode ? "#6366f1" : isDark ? "#1e293b" : "#fff",
-              color:      reelsMode ? "#fff" : isDark ? "#94a3b8" : "#6b7280",
-              borderColor: reelsMode ? "#6366f1" : isDark ? "#334155" : "#e2e8f0",
-              boxShadow:  reelsMode ? "0 0 0 3px rgba(99,102,241,0.2)" : "none",
+              background: isDark ? "#0a1020" : "#fff",
+              color:      muTxt,
+              border:     `1.5px solid ${borderCol}`,
             }}
           >
-            {reelsMode ? <List className="w-3.5 h-3.5" /> : <Film className="w-3.5 h-3.5" />}
-            {reelsMode ? "List" : "Reels"}
+            <Film className="w-3.5 h-3.5" />Reels
           </button>
         </div>
       )}
 
-      {/* Content area */}
+      {/* ── Content ─────────────────────────────────────────────────── */}
       {reelsMode && articles.length > 0 ? (
         <ReelsView articles={articles} onClose={() => setReelsMode(false)} />
       ) : reelsMode && feedLoading ? (
@@ -822,19 +798,19 @@ export default function NewsFeed() {
           <p className="text-sm">Loading reels…</p>
         </div>
       ) : feedLoading ? (
-        <LoadingCards isDark={isDark} />
+        <LoadingCards />
       ) : articles.length === 0 ? (
         <div className="text-center py-16" style={{ color: muTxt }}>
-          <Newspaper className="w-12 h-12 mx-auto mb-3 opacity-30" />
-          <p className="font-medium">No articles found</p>
-          <p className="text-sm mt-1">{search ? "Try a different search term" : "Check back soon"}</p>
+          <Newspaper className="w-12 h-12 mx-auto mb-3 opacity-20" />
+          <p className="font-semibold">No articles found</p>
+          <p className="text-sm mt-1 opacity-70">{search ? "Try a different search term" : "Check back soon"}</p>
         </div>
       ) : (
-        <div className="relative space-y-3">
+        <div className="relative space-y-2.5">
           <SectionLoader active={feedFetching && !feedLoading} />
           {articles.map((article, i) => (
             <div key={article.id} className="news-card-enter" style={{ animationDelay: `${Math.min(i * 30, 400)}ms` }}>
-              <NewsCard article={article} isDark={isDark} index={i} />
+              <NewsCard article={article} index={i} />
             </div>
           ))}
           <p className="text-center text-xs py-4" style={{ color: muTxt }}>
