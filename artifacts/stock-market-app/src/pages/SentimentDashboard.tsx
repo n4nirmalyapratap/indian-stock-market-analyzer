@@ -196,10 +196,10 @@ function Speedometer({ score, label }: { score: number | null; label: string }) 
           );
         })}
 
-        {/* Animated fill arc (dashoffset trick) */}
+        {/* Animated fill arc (dashoffset trick) — butt caps so no phantom dot at start */}
         <path
           d={arcD(-90, 90)} fill="none" stroke={zoneColor} strokeWidth="2.5"
-          strokeLinecap="round"
+          strokeLinecap="butt"
           strokeDasharray={`${arcLen} ${arcLen}`}
           strokeDashoffset={fired ? arcLen * (1 - normalized) : arcLen}
           opacity={0.55}
