@@ -23,34 +23,34 @@ function timeAgo(iso: string): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function sentimentConfig(s: string) {
+function sentimentConfig(s: string, isDark: boolean) {
   if (s === "bullish") return {
     border: "#22c55e",
-    glow: "rgba(34,197,94,0.15)",
-    bg: "rgba(34,197,94,0.06)",
-    chip: "rgba(34,197,94,0.12)",
-    chipBorder: "rgba(34,197,94,0.22)",
-    text: "#4ade80",
+    glow: "rgba(34,197,94,0.18)",
+    bg: isDark ? "rgba(34,197,94,0.06)" : "rgba(34,197,94,0.07)",
+    chip: isDark ? "rgba(34,197,94,0.12)" : "rgba(34,197,94,0.1)",
+    chipBorder: isDark ? "rgba(34,197,94,0.22)" : "rgba(34,197,94,0.3)",
+    text: isDark ? "#4ade80" : "#16a34a",
     Icon: TrendingUp,
     label: "Bullish",
   };
   if (s === "bearish") return {
     border: "#ef4444",
-    glow: "rgba(239,68,68,0.15)",
-    bg: "rgba(239,68,68,0.06)",
-    chip: "rgba(239,68,68,0.12)",
-    chipBorder: "rgba(239,68,68,0.22)",
-    text: "#f87171",
+    glow: "rgba(239,68,68,0.18)",
+    bg: isDark ? "rgba(239,68,68,0.06)" : "rgba(239,68,68,0.05)",
+    chip: isDark ? "rgba(239,68,68,0.12)" : "rgba(239,68,68,0.08)",
+    chipBorder: isDark ? "rgba(239,68,68,0.22)" : "rgba(239,68,68,0.25)",
+    text: isDark ? "#f87171" : "#dc2626",
     Icon: TrendingDown,
     label: "Bearish",
   };
   return {
-    border: "#334155",
+    border: isDark ? "#334155" : "#cbd5e1",
     glow: "rgba(99,102,241,0.06)",
-    bg: "rgba(15,30,55,0.4)",
-    chip: "rgba(100,116,139,0.12)",
-    chipBorder: "rgba(100,116,139,0.2)",
-    text: "#64748b",
+    bg: isDark ? "rgba(15,30,55,0.4)" : "rgba(100,116,139,0.05)",
+    chip: isDark ? "rgba(100,116,139,0.12)" : "rgba(100,116,139,0.08)",
+    chipBorder: isDark ? "rgba(100,116,139,0.2)" : "rgba(100,116,139,0.2)",
+    text: isDark ? "#64748b" : "#475569",
     Icon: Minus,
     label: "Neutral",
   };
@@ -65,23 +65,30 @@ const CATEGORY_META: Record<string, { label: string; icon: React.ReactNode; colo
 
 // ── Ticker Banner ─────────────────────────────────────────────────────────────
 
-function TickerBanner({ articles }: { articles: NewsArticle[] }) {
+function TickerBanner({ articles, isDark }: { articles: NewsArticle[]; isDark: boolean }) {
   const headlines = articles.slice(0, 12).map(a => a.title);
   if (!headlines.length) return null;
   const text = headlines.join("   ·   ");
   return (
-    <div className="relative overflow-hidden flex items-center gap-0 rounded-2xl" style={{ background: "linear-gradient(90deg, #0e1829 0%, #0a1020 100%)", border: "1px solid #162244", minHeight: 44 }}>
+    <div className="relative overflow-hidden flex items-center gap-0 rounded-2xl" style={{
+      background: isDark ? "linear-gradient(90deg,#0e1829 0%,#0a1020 100%)" : "linear-gradient(90deg,#eef2ff 0%,#f8fafc 100%)",
+      border: isDark ? "1px solid #162244" : "1px solid #c7d2fe",
+      minHeight: 44,
+    }}>
       {/* LIVE badge */}
-      <div className="flex items-center gap-2 px-4 py-2.5 shrink-0 border-r" style={{ borderColor: "#162244", background: "rgba(99,102,241,0.08)" }}>
+      <div className="flex items-center gap-2 px-4 py-2.5 shrink-0 border-r" style={{
+        borderColor: isDark ? "#162244" : "#c7d2fe",
+        background: isDark ? "rgba(99,102,241,0.1)" : "rgba(99,102,241,0.08)",
+      }}>
         <span className="relative flex h-2.5 w-2.5">
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-60" />
           <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
         </span>
-        <span className="text-xs font-black tracking-widest text-white uppercase">Live</span>
+        <span className="text-xs font-black tracking-widest uppercase" style={{ color: isDark ? "#ffffff" : "#4338ca" }}>Live</span>
       </div>
       {/* Scroll text */}
       <div className="overflow-hidden flex-1 px-4">
-        <div className="whitespace-nowrap text-xs font-medium" style={{ color: "#94a3b8", animation: "tickerScroll 60s linear infinite", display: "inline-block" }}>
+        <div className="whitespace-nowrap text-xs font-medium" style={{ color: isDark ? "#94a3b8" : "#475569", animation: "tickerScroll 60s linear infinite", display: "inline-block" }}>
           {text}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{text}
         </div>
       </div>
@@ -91,41 +98,44 @@ function TickerBanner({ articles }: { articles: NewsArticle[] }) {
 
 // ── Market Mood Bar ───────────────────────────────────────────────────────────
 
-function MoodBar({ bullish, bearish, neutral, mood }: { bullish: number; bearish: number; neutral: number; mood: string }) {
+function MoodBar({ bullish, bearish, neutral, mood, isDark }: { bullish: number; bearish: number; neutral: number; mood: string; isDark: boolean }) {
   const total = bullish + bearish + neutral || 1;
   const bPct = Math.round((bullish / total) * 100);
   const rPct = Math.round((bearish / total) * 100);
   const nPct = 100 - bPct - rPct;
 
   const moodConf = mood === "bullish"
-    ? { label: "Bullish", color: "#22c55e", bg: "rgba(34,197,94,0.12)", border: "rgba(34,197,94,0.25)", Icon: TrendingUp }
+    ? { label: "Bullish", color: "#22c55e", bg: isDark ? "rgba(34,197,94,0.12)" : "#dcfce7", border: isDark ? "rgba(34,197,94,0.25)" : "#86efac", Icon: TrendingUp }
     : mood === "bearish"
-    ? { label: "Bearish", color: "#ef4444", bg: "rgba(239,68,68,0.12)", border: "rgba(239,68,68,0.25)", Icon: TrendingDown }
-    : { label: "Neutral", color: "#64748b", bg: "rgba(100,116,139,0.12)", border: "rgba(100,116,139,0.2)", Icon: Minus };
+    ? { label: "Bearish", color: "#ef4444", bg: isDark ? "rgba(239,68,68,0.12)" : "#fee2e2", border: isDark ? "rgba(239,68,68,0.25)" : "#fca5a5", Icon: TrendingDown }
+    : { label: "Neutral", color: isDark ? "#64748b" : "#475569", bg: isDark ? "rgba(100,116,139,0.12)" : "#f1f5f9", border: isDark ? "rgba(100,116,139,0.2)" : "#cbd5e1", Icon: Minus };
 
   return (
-    <div className="rounded-2xl p-4" style={{ background: "#0a1020", border: "1px solid #162244" }}>
+    <div className="rounded-2xl p-4" style={{
+      background: isDark ? "#0a1020" : "#ffffff",
+      border: isDark ? "1px solid #162244" : "1px solid #e2e8f0",
+    }}>
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2.5">
-          <div className="p-1.5 rounded-lg" style={{ background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.2)" }}>
+          <div className="p-1.5 rounded-lg" style={{ background: isDark ? "rgba(99,102,241,0.12)" : "#eef2ff", border: isDark ? "1px solid rgba(99,102,241,0.2)" : "1px solid #c7d2fe" }}>
             <Radio className="w-3.5 h-3.5" style={{ color: "#818cf8" }} />
           </div>
-          <span className="text-sm font-semibold" style={{ color: "#e2e8f0" }}>Market Mood Sensor</span>
+          <span className="text-sm font-semibold" style={{ color: isDark ? "#e2e8f0" : "#1e293b" }}>Market Mood Sensor</span>
         </div>
         <div className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full" style={{ background: moodConf.bg, color: moodConf.color, border: `1px solid ${moodConf.border}` }}>
           <moodConf.Icon className="w-3 h-3" />{moodConf.label}
         </div>
       </div>
 
-      <div className="h-3 rounded-full overflow-hidden flex gap-0.5" style={{ background: "#162244" }}>
+      <div className="h-3 rounded-full overflow-hidden flex gap-0.5" style={{ background: isDark ? "#162244" : "#f1f5f9" }}>
         <div style={{ width: `${bPct}%`, background: "linear-gradient(90deg,#15803d,#22c55e)", transition: "width 1s ease", borderRadius: "6px 0 0 6px" }} />
-        <div style={{ width: `${nPct}%`, background: "#1e3a5f", transition: "width 1s ease" }} />
+        <div style={{ width: `${nPct}%`, background: isDark ? "#1e3a5f" : "#cbd5e1", transition: "width 1s ease" }} />
         <div style={{ width: `${rPct}%`, background: "linear-gradient(90deg,#ef4444,#b91c1c)", transition: "width 1s ease", borderRadius: "0 6px 6px 0" }} />
       </div>
 
-      <div className="flex justify-between mt-3 text-xs" style={{ color: "#4a6080" }}>
+      <div className="flex justify-between mt-3 text-xs" style={{ color: isDark ? "#4a6080" : "#64748b" }}>
         <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-green-500 inline-block" />{bPct}% Bullish</span>
-        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block" style={{ background: "#1e3a5f" }} />{nPct}% Neutral</span>
+        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block" style={{ background: isDark ? "#1e3a5f" : "#94a3b8" }} />{nPct}% Neutral</span>
         <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" />{rPct}% Bearish</span>
       </div>
     </div>
@@ -134,9 +144,9 @@ function MoodBar({ bullish, bearish, neutral, mood }: { bullish: number; bearish
 
 // ── News Card ─────────────────────────────────────────────────────────────────
 
-function NewsCard({ article, index }: { article: NewsArticle; index: number }) {
+function NewsCard({ article, index, isDark }: { article: NewsArticle; index: number; isDark: boolean }) {
   const [expanded, setExpanded] = useState(false);
-  const s = sentimentConfig(article.sentiment);
+  const s = sentimentConfig(article.sentiment, isDark);
 
   return (
     <div
@@ -163,19 +173,19 @@ function NewsCard({ article, index }: { article: NewsArticle; index: number }) {
               <span className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-lg" style={{ background: s.chip, color: s.text, border: `1px solid ${s.chipBorder}` }}>
                 <s.Icon className="w-3 h-3" />{s.label}
               </span>
-              <span className="flex items-center gap-1 text-xs" style={{ color: "#4a6080" }}>
+              <span className="flex items-center gap-1 text-xs" style={{ color: isDark ? "#4a6080" : "#94a3b8" }}>
                 <Clock className="w-3 h-3" />{timeAgo(article.published)}
               </span>
             </div>
 
             {/* Title */}
-            <p className="text-sm font-semibold leading-snug" style={{ color: "#dde8f8" }}>
+            <p className="text-sm font-semibold leading-snug" style={{ color: isDark ? "#dde8f8" : "#0f172a" }}>
               {article.title}
             </p>
 
             {/* Summary */}
             {expanded && article.summary && (
-              <p className="text-xs mt-2.5 leading-relaxed" style={{ color: "#4a6080" }}>
+              <p className="text-xs mt-2.5 leading-relaxed" style={{ color: isDark ? "#4a6080" : "#64748b" }}>
                 {article.summary}
               </p>
             )}
@@ -201,7 +211,7 @@ function NewsCard({ article, index }: { article: NewsArticle; index: number }) {
               style={{ color: "#818cf8" }}>
               <ExternalLink className="w-3.5 h-3.5" />
             </a>
-            <span style={{ color: "#334155" }}>
+            <span style={{ color: isDark ? "#334155" : "#94a3b8" }}>
               {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             </span>
           </div>
@@ -213,11 +223,17 @@ function NewsCard({ article, index }: { article: NewsArticle; index: number }) {
 
 // ── Loading Skeletons ─────────────────────────────────────────────────────────
 
-function LoadingCards() {
+function LoadingCards({ isDark }: { isDark: boolean }) {
   return (
     <div className="space-y-3">
       {[...Array(5)].map((_, i) => (
-        <div key={i} className="h-20 rounded-2xl animate-pulse" style={{ background: "linear-gradient(90deg, #0a1020 25%, #0e1829 50%, #0a1020 75%)", backgroundSize: "200% 100%", animation: `shimmer 1.5s infinite ${i * 0.1}s`, borderLeft: "4px solid #162244", border: "1px solid #162244" }} />
+        <div key={i} className="h-20 rounded-2xl" style={{
+          background: isDark ? "linear-gradient(90deg,#0a1020 25%,#0e1829 50%,#0a1020 75%)" : "linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%)",
+          backgroundSize: "200% 100%",
+          animation: `shimmer 1.5s infinite ${i * 0.1}s`,
+          borderLeft: isDark ? "4px solid #162244" : "4px solid #c7d2fe",
+          border: isDark ? "1px solid #162244" : "1px solid #e2e8f0",
+        }} />
       ))}
     </div>
   );
@@ -243,14 +259,14 @@ function SectionLoader({ active }: { active: boolean }) {
 
 // ── Refresh Countdown ─────────────────────────────────────────────────────────
 
-function RefreshCountdown({ seconds, onRefresh, isRefreshing }: { seconds: number; onRefresh: () => void; isRefreshing: boolean }) {
+function RefreshCountdown({ seconds, onRefresh, isRefreshing, isDark }: { seconds: number; onRefresh: () => void; isRefreshing: boolean; isDark: boolean }) {
   const pct = (seconds / (8 * 60)) * 100;
   return (
     <button
       onClick={onRefresh}
       disabled={isRefreshing}
       className="flex items-center gap-2 text-xs px-3 py-2 rounded-xl transition-all disabled:opacity-60"
-      style={{ background: "#0a1020", color: "#4a6080", border: "1px solid #162244" }}
+      style={{ background: isDark ? "#0a1020" : "#f8fafc", color: isDark ? "#4a6080" : "#64748b", border: isDark ? "1px solid #162244" : "1px solid #e2e8f0" }}
       title={isRefreshing ? "Refreshing…" : `Auto-refresh in ${Math.floor(seconds / 60)}m ${seconds % 60}s`}
     >
       <RefreshCw className="w-3.5 h-3.5" style={{ animation: isRefreshing ? "spin 0.7s linear infinite" : "none", color: isRefreshing ? "#818cf8" : undefined }} />
@@ -638,12 +654,12 @@ export default function NewsFeed() {
         </div>
         <div className="flex items-center gap-2">
           <DataFreshness meta={feedMeta} hideRefresh />
-          <RefreshCountdown seconds={countdown} onRefresh={handleRefresh} isRefreshing={refreshMutation.isPending} />
+          <RefreshCountdown seconds={countdown} onRefresh={handleRefresh} isRefreshing={refreshMutation.isPending} isDark={isDark} />
         </div>
       </div>
 
       {/* ── Live ticker ─────────────────────────────────────────────── */}
-      {articles.length > 0 && <TickerBanner articles={articles} />}
+      {articles.length > 0 && <TickerBanner articles={articles} isDark={isDark} />}
 
       {/* ── Stats row ───────────────────────────────────────────────── */}
       {stats && (
@@ -684,7 +700,7 @@ export default function NewsFeed() {
       )}
 
       {/* ── Mood bar ────────────────────────────────────────────────── */}
-      {stats && isDark && (
+      {stats && (
         <div className="relative">
           <SectionLoader active={statsFetching} />
           <MoodBar
@@ -692,38 +708,8 @@ export default function NewsFeed() {
             bearish={stats.sentiments.bearish}
             neutral={stats.sentiments.neutral}
             mood={stats.marketMood}
+            isDark={isDark}
           />
-        </div>
-      )}
-      {stats && !isDark && (
-        <div className="relative rounded-2xl border p-4" style={{ background: "#fff", borderColor: "#e2e8f0" }}>
-          <SectionLoader active={statsFetching} />
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <Radio className="w-4 h-4 text-indigo-500" />
-              <span className="text-sm font-semibold text-gray-800">Market Mood Sensor</span>
-            </div>
-            {stats.marketMood === "bullish" ? <span className="flex items-center gap-1 text-xs font-bold px-3 py-1 rounded-full bg-green-100 text-green-700"><TrendingUp className="w-3 h-3"/>Bullish</span>
-            : stats.marketMood === "bearish" ? <span className="flex items-center gap-1 text-xs font-bold px-3 py-1 rounded-full bg-red-100 text-red-700"><TrendingDown className="w-3 h-3"/>Bearish</span>
-            : <span className="flex items-center gap-1 text-xs font-bold px-3 py-1 rounded-full bg-gray-100 text-gray-600"><Minus className="w-3 h-3"/>Neutral</span>}
-          </div>
-          {(() => {
-            const total = stats.sentiments.bullish + stats.sentiments.bearish + stats.sentiments.neutral || 1;
-            const bP = Math.round((stats.sentiments.bullish / total) * 100);
-            const rP = Math.round((stats.sentiments.bearish / total) * 100);
-            return (
-              <>
-                <div className="h-3 rounded-full overflow-hidden flex gap-0.5 bg-gray-100">
-                  <div style={{ width: `${bP}%`, background: "#22c55e", borderRadius: "6px 0 0 6px" }} />
-                  <div style={{ width: `${100-bP-rP}%`, background: "#d1d5db" }} />
-                  <div style={{ width: `${rP}%`, background: "#ef4444", borderRadius: "0 6px 6px 0" }} />
-                </div>
-                <div className="flex justify-between mt-2 text-xs text-gray-400">
-                  <span>{bP}% Bullish</span><span>{100-bP-rP}% Neutral</span><span>{rP}% Bearish</span>
-                </div>
-              </>
-            );
-          })()}
         </div>
       )}
 
@@ -798,7 +784,7 @@ export default function NewsFeed() {
           <p className="text-sm">Loading reels…</p>
         </div>
       ) : feedLoading ? (
-        <LoadingCards />
+        <LoadingCards isDark={isDark} />
       ) : articles.length === 0 ? (
         <div className="text-center py-16" style={{ color: muTxt }}>
           <Newspaper className="w-12 h-12 mx-auto mb-3 opacity-20" />
@@ -810,7 +796,7 @@ export default function NewsFeed() {
           <SectionLoader active={feedFetching && !feedLoading} />
           {articles.map((article, i) => (
             <div key={article.id} className="news-card-enter" style={{ animationDelay: `${Math.min(i * 30, 400)}ms` }}>
-              <NewsCard article={article} index={i} />
+              <NewsCard article={article} index={i} isDark={isDark} />
             </div>
           ))}
           <p className="text-center text-xs py-4" style={{ color: muTxt }}>
