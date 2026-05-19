@@ -269,6 +269,40 @@ async def saved_delete(sid: int, request: Request):
     return {"deleted": sid}
 
 
+# ── Backtest / track-record endpoints ─────────────────────────────────────────
+# Show how the AI Analyst's BUY/SELL verdicts have actually played out.
+# Honest stats build trust; hiding them only hides bad calls until users
+# notice on their own.
+
+@router.get("/backtest/overall")
+async def backtest_overall():
+    """App-wide hit rate by horizon and verdict direction."""
+    from ..services import ai_backtest_service as _bt  # noqa: PLC0415
+    return _bt.get_overall_stats()
+
+
+@router.get("/backtest/recent")
+async def backtest_recent(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200),
+    scope: str = Query("me", regex="^(me|all)$"),
+):
+    """Most recent backtested verdicts. scope=me restricts to the caller;
+    scope=all is admin-only and shows the app-wide stream."""
+    from ..services import ai_backtest_service as _bt  # noqa: PLC0415
+    if scope == "all":
+        _require_admin(request)
+        return _bt.get_recent_calls(limit=limit)
+    return _bt.get_recent_calls(limit=limit, user_id=_user_id(request))
+
+
+@router.get("/backtest/by-ticker")
+async def backtest_by_ticker(symbol: str = Query(..., min_length=1, max_length=24)):
+    """Per-ticker track record + last 10 calls."""
+    from ..services import ai_backtest_service as _bt  # noqa: PLC0415
+    return _bt.get_stats_by_ticker(symbol)
+
+
 @router.get("/admin/stats")
 async def admin_stats(request: Request):
     _require_admin(request)

@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { useCustomAuth } from "@/context/CustomAuthContext";
 import { friendlyError, friendlyMessage, sanitizeTicker } from "@/lib/friendlyError";
+import { StockCombobox } from "@/components/StockCombobox";
 
 type Verdict = "BUY" | "HOLD" | "SELL";
 type Confidence = "LOW" | "MEDIUM" | "HIGH";
@@ -381,15 +382,19 @@ export default function AIAnalystCompare() {
 
       {/* Input bar — grid on mobile (no overflow at 320px), flex on >=sm */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-xl p-3 sm:p-4 grid grid-cols-[1fr_auto_1fr] sm:flex sm:flex-wrap items-center gap-2">
-        <input value={a} onChange={e => setA(e.target.value.toUpperCase().slice(0, 20))}
-               aria-label="First ticker"
-               placeholder="Ticker A"
-               className="min-w-0 sm:flex-1 sm:min-w-[140px] px-3 py-2 text-sm bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-white/10 rounded-lg text-gray-900 dark:text-white placeholder:text-gray-400" />
+        <div className="min-w-0 sm:flex-1 sm:min-w-[140px]">
+          <StockCombobox value={a} onChange={(v) => setA(v.slice(0, 20))}
+                         onSelect={(s) => setA(s.symbol)}
+                         onSubmit={() => run()}
+                         placeholder="Ticker A" />
+        </div>
         <span className="text-gray-400 text-xs font-bold px-1" aria-hidden="true">VS</span>
-        <input value={b} onChange={e => setB(e.target.value.toUpperCase().slice(0, 20))}
-               aria-label="Second ticker"
-               placeholder="Ticker B"
-               className="min-w-0 sm:flex-1 sm:min-w-[140px] px-3 py-2 text-sm bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-white/10 rounded-lg text-gray-900 dark:text-white placeholder:text-gray-400" />
+        <div className="min-w-0 sm:flex-1 sm:min-w-[140px]">
+          <StockCombobox value={b} onChange={(v) => setB(v.slice(0, 20))}
+                         onSelect={(s) => setB(s.symbol)}
+                         onSubmit={() => run()}
+                         placeholder="Ticker B" />
+        </div>
         <button onClick={() => run()} disabled={running}
                 className="col-span-3 sm:col-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg flex items-center justify-center gap-2">
           {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Microscope className="w-4 h-4" />}

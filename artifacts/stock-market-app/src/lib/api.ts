@@ -697,6 +697,48 @@ export const api = {
     );
   },
 
+  // Vision-LLM extraction from a broker screenshot. Returns extracted rows
+  // + confidence; nothing is written to the DB until applyExtractedHoldings
+  // is called with the user-confirmed subset.
+  extractPortfolioFromImage: (pid: string, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return fetchApi<{
+      filename: string;
+      rowsFound: number;
+      holdings: Array<{
+        symbol: string;
+        qty: number;
+        avgPrice: number;
+        confidence: number;
+        rawName?: string | null;
+      }>;
+    }>(
+      `/portfolio/${encodeURIComponent(pid)}/extract-from-image`,
+      { method: "POST", body: fd },
+    );
+  },
+
+  applyExtractedHoldings: (
+    pid: string,
+    holdings: Array<{
+      symbol: string;
+      qty: number;
+      avgPrice: number;
+      confidence: number;
+      rawName?: string | null;
+    }>,
+    tradedAt?: string,
+  ) =>
+    fetchApi<{ rowsApplied: number; rowsRejected: number; errors: string[] }>(
+      `/portfolio/${encodeURIComponent(pid)}/apply-extracted`,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ holdings, tradedAt, source: "screenshot" }),
+      },
+    ),
+
   portfolioRisk: (pid: string, params: PortfolioRiskParams = {}) =>
     fetchApi<PortfolioRiskResult>(`/portfolio/${encodeURIComponent(pid)}/risk`, {
       method: "POST", headers: JSON_HEADERS, body: JSON.stringify(params),

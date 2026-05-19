@@ -10,6 +10,7 @@ import {
 // ─── Types — re-exported from shared api types so they stay in sync ──────────
 
 import type { AgentVerdict as Verdict, ChecklistItem, PersonaResult, CouncilResponse, PersonaRegion } from "@/lib/api";
+import { StockCombobox } from "@/components/StockCombobox";
 export type { Verdict, ChecklistItem, PersonaResult, CouncilResponse };
 
 // Fallback region map by persona id (backend already emits `region`, but this
@@ -312,14 +313,16 @@ function SearchLanding({ onSelect }: { onSelect: (sym: string) => void }) {
         onSubmit={(e) => { e.preventDefault(); if (input.trim()) onSelect(input.trim().toUpperCase()); }}
         className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-white/10 rounded-xl p-4 flex gap-2"
       >
-        <Search className="w-5 h-5 text-gray-400 self-center" />
-        <input
-          autoFocus
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Enter NSE symbol (e.g. RELIANCE, TCS, HDFCBANK)…"
-          className="flex-1 bg-transparent outline-none text-sm text-gray-900 dark:text-white"
-        />
+        <div className="flex-1">
+          <StockCombobox
+            autoFocus
+            value={input}
+            onChange={setInput}
+            onSelect={(s) => onSelect(s.symbol)}
+            onSubmit={() => input.trim() && onSelect(input.trim().toUpperCase())}
+            placeholder="Enter NSE symbol or company name (e.g. RELIANCE)…"
+          />
+        </div>
         <button type="submit" className="px-4 py-1.5 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700">
           Ask the Council
         </button>

@@ -25,6 +25,7 @@ import InsightsLayout from "@/pages/insights/InsightsLayout";
 import AIAnalyst from "@/pages/AIAnalyst";
 import AIAnalystCompare from "@/pages/AIAnalystCompare";
 import AIAnalystScan from "@/pages/AIAnalystScan";
+import AIAnalystTrackRecord from "@/pages/AIAnalystTrackRecord";
 import SavedAnalyses from "@/pages/SavedAnalyses";
 import GlobalAssistant from "@/components/GlobalAssistant";
 import { ThemeProvider } from "@/context/ThemeContext";
@@ -105,10 +106,11 @@ function AppRoutes() {
         <Route path="/hydra"           component={HydraAlpha} />
         <Route path="/agents/:symbol"  component={InvestorCouncil} />
         <Route path="/agents"          component={InvestorCouncil} />
-        <Route path="/ai-analyst/saved"   component={SavedAnalyses} />
-        <Route path="/ai-analyst/scan"    component={AIAnalystScan} />
-        <Route path="/ai-analyst/compare" component={AIAnalystCompare} />
-        <Route path="/ai-analyst/:ticker" component={AIAnalyst} />
+        <Route path="/ai-analyst/saved"        component={SavedAnalyses} />
+        <Route path="/ai-analyst/scan"         component={AIAnalystScan} />
+        <Route path="/ai-analyst/compare"      component={AIAnalystCompare} />
+        <Route path="/ai-analyst/track-record" component={AIAnalystTrackRecord} />
+        <Route path="/ai-analyst/:ticker"      component={AIAnalyst} />
         <Route path="/ai-analyst"      component={AIAnalyst} />
         <Route path="/options"         component={OptionsStrategyTester} />
         <Route path="/portfolio"       component={Portfolio} />
