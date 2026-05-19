@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import DataFreshness from "@/components/DataFreshness";
 import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
+import { useTheme } from "@/context/ThemeContext";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 // Every numeric reading can be null when its upstream feed is unavailable.
@@ -82,57 +83,68 @@ function signalBorderColor(color: string): string {
 
 // ── Speedometer gauge ────────────────────────────────────────────────────────
 function Speedometer({ score, label }: { score: number | null; label: string }) {
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
   const [fired, setFired] = useState(false);
   const [countedScore, setCountedScore] = useState(0);
   const rafRef = useRef<number>(0);
 
-  const cx = 160, cy = 148, r = 112;
-  // Map score (-100..+100) to CSS rotation angle (-90..+90 deg, 0=up)
+  const cx = 140, cy = 128, r = 100;
+  // score –100..+100 → CSS rotation –90..+90 deg (0 = pointing up)
   const targetAngle = score != null ? score * 0.9 : -90;
 
-  const zoneColor = score == null ? "#475569"
+  const zoneColor = score == null
+    ? (isDark ? "#475569" : "#94a3b8")
     : score >= 50  ? "#10b981"
     : score >= 20  ? "#22c55e"
-    : score > -20  ? "#64748b"
+    : score > -20  ? (isDark ? "#64748b" : "#94a3b8")
     : score > -50  ? "#f97316"
     : "#ef4444";
 
   useEffect(() => {
-    const t = setTimeout(() => setFired(true), 120);
+    setFired(false);
+    setCountedScore(0);
+    const t = setTimeout(() => setFired(true), 100);
     if (score == null) return () => clearTimeout(t);
     const start = performance.now();
-    const dur = 1100;
+    const dur = 1000;
     const to = score;
     const tick = () => {
       const elapsed = performance.now() - start;
       const p = Math.min(elapsed / dur, 1);
-      const ease = 1 - Math.pow(1 - p, 3);
-      setCountedScore(Math.round(to * ease));
+      setCountedScore(Math.round(to * (1 - Math.pow(1 - p, 3))));
       if (p < 1) rafRef.current = requestAnimationFrame(tick);
     };
-    const t2 = setTimeout(() => { rafRef.current = requestAnimationFrame(tick); }, 120);
+    const t2 = setTimeout(() => { rafRef.current = requestAnimationFrame(tick); }, 100);
     return () => { clearTimeout(t); clearTimeout(t2); cancelAnimationFrame(rafRef.current); };
   }, [score]);
 
-  // Arc helpers — angle 0° = top (12-o'clock), +90° = right, -90° = left
+  // angle 0° = top (12-o'clock), +90° = right, –90° = left
   function ap(deg: number, radius = r) {
     const rad = (deg * Math.PI) / 180;
     return { x: cx + radius * Math.sin(rad), y: cy - radius * Math.cos(rad) };
   }
   function arcD(from: number, to: number, radius = r) {
-    const p1 = ap(from, radius), p2 = ap(to, radius);
+    const { x: x1, y: y1 } = ap(from, radius);
+    const { x: x2, y: y2 } = ap(to, radius);
     const large = Math.abs(to - from) > 180 ? 1 : 0;
-    return `M ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} A ${radius} ${radius} 0 ${large} 0 ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`;
+    return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${radius} ${radius} 0 ${large} 0 ${x2.toFixed(2)} ${y2.toFixed(2)}`;
   }
 
-  // Full semicircle perimeter (for dasharray trick on the glow arc)
-  const arcLen = Math.PI * r; // ≈351 px
+  const arcLen = Math.PI * r;
   const normalized = score != null ? (score + 100) / 200 : 0;
+
+  // Theme-aware palette
+  const trackColor  = isDark ? "#1e293b" : "#e2e8f0";
+  const hubFill     = isDark ? "#0f172a" : "#ffffff";
+  const neutralZone = isDark ? "#475569" : "#94a3b8";
+  const axisNeutral = isDark ? "#64748b" : "#94a3b8";
+  const tipDot      = isDark ? "#ffffff" : "#1e293b";
 
   const zones = [
     { from: -90, to: -54, color: "#ef4444" },
     { from: -54, to: -18, color: "#f97316" },
-    { from: -18, to:  18, color: "#64748b" },
+    { from: -18, to:  18, color: neutralZone },
     { from:  18, to:  54, color: "#22c55e" },
     { from:  54, to:  90, color: "#10b981" },
   ];
@@ -140,146 +152,92 @@ function Speedometer({ score, label }: { score: number | null; label: string }) 
   if (score == null) {
     return (
       <div className="flex flex-col items-center">
-        <svg width="320" height="185" viewBox="0 0 320 185">
-          <path d={arcD(-90, 90)} fill="none" stroke="#0f1c35" strokeWidth="16" strokeLinecap="round" />
-          <text x={cx} y={cy + 14} textAnchor="middle" fontSize="30" fontWeight="900" fill="#334155">—</text>
-          <text x={cx} y={cy + 34} textAnchor="middle" fontSize="10" fill="#334155" letterSpacing="2">UNAVAILABLE</text>
+        <svg width="280" height="168" viewBox="0 0 280 168">
+          <path d={arcD(-90, 90)} fill="none" stroke={trackColor} strokeWidth="14" strokeLinecap="round" />
+          <text x={cx} y={cy + 10} textAnchor="middle" fontSize="28" fontWeight="900"
+            fill={isDark ? "#334155" : "#cbd5e1"}>—</text>
+          <text x={cx} y={cy + 28} textAnchor="middle" fontSize="9" fontWeight="600"
+            fill={isDark ? "#334155" : "#cbd5e1"} letterSpacing="2">DATA UNAVAILABLE</text>
         </svg>
       </div>
     );
   }
 
-  const leftPt  = ap(-90, r + 14);
-  const topPt   = ap(0,   r + 16);
-  const rightPt = ap(90,  r + 14);
+  const L = ap(-90, r + 16);
+  const T = ap(0,   r + 18);
+  const R = ap(90,  r + 16);
 
   return (
     <div className="flex flex-col items-center w-full">
-      <style>{`
-        @keyframes gaugePulse {
-          0%,100% { opacity: 0.6; }
-          50%      { opacity: 1; }
-        }
-        @keyframes hubSpin {
-          from { transform: rotate(0deg); }
-          to   { transform: rotate(360deg); }
-        }
-      `}</style>
-
-      <svg width="320" height="210" viewBox="0 0 320 210" style={{ overflow: "visible" }}>
+      <svg width="280" height="190" viewBox="0 0 280 190">
         <defs>
-          <filter id="glow-tip" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="4" result="blur" />
-            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-          </filter>
-          <filter id="glow-hub" x="-80%" y="-80%" width="260%" height="260%">
-            <feGaussianBlur stdDeviation="6" result="blur" />
-            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+          <filter id="sd-tip" x="-80%" y="-80%" width="260%" height="260%">
+            <feGaussianBlur stdDeviation="3" result="b" />
+            <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
           </filter>
         </defs>
 
-        {/* ── Track background ─────────────────────────────── */}
-        <path d={arcD(-90, 90)} fill="none" stroke="#0a1520" strokeWidth="20" strokeLinecap="round" />
-        <path d={arcD(-90, 90)} fill="none" stroke="#162244" strokeWidth="16" strokeLinecap="round" />
+        {/* Track */}
+        <path d={arcD(-90, 90)} fill="none" stroke={trackColor} strokeWidth="14" strokeLinecap="round" />
 
-        {/* ── Zone segments ────────────────────────────────── */}
+        {/* Zone segments */}
         {zones.map((z, i) => {
-          const inZone = score != null && targetAngle >= z.from && targetAngle <= z.to;
+          const active = fired && targetAngle >= z.from && targetAngle <= z.to;
           return (
-            <path
-              key={i}
-              d={arcD(z.from, z.to)}
-              fill="none"
-              stroke={z.color}
-              strokeWidth="12"
-              strokeLinecap="butt"
+            <path key={i} d={arcD(z.from, z.to)} fill="none" stroke={z.color}
+              strokeWidth="10" strokeLinecap="butt"
               style={{
-                opacity: inZone ? 1 : 0.3,
-                transition: "opacity 0.6s ease",
-                filter: inZone ? `drop-shadow(0 0 6px ${z.color})` : "none",
+                opacity: active ? 1 : 0.28,
+                transition: "opacity 0.5s ease",
+                filter: active ? `drop-shadow(0 0 4px ${z.color})` : "none",
               }}
             />
           );
         })}
 
-        {/* ── Animated glow arc (stroke-dashoffset trick) ──── */}
+        {/* Animated fill arc (dashoffset trick) */}
         <path
-          d={arcD(-90, 90)}
-          fill="none"
-          stroke={zoneColor}
-          strokeWidth="3"
+          d={arcD(-90, 90)} fill="none" stroke={zoneColor} strokeWidth="2.5"
           strokeLinecap="round"
           strokeDasharray={`${arcLen} ${arcLen}`}
           strokeDashoffset={fired ? arcLen * (1 - normalized) : arcLen}
-          opacity={0.45}
-          style={{ transition: "stroke-dashoffset 1.2s cubic-bezier(0.34,1.56,0.64,1)" }}
+          opacity={0.55}
+          style={{ transition: "stroke-dashoffset 1.1s cubic-bezier(0.34,1.56,0.64,1)" }}
         />
 
-        {/* ── Needle ───────────────────────────────────────── */}
-        <g
-          style={{
-            transform: `rotate(${fired ? targetAngle : -90}deg)`,
-            transformOrigin: `${cx}px ${cy}px`,
-            transition: "transform 1.2s cubic-bezier(0.34,1.56,0.64,1)",
-          }}
-        >
-          {/* Needle shaft */}
-          <line
-            x1={cx} y1={cy + 14}
-            x2={cx} y2={cy - r + 24}
-            stroke={zoneColor}
-            strokeWidth="2"
-            strokeLinecap="round"
-            opacity={0.9}
-          />
-          {/* Glow at tip */}
-          <circle cx={cx} cy={cy - r + 24} r={7} fill={zoneColor} opacity={0.25} filter="url(#glow-tip)" />
-          {/* Bright tip dot */}
-          <circle cx={cx} cy={cy - r + 24} r={3} fill="white" />
+        {/* Needle */}
+        <g style={{
+          transform: `rotate(${fired ? targetAngle : -90}deg)`,
+          transformOrigin: `${cx}px ${cy}px`,
+          transition: "transform 1.1s cubic-bezier(0.34,1.56,0.64,1)",
+        }}>
+          <line x1={cx} y1={cy + 10} x2={cx} y2={cy - r + 18}
+            stroke={zoneColor} strokeWidth="2" strokeLinecap="round" />
+          <circle cx={cx} cy={cy - r + 18} r={6} fill={zoneColor} opacity={0.3} filter="url(#sd-tip)" />
+          <circle cx={cx} cy={cy - r + 18} r={3} fill={tipDot} />
         </g>
 
-        {/* ── Hub ──────────────────────────────────────────── */}
-        <circle cx={cx} cy={cy} r={13} fill={zoneColor} opacity={0.15} filter="url(#glow-hub)" />
-        <circle cx={cx} cy={cy} r={10} fill="#060e1c" stroke={zoneColor} strokeWidth="2" />
+        {/* Hub */}
+        <circle cx={cx} cy={cy} r={10} fill={hubFill} stroke={zoneColor} strokeWidth="2" />
         <circle cx={cx} cy={cy} r={4}  fill={zoneColor} />
 
-        {/* ── Score number ─────────────────────────────────── */}
-        <text
-          x={cx} y={cy + 44}
-          textAnchor="middle"
-          fontSize="36"
-          fontWeight="900"
-          fill={zoneColor}
-          style={{ fontFamily: "system-ui, sans-serif", letterSpacing: "-1px" }}
-        >
+        {/* Score */}
+        <text x={cx} y={cy + 38} textAnchor="middle" fontSize="32" fontWeight="900" fill={zoneColor}>
           {countedScore > 0 ? `+${countedScore}` : countedScore}
         </text>
 
-        {/* ── Axis labels ──────────────────────────────────── */}
-        <text x={leftPt.x - 2} y={leftPt.y + 4} textAnchor="end"    fontSize="8.5" fill="#ef4444" fontWeight="700" letterSpacing="1">BEAR</text>
-        <text x={topPt.x}      y={topPt.y - 2}   textAnchor="middle" fontSize="8.5" fill="#64748b" fontWeight="700" letterSpacing="1">NEUTRAL</text>
-        <text x={rightPt.x + 2} y={rightPt.y + 4} textAnchor="start" fontSize="8.5" fill="#10b981" fontWeight="700" letterSpacing="1">BULL</text>
+        {/* Axis labels */}
+        <text x={L.x - 4} y={L.y + 4} textAnchor="end"    fontSize="9" fill="#ef4444"    fontWeight="700">BEAR</text>
+        <text x={T.x}     y={T.y - 4} textAnchor="middle" fontSize="9" fill={axisNeutral} fontWeight="700">NEUTRAL</text>
+        <text x={R.x + 4} y={R.y + 4} textAnchor="start"  fontSize="9" fill="#10b981"    fontWeight="700">BULL</text>
 
-        {/* ── Zone legend dots ─────────────────────────────── */}
-        {[
-          { color: "#ef4444", label: "Ex. Bearish", x: 14 },
-          { color: "#f97316", label: "Bearish",     x: 72 },
-          { color: "#64748b", label: "Neutral",     x: 130 },
-          { color: "#22c55e", label: "Bullish",     x: 188 },
-          { color: "#10b981", label: "Ex. Bullish", x: 246 },
-        ].map((d, i) => (
-          <g key={i}>
-            <circle cx={d.x + 4} cy={196} r={3} fill={d.color} />
-            <text x={d.x + 11} y={200} fontSize="7.5" fill="#334155" fontWeight="600">{d.label}</text>
-          </g>
-        ))}
+        {/* Scale ticks */}
+        <text x="6"   y="186" fontSize="8" fill={axisNeutral} fontWeight="500">−100</text>
+        <text x={cx}  y="186" fontSize="8" fill={axisNeutral} fontWeight="500" textAnchor="middle">0</text>
+        <text x="274" y="186" fontSize="8" fill={axisNeutral} fontWeight="500" textAnchor="end">+100</text>
       </svg>
 
-      {/* Label */}
-      <p
-        className="text-base font-black tracking-tight -mt-1"
-        style={{ color: zoneColor, letterSpacing: "-0.5px" }}
-      >
+      <p className="text-sm font-bold mt-0.5" style={{ color: zoneColor }}>
         {label}
       </p>
     </div>
@@ -288,6 +246,8 @@ function Speedometer({ score, label }: { score: number | null; label: string }) 
 
 // ── Component bar ─────────────────────────────────────────────────────────────
 function ComponentBar({ comp, index = 0 }: { comp: Component; index?: number }) {
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
   const [barWidth, setBarWidth] = useState(0);
   const isUnavailable = comp.score == null || comp.available === false;
   const isInformational = comp.weight === 0;
@@ -297,22 +257,35 @@ function ComponentBar({ comp, index = 0 }: { comp: Component; index?: number }) 
     if (comp.score == null) return;
     const t = setTimeout(
       () => setBarWidth(Math.min(100, Math.abs(comp.score as number))),
-      120 + index * 80,
+      100 + index * 70,
     );
     return () => clearTimeout(t);
   }, [comp.score, index]);
+
+  const trackBg  = isDark ? "#1e293b" : "#f1f5f9";
+  const nameTxt  = isDark ? "#94a3b8" : "#475569";
+  const detailTxt = isDark ? "#475569" : "#94a3b8";
+  const unavailBadgeBg = isDark ? "#0f172a" : "#f1f5f9";
+  const unavailBadgeTxt = isDark ? "#475569" : "#94a3b8";
+  const unavailBadgeBorder = isDark ? "#1e293b" : "#e2e8f0";
+  const unavailBar = isDark ? "#334155" : "#cbd5e1";
+  const badgeBg = isDark ? "rgba(99,102,241,0.1)" : "#eef2ff";
+  const badgeBorder = isDark ? "rgba(99,102,241,0.2)" : "#c7d2fe";
 
   if (isUnavailable) {
     return (
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
-          <span className="text-xs font-medium" style={{ color: "#475569" }}>{comp.name}</span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded-md" style={{ background: "#0f1c35", color: "#334155" }}>—</span>
+          <span className="text-xs font-medium" style={{ color: nameTxt }}>{comp.name}</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded"
+            style={{ background: unavailBadgeBg, color: unavailBadgeTxt, border: `1px solid ${unavailBadgeBorder}` }}>
+            —
+          </span>
         </div>
-        <div className="h-2 rounded-full overflow-hidden" style={{ background: "#0a1520" }}>
-          <div className="h-full rounded-full" style={{ width: "100%", background: "#162244" }} />
+        <div className="h-2 rounded-full overflow-hidden" style={{ background: trackBg }}>
+          <div className="h-full rounded-full opacity-40" style={{ width: "100%", background: unavailBar }} />
         </div>
-        <p className="text-[10px] italic truncate" style={{ color: "#1e3a5f" }}>{comp.detail || "Unavailable"}</p>
+        <p className="text-[10px] italic truncate" style={{ color: detailTxt }}>{comp.detail || "Unavailable"}</p>
       </div>
     );
   }
@@ -322,40 +295,39 @@ function ComponentBar({ comp, index = 0 }: { comp: Component; index?: number }) 
   const fillGradient = positive
     ? "linear-gradient(90deg, #15803d, #4ade80)"
     : "linear-gradient(90deg, #b91c1c, #f87171)";
-  const glowColor = positive ? "rgba(74,222,128,0.35)" : "rgba(248,113,113,0.35)";
-  const textColor = positive ? "#4ade80" : "#f87171";
+  const glowColor  = positive ? "rgba(74,222,128,0.35)" : "rgba(248,113,113,0.35)";
+  const scoreColor = positive
+    ? (isDark ? "#4ade80" : "#16a34a")
+    : (isDark ? "#f87171" : "#dc2626");
 
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-medium truncate" style={{ color: "#94a3b8" }}>{comp.name}</span>
+        <span className="text-xs font-medium truncate" style={{ color: nameTxt }}>{comp.name}</span>
         <div className="flex items-center gap-1.5 shrink-0">
-          <span className="text-xs font-bold" style={{ color: textColor }}>
+          <span className="text-xs font-bold" style={{ color: scoreColor }}>
             {score > 0 ? "+" : ""}{score}
           </span>
-          <span
-            className="text-[9px] font-semibold px-1.5 py-0.5 rounded-md"
-            style={{ background: "rgba(99,102,241,0.1)", color: "#6366f1", border: "1px solid rgba(99,102,241,0.15)" }}
-          >
+          <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded"
+            style={{ background: badgeBg, color: "#6366f1", border: `1px solid ${badgeBorder}` }}>
             {weightLabel}
           </span>
         </div>
       </div>
 
-      {/* Bar track */}
-      <div className="h-2.5 rounded-full overflow-hidden relative" style={{ background: "#0a1520" }}>
+      <div className="h-2.5 rounded-full overflow-hidden" style={{ background: trackBg }}>
         <div
           className="h-full rounded-full"
           style={{
             width: `${barWidth}%`,
             background: fillGradient,
-            boxShadow: `0 0 10px ${glowColor}`,
+            boxShadow: `0 0 8px ${glowColor}`,
             transition: "width 0.9s cubic-bezier(0.34,1.56,0.64,1)",
           }}
         />
       </div>
 
-      <p className="text-[10px] truncate" style={{ color: "#1e3a5f" }}>{comp.detail}</p>
+      <p className="text-[10px] truncate" style={{ color: detailTxt }}>{comp.detail}</p>
     </div>
   );
 }
