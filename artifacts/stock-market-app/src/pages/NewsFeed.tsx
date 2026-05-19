@@ -651,25 +651,25 @@ export default function NewsFeed() {
           <SectionLoader active={statsFetching} />
 
           {/* Total */}
-          <div className="rounded-2xl p-4" style={{ background: cardBg, borderWidth: "3px 1px 1px 1px", borderStyle: "solid", borderColor: `#6366f1 ${borderCol} ${borderCol} ${borderCol}` }}>
+          <div className="rounded-2xl p-4" style={{ background: cardBg, borderTop: "3px solid #6366f1", borderRight: `1px solid ${borderCol}`, borderBottom: `1px solid ${borderCol}`, borderLeft: `1px solid ${borderCol}` }}>
             <div className="text-xs font-medium mb-1" style={{ color: muTxt }}>Total Articles</div>
             <div className="text-2xl font-black" style={{ color: isDark ? "#c7d2fe" : "#4f46e5" }}>{stats.totalArticles}</div>
           </div>
 
           {/* Bullish */}
-          <div className="rounded-2xl p-4" style={{ background: isDark ? "rgba(34,197,94,0.05)" : "#f0fdf4", borderWidth: "3px 1px 1px 1px", borderStyle: "solid", borderColor: `#22c55e ${isDark ? "rgba(34,197,94,0.15)" : "#bbf7d0"} ${isDark ? "rgba(34,197,94,0.15)" : "#bbf7d0"} ${isDark ? "rgba(34,197,94,0.15)" : "#bbf7d0"}` }}>
+          <div className="rounded-2xl p-4" style={{ background: isDark ? "rgba(34,197,94,0.05)" : "#f0fdf4", borderTop: "3px solid #22c55e", borderRight: `1px solid ${isDark ? "rgba(34,197,94,0.15)" : "#bbf7d0"}`, borderBottom: `1px solid ${isDark ? "rgba(34,197,94,0.15)" : "#bbf7d0"}`, borderLeft: `1px solid ${isDark ? "rgba(34,197,94,0.15)" : "#bbf7d0"}` }}>
             <div className="text-xs font-medium mb-1" style={{ color: muTxt }}>Bullish Signals</div>
             <div className="text-2xl font-black text-green-500">{stats.sentiments.bullish}</div>
           </div>
 
           {/* Bearish */}
-          <div className="rounded-2xl p-4" style={{ background: isDark ? "rgba(239,68,68,0.05)" : "#fef2f2", borderWidth: "3px 1px 1px 1px", borderStyle: "solid", borderColor: `#ef4444 ${isDark ? "rgba(239,68,68,0.15)" : "#fecaca"} ${isDark ? "rgba(239,68,68,0.15)" : "#fecaca"} ${isDark ? "rgba(239,68,68,0.15)" : "#fecaca"}` }}>
+          <div className="rounded-2xl p-4" style={{ background: isDark ? "rgba(239,68,68,0.05)" : "#fef2f2", borderTop: "3px solid #ef4444", borderRight: `1px solid ${isDark ? "rgba(239,68,68,0.15)" : "#fecaca"}`, borderBottom: `1px solid ${isDark ? "rgba(239,68,68,0.15)" : "#fecaca"}`, borderLeft: `1px solid ${isDark ? "rgba(239,68,68,0.15)" : "#fecaca"}` }}>
             <div className="text-xs font-medium mb-1" style={{ color: muTxt }}>Bearish Signals</div>
             <div className="text-2xl font-black text-red-500">{stats.sentiments.bearish}</div>
           </div>
 
           {/* Sources */}
-          <div className="rounded-2xl p-4" style={{ background: cardBg, borderWidth: "3px 1px 1px 1px", borderStyle: "solid", borderColor: `#7c3aed ${borderCol} ${borderCol} ${borderCol}` }}>
+          <div className="rounded-2xl p-4" style={{ background: cardBg, borderTop: "3px solid #7c3aed", borderRight: `1px solid ${borderCol}`, borderBottom: `1px solid ${borderCol}`, borderLeft: `1px solid ${borderCol}` }}>
             <div className="text-xs font-medium mb-2" style={{ color: muTxt }}>Sources</div>
             <div className="flex flex-wrap gap-1">
               {sourceStats.map(s => (
