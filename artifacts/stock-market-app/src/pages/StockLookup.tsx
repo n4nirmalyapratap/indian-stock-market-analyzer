@@ -1,38 +1,73 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearch, useLocation, Link } from "wouter";
 import { api } from "@/lib/api";
-import { Search, TrendingUp, TrendingDown, AlertCircle, BarChart2, Activity } from "lucide-react";
+import { Search, TrendingUp, TrendingDown, AlertCircle, BarChart2, Activity, Users, ArrowLeft } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
+import AIAnalystButton from "@/components/AIAnalystButton";
 import StockFinancials from "@/components/financials/StockFinancials";
 import TechnicalSummary from "@/components/technicals/TechnicalSummary";
+import DataFreshness from "@/components/DataFreshness";
+import { marketDataQueryOptions, pickMeta } from "@/lib/marketData";
 
 const NIFTY100_QUICK = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","ITC","SBIN","BHARTIARTL","KOTAKBANK","BAJFINANCE","AXISBANK","MARUTI","HCLTECH","WIPRO","TITAN","SUNPHARMA"];
 
 export default function StockLookup() {
+  const search = useSearch();
+  const [, navigate] = useLocation();
   const [input, setInput] = useState("");
   const [symbol, setSymbol] = useState("");
   const [view, setView] = useState<"technicals" | "financials">("technicals");
+  // True only when ChartButton explicitly set the flag — cleared immediately so
+  // coming back from Investor Council (or any other back-nav) never re-shows it.
+  const cameFromLink = useRef((() => {
+    const v = sessionStorage.getItem("_stockLookupRef") === "1";
+    sessionStorage.removeItem("_stockLookupRef");
+    return v;
+  })());
+
+  // Auto-search when ?symbol=XYZ is present in the URL (e.g. from Heatmap click or back-nav)
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    const sym = (params.get("symbol") || "").toUpperCase().trim();
+    if (sym && sym !== symbol) {
+      setInput(sym);
+      setSymbol(sym);
+      setView("technicals");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["stock", symbol],
-    queryFn: () => api.stockDetail(symbol),
+    ...marketDataQueryOptions(["stock", symbol], () => api.stockDetail(symbol)),
     enabled: !!symbol,
-    staleTime: 5 * 60 * 1000,
   });
 
+  // Push symbol into the URL so back-navigation always restores the looked-up stock
   function handleSearch(sym?: string) {
     const s = (sym || input).toUpperCase().trim();
     if (s) {
-      setSymbol(s);
-      setView("technicals");
+      navigate(`/stocks?symbol=${encodeURIComponent(s)}`, { replace: false });
     }
   }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Stock Analysis</h1>
-        <p className="text-sm text-gray-500">Enter any NSE symbol for technical and fundamental analysis</p>
+      <div className="flex items-center gap-3">
+        {cameFromLink.current && (
+          <button
+            onClick={() => window.history.back()}
+            title="Go back"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-white transition-colors flex-shrink-0"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back
+          </button>
+        )}
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Stock Analysis</h1>
+          <p className="text-sm text-gray-500">Enter any NSE symbol for technical and fundamental analysis</p>
+        </div>
       </div>
 
       <div className="flex gap-2">
@@ -99,6 +134,29 @@ export default function StockLookup() {
               </div>
             </div>
             <p className="mt-3 text-sm text-gray-600 leading-relaxed">{data.insight}</p>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Link
+                href={`/agents/${encodeURIComponent(data.symbol)}`}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-indigo-50 to-violet-50 hover:from-indigo-100 hover:to-violet-100 text-indigo-700 text-xs font-medium border border-indigo-200/60 transition"
+              >
+                <Users className="w-3.5 h-3.5" />
+                Ask the Investor Council about {data.symbol}
+              </Link>
+              <AIAnalystButton symbol={data.symbol} />
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <DataFreshness meta={pickMeta(data)} refreshKeys={["stock", symbol]} />
+              {/* History provenance pill — quote can be live NSE while
+                  candles came off disk EOD; surface that distinction so
+                  "EMA50 below price" reads honestly when the bars are stale. */}
+              {pickMeta(data)?.historySource && pickMeta(data)?.historySource !== pickMeta(data)?.source && (
+                <span className="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-200" title="Historical-bars source (used for EMA / RSI / MACD)">
+                  History: {String(pickMeta(data)?.historySource)}
+                  {pickMeta(data)?.historyEodDate ? ` · ${pickMeta(data)?.historyEodDate}` : ""}
+                </span>
+              )}
+            </div>
           </div>
 
           {/* View toggle: Technicals | Financials */}
@@ -133,7 +191,7 @@ export default function StockLookup() {
 
       {data?.error && (
         <div className="flex items-center gap-2 text-amber-600 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm">
-          <AlertCircle className="w-4 h-4" /> {data.error}
+          <AlertCircle className="w-4 h-4" /> {(error as Error).message}
         </div>
       )}
     </div>

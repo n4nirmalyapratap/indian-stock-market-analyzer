@@ -18,8 +18,8 @@ export interface SectorData {
   focus?: string;
   /** Data source label */
   source?: string;
-  /** A/D ratio for the sector */
-  advanceDeclineRatio?: number;
+  /** A/D ratio for the sector. null when declines == 0 (infinite). */
+  advanceDeclineRatio?: number | null;
   [key: string]: unknown;
 }
 
@@ -80,11 +80,12 @@ export interface SectorRotation {
     declining: number;
     unchanged: number;
     /** A/D ratio as a formatted string, e.g. "5.00" */
-    advanceDeclineRatio?: number | string;
+    advanceDeclineRatio?: number | string | null;
     /** Market breadth percentage 0–100 */
     breadthScore?: number;
   };
-  adRatio: number;
+  /** null when declines == 0 (mathematically infinite ratio). UI renders "∞". */
+  adRatio: number | null;
   sectors: SectorData[];
   whereToBuyNow: SectorData[];
   phasedOut?: SectorData[];
@@ -179,6 +180,180 @@ export interface PatternsResponse {
   patterns: ChartPattern[];
   topCalls: ChartPattern[];
   topPuts: ChartPattern[];
+}
+
+// ── Famous-Investor AI Council types ─────────────────────────────────────────
+
+export type AgentVerdict = "STRONG_BUY" | "BUY" | "HOLD" | "AVOID" | "STRONG_AVOID";
+
+export interface ChecklistItem {
+  label:     string;
+  passed:    boolean;
+  value:     number | null;
+  threshold: number | number[];
+  op:        string;
+  weight:    number;
+  detail:    string;
+}
+
+export type PersonaRegion = "India" | "Global";
+
+export interface PersonaResult {
+  id:         string;
+  name:       string;
+  firm:       string;
+  philosophy: string;
+  signature:  string;
+  score:      number;
+  verdict:    AgentVerdict;
+  checklist:  ChecklistItem[];
+  thesis?:    string;
+  region?:    PersonaRegion;
+}
+
+export interface PersonaMeta {
+  id:         string;
+  name:       string;
+  firm:       string;
+  era:        string;
+  philosophy: string;
+  signature:  string;
+  region?:    PersonaRegion;
+}
+
+export interface AgentSource {
+  id:     string;
+  label:  string;
+  covers: string;
+}
+
+export interface CouncilResponse {
+  symbol:    string;
+  name:      string | null;
+  sector:    string | null;
+  lastPrice: number | null;
+  context:   Record<string, unknown>;
+  personas:  PersonaResult[];
+  council: {
+    verdict:    AgentVerdict;
+    avgScore:   number;
+    buyCount:   number;
+    avoidCount: number;
+    holdCount:  number;
+  };
+  sources?:   AgentSource[];
+  fetchedAt?: string;
+}
+
+export interface PersonaDeepDive extends PersonaMeta {
+  symbol:     string;
+  name_stock: string | null;
+  sector:     string | null;
+  lastPrice:  number | null;
+  score:      number;
+  verdict:    AgentVerdict;
+  checklist:  ChecklistItem[];
+  thesis:     string;
+  context:    Record<string, unknown>;
+}
+
+export interface AgentsListResponse {
+  personas: PersonaMeta[];
+  count:    number;
+}
+
+// ── Macro Pulse (India macro indicators) ─────────────────────────────────────
+
+export interface MacroTile {
+  id:        string;
+  label:     string;
+  unit:      string;
+  value:     number | null;
+  delta:     number | null;
+  deltaUnit: string;
+  asOf:      string | null;
+}
+
+export interface MacroSource {
+  id:      string;
+  label:   string;
+  covers:  string;
+  ok?:     boolean;
+  url?:    string | null;
+  note?:   string | null;
+}
+
+export interface MacroYieldCurvePoint {
+  tenor:        string;
+  tenorMonths:  number;
+  value:        number | null;
+  asOf:         string | null;
+}
+
+export interface MacroStripResponse {
+  tiles:     MacroTile[];
+  fetchedAt: string;
+  sources:   MacroSource[];
+  meta?:     unknown;
+}
+
+export interface GlobalIndex {
+  symbol:  string;
+  name:    string;
+  region:  string;
+  flag:    string;
+  value:   number | null;
+  change:  number | null;
+  pChange: number | null;
+}
+
+export interface GlobalIndicesRegion {
+  label:   string;
+  indices: GlobalIndex[];
+}
+
+export interface GlobalIndicesResponse {
+  regions: GlobalIndicesRegion[];
+  asOf:    string;
+  meta?:   unknown;
+}
+
+export interface MacroSeriesPoint {
+  date:  string;
+  value: number;
+}
+
+export interface MacroQuote {
+  symbol?:  string;
+  price?:   number | null;
+  change?:  number;
+  pChange?: number;
+  name?:    string;
+}
+
+export interface MacroDashboardResponse {
+  rateTimeline: MacroSeriesPoint[];
+  cpi:          MacroSeriesPoint[];
+  wpi:          MacroSeriesPoint[];
+  iip:          MacroSeriesPoint[];
+  gdp:          MacroSeriesPoint[];
+  yieldCurve: {
+    ind10yNow:     number | null;
+    ind10yAsOf:    string | null;
+    ind10yHistory: MacroSeriesPoint[];
+    snapshot:      MacroYieldCurvePoint[];
+  };
+  currencyStrip: {
+    usdinr: MacroQuote;
+    dxy:    MacroQuote;
+    brent:  MacroQuote;
+    gold:   MacroQuote;
+    vix:    MacroQuote;
+  };
+  commentary: string;
+  fetchedAt:  string;
+  sources:    MacroSource[];
+  meta?:      unknown;
 }
 
 export interface TechnicalAnalysis {
@@ -318,6 +493,36 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
+export interface DcfResponse {
+  symbol:         string;
+  companyName:    string;
+  currency:       string;
+  currentPrice:   number | null;
+  intrinsicValue: number;
+  marginOfSafety: number | null;
+  verdict:        "UNDERVALUED" | "FAIR" | "OVERVALUED" | "UNKNOWN";
+  assumptions: {
+    baseFcfCr:            number;
+    growthYears1to5Pct:   number;
+    growthYears6to10Pct:  number;
+    terminalGrowthPct:    number;
+    waccPct:              number;
+    riskFreePct:          number;
+    beta:                 string;
+    equityRiskPremiumPct: number;
+    sharesOutstandingCr:  number;
+    totalDebtCr:          number;
+    cashCr:               number;
+    netDebtCr:            number;
+    enterpriseValueCr:    number;
+    equityValueCr:        number;
+    horizonYears:         number;
+    growthSource:         string;
+  };
+  fcfHistoryCr: number[];
+  source:       string;
+}
+
 export const api = {
   health: () =>
     fetchApi<{ status: string }>("/healthz"),
@@ -338,8 +543,31 @@ export const api = {
   stockFinancials: (symbol: string) =>
     fetchApi<StockFinancials>(`/stocks/${encodeURIComponent(symbol)}/financials`),
 
+  stockDcf: (symbol: string) =>
+    fetchApi<DcfResponse>(`/stocks/${encodeURIComponent(symbol)}/dcf`),
+
   stockTechnicalSummary: (symbol: string, interval = "1d") =>
     fetchApi<TechnicalSummary>(`/stocks/${encodeURIComponent(symbol)}/technical-summary?interval=${interval}`),
+
+  // ── Famous-Investor AI Council ──
+  agentsList: () =>
+    fetchApi<AgentsListResponse>("/agents"),
+
+  agentCouncil: (symbol: string) =>
+    fetchApi<CouncilResponse>(`/agents/${encodeURIComponent(symbol)}`),
+
+  agentCouncilFull: (symbol: string) =>
+    fetchApi<CouncilResponse>(`/agents/${encodeURIComponent(symbol)}/council`),
+
+  agentPersona: (symbol: string, personaId: string) =>
+    fetchApi<PersonaDeepDive>(
+      `/agents/${encodeURIComponent(symbol)}/${encodeURIComponent(personaId)}`,
+    ),
+
+  // ── Macro Pulse ──
+  macroStrip:     () => fetchApi<MacroStripResponse>("/insights/macro/strip"),
+  macroDashboard: () => fetchApi<MacroDashboardResponse>("/insights/macro"),
+  globalIndices:  () => fetchApi<GlobalIndicesResponse>("/insights/global-indices"),
 
   patterns: (params?: { universe?: string; signal?: string; category?: string }) => {
     const filtered = Object.fromEntries(
@@ -355,7 +583,11 @@ export const api = {
       { method: "POST" },
     ),
 
-  scanners:      () => fetchApi<Scanner[]>("/scanners"),
+  scanners:      async () => {
+    const res = await fetchApi<Scanner[] | { scanners: Scanner[]; meta?: unknown }>("/scanners");
+    return Array.isArray(res) ? res : (res?.scanners ?? []);
+  },
+  scannersWithMeta: () => fetchApi<{ scanners: Scanner[]; meta?: unknown }>("/scanners"),
   createScanner: (data: ScannerCreateInput) =>
     fetchApi<Scanner>("/scanners", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(data) }),
   updateScanner: (id: string, data: Partial<ScannerCreateInput>) =>
@@ -414,6 +646,96 @@ export const api = {
   newsStats: () => fetchApi<NewsStatsResponse>("/news/stats"),
 
   newsRefresh: () => fetchApi<{ ok: boolean }>("/news/refresh", { method: "POST" }),
+
+  // ── Portfolio Manager ──
+  portfolios: () =>
+    fetchApi<{ portfolios: Portfolio[] }>("/portfolio"),
+
+  createPortfolio: (data: { name: string; cash?: number; baseCurrency?: string }) =>
+    fetchApi<Portfolio>("/portfolio", {
+      method: "POST", headers: JSON_HEADERS, body: JSON.stringify(data),
+    }),
+
+  updatePortfolio: (pid: string, data: { name?: string; cash?: number }) =>
+    fetchApi<Portfolio>(`/portfolio/${encodeURIComponent(pid)}`, {
+      method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(data),
+    }),
+
+  deletePortfolio: (pid: string) =>
+    fetchApi<{ success: boolean; id: string }>(`/portfolio/${encodeURIComponent(pid)}`, {
+      method: "DELETE",
+    }),
+
+  portfolioValuation: (pid: string) =>
+    fetchApi<PortfolioValuation>(`/portfolio/${encodeURIComponent(pid)}/valuation`),
+
+  portfolioTransactions: (pid: string) =>
+    fetchApi<{ transactions: PortfolioTx[] }>(`/portfolio/${encodeURIComponent(pid)}/transactions`),
+
+  addPortfolioTx: (pid: string, tx: PortfolioTxInput) =>
+    fetchApi<PortfolioTx>(`/portfolio/${encodeURIComponent(pid)}/transactions`, {
+      method: "POST", headers: JSON_HEADERS, body: JSON.stringify(tx),
+    }),
+
+  deletePortfolioTx: (pid: string, txId: string) =>
+    fetchApi<{ success: boolean; id: string }>(
+      `/portfolio/${encodeURIComponent(pid)}/transactions/${encodeURIComponent(txId)}`,
+      { method: "DELETE" },
+    ),
+
+  importPortfolioCsv: (pid: string, csv: string) =>
+    fetchApi<PortfolioImportResult>(`/portfolio/${encodeURIComponent(pid)}/import`, {
+      method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ csv }),
+    }),
+
+  importPortfolioFile: (pid: string, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return fetchApi<PortfolioImportResult & { source_filename?: string }>(
+      `/portfolio/${encodeURIComponent(pid)}/import-file`,
+      { method: "POST", body: fd },  // browser sets multipart boundary
+    );
+  },
+
+  portfolioRisk: (pid: string, params: PortfolioRiskParams = {}) =>
+    fetchApi<PortfolioRiskResult>(`/portfolio/${encodeURIComponent(pid)}/risk`, {
+      method: "POST", headers: JSON_HEADERS, body: JSON.stringify(params),
+    }),
+
+  portfolioPerformance: (pid: string, benchmark = "NIFTY 50", days = 365) =>
+    fetchApi<PortfolioPerformance>(
+      `/portfolio/${encodeURIComponent(pid)}/performance?benchmark=${encodeURIComponent(benchmark)}&days=${days}`,
+    ),
+
+  portfolioOptimize: (pid: string, params: PortfolioOptimizeParams) =>
+    fetchApi<PortfolioOptimizeResult>(`/portfolio/${encodeURIComponent(pid)}/optimize`, {
+      method: "POST", headers: JSON_HEADERS, body: JSON.stringify(params),
+    }),
+
+  dataConsistency: (symbols: string[] = []) => {
+    const q = symbols.length ? `?symbols=${encodeURIComponent(symbols.join(","))}` : "";
+    return fetchApi<{
+      marketState: string;
+      marketOpen:  boolean;
+      cacheVersion: number;
+      asOf:        string;
+      checked:     number;
+      driftCount:  number;
+      consistent:  boolean;
+      results: Array<{
+        symbol:        string;
+        quotePrice?:   number;
+        historyClose?: number;
+        historyDate?:  string;
+        sectorPrice?:  number | null;
+        drift?:        number | null;
+        driftPct?:     number | null;
+        consistent?:   boolean;
+        meta?:         Record<string, unknown>;
+        error?:        string;
+      }>;
+    }>(`/admin/data-consistency${q}`);
+  },
 };
 
 // ─── News types ────────────────────────────────────────────────────────────────
@@ -471,7 +793,11 @@ export interface NewsEvent {
 export interface NewsEventsResponse {
   events: NewsEvent[];
   total: number;
+  available: boolean;
+  error: string | null;
+  cached: boolean;
   refreshedAt: string;
+  fetchedAt: string;
 }
 
 export interface NewsStatsResponse {
@@ -553,16 +879,25 @@ export interface ConstituentStock {
   ps:           number | null;
   evEbitda:     number | null;
   roe:          number | null;
+  roa:          number | null;
+  earningsGrowth: number | null;
+  revenueGrowth:  number | null;
   debtToEquity: number | null;
   dividendYield: number | null;
   beta:         number | null;
   industry:     string | null;
+  priceSource?:     string | null;
+  priceServedFrom?: string | null;
 }
 
 export interface SectorDetailData {
   symbol:          string;
   name:            string;
   marketCap:       number;
+  /** True when the official sector-index history is unavailable (e.g. the
+   *  Yahoo ticker is delisted) and we reconstruct the series from
+   *  equal-weighted constituents. Performance/RS numbers are then approximations. */
+  historySynthetic?: boolean;
   relativeStrength: RSPoint[];
   performance:     Record<string, number | null>;
   valuation:       SectorValuation;
@@ -571,6 +906,11 @@ export interface SectorDetailData {
   constituents:    ConstituentStock[];
   topGainers:      ConstituentStock[];
   topLosers:       ConstituentStock[];
+  /** Provenance fields surfaced by the backend for DataFreshness. */
+  asOf?:           string;
+  marketState?:    string;
+  source?:         "NSE" | "YAHOO" | string;
+  servedFrom?:     string;
 }
 
 // ── Technical Summary (TradingView Indicators' Summary) ──────────────────────
@@ -620,6 +960,14 @@ export interface TechnicalSummary {
     camarilla: PivotLevel;
     woodie:    PivotLevel;
     dm:        DmPivot;
+  };
+  meta?: {
+    source?:       string;
+    asOf?:         string | null;
+    marketState?:  string;
+    eodSealed?:    boolean;
+    eodDate?:      string | null;
+    cacheVersion?: number;
   };
 }
 
@@ -695,4 +1043,201 @@ export interface StockFinancials {
   cashFlow:        { annual: CashFlowRow[] };
   dividends:       DividendRow[];
   eps:             { annual: EpsRow[]; quarterly: EpsRow[] };
+  meta?: {
+    source?:       string;
+    asOf?:         string | null;
+    marketState?:  string | null;
+    note?:         string;
+    [k: string]:   unknown;
+  };
+}
+
+// ─── Portfolio Manager types ─────────────────────────────────────────────────
+
+export interface Portfolio {
+  id:           string;
+  userId:       string;
+  name:         string;
+  baseCurrency: string;
+  cash:         number;
+  createdAt:    string;
+  updatedAt:    string;
+}
+
+export interface PortfolioTx {
+  id:          string;
+  portfolioId: string;
+  symbol:      string;
+  side:        "BUY" | "SELL" | "DIVIDEND";
+  qty:         number;
+  price:       number;
+  fees:        number;
+  tradedAt:    string;
+  source:      string;
+  note?:       string | null;
+}
+
+export interface PortfolioTxInput {
+  symbol:    string;
+  side:      "BUY" | "SELL" | "DIVIDEND";
+  qty:       number;
+  price:     number;
+  fees?:     number;
+  tradedAt?: string;
+  note?:     string;
+}
+
+export interface PortfolioHolding {
+  symbol:           string;
+  companyName?:     string;
+  qty:              number;
+  avgCost:          number;
+  invested:         number;
+  realised:         number;
+  dividends:        number;
+  fees:             number;
+  buys:             number;
+  sells:            number;
+  firstTradedAt:    string;
+  lastTradedAt:     string;
+  lastPrice:        number;
+  previousClose:    number;
+  marketValue:      number;
+  unrealisedPnl:    number;
+  unrealisedPnlPct: number;
+  dayPnl:           number;
+  dayPnlPct:        number;
+  sector:           string;
+  marketCap:        number | null;
+  marketCapBucket:  string;
+  weight:           number;
+}
+
+export interface PortfolioTotals {
+  cash:             number;
+  marketValue:      number;
+  investedValue:    number;
+  dayPnl:           number;
+  dayPnlPct:        number;
+  unrealisedPnl:    number;
+  unrealisedPnlPct: number;
+  realisedPnl:      number;
+  dividendsRcvd:    number;
+  totalEquity:      number;
+}
+
+export interface AllocationSlice { label: string; value: number; weight: number; }
+
+export interface PortfolioValuation {
+  portfolio:      Portfolio;
+  holdings:       PortfolioHolding[];
+  closedHoldings: Array<Omit<PortfolioHolding, "marketValue" | "lastPrice" | "previousClose" | "unrealisedPnl" | "unrealisedPnlPct" | "dayPnl" | "dayPnlPct" | "sector" | "marketCap" | "marketCapBucket" | "weight" | "companyName">>;
+  allocation?:    { sector: AllocationSlice[]; marketCap: AllocationSlice[]; };
+  totals:         PortfolioTotals;
+  concentration:  Array<{ symbol: string; weight: number; marketValue: number }>;
+  fetchedAt:      string;
+}
+
+export interface PortfolioImportResult {
+  format:       string;
+  rowsParsed:   number;
+  rowsInserted: number;
+  errors:       string[];
+}
+
+export interface PortfolioRiskParams {
+  confidence?:    number;
+  horizonDays?:   number;
+  riskFreeRate?:  number;
+  lookbackDays?:  number;
+}
+
+export interface PortfolioRiskResult {
+  portfolioId:  string;
+  totals:       PortfolioTotals;
+  var: {
+    valueAtRisk?:    number;
+    varPct?:         number;
+    cvarPct?:        number;
+    confidence?:     number;
+    horizonDays?:    number;
+    method?:         string;
+    [key: string]:   unknown;
+  };
+  perPosition: Array<{
+    symbol:            string;
+    weight:            number;
+    sharpe:            number | null;
+    sortino:           number | null;
+    annualReturn:      number | null;
+    annualVolatility:  number | null;
+    maxDrawdownPct:    number | null;
+  }>;
+  portfolio: {
+    sharpe:            number | null;
+    sortino:           number | null;
+    annualReturn:      number | null;
+    annualVolatility:  number | null;
+    maxDrawdownPct:    number | null;
+  };
+  fetchedAt:    string;
+}
+
+export interface PortfolioPerformancePoint {
+  date:        string;
+  equity:      number;
+  marketValue: number;
+}
+
+export interface PortfolioPerformance {
+  portfolioId:      string;
+  series:           PortfolioPerformancePoint[];
+  benchmark:        string;
+  benchmarkSeries:  Array<{ date: string; value: number }>;
+  fetchedAt:        string;
+}
+
+export interface PortfolioOptimizeParams {
+  method?:        "markowitz" | "cvar" | "min_vol";
+  confidence?:    number;
+  riskFreeRate?:  number;
+  universe?:      string[];
+  points?:        number;
+  targetWeights?: Record<string, number>;
+}
+
+export interface FrontierPoint {
+  expectedReturn: number;
+  volatility:     number;
+  sharpe:         number;
+  weights:        number[];
+}
+
+export interface PortfolioOptimizeResult {
+  portfolioId:     string;
+  method:          string;
+  result:          (FrontierPoint & { cvarPct?: number; varPct?: number; annualCvarPct?: number; confidence?: number }) | null;
+  frontier?:       {
+    symbols:           string[];
+    frontier:          FrontierPoint[];
+    maxSharpe:         FrontierPoint | null;
+    minVol:            FrontierPoint | null;
+    riskFreeRateAnnual: number;
+    lookbackDays:      number;
+  } | null;
+  currentWeights:  Record<string, number>;
+  targetWeights:   Record<string, number>;
+  trades: Array<{
+    symbol:        string;
+    side:          "BUY" | "SELL";
+    qty:           number;
+    price:         number;
+    notional:      number;
+    currentQty:    number;
+    currentWeight: number;
+    targetWeight:  number;
+  }>;
+  equity:    number;
+  universe:  string[];
+  fetchedAt: string;
 }

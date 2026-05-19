@@ -29,6 +29,10 @@ from app.routes.admin import router as admin_router
 from app.routes.auth import router as auth_router
 from app.routes.sentiment import router as sentiment_router
 from app.routes.jobs import router as jobs_router
+from app.routes.insights import router as insights_router
+from app.routes.agents import router as agents_router
+from app.routes.portfolio import router as portfolio_router
+from app.routes.ai_analyst import router as ai_analyst_router
 from app.services.log_buffer import setup_ring_buffer
 from app.services.market_cache_service import is_market_open, cache_status
 from app.services import market_cache_service as _mcs
@@ -65,24 +69,93 @@ async def _telegram_polling_loop() -> None:
 
 
 async def _cache_warmup_task() -> None:
-    """On startup, warm up disk cache only when market is closed and cache is thin."""
+    """On startup, warm up disk cache only when market is closed and cache is thin.
+
+    Also runs `seal_eod_for_today_if_overdue()` so any snapshots that were
+    saved intraday get re-fetched and rewritten as official EOD closes.
+    """
     await asyncio.sleep(5)  # let the server fully start first
+    price_service = _PriceService(_NseService(), _YahooService())
+
     if is_market_open():
         logger.info("Cache warmup skipped — market is open.")
         return
+
     status = cache_status()
-    if not status.get("thin", True):
+    if status.get("thin", True):
+        logger.info("Warming up disk cache (market closed + cache thin)…")
+        try:
+            result = await _mcs.warmup_cache(price_service)
+            logger.info(
+                "Cache warmup complete: %d files saved, %d errors (date=%s)",
+                result["filesSaved"], result["errors"], result["cacheDate"],
+            )
+        except Exception as e:
+            logger.warning("Cache warmup failed: %s", e)
+    else:
         logger.info("Cache warmup skipped — cache is already populated (date=%s).", status.get("cacheDate"))
-        return
-    logger.info("Warming up disk cache (market closed + cache thin)…")
+
+    # Always seal any intraday snapshots into EOD closes when market is closed
     try:
-        result = await _mcs.warmup_cache(_PriceService(_NseService(), _YahooService()))
-        logger.info(
-            "Cache warmup complete: %d files saved, %d errors (date=%s)",
-            result["filesSaved"], result["errors"], result["cacheDate"],
-        )
+        seal_result = await _mcs.seal_eod_for_today_if_overdue(price_service)
+        logger.info("EOD seal complete: %s", seal_result)
     except Exception as e:
-        logger.warning("Cache warmup failed: %s", e)
+        logger.warning("EOD seal failed: %s", e)
+
+
+async def _market_state_transition_loop() -> None:
+    """
+    Watch for NSE market-state transitions every 60s. When the state changes
+    (e.g. OPEN → CLOSED at 15:30 IST, CLOSED → OPEN at 09:15 IST, weekend
+    rollovers), bump the cache version. For transitions *into* a closed state
+    (OPEN → CLOSED, OPEN → WEEKEND, PRE_OPEN → CLOSED, etc.), wait briefly
+    for any in-flight intraday quotes to settle then run
+    `seal_eod_for_today_if_overdue()` so on-disk snapshots get re-fetched and
+    rewritten as the official EOD close — without needing a restart.
+    """
+    await asyncio.sleep(10)  # let the server settle before the first read
+    price_service = _PriceService(_NseService(), _YahooService())
+
+    last_state = _mcs.current_market_state()
+    initial_version = _mcs.cache_version()
+    logger.info(
+        "Market-state watcher started (state=%s, cacheVersion=%d).",
+        last_state, initial_version,
+    )
+
+    closed_states = {"CLOSED", "WEEKEND"}
+    while True:
+        try:
+            await asyncio.sleep(60)
+            state = _mcs.current_market_state()
+            if state == last_state:
+                continue
+
+            # Transition — `cache_version()` (which calls bump_if_needed)
+            # automatically increments on state change.
+            new_version = _mcs.cache_version()
+            logger.info(
+                "Market state transition: %s → %s (cacheVersion=%d).",
+                last_state, state, new_version,
+            )
+
+            # When entering a closed state, give the upstream feeds ~30s to
+            # publish their final official numbers, then seal.
+            if state in closed_states and last_state not in closed_states:
+                await asyncio.sleep(30)
+                try:
+                    result = await _mcs.seal_eod_for_today_if_overdue(price_service)
+                    logger.info("EOD seal after transition: %s", result)
+                except Exception as e:
+                    logger.warning("Post-transition EOD seal failed: %s", e)
+
+            last_state = state
+        except asyncio.CancelledError:
+            logger.info("Market-state watcher stopped.")
+            break
+        except Exception as e:
+            logger.warning("Market-state watcher error: %s — retrying in 60s.", e)
+            await asyncio.sleep(60)
 
 
 async def _bug_fixer_loop() -> None:
@@ -107,8 +180,47 @@ async def _bug_fixer_loop() -> None:
         await asyncio.sleep(600)  # 10 minutes
 
 
+def _verify_critical_dependencies() -> None:
+    """Fail loudly at boot if any data-source-critical package is missing.
+    
+    History: both `nsepython` (NSE deals/events) and `statsmodels`
+    (cointegration p-values for Hydra Pairs) were used inside silent
+    try/except blocks. When the packages went missing from requirements,
+    the features simply returned empty/weak results without anyone noticing.
+    A loud import here is the meta-fix — anything in this list MUST resolve
+    or the backend won't start.
+    """
+    critical = {
+        "nsepython":   "NSE bulk/block deals + corporate events feed",
+        "statsmodels": "Engle-Granger cointegration for Hydra Pairs",
+        "pandas_ta":   "Technical indicators (RSI/MACD/etc)",
+        "vaderSentiment": "News sentiment scoring",
+        "feedparser":  "RSS news ingestion",
+        "yfinance":    "Yahoo price fallback",
+        "spacy":       "NER for news entity extraction",
+    }
+    missing: list[str] = []
+    for mod, why in critical.items():
+        try:
+            __import__(mod)
+        except ImportError as e:
+            missing.append(f"  - {mod}: {why}  ({e})")
+    if missing:
+        msg = (
+            "FATAL: critical dependencies missing — refusing to start.\n"
+            "Add these to requirements.txt:\n" + "\n".join(missing)
+        )
+        logger.error(msg)
+        raise RuntimeError(msg)
+    logger.info("Dependency check OK: %d critical packages present", len(critical))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Verify all critical data-source packages are importable. Loud failure
+    # beats silent fallback — see _verify_critical_dependencies for the why.
+    _verify_critical_dependencies()
+
     # Attach the ring-buffer AFTER uvicorn has configured logging (it resets
     # the root logger on startup, so setup_ring_buffer() in run.py is too early).
     # Also hook uvicorn's own loggers explicitly — they set propagate=False.
@@ -118,19 +230,135 @@ async def lifespan(app: FastAPI):
         if rb not in _l.handlers:
             _l.addHandler(rb)
 
-    poll_task    = asyncio.create_task(_telegram_polling_loop())
-    universe_task = asyncio.create_task(_universe_scheduler())
-    warmup_task  = asyncio.create_task(_cache_warmup_task())
-    fixer_task   = asyncio.create_task(_bug_fixer_loop())
+    poll_task       = asyncio.create_task(_telegram_polling_loop())
+    universe_task   = asyncio.create_task(_universe_scheduler())
+    warmup_task     = asyncio.create_task(_cache_warmup_task())
+    transition_task = asyncio.create_task(_market_state_transition_loop())
+    fixer_task      = asyncio.create_task(_bug_fixer_loop())
+    rfr_task        = asyncio.create_task(_risk_free_rate_scheduler())
+    bhav_task       = asyncio.create_task(_bhavcopy_refresh_scheduler())
+    alerts_task     = asyncio.create_task(_bot_alerts_tick_loop())
     try:
         yield
     finally:
-        for t in (poll_task, universe_task, warmup_task, fixer_task):
+        for t in (poll_task, universe_task, warmup_task, transition_task,
+                  fixer_task, rfr_task, bhav_task, alerts_task):
             t.cancel()
             try:
                 await t
             except asyncio.CancelledError:
                 pass
+
+
+async def _bot_alerts_tick_loop() -> None:
+    """Evaluate per-chat bot alert subscriptions every 5 minutes and dispatch
+    fired alerts via the Telegram and WhatsApp send functions.
+
+    Loud-fallback: never raises out of the loop — each tick logs warnings on
+    failure so operators can see exactly which subscription/symbol misbehaved.
+    """
+    from app.services import bot_alerts
+    from app.routes.telegram import get_service as _tg_svc
+    from app.routes.whatsapp import get_service as _wa_svc
+
+    # Brief warmup delay
+    await asyncio.sleep(30)
+    while True:
+        try:
+            tg = _tg_svc()
+            wa = _wa_svc()
+
+            async def _quote(symbol: str) -> dict:
+                try:
+                    return await tg.stocks.get_stock_details(symbol)
+                except Exception:
+                    return {}
+
+            async def _patterns() -> dict:
+                try:
+                    return await tg.patterns.get_patterns()
+                except Exception:
+                    return {}
+
+            async def _send(channel: str, chat_id: str, text: str) -> bool:
+                try:
+                    if channel == "telegram":
+                        return await tg.send_message(chat_id, text)
+                    # WhatsApp: log into the in-memory message log so the admin
+                    # dashboard surfaces it; real Twilio dispatch happens out
+                    # of band when the user replies.
+                    wa.get_message_log().append({
+                        "from": chat_id, "text": "(alert)",
+                        "response": text,
+                        "timestamp": dt.datetime.utcnow().isoformat() + "Z",
+                    })
+                    return True
+                except Exception as exc:
+                    logger.warning("bot_alerts send failed: %s", exc)
+                    return False
+
+            stats = await bot_alerts.evaluate_due_alerts(
+                quote_fn=_quote, pattern_fn=_patterns, send_fn=_send,
+            )
+            if stats.get("fired"):
+                logger.info("bot_alerts: tick fired=%d skipped=%d errors=%d",
+                            stats["fired"], stats["skipped"], stats["errors"])
+        except Exception as exc:
+            logger.warning("bot_alerts tick failed: %s", exc)
+        try:
+            await asyncio.sleep(5 * 60)
+        except asyncio.CancelledError:
+            logger.info("Bot alerts scheduler stopped.")
+            break
+
+
+async def _risk_free_rate_scheduler() -> None:
+    """Refresh the FRED India 10Y G-Sec yield on startup, then once a day.
+
+    Loud-fallback design: every refresh logs at INFO on success and WARNING
+    on stale/hard-fallback so operators see exactly which value the pricing
+    layer is using.  Never raises — falls back via the standard chain.
+    """
+    from app.services.risk_free_service import refresh_risk_free_rate_on_startup
+    # Brief delay so the rest of the startup logging is grouped first
+    await asyncio.sleep(2)
+    while True:
+        try:
+            await refresh_risk_free_rate_on_startup()
+        except Exception as exc:
+            logger.warning("risk-free scheduler tick failed: %s", exc)
+        # 24h refresh — matches the in-memory cache TTL
+        try:
+            await asyncio.sleep(24 * 3600)
+        except asyncio.CancelledError:
+            logger.info("Risk-free scheduler stopped.")
+            break
+
+
+async def _bhavcopy_refresh_scheduler() -> None:
+    """Refresh the NSE/BSE F&O bhavcopy cache once a day.
+
+    On startup, pulls the last 7 trading days that aren't already cached so
+    fresh installs become useful quickly.  Subsequent ticks pull just the
+    last 2 days to catch the previous trading session.
+    """
+    from app.services.nse_bhavcopy_service import refresh_recent
+    await asyncio.sleep(5)
+    first_run = True
+    while True:
+        try:
+            results = await asyncio.to_thread(refresh_recent, 7 if first_run else 2)
+            ok = sum(1 for r in results if r["status"] == "ok")
+            logger.info("Bhavcopy scheduler tick: %d new days cached "
+                        "(%d attempts)", ok, len(results))
+        except Exception as exc:
+            logger.warning("Bhavcopy scheduler tick failed: %s", exc)
+        first_run = False
+        try:
+            await asyncio.sleep(24 * 3600)
+        except asyncio.CancelledError:
+            logger.info("Bhavcopy scheduler stopped.")
+            break
 
 
 async def _universe_scheduler() -> None:
@@ -236,3 +464,7 @@ app.include_router(admin_router,            prefix="/api")
 app.include_router(auth_router,             prefix="/api")
 app.include_router(sentiment_router,        prefix="/api")
 app.include_router(jobs_router,             prefix="/api")
+app.include_router(insights_router,         prefix="/api")
+app.include_router(agents_router,            prefix="/api")
+app.include_router(portfolio_router,         prefix="/api")
+app.include_router(ai_analyst_router,         prefix="/api")

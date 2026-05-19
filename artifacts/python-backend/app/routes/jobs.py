@@ -170,7 +170,7 @@ class _NewsRefreshJob(_Job):
 
 class _ScannersRunAllJob(_Job):
     async def _execute(self) -> str:
-        from app.services.scanners_service import ScannersService, _DB
+        from app.services.scanners_service import ScannersService
         from app.services.yahoo_service import YahooService
         from app.services.nse_service import NseService
         from app.services.price_service import PriceService
@@ -183,7 +183,8 @@ class _ScannersRunAllJob(_Job):
         for sc in all_scanners:
             try:
                 result = await svc.run_scanner(sc["id"])
-                hits += len(result.get("matches", []))
+                # Result schema (run_scanner): {results: [...], scanErrors: [...], ...}
+                hits += len(result.get("results", []))
             except Exception:
                 pass
         return f"Ran {len(all_scanners)} scanner(s) — {hits} total matches found"
@@ -264,9 +265,10 @@ class _BugFinderJob(_Job):
         for m in re.finditer(r'sym:\s*"([A-Z0-9]+)".*?lot:\s*(\d+)', fe_text, re.DOTALL):
             fe_lots[m.group(1)] = int(m.group(2))
 
-        # ── 3. Expected SEBI lot sizes (Nov 2024) ────────────────────────────
+        # ── 3. Expected SEBI lot sizes (Jan 2026 revision) ───────────────────
+        # NIFTY revised 75→65 effective Jan 2026 series (NSE/FAOP/64012 2025-11)
         sebi_lots = {
-            "NIFTY": 75, "BANKNIFTY": 30, "FINNIFTY": 65,
+            "NIFTY": 65, "BANKNIFTY": 30, "FINNIFTY": 65,
             "MIDCPNIFTY": 120, "SENSEX": 10, "BANKEX": 15,
         }
 
@@ -299,7 +301,7 @@ class _BugFinderJob(_Job):
                 )
 
         if not issues:
-            return "No discrepancies found — frontend and backend are in sync with SEBI Nov 2024 rules"
+            return "No discrepancies found — frontend and backend are in sync with SEBI Jan 2026 rules"
         return f"{len(issues)} discrepancy(ies) found:\n" + "\n".join(f"  • {i}" for i in issues)
 
 
@@ -390,7 +392,7 @@ _reg(_SebiAuditJob(
 _reg(_BugFinderJob(
     id="bug_finder",
     name="Bug Finder (Cross-App Scan)",
-    description="Scans for discrepancies between frontend and backend: lot sizes, expiry days, weekly/monthly index rules. Flags any drift from SEBI Nov 2024 standards.",
+    description="Scans for discrepancies between frontend and backend: lot sizes, expiry days, weekly/monthly index rules. Flags any drift from SEBI Jan 2026 standards.",
     category="Compliance",
     icon="bug",
 ))

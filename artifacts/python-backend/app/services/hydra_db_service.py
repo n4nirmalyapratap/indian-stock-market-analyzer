@@ -1,12 +1,20 @@
 """
 Hydra-Alpha Engine — Data Layer
 SQLite OHLCV database with incremental updates from Yahoo Finance.
-Schema: daily_prices(ticker, date, open, high, low, close, volume)
+Schema: daily_prices(ticker, date, open, high, low, close, raw_close, volume)
+
+`close`     = split/dividend-adjusted close (used by all math services so
+              returns are continuous across corporate actions).
+`raw_close` = unadjusted close as reported on the trading day (kept so the
+              OHLC quartet stays internally consistent for display).
 
 Fix applied (code review):
   FIX-5: Enable WAL journal mode and set busy_timeout on every connection.
          Serialise all write operations through a single asyncio.Lock so
          concurrent asyncio.gather() calls do not race on the DB file.
+  FIX-7: Store both adjusted and raw close. OHLC + raw_close form an
+         internally consistent candle; `close` remains adjusted for the
+         continuous-return math used by forecast / VaR / pairs / backtest.
 """
 from __future__ import annotations
 import asyncio
@@ -50,16 +58,26 @@ def ensure_schema() -> sqlite3.Connection:
     conn = _connect()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS daily_prices (
-            ticker  TEXT NOT NULL,
-            date    TEXT NOT NULL,
-            open    REAL,
-            high    REAL,
-            low     REAL,
-            close   REAL,
-            volume  INTEGER,
+            ticker     TEXT NOT NULL,
+            date       TEXT NOT NULL,
+            open       REAL,
+            high       REAL,
+            low        REAL,
+            close      REAL,
+            raw_close  REAL,
+            volume     INTEGER,
             PRIMARY KEY (ticker, date)
         )
     """)
+    # FIX-7: backfill raw_close column on legacy DBs created before the split.
+    # Wrapped in try/except to be safe under concurrent first-run migrations.
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(daily_prices)").fetchall()]
+    if "raw_close" not in cols:
+        try:
+            conn.execute("ALTER TABLE daily_prices ADD COLUMN raw_close REAL")
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ticker ON daily_prices(ticker)")
     conn.commit()
     return conn
@@ -76,11 +94,13 @@ def _upsert_rows(conn: sqlite3.Connection, ticker: str, rows: list[dict]) -> int
     if not rows:
         return 0
     conn.executemany(
-        "INSERT OR REPLACE INTO daily_prices(ticker,date,open,high,low,close,volume) "
-        "VALUES(?,?,?,?,?,?,?)",
+        "INSERT OR REPLACE INTO daily_prices"
+        "(ticker,date,open,high,low,close,raw_close,volume) "
+        "VALUES(?,?,?,?,?,?,?,?)",
         [
             (ticker, r["date"], r.get("open"), r.get("high"),
-             r.get("low"), r.get("close"), r.get("volume", 0))
+             r.get("low"), r.get("close"), r.get("raw_close"),
+             r.get("volume", 0))
             for r in rows
         ],
     )
@@ -91,18 +111,24 @@ def _upsert_rows(conn: sqlite3.Connection, ticker: str, rows: list[dict]) -> int
 # ── Read helpers (no lock needed — WAL allows concurrent reads) ────────────────
 
 def get_history(ticker: str, days: int = 252) -> list[dict]:
-    """Return up to `days` rows newest-last from the local DB."""
+    """
+    Return up to `days` rows newest-last from the local DB.
+
+    Each row exposes BOTH:
+      - close     : split/dividend-adjusted close (use for return math)
+      - rawClose  : unadjusted close (use for OHLC display consistency)
+    """
     conn = ensure_schema()
     cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
     rows = conn.execute(
-        "SELECT date,open,high,low,close,volume FROM daily_prices "
+        "SELECT date,open,high,low,close,raw_close,volume FROM daily_prices "
         "WHERE ticker=? AND date>=? ORDER BY date ASC",
         (ticker, cutoff),
     ).fetchall()
     conn.close()
     return [
         {"date": r[0], "open": r[1], "high": r[2], "low": r[3],
-         "close": r[4], "volume": r[5]}
+         "close": r[4], "rawClose": r[5], "volume": r[6]}
         for r in rows
     ]
 
@@ -150,24 +176,26 @@ async def _fetch_yahoo(yahoo_ticker: str, start_date: Optional[str] = None) -> l
             adj = cr.get("indicators", {}).get("adjclose", [{}])
             adj_closes = adj[0].get("adjclose", []) if adj else []
             rows = []
+            raw_closes = q.get("close", [])
             for i, ts in enumerate(timestamps):
-                c = (
-                    adj_closes[i]
-                    if i < len(adj_closes) and adj_closes[i]
-                    else (q.get("close", [])[i] if i < len(q.get("close", [])) else None)
-                )
-                if c is None:
+                raw_c = raw_closes[i] if i < len(raw_closes) else None
+                adj_c = adj_closes[i] if i < len(adj_closes) and adj_closes[i] else raw_c
+                # Need at least one usable close to keep the row.
+                if adj_c is None and raw_c is None:
                     continue
+                # Prefer adjusted for math; fall back to raw if Yahoo omitted it.
+                c = adj_c if adj_c is not None else raw_c
                 date_str = datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
                 if start_date and date_str <= start_date:
                     continue
                 rows.append({
-                    "date":   date_str,
-                    "open":   q.get("open",   [])[i] if i < len(q.get("open",   [])) else c,
-                    "high":   q.get("high",   [])[i] if i < len(q.get("high",   [])) else c,
-                    "low":    q.get("low",    [])[i] if i < len(q.get("low",    [])) else c,
-                    "close":  c,
-                    "volume": q.get("volume", [])[i] if i < len(q.get("volume", [])) else 0,
+                    "date":      date_str,
+                    "open":      q.get("open",   [])[i] if i < len(q.get("open",   [])) else raw_c,
+                    "high":      q.get("high",   [])[i] if i < len(q.get("high",   [])) else raw_c,
+                    "low":       q.get("low",    [])[i] if i < len(q.get("low",    [])) else raw_c,
+                    "close":     c,        # adjusted (math)
+                    "raw_close": raw_c,    # unadjusted (OHLC consistency)
+                    "volume":    q.get("volume", [])[i] if i < len(q.get("volume", [])) else 0,
                 })
             return rows
     except Exception as e:

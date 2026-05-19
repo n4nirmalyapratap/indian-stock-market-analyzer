@@ -10,23 +10,34 @@ import StockLookup from "@/pages/StockLookup";
 import Patterns from "@/pages/Patterns";
 import Scanners from "@/pages/Scanners";
 import HydraAlpha from "@/pages/HydraAlpha";
+import InvestorCouncil from "@/pages/InvestorCouncil";
 import OptionsStrategyTester from "@/pages/OptionsStrategyTester";
 import SettingsPage from "@/pages/SettingsPage";
+import Portfolio from "@/pages/Portfolio";
+import DCF from "@/pages/DCF";
 import NotFound from "@/pages/not-found";
 import TradingPlatform from "@/pages/TradingPlatform";
 import SectorDetail from "@/pages/SectorDetail";
 import NewsFeed from "@/pages/NewsFeed";
 import SentimentDashboard from "@/pages/SentimentDashboard";
 import LoginPage from "@/pages/LoginPage";
+import InsightsLayout from "@/pages/insights/InsightsLayout";
+import AIAnalyst from "@/pages/AIAnalyst";
+import AIAnalystCompare from "@/pages/AIAnalystCompare";
+import AIAnalystScan from "@/pages/AIAnalystScan";
+import SavedAnalyses from "@/pages/SavedAnalyses";
 import GlobalAssistant from "@/components/GlobalAssistant";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { CustomAuthProvider, useCustomAuth } from "@/context/CustomAuthContext";
 import { setTokenGetter } from "@/lib/api";
+import { useMarketStateBoundary } from "@/lib/marketData";
 import { LayoutShell } from "@/LayoutShell";
-import { LogOut } from "lucide-react";
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
+  // refetchOnWindowFocus defaults to true so any market-data query (even
+  // ones not yet migrated to marketDataQueryOptions) re-validates against
+  // the official close when the user returns to the tab.
+  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: true } },
 });
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -35,7 +46,7 @@ const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 // ── User profile ──────────────────────────────────────────────────────────────
 
 function UserProfile({ open }: { open: boolean }) {
-  const { user, logout } = useCustomAuth();
+  const { user } = useCustomAuth();
   if (!user) return null;
 
   const initials = (user.name || user.email)
@@ -43,13 +54,11 @@ function UserProfile({ open }: { open: boolean }) {
 
   if (!open) {
     return (
-      <button
-        onClick={logout}
-        title="Sign out"
-        className="w-full flex justify-center py-2 text-gray-400 hover:text-red-400 transition"
-      >
-        <LogOut className="w-4 h-4" />
-      </button>
+      <div className="w-full flex justify-center py-2">
+        <div className="w-7 h-7 rounded-full bg-indigo-500 flex items-center justify-center text-white text-xs font-bold">
+          {initials}
+        </div>
+      </div>
     );
   }
 
@@ -63,13 +72,6 @@ function UserProfile({ open }: { open: boolean }) {
           <p className="text-xs font-medium text-gray-900 dark:text-white truncate">{user.name || "User"}</p>
           <p className="text-[10px] text-gray-400 truncate">{user.email}</p>
         </div>
-        <button
-          onClick={logout}
-          title="Sign out"
-          className="text-gray-400 hover:text-red-400 transition flex-shrink-0"
-        >
-          <LogOut className="w-3.5 h-3.5" />
-        </button>
       </div>
     </div>
   );
@@ -93,13 +95,24 @@ function AppRoutes() {
         <Route path="/trading"         component={TradingPlatform} />
         <Route path="/sectors/:sectorId" component={SectorDetail} />
         <Route path="/sectors"          component={Sectors} />
+        <Route path="/insights/:tab*"   component={InsightsLayout} />
+        <Route path="/insights"         component={InsightsLayout} />
         <Route path="/news"            component={NewsFeed} />
         <Route path="/sentiment"       component={SentimentDashboard} />
         <Route path="/stocks"          component={StockLookup} />
         <Route path="/patterns"        component={Patterns} />
         <Route path="/scanners"        component={Scanners} />
         <Route path="/hydra"           component={HydraAlpha} />
+        <Route path="/agents/:symbol"  component={InvestorCouncil} />
+        <Route path="/agents"          component={InvestorCouncil} />
+        <Route path="/ai-analyst/saved"   component={SavedAnalyses} />
+        <Route path="/ai-analyst/scan"    component={AIAnalystScan} />
+        <Route path="/ai-analyst/compare" component={AIAnalystCompare} />
+        <Route path="/ai-analyst/:ticker" component={AIAnalyst} />
+        <Route path="/ai-analyst"      component={AIAnalyst} />
         <Route path="/options"         component={OptionsStrategyTester} />
+        <Route path="/portfolio"       component={Portfolio} />
+        <Route path="/dcf"             component={DCF} />
         <Route path="/settings"        component={SettingsPage} />
         <Route path="/chart/:symbol"   component={ChartView} />
         <Route component={NotFound} />
@@ -116,6 +129,13 @@ function TokenInjector() {
   useEffect(() => {
     if (token) setTokenGetter(async () => token!);
   }, [token]);
+  return null;
+}
+
+// Watches IST market open/closed boundary and invalidates all React-Query
+// caches at the transition so post-close pages snap to the sealed EOD close.
+function MarketStateBoundary() {
+  useMarketStateBoundary();
   return null;
 }
 
@@ -139,6 +159,7 @@ function AuthGate() {
   return (
     <>
       <TokenInjector />
+      <MarketStateBoundary />
       <AppRoutes />
       <GlobalAssistant />
     </>

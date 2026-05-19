@@ -97,23 +97,19 @@ def _engle_granger_pvalue(closes_a: list[float], closes_b: list[float]) -> float
     Approximate Engle-Granger cointegration p-value.
     Uses the ADF test on the OLS residuals.
     """
+    # statsmodels is a hard requirement (pinned in requirements.txt) so this
+    # import is no longer wrapped in a silent try/except. If it ever goes
+    # missing again we want a loud failure, not a weaker fallback p-value
+    # quietly poisoning the pairs ranking.
+    from statsmodels.tsa.stattools import coint
     try:
-        from statsmodels.tsa.stattools import coint
         n = min(len(closes_a), len(closes_b))
         a = np.array(closes_a[-n:])
         b = np.array(closes_b[-n:])
         _, pvalue, _ = coint(a, b)
         return float(pvalue)
-    except ImportError:
-        # Fallback: compute correlation of differenced series (weaker test)
-        n = min(len(closes_a), len(closes_b))
-        a = np.diff(closes_a[-n:])
-        b = np.diff(closes_b[-n:])
-        if len(a) < 5 or len(b) < 5:
-            return 1.0
-        corr = float(np.corrcoef(a, b)[0, 1])
-        return 1.0 - abs(corr)
-    except Exception:
+    except Exception as e:
+        logger.warning("Engle-Granger coint failed: %s", e)
         return 1.0
 
 
@@ -218,6 +214,8 @@ def scan_pairs(
     # Bonferroni-corrected threshold
     corrected_threshold = min(p_threshold, 0.05 / max(total_tests, 1))
 
+    # Evaluate ALL pairs so the final sort returns the globally best ones.
+    # 105 OLS regressions for 15 symbols (default) is cheap; do not short-circuit.
     results = []
     for i in range(n):
         for j in range(i + 1, n):
@@ -228,8 +226,7 @@ def scan_pairs(
                 continue
             pvalue = _engle_granger_pvalue(ca, cb)
             if pvalue <= p_threshold:
-                _, beta = _compute_spread(ca, cb)
-                spread, _ = _compute_spread(ca, cb)
+                spread, beta = _compute_spread(ca, cb)
                 ou = calibrate_ou(spread)
                 sig = generate_signal(ou) if "error" not in ou else {"signal": "UNKNOWN"}
                 results.append({
@@ -242,7 +239,5 @@ def scan_pairs(
                     "zScore": ou.get("zScore", 0.0),
                     "halfLife": ou.get("halfLife", 0.0),
                 })
-        if len(results) >= max_pairs:
-            break
 
     return sorted(results, key=lambda r: r["pValue"])[:max_pairs]

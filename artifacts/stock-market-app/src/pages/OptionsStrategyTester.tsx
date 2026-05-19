@@ -77,6 +77,237 @@ const STRATEGY_GROUPS = [
 ];
 
 // ── Components ────────────────────────────────────────────────────────────────
+
+/**
+ * SEBI Compliance card — fetches GET /options/compliance and shows the
+ * authoritative lot size, expiry weekday, cost schedule, and live FRED
+ * risk-free rate for the currently selected symbol.  Pure additive UI;
+ * does not affect any existing inputs or analytics.
+ */
+function SEBIComplianceCard({
+  symbol,
+  strategy,
+  lots,
+}: {
+  symbol: string;
+  strategy?: string | null;
+  lots?: number;
+}) {
+  const [data, setData] = useState<any>(null);
+  const [open, setOpen] = useState(false);
+  const [err,  setErr]  = useState("");
+
+  useEffect(() => {
+    let cancel = false;
+    setErr("");
+    setData(null);
+    const params = new URLSearchParams({ symbol });
+    if (strategy) params.set("strategy", strategy);
+    if (lots && lots > 0) params.set("lots", String(lots));
+    fetchApi<any>(`/options/compliance?${params.toString()}`)
+      .then((d) => { if (!cancel) setData(d); })
+      .catch((e) => { if (!cancel) setErr(String(e?.message || e)); });
+    return () => { cancel = true; };
+  }, [symbol, strategy, lots]);
+
+  if (err) {
+    return (
+      <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 text-xs text-amber-700">
+        Compliance snapshot unavailable: {err}
+      </div>
+    );
+  }
+  if (!data) return null;
+
+  const sym  = data.symbols?.[0];
+  const cs   = data.cost_schedule;
+  const rfr  = data.risk_free_rate;
+  const lot  = sym?.lot_size;
+  const wd   = sym?.expiry_weekday?.weekday_name;
+  const strat = data.strategy;             // populated when strategy was sent
+  const perLeg = data.per_leg_costs;       // {per_leg:[…], total, circular_ref}
+  const margin = data.margin_estimate;     // {value, note}
+
+  // Helper: render a circular reference as a hyperlink when URL is known
+  const refLink = (ref?: string | null, url?: string | null) => {
+    if (!ref) return <>—</>;
+    if (!url) return <span className="break-words">{ref}</span>;
+    return (
+      <a href={url} target="_blank" rel="noopener noreferrer"
+         className="text-indigo-600 hover:underline break-words">
+        {ref} ↗
+      </a>
+    );
+  };
+  const fmtINR = (n: number) =>
+    "₹" + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+
+  return (
+    <div className="bg-indigo-50/40 border border-indigo-200 rounded-xl px-4 py-3">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between text-left"
+      >
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+          <span className="font-semibold text-indigo-800">SEBI Compliance</span>
+          <span className="text-gray-700">
+            Lot <b>{lot?.value ?? "—"}</b>
+          </span>
+          <span className="text-gray-700">
+            Expiry <b>{wd ?? "—"}</b>
+          </span>
+          <span className="text-gray-700">
+            Weekly <b>{sym?.weekly_available ? "yes" : "no"}</b>
+          </span>
+          <span className="text-gray-700">
+            Risk-free <b>{(rfr?.value * 100).toFixed(2)}%</b>
+            <span className="ml-1 text-gray-400">({rfr?.source})</span>
+          </span>
+          <span className="text-gray-400">as of {data.as_of}</span>
+        </div>
+        <span className="text-indigo-600 text-xs ml-2">
+          {open ? "hide details ▾" : "show details ▸"}
+        </span>
+      </button>
+
+      {open && (
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+          <div className="bg-white border border-gray-200 rounded-lg p-3">
+            <div className="font-semibold text-gray-700 mb-1">
+              Lot size — {lot?.value ?? "—"} units
+            </div>
+            <div className="text-gray-600">
+              Effective from {lot?.effective_from ?? "—"}
+            </div>
+            <div className="text-gray-500 mt-1 break-words">
+              Ref: {refLink(lot?.circular_ref, lot?.circular_url)}
+            </div>
+            {lot?.notes && (
+              <div className="text-gray-500 mt-1 italic">{lot.notes}</div>
+            )}
+          </div>
+
+          <div className="bg-white border border-gray-200 rounded-lg p-3">
+            <div className="font-semibold text-gray-700 mb-1">
+              Cost schedule (effective {cs?.effective_from})
+            </div>
+            <ul className="text-gray-600 space-y-0.5">
+              <li>STT (sell premium): <b>{(cs?.stt_sell_premium_pct * 100).toFixed(4)}%</b></li>
+              <li>STT (exercise / ITM): <b>{(cs?.stt_exercise_pct * 100).toFixed(4)}%</b></li>
+              <li>NSE exchange charge: <b>{(cs?.exchange_charge_pct * 100).toFixed(4)}%</b></li>
+              <li>SEBI turnover: <b>{(cs?.sebi_charge_pct * 100).toFixed(5)}%</b></li>
+              <li>Stamp duty (buy): <b>{(cs?.stamp_duty_pct * 100).toFixed(4)}%</b></li>
+              <li>GST: <b>{(cs?.gst_pct * 100).toFixed(0)}%</b> on (brokerage+exch+sebi)</li>
+              <li>Brokerage: <b>₹{cs?.brokerage_per_order}</b> per executed order</li>
+            </ul>
+            <div className="text-gray-500 mt-1 break-words">
+              Ref: {refLink(cs?.circular_ref, cs?.circular_url)}
+            </div>
+          </div>
+
+          {/* Per-strategy enrichment — only when ?strategy was sent */}
+          {strat && perLeg?.per_leg?.length > 0 && (
+            <div className="bg-white border border-gray-200 rounded-lg p-3 md:col-span-2">
+              <div className="font-semibold text-gray-700 mb-1">
+                Per-leg cost breakdown — {strat.id} × {strat.lots} lot
+                {strat.lots !== 1 ? "s" : ""} (lot size {strat.lot_size})
+              </div>
+              {!strat.weekly_available_now && (
+                <div className="text-amber-600 text-xs mb-2">
+                  ⚠ Weekly contracts are not available for {sym?.symbol} on this
+                  date (SEBI Nov-2024 framework) — backtests must use the
+                  monthly expiry cycle.
+                </div>
+              )}
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="text-gray-500">
+                    <tr className="border-b border-gray-100">
+                      <th className="text-left py-1 pr-2">#</th>
+                      <th className="text-left py-1 pr-2">Side</th>
+                      <th className="text-right py-1 pr-2">Strike</th>
+                      <th className="text-right py-1 pr-2">Brokerage</th>
+                      <th className="text-right py-1 pr-2">STT</th>
+                      <th className="text-right py-1 pr-2">Exch+SEBI</th>
+                      <th className="text-right py-1 pr-2">Stamp</th>
+                      <th className="text-right py-1 pr-2">GST</th>
+                      <th className="text-right py-1">Leg total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {perLeg.per_leg.map((row: any) => {
+                      const e = row.entry, x = row.exit;
+                      return (
+                        <tr key={row.leg_index} className="border-b border-gray-50">
+                          <td className="py-1 pr-2 text-gray-500">{row.leg_index + 1}</td>
+                          <td className="py-1 pr-2">
+                            {row.action} {row.type}
+                          </td>
+                          <td className="py-1 pr-2 text-right">{row.strike}</td>
+                          <td className="py-1 pr-2 text-right">{fmtINR(e.brokerage + x.brokerage)}</td>
+                          <td className="py-1 pr-2 text-right">{fmtINR(e.stt + x.stt)}</td>
+                          <td className="py-1 pr-2 text-right">
+                            {fmtINR(e.exchange_charge + x.exchange_charge
+                                    + e.sebi_charge + x.sebi_charge)}
+                          </td>
+                          <td className="py-1 pr-2 text-right">{fmtINR(e.stamp_duty + x.stamp_duty)}</td>
+                          <td className="py-1 pr-2 text-right">{fmtINR(e.gst + x.gst)}</td>
+                          <td className="py-1 text-right font-semibold">{fmtINR(row.leg_total)}</td>
+                        </tr>
+                      );
+                    })}
+                    <tr>
+                      <td colSpan={8} className="py-1 pr-2 text-right text-gray-500">
+                        Round-trip total
+                      </td>
+                      <td className="py-1 text-right font-bold text-indigo-700">
+                        {fmtINR(perLeg.total)}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              {margin && (
+                <div className="mt-2 text-gray-600">
+                  Estimated SPAN+ELM margin: <b>{fmtINR(margin.value)}</b>
+                  <span className="ml-2 text-gray-400 italic">{margin.note}</span>
+                </div>
+              )}
+              {strat.applicable_circulars?.length > 0 && (
+                <div className="mt-2 text-gray-500 text-xs">
+                  Applicable circulars:{" "}
+                  {strat.applicable_circulars.map((c: any, i: number) => (
+                    <span key={i} className="mr-2">
+                      {refLink(c.ref, c.url)}
+                      {i < strat.applicable_circulars.length - 1 ? " · " : ""}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="bg-white border border-gray-200 rounded-lg p-3 md:col-span-2">
+            <div className="font-semibold text-gray-700 mb-1">
+              Risk-free rate (India 10Y G-Sec)
+            </div>
+            <div className="text-gray-600">
+              <b>{(rfr?.value * 100).toFixed(3)}%</b>
+              {rfr?.asOf && <span className="ml-2 text-gray-500">as of {rfr.asOf}</span>}
+              <span className="ml-2 text-gray-500">— source: {rfr?.source}</span>
+            </div>
+            {!rfr?.success && (
+              <div className="text-amber-600 mt-1">
+                ⚠ {rfr?.note} — strategy math is using the {(rfr?.value * 100).toFixed(2)}% fallback.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Loader() {
   return (
     <div className="flex items-center gap-2 text-indigo-500 text-sm">
@@ -706,7 +937,7 @@ function SmartBuilderTab({
   async function useStrategy(rec: SuggestedStrategy) {
     let info = spotInfo;
     if (!info) info = await doFetchSpot();
-    const ls = info?.lot_size ?? 75;
+    const ls = info?.lot_size ?? 65;
     const iv = info?.hv30     ?? 0.20;
     const newLegs: Leg[] = rec.legs.map(l => ({
       id: crypto.randomUUID(), action: l.action, option_type: l.option_type,
@@ -1073,7 +1304,7 @@ export default function OptionsStrategyTester() {
   // ── Add leg ─────────────────────────────────────────────────────────────────
   function addLeg(partial?: Partial<Leg>) {
     const atm  = spotInfo?.atm  ?? 0;
-    const ls   = spotInfo?.lot_size ?? 75;
+    const ls   = spotInfo?.lot_size ?? 65;
     const hv   = spotInfo?.hv30 ?? 0.20;
     const newLeg: Leg = {
       id:          crypto.randomUUID(),
@@ -1241,7 +1472,7 @@ export default function OptionsStrategyTester() {
       {/* Symbol bar */}
       {(() => {
         const INDICES = [
-          { sym: "NIFTY",      label: "NIFTY 50",     lot: 75, exch: "NSE" },
+          { sym: "NIFTY",      label: "NIFTY 50",     lot: 65, exch: "NSE" },
           { sym: "BANKNIFTY",  label: "BANK NIFTY",   lot: 30, exch: "NSE" },
           { sym: "FINNIFTY",   label: "FIN NIFTY",    lot: 65,  exch: "NSE" },
           { sym: "MIDCPNIFTY", label: "MIDCAP NIFTY", lot: 120, exch: "NSE" },
@@ -1270,9 +1501,10 @@ export default function OptionsStrategyTester() {
             {/* Segmented control */}
             <div className="bg-gray-50 border-b border-gray-100 p-2">
               <div className="bg-gray-100 rounded-xl p-1 flex gap-0.5">
-                {INDICES.map(({ sym, label, lot, exch }) => {
+                {INDICES.map(({ sym, label, lot: staticLot, exch }) => {
                   const active = symbol === sym;
                   const fetching = active && loadingSpot;
+                  const lot = active && spotInfo ? spotInfo.lot_size : staticLot;
                   return (
                     <button
                       key={sym}
@@ -1357,6 +1589,14 @@ export default function OptionsStrategyTester() {
           </div>
         );
       })()}
+
+      {/* SEBI Compliance card — live rule snapshot from backend registry */}
+      <SEBIComplianceCard
+        symbol={symbol}
+        strategy={strategyName}
+        lots={legs.reduce((m, l) => Math.max(m, Number(l.lots) || 0), 0) || 1}
+      />
+
 
       {/* Tabs */}
       <div className="border-b border-gray-200">
@@ -1878,6 +2118,37 @@ export default function OptionsStrategyTester() {
           {/* Results */}
           {btResult && (
             <div className="space-y-4">
+              {/* Premium-source honesty badge */}
+              {btResult.premium_source_breakdown && (() => {
+                const ps = btResult.premium_source_breakdown;
+                const real     = ps.real_pct ?? 0;
+                const synth    = ps.synthetic_pct ?? 0;
+                const settled  = ps.intrinsic_settlement_pct ?? 0;
+                const isReal   = ps.primary_source === "bhavcopy" && real >= 50;
+                const tone = isReal
+                  ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                  : "bg-amber-50 border-amber-200 text-amber-800";
+                const dot = isReal ? "bg-emerald-500" : "bg-amber-500";
+                return (
+                  <div className={`flex flex-wrap items-center gap-3 rounded-xl border px-4 py-2 text-xs ${tone}`}
+                       title={ps.note}>
+                    <span className={`inline-block w-2 h-2 rounded-full ${dot}`} />
+                    <span className="font-semibold">Premium source</span>
+                    <span>
+                      <b>{real.toFixed(1)}%</b> real (NSE/BSE bhavcopy)
+                      {" · "}
+                      <b>{synth.toFixed(1)}%</b> synthetic (Black–Scholes)
+                      {" · "}
+                      <b>{settled.toFixed(1)}%</b> intrinsic settlement
+                    </span>
+                    <span className="text-[11px] opacity-70">
+                      {ps.bhavcopy_fills} real / {ps.synthetic_bs_fills} synthetic
+                      {" / "}{ps.intrinsic_settlement_fills} settled (of {ps.total_fills} fills)
+                    </span>
+                  </div>
+                );
+              })()}
+
               {/* Metrics */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {[
