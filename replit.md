@@ -78,6 +78,7 @@ cd artifacts/admin-dashboard && PORT=22133 BASE_PATH=/admin pnpm dev
 - **`sebi_audit.py`** runs IN-PROCESS via `run_audit_async()` — NEVER call it as a subprocess
 - **NEVER add `"pandas_ta"` to SKIP_DIRS** in `push-github.ts`
 - Every bug must have a ticket before code changes.
+- **Council consensus screener cache** (`market_cache/agents_screener.db`) refreshes on the **next request after 16:00 IST** on any trading day (NSE close 15:30 + 30 min EOD-data grace); weekends roll back to Friday's close — never a flat 24-hour TTL.
 
 ## Gotchas
 
