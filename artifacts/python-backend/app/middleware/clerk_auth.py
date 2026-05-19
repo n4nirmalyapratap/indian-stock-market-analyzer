@@ -25,8 +25,19 @@ def _check_admin_token(token: str) -> bool:
         return False
 
 
-class ClerkAuthMiddleware(BaseHTTPMiddleware):
-    SKIP_PATHS = {"/api/healthz"}
+class AppAuthMiddleware(BaseHTTPMiddleware):
+    # Public, but each is responsible for its own authorization:
+    #   /api/healthz                — health probe
+    #   /api/telegram/webhook       — verifies X-Telegram-Bot-Api-Secret-Token
+    #   /api/whatsapp/twilio        — verifies X-Twilio-Signature
+    # These webhooks cannot send a Bearer token (Telegram/Twilio originate
+    # them), so the middleware must let them through and the handler verifies
+    # the per-provider signature instead.
+    SKIP_PATHS = {
+        "/api/healthz",
+        "/api/telegram/webhook",
+        "/api/whatsapp/twilio",
+    }
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -71,9 +82,15 @@ class ClerkAuthMiddleware(BaseHTTPMiddleware):
         custom_payload = _verify_custom_token(token)
         if custom_payload:
             request.state.user_id = custom_payload.get("sub", "custom")
+            request.state.user_email = custom_payload.get("email")
+            request.state.is_admin = bool(custom_payload.get("is_admin"))
             return await call_next(request)
 
         return JSONResponse(
             status_code=401,
             content={"error": "Invalid or expired session. Please sign in again."},
         )
+
+
+# Backward-compatible export to avoid touching every import/test at once.
+ClerkAuthMiddleware = AppAuthMiddleware

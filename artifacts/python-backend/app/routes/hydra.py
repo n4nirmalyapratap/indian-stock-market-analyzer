@@ -111,7 +111,10 @@ class TextScoreRequest(BaseModel):
 
 
 class DataUpdateRequest(BaseModel):
-    symbols: list[str] = Field(..., min_length=1)
+    # Cap at 50 symbols per request to prevent fan-out DoS on Yahoo via
+    # /api/hydra/data/update (the bulk_update path runs them in parallel).
+    # Larger refreshes should be batched by the caller.
+    symbols: list[str] = Field(..., min_length=1, max_length=50)
 
     @field_validator("symbols")
     @classmethod

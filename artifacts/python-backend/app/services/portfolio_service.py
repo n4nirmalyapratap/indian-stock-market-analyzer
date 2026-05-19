@@ -1,21 +1,26 @@
 """
-Portfolio Manager Service — SQLite-backed CRUD + live valuation.
+Portfolio Manager Service — Postgres-backed CRUD + live valuation.
 
-Stores per-user portfolios and holdings.  Supports importing Zerodha Console
+Stores per-user portfolios and holdings. Supports importing Zerodha Console
 and Upstox tradebook CSVs (no broker key required at this stage).
 
 Live valuation, day P&L, total P&L, sector / market-cap allocations and
 concentration warnings are computed from our existing PriceService cache so we
 never re-fetch quotes that the dashboard already has.
 
-Tables:
-  portfolios   (id, user_id, name, base_currency, cash, created_at, updated_at)
-  transactions (id, portfolio_id, symbol, side BUY|SELL|DIVIDEND,
-                qty, price, fees, traded_at, source)
+Tables (managed by app.lib.auth_store.ensure_primary_schema):
+  portfolios               (id, user_id, name, base_currency, cash, created_at, updated_at)
+  portfolio_transactions   (id, portfolio_id, symbol, side BUY|SELL|DIVIDEND,
+                            qty, price, fees, traded_at, source, note, inserted_at)
 
-Holdings are *derived* from the transactions table (FIFO net qty + weighted
-avg cost) — that way every dividend / sell / buy tweaks the position in one
-place and the books always reconcile to the trade history.
+Holdings are *derived* from the transactions table (weighted-avg cost) — that
+way every dividend / sell / buy tweaks the position in one place and the books
+always reconcile to the trade history.
+
+Migration note: this used to be a local SQLite file
+(``artifacts/python-backend/market_cache/portfolio.db``). The schema lives in
+the central PG bootstrap now so multi-instance deployments don't corrupt the
+SQLite write log.
 """
 from __future__ import annotations
 
@@ -23,79 +28,33 @@ import asyncio
 import csv
 import io
 import logging
-import os
-import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from psycopg.rows import dict_row
+
+from app.lib.auth_store import ensure_primary_schema, get_conn
+
 logger = logging.getLogger(__name__)
 
-# ── Storage location ─────────────────────────────────────────────────────────
 
-_CACHE_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "..", "market_cache",
-)
-os.makedirs(_CACHE_DIR, exist_ok=True)
-DB_PATH = os.path.join(_CACHE_DIR, "portfolio.db")
-
-_WRITE_LOCK: asyncio.Lock | None = None
-
-
-def _lock() -> asyncio.Lock:
-    global _WRITE_LOCK
-    if _WRITE_LOCK is None:
-        _WRITE_LOCK = asyncio.Lock()
-    return _WRITE_LOCK
-
-
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.execute("PRAGMA foreign_keys=ON")
+def _connect():
+    """Open a Postgres connection with dict-row results, matching the previous
+    SQLite ``conn.row_factory = sqlite3.Row`` access pattern (``row["col"]``).
+    """
+    conn = get_conn()
+    # auth_store.get_conn already configures dict_row, but we re-set here as a
+    # belt-and-braces guard against a future change in get_conn.
+    conn.row_factory = dict_row  # type: ignore[attr-defined]
     return conn
 
 
-def ensure_schema() -> None:
-    conn = _connect()
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS portfolios (
-            id            TEXT PRIMARY KEY,
-            user_id       TEXT NOT NULL,
-            name          TEXT NOT NULL,
-            base_currency TEXT NOT NULL DEFAULT 'INR',
-            cash          REAL NOT NULL DEFAULT 0,
-            created_at    INTEGER NOT NULL,
-            updated_at    INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_portfolios_user ON portfolios(user_id);
-
-        CREATE TABLE IF NOT EXISTS transactions (
-            id           TEXT PRIMARY KEY,
-            portfolio_id TEXT NOT NULL,
-            symbol       TEXT NOT NULL,
-            side         TEXT NOT NULL CHECK (side IN ('BUY','SELL','DIVIDEND')),
-            qty          REAL NOT NULL,
-            price        REAL NOT NULL,
-            fees         REAL NOT NULL DEFAULT 0,
-            traded_at    TEXT NOT NULL,
-            source       TEXT NOT NULL DEFAULT 'manual',
-            note         TEXT,
-            FOREIGN KEY (portfolio_id) REFERENCES portfolios(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_tx_portfolio ON transactions(portfolio_id);
-        CREATE INDEX IF NOT EXISTS idx_tx_symbol    ON transactions(portfolio_id, symbol);
-        """
-    )
-    conn.commit()
-    conn.close()
-
-
-ensure_schema()
+# Schema is owned by auth_store.ensure_primary_schema(); call it once at
+# import so a hot-restart can serve immediately without waiting for the
+# lifespan to fire.
+ensure_primary_schema()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -108,7 +67,7 @@ def _iso(ts: int | None = None) -> str:
     return datetime.fromtimestamp((ts or _now_ms()) / 1000, tz=timezone.utc).isoformat()
 
 
-def _row_to_portfolio(row: sqlite3.Row) -> dict:
+def _row_to_portfolio(row: dict) -> dict:
     return {
         "id":            row["id"],
         "userId":        row["user_id"],
@@ -120,7 +79,7 @@ def _row_to_portfolio(row: sqlite3.Row) -> dict:
     }
 
 
-def _row_to_tx(row: sqlite3.Row) -> dict:
+def _row_to_tx(row: dict) -> dict:
     return {
         "id":          row["id"],
         "portfolioId": row["portfolio_id"],
@@ -147,22 +106,24 @@ def _norm_symbol(sym: str) -> str:
 # ── Portfolio CRUD ───────────────────────────────────────────────────────────
 
 def list_portfolios(user_id: str) -> list[dict]:
-    conn = _connect()
-    rows = conn.execute(
-        "SELECT * FROM portfolios WHERE user_id=? ORDER BY created_at ASC",
-        (user_id,),
-    ).fetchall()
-    conn.close()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM portfolios WHERE user_id=%s ORDER BY created_at ASC",
+                (user_id,),
+            )
+            rows = cur.fetchall()
     return [_row_to_portfolio(r) for r in rows]
 
 
 def get_portfolio(user_id: str, portfolio_id: str) -> Optional[dict]:
-    conn = _connect()
-    row = conn.execute(
-        "SELECT * FROM portfolios WHERE id=? AND user_id=?",
-        (portfolio_id, user_id),
-    ).fetchone()
-    conn.close()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM portfolios WHERE id=%s AND user_id=%s",
+                (portfolio_id, user_id),
+            )
+            row = cur.fetchone()
     return _row_to_portfolio(row) if row else None
 
 
@@ -170,15 +131,15 @@ def create_portfolio(user_id: str, name: str, cash: float = 0.0,
                      base_currency: str = "INR") -> dict:
     pid = str(uuid.uuid4())
     now = _now_ms()
-    conn = _connect()
-    conn.execute(
-        "INSERT INTO portfolios(id,user_id,name,base_currency,cash,created_at,updated_at) "
-        "VALUES(?,?,?,?,?,?,?)",
-        (pid, user_id, (name or "My Portfolio").strip()[:80],
-         (base_currency or "INR").upper()[:8], float(cash or 0), now, now),
-    )
-    conn.commit()
-    conn.close()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO portfolios(id,user_id,name,base_currency,cash,created_at,updated_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s)",
+                (pid, user_id, (name or "My Portfolio").strip()[:80],
+                 (base_currency or "INR").upper()[:8], float(cash or 0), now, now),
+            )
+        conn.commit()
     return get_portfolio(user_id, pid)  # type: ignore[return-value]
 
 
@@ -190,35 +151,35 @@ def update_portfolio(user_id: str, portfolio_id: str,
         return None
     fields, values = [], []
     if name is not None:
-        fields.append("name=?")
+        fields.append("name=%s")
         values.append(name.strip()[:80])
     if cash is not None:
-        fields.append("cash=?")
+        fields.append("cash=%s")
         values.append(float(cash))
     if not fields:
         return p
-    fields.append("updated_at=?")
+    fields.append("updated_at=%s")
     values.append(_now_ms())
     values.extend([portfolio_id, user_id])
-    conn = _connect()
-    conn.execute(
-        f"UPDATE portfolios SET {', '.join(fields)} WHERE id=? AND user_id=?",
-        tuple(values),
-    )
-    conn.commit()
-    conn.close()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE portfolios SET {', '.join(fields)} WHERE id=%s AND user_id=%s",
+                tuple(values),
+            )
+        conn.commit()
     return get_portfolio(user_id, portfolio_id)
 
 
 def delete_portfolio(user_id: str, portfolio_id: str) -> bool:
-    conn = _connect()
-    cur = conn.execute(
-        "DELETE FROM portfolios WHERE id=? AND user_id=?",
-        (portfolio_id, user_id),
-    )
-    conn.commit()
-    deleted = cur.rowcount > 0
-    conn.close()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM portfolios WHERE id=%s AND user_id=%s",
+                (portfolio_id, user_id),
+            )
+            deleted = cur.rowcount > 0
+        conn.commit()
     return deleted
 
 
@@ -228,19 +189,23 @@ def list_transactions(user_id: str, portfolio_id: str,
                       symbol: Optional[str] = None) -> list[dict]:
     if not get_portfolio(user_id, portfolio_id):
         return []
-    conn = _connect()
-    if symbol:
-        rows = conn.execute(
-            "SELECT * FROM transactions WHERE portfolio_id=? AND symbol=? "
-            "ORDER BY traded_at DESC",
-            (portfolio_id, _norm_symbol(symbol)),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM transactions WHERE portfolio_id=? ORDER BY traded_at DESC",
-            (portfolio_id,),
-        ).fetchall()
-    conn.close()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            if symbol:
+                cur.execute(
+                    "SELECT * FROM portfolio_transactions "
+                    "WHERE portfolio_id=%s AND symbol=%s "
+                    "ORDER BY traded_at DESC, inserted_at DESC",
+                    (portfolio_id, _norm_symbol(symbol)),
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM portfolio_transactions "
+                    "WHERE portfolio_id=%s "
+                    "ORDER BY traded_at DESC, inserted_at DESC",
+                    (portfolio_id,),
+                )
+            rows = cur.fetchall()
     return [_row_to_tx(r) for r in rows]
 
 
@@ -263,57 +228,74 @@ def add_transaction(user_id: str, portfolio_id: str, *,
 
     tx_id = str(uuid.uuid4())
     iso = (traded_at or _iso())[:32]
-    conn = _connect()
-    conn.execute(
-        "INSERT INTO transactions(id,portfolio_id,symbol,side,qty,price,fees,"
-        "traded_at,source,note) VALUES(?,?,?,?,?,?,?,?,?,?)",
-        (tx_id, portfolio_id, _norm_symbol(symbol), side_u, qty_f, price_f,
-         float(fees or 0), iso, source[:32], note),
-    )
-    # SELL / BUY moves cash; DIVIDEND adds cash
+    now = _now_ms()
+    # Cash bookkeeping: SELL / BUY moves cash; DIVIDEND adds cash
     if side_u == "BUY":
         cash_delta = -(qty_f * price_f + (fees or 0))
     elif side_u == "SELL":
         cash_delta = +(qty_f * price_f - (fees or 0))
     else:  # DIVIDEND
         cash_delta = +(qty_f * price_f)
-    conn.execute(
-        "UPDATE portfolios SET cash = cash + ?, updated_at = ? WHERE id=?",
-        (cash_delta, _now_ms(), portfolio_id),
-    )
-    conn.commit()
-    row = conn.execute("SELECT * FROM transactions WHERE id=?", (tx_id,)).fetchone()
-    conn.close()
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO portfolio_transactions"
+                "(id,portfolio_id,symbol,side,qty,price,fees,"
+                " traded_at,source,note,inserted_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (tx_id, portfolio_id, _norm_symbol(symbol), side_u,
+                 qty_f, price_f, float(fees or 0), iso, source[:32], note, now),
+            )
+            cur.execute(
+                "UPDATE portfolios SET cash = cash + %s, updated_at = %s "
+                "WHERE id=%s",
+                (cash_delta, now, portfolio_id),
+            )
+            cur.execute(
+                "SELECT * FROM portfolio_transactions WHERE id=%s",
+                (tx_id,),
+            )
+            row = cur.fetchone()
+        conn.commit()
     return _row_to_tx(row)
 
 
 def delete_transaction(user_id: str, portfolio_id: str, tx_id: str) -> bool:
     if not get_portfolio(user_id, portfolio_id):
         return False
-    conn = _connect()
-    row = conn.execute(
-        "SELECT * FROM transactions WHERE id=? AND portfolio_id=?",
-        (tx_id, portfolio_id),
-    ).fetchone()
-    if not row:
-        conn.close()
-        return False
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM portfolio_transactions "
+                "WHERE id=%s AND portfolio_id=%s",
+                (tx_id, portfolio_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
 
-    side, qty, price, fees = row["side"], float(row["qty"]), float(row["price"]), float(row["fees"] or 0)
-    if side == "BUY":
-        cash_delta = +(qty * price + fees)
-    elif side == "SELL":
-        cash_delta = -(qty * price - fees)
-    else:
-        cash_delta = -(qty * price)
+            side = row["side"]
+            qty = float(row["qty"])
+            price = float(row["price"])
+            fees = float(row["fees"] or 0)
+            if side == "BUY":
+                cash_delta = +(qty * price + fees)
+            elif side == "SELL":
+                cash_delta = -(qty * price - fees)
+            else:
+                cash_delta = -(qty * price)
 
-    conn.execute("DELETE FROM transactions WHERE id=?", (tx_id,))
-    conn.execute(
-        "UPDATE portfolios SET cash = cash + ?, updated_at = ? WHERE id=?",
-        (cash_delta, _now_ms(), portfolio_id),
-    )
-    conn.commit()
-    conn.close()
+            cur.execute(
+                "DELETE FROM portfolio_transactions WHERE id=%s",
+                (tx_id,),
+            )
+            cur.execute(
+                "UPDATE portfolios SET cash = cash + %s, updated_at = %s "
+                "WHERE id=%s",
+                (cash_delta, _now_ms(), portfolio_id),
+            )
+        conn.commit()
     return True
 
 
@@ -332,12 +314,14 @@ def derive_holdings(portfolio_id: str) -> list[dict]:
     This is the standard Indian retail-tax book-keeping convention (FIFO is
     only enforced at tax-filing time; for live P&L we use weighted-avg cost).
     """
-    conn = _connect()
-    rows = conn.execute(
-        "SELECT * FROM transactions WHERE portfolio_id=? ORDER BY traded_at ASC, rowid ASC",
-        (portfolio_id,),
-    ).fetchall()
-    conn.close()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM portfolio_transactions WHERE portfolio_id=%s "
+                "ORDER BY traded_at ASC, inserted_at ASC",
+                (portfolio_id,),
+            )
+            rows = cur.fetchall()
 
     book: dict[str, dict] = {}
     for r in rows:
@@ -786,6 +770,7 @@ def import_transactions(user_id: str, portfolio_id: str, csv_text: str) -> dict:
 
     # Pre-validate + normalise every row first; if any row fails we abort
     # before touching the DB so import is genuinely all-or-nothing.
+    now = _now_ms()
     prepared: list[tuple] = []
     cash_delta_total = 0.0
     for tx in parsed["transactions"]:
@@ -804,7 +789,7 @@ def import_transactions(user_id: str, portfolio_id: str, csv_text: str) -> dict:
             iso = (tx.get("tradedAt") or _iso())[:32]
             source = (tx.get("source") or "csv")[:32]
             prepared.append((str(uuid.uuid4()), portfolio_id, sym, side_u,
-                             qty_f, price_f, fees_f, iso, source, None))
+                             qty_f, price_f, fees_f, iso, source, None, now))
             if side_u == "BUY":
                 cash_delta_total -= qty_f * price_f + fees_f
             elif side_u == "SELL":
@@ -816,25 +801,28 @@ def import_transactions(user_id: str, portfolio_id: str, csv_text: str) -> dict:
 
     inserted = 0
     if prepared:
-        conn = _connect()
+        # psycopg's connection context manager opens an implicit transaction
+        # on first execute and commits on exit / rolls back on exception, so
+        # we don't need explicit BEGIN/commit/rollback here.
         try:
-            conn.execute("BEGIN")
-            conn.executemany(
-                "INSERT INTO transactions(id,portfolio_id,symbol,side,qty,"
-                "price,fees,traded_at,source,note) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                prepared,
-            )
-            conn.execute(
-                "UPDATE portfolios SET cash = cash + ?, updated_at = ? WHERE id=?",
-                (cash_delta_total, _now_ms(), portfolio_id),
-            )
-            conn.commit()
-            inserted = len(prepared)
+            with _connect() as conn:
+                with conn.cursor() as cur:
+                    cur.executemany(
+                        "INSERT INTO portfolio_transactions"
+                        "(id,portfolio_id,symbol,side,qty,price,fees,"
+                        " traded_at,source,note,inserted_at) "
+                        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        prepared,
+                    )
+                    cur.execute(
+                        "UPDATE portfolios SET cash = cash + %s, "
+                        "updated_at = %s WHERE id=%s",
+                        (cash_delta_total, now, portfolio_id),
+                    )
+                conn.commit()
+                inserted = len(prepared)
         except Exception as exc:
-            conn.rollback()
             parsed["errors"].append(f"import rolled back: {exc}")
-        finally:
-            conn.close()
 
     return {
         "format":          parsed["format"],

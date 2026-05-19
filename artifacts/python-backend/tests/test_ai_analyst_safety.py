@@ -19,9 +19,10 @@ future edits:
 """
 from __future__ import annotations
 
+import os
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 
 import pytest
 
@@ -32,15 +33,44 @@ from app.services import ai_analyst_service as ai
 
 
 @pytest.fixture
-def isolated_db(tmp_path, monkeypatch):
-    """Point the service at a fresh SQLite DB for the duration of one test."""
-    db_file = tmp_path / "ai_analyst_test.db"
-    monkeypatch.setattr(ai, "_CACHE_DIR", tmp_path)
-    monkeypatch.setattr(ai, "_DB_FILE", db_file)
-    # Use a fresh lock so a hung test cannot interfere with later tests.
-    monkeypatch.setattr(ai, "_DB_LOCK", threading.Lock())
-    ai._ensure_schema()
-    return db_file
+def isolated_db():
+    """Provide a per-test user-id namespace inside the shared Postgres.
+
+    The service now writes to Postgres tables managed centrally by
+    app.lib.auth_store.ensure_primary_schema(). We can't (cheaply) give
+    each test a brand-new database, but every row written by the saved
+    store and quota table is keyed on ``user_id`` — so generating a fresh
+    random ``user_id`` per test and cleaning up its rows at teardown is
+    enough to keep tests independent.
+
+    Tests requiring this fixture are skipped if ``DATABASE_URL`` is unset
+    (e.g. CI without a Postgres service) — the surrounding code paths
+    can still be unit-tested without DB access.
+    """
+    if not os.environ.get("DATABASE_URL"):
+        pytest.skip("DATABASE_URL not set; skipping Postgres-backed test.")
+
+    # Make sure schema exists.
+    from app.lib.auth_store import ensure_primary_schema, get_conn
+    ensure_primary_schema()
+
+    # Yield a unique prefix so tests can build user-ids like
+    # f"{prefix}-userA" or pass the prefix directly as the user-id.
+    prefix = f"test-{uuid.uuid4().hex}"
+    yield prefix
+
+    # Teardown: scrub anything written under this prefix.
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM ai_analyst_saved WHERE user_id LIKE %s",
+                (f"{prefix}%",),
+            )
+            cur.execute(
+                "DELETE FROM ai_analyst_quota WHERE user_id LIKE %s",
+                (f"{prefix}%",),
+            )
+        conn.commit()
 
 
 # ── 1. SEBI compliance scrub ─────────────────────────────────────────────────
@@ -220,7 +250,7 @@ def test_scrub_report_preserves_innocuous_text():
 def test_try_reserve_quota_is_atomic_under_concurrency(isolated_db):
     """N threads racing to reserve a slot for the same user with limit=3
     should yield exactly 3 successes — never 4, never 2."""
-    user = "race-user"
+    user = f"{isolated_db}-race-user"
     n_workers = 20
     limit = 3
 
@@ -257,22 +287,24 @@ def test_try_reserve_quota_is_atomic_under_concurrency(isolated_db):
 def test_get_cached_report_is_per_user(isolated_db):
     """A report saved for user A must not be served to user B."""
     ticker = "RELIANCE"
+    user_a = f"{isolated_db}-userA"
+    user_b = f"{isolated_db}-userB"
     report_a = {
         "ticker": ticker, "verdict": "BUY", "headline": "User A's report",
     }
     ai._save_report(
-        ticker=ticker, user_id="userA", report=report_a,
+        ticker=ticker, user_id=user_a, report=report_a,
         models=["m"], sources=["s"], wall_clock_ms=100,
     )
 
-    # User A sees their cached report.
-    got_a = ai.get_cached_report(ticker, "userA")
+    # User A sees their saved report.
+    got_a = ai.get_cached_report(ticker, user_a)
     assert got_a is not None
     assert got_a["headline"] == "User A's report"
     assert got_a["cached"] is True
 
-    # User B sees nothing for the same ticker on the same IST day.
-    got_b = ai.get_cached_report(ticker, "userB")
+    # User B sees nothing for the same ticker.
+    got_b = ai.get_cached_report(ticker, user_b)
     assert got_b is None
 
     # User B saving their own report does not overwrite user A's row.
@@ -280,10 +312,10 @@ def test_get_cached_report_is_per_user(isolated_db):
         "ticker": ticker, "verdict": "SELL", "headline": "User B's report",
     }
     ai._save_report(
-        ticker=ticker, user_id="userB", report=report_b,
+        ticker=ticker, user_id=user_b, report=report_b,
         models=["m"], sources=["s"], wall_clock_ms=100,
     )
-    again_a = ai.get_cached_report(ticker, "userA")
-    again_b = ai.get_cached_report(ticker, "userB")
+    again_a = ai.get_cached_report(ticker, user_a)
+    again_b = ai.get_cached_report(ticker, user_b)
     assert again_a is not None and again_a["headline"] == "User A's report"
     assert again_b is not None and again_b["headline"] == "User B's report"

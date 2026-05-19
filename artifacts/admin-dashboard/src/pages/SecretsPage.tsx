@@ -148,7 +148,12 @@ function SecretCard({ row, onRefresh }: { row: SecretRow; onRefresh: () => void 
             )}
             {row.source !== "unset" && row.value !== "" && (
               <p className="text-xs font-mono text-gray-400 mt-1">
-                Current: <span className="text-gray-600">{row.value}</span>
+                Current: <span className="text-gray-600">
+                  {/* When the value is flagged as masked, never render it
+                      as plaintext on the listing row. The full value is
+                      only revealed inside the edit panel below. */}
+                  {row.masked ? "••••••••" : row.value}
+                </span>
                 {row.updated_at && (
                   <span className="ml-2 text-gray-300">
                     · updated {new Date(row.updated_at * 1000).toLocaleDateString("en-IN", { day:"numeric", month:"short", year:"numeric" })}

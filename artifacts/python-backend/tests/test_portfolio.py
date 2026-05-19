@@ -1,9 +1,22 @@
-"""End-to-end tests for the Portfolio Manager (`/api/portfolio/*`)."""
+"""End-to-end tests for the Portfolio Manager (`/api/portfolio/*`).
+
+These hit the FastAPI app end-to-end and rely on the Postgres-backed
+portfolio_service. Skipped when ``DATABASE_URL`` is unset (e.g. CI without
+a Postgres service) — set it to a disposable local instance to run them.
+"""
 from __future__ import annotations
 
 import os
 import pytest
 from fastapi.testclient import TestClient
+
+# Skip the whole module if no Postgres is reachable. portfolio_service
+# now writes to PG and ``ensure_primary_schema()`` runs at import time;
+# without DATABASE_URL the import itself blows up.
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("DATABASE_URL"),
+    reason="DATABASE_URL not set; skipping Postgres-backed portfolio tests.",
+)
 
 
 @pytest.fixture(scope="module")

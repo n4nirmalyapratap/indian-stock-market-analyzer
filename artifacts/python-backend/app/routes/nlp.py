@@ -1,9 +1,12 @@
 """
 NLP query endpoint — accepts plain-English questions and routes to appropriate services.
 """
+import logging
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from ..services.nlp_service import NlpService
 from ..services.stocks_service import StocksService
@@ -36,10 +39,11 @@ async def nlp_query(body: dict[str, Any]):
     # Guard NLP parsing — OSError if spaCy model missing, etc.
     try:
         parsed = _nlp.parse(text)
-    except Exception as exc:
+    except Exception:
+        logger.exception("NLP parse failed for query")
         return JSONResponse(
             status_code=500,
-            content={"error": f"NLP parsing failed: {exc}. Please try again later."},
+            content={"error": "NLP parsing failed. Please try again later."},
         )
 
     intent = parsed["intent"]
@@ -149,7 +153,8 @@ async def nlp_query(body: dict[str, Any]):
         else:
             result["data"] = {"message": f"Query understood as '{intent}'. No specific data found."}
 
-    except Exception as e:
-        result["error"] = f"Error processing query: {e}"
+    except Exception:
+        logger.exception("NLP query handler failed for intent=%s", intent)
+        result["error"] = "Error processing query."
 
     return result
