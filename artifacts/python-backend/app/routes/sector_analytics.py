@@ -11,13 +11,15 @@ from ..services.sector_analytics_service import SectorAnalyticsService
 from ..services.sectors_service import SectorsService
 from ..services.nse_service import NseService
 from ..services.yahoo_service import YahooService
+from ..services.price_service import PriceService
 
 router = APIRouter(prefix="/sector-analytics", tags=["sector-analytics"])
 
 _nse     = NseService()
 _yahoo   = YahooService()
+_price   = PriceService(_nse, _yahoo)
 _sectors = SectorsService(_nse, _yahoo)
-_svc     = SectorAnalyticsService(_yahoo)
+_svc     = SectorAnalyticsService(_yahoo, price=_price)
 
 
 @router.get("/heatmap")

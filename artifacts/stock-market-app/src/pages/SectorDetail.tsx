@@ -12,6 +12,8 @@ import {
 import { api, SectorDetailData, ConstituentStock } from "@/lib/api";
 import { useTheme } from "@/context/ThemeContext";
 import ChartButton from "@/components/ChartButton";
+import DataFreshness from "@/components/DataFreshness";
+import { marketDataQueryOptions, pickMeta } from "@/lib/marketData";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -162,6 +164,11 @@ function OverviewTab({
             <p className="text-xs mt-0.5" style={{ color: isDark ? "#94a3b8" : "#6b7280" }}>
               Above 100 = outperforming · Below 100 = underperforming
             </p>
+            {data.historySynthetic && (
+              <p className="text-[11px] mt-1" style={{ color: isDark ? "#fbbf24" : "#b45309" }}>
+                ⓘ Sector index history unavailable — reconstructed from equal-weighted constituents (approximate).
+              </p>
+            )}
           </div>
           <div className="flex gap-1">
             {(["3mo","6mo","1y","5y"] as const).map(p => (
@@ -293,26 +300,27 @@ function ValuationTab({ data, isDark }: { data: SectorDetailData; isDark: boolea
   const v = data.valuation;
   const hdrTxt = isDark ? "#f1f5f9" : "#111827";
 
+  const wAvg = mode === "cap" ? "market-cap-weighted average" : "equal-weighted average";
   const metrics = [
     {
       key: "pe", label: "P/E Ratio",
       val: mode === "cap" ? v?.pe : v?.pe_equal,
-      tip: "Price-to-Earnings: Sum of Market Caps / Sum of Net Earnings. High P/E suggests high growth expectations but is less reliable when earnings are negative.",
+      tip: `Price-to-Earnings: ${wAvg} of each constituent's P/E ratio (constituents with negative or missing earnings are excluded). High P/E suggests high growth expectations.`,
     },
     {
       key: "pb", label: "P/B Ratio",
       val: mode === "cap" ? v?.pb : v?.pb_equal,
-      tip: "Price-to-Book: Sum of Market Caps / Sum of Book Values. Most useful for asset-heavy sectors (Financials, Industrials). Below 1 may indicate undervaluation.",
+      tip: `Price-to-Book: ${wAvg} of each constituent's P/B ratio. Most useful for asset-heavy sectors (Financials, Industrials). Below 1 may indicate undervaluation.`,
     },
     {
       key: "ps", label: "P/S Ratio",
       val: mode === "cap" ? v?.ps : v?.ps_equal,
-      tip: "Price-to-Sales: Sum of Market Caps / Sum of Total Revenues. Key metric for sectors with unprofitable companies (e.g. early-stage tech).",
+      tip: `Price-to-Sales: ${wAvg} of each constituent's P/S ratio. Key metric for sectors with unprofitable companies (e.g. early-stage tech).`,
     },
     {
       key: "evEbitda", label: "EV/EBITDA",
       val: mode === "cap" ? v?.evEbitda : v?.evEbitda_equal,
-      tip: "Enterprise Value / EBITDA. Capital-structure-neutral metric useful for comparing sectors with different debt levels.",
+      tip: `Enterprise Value / EBITDA — ${wAvg} across constituents. Capital-structure-neutral metric useful for comparing sectors with different debt levels.`,
     },
   ];
 
@@ -418,7 +426,7 @@ function ProfitabilityTab({ data, isDark }: { data: SectorDetailData; isDark: bo
         <div className="rounded-xl border p-4" style={{ background: isDark ? "#1e293b" : "#f8fafc", borderColor: isDark ? "#334155" : "#e2e8f0" }}>
           <div className="flex items-center gap-1 text-xs mb-1" style={{ color: muTxt }}>
             Aggregate Net Profit Margin
-            <InfoTip text="Sum of Net Incomes / Sum of Revenues. Declining margins signal rising competition or costs." />
+            <InfoTip text="Market-cap-weighted average of each constituent's net profit margin (Net Income ÷ Revenue). Declining margins signal rising competition or costs." />
           </div>
           <div className="text-3xl font-bold" style={{ color: hdrTxt }}>
             {p?.netMargin != null ? p.netMargin.toFixed(1) + "%" : "—"}
@@ -430,7 +438,7 @@ function ProfitabilityTab({ data, isDark }: { data: SectorDetailData; isDark: bo
         <div className="rounded-xl border p-4" style={{ background: isDark ? "#1e293b" : "#f8fafc", borderColor: isDark ? "#334155" : "#e2e8f0" }}>
           <div className="flex items-center gap-1 text-xs mb-1" style={{ color: muTxt }}>
             Aggregate ROE
-            <InfoTip text="Return on Equity: Sum of Net Incomes / Sum of Shareholder Equity. High ROE indicates efficiency — cross-check D/E to ensure it's not just from high leverage." />
+            <InfoTip text="Market-cap-weighted average of each constituent's Return on Equity. High ROE indicates efficiency — cross-check D/E to ensure it's not just from high leverage." />
           </div>
           <div className="text-3xl font-bold" style={{ color: hdrTxt }}>
             {p?.roe != null ? p.roe.toFixed(1) + "%" : "—"}
@@ -478,8 +486,8 @@ function FinancialHealthTab({ data, isDark }: { data: SectorDetailData; isDark: 
     .sort((a, b) => b.de - a.de) ?? [];
 
   // For banking sectors: show ROA per constituent
-  const roaData = data.constituents?.filter(c => (c as any).roa != null)
-    .map(c => ({ name: c.symbol.replace(".NS", ""), roa: +((c as any).roa * 100).toFixed(2) }))
+  const roaData = data.constituents?.filter(c => c.roa != null)
+    .map(c => ({ name: c.symbol.replace(".NS", ""), roa: +(c.roa! * 100).toFixed(2) }))
     .sort((a, b) => b.roa - a.roa) ?? [];
 
   const isBanking = h?.isBanking ?? false;
@@ -562,7 +570,7 @@ function FinancialHealthTab({ data, isDark }: { data: SectorDetailData; isDark: 
       <div className="rounded-xl border p-5" style={{ background: cardBg, borderColor: borderC }}>
         <div className="flex items-center gap-1 text-xs mb-1" style={{ color: muTxt }}>
           Aggregate Debt-to-Equity Ratio
-          <InfoTip text="Sum of Total Debts / Sum of Shareholder Equity. What's 'high' depends on the sector — Financials normally run high D/E. A sharp upward trend is a red flag." />
+          <InfoTip text="Average D/E ratio across constituents (Total Debt ÷ Shareholder Equity). What's 'high' depends on the sector — Financials normally run high D/E. A sharp upward trend is a red flag." />
         </div>
         <div className="text-4xl font-bold" style={{ color: hdrTxt }}>
           {h?.debtToEquity != null ? h.debtToEquity.toFixed(2) + "×" : "—"}
@@ -702,10 +710,12 @@ export default function SectorDetail() {
   const [period, setPeriod] = useState<"3mo" | "6mo" | "1y" | "5y">("1y");
 
   const { data, isLoading, error } = useQuery({
-    queryKey:  ["sectorDetail", sectorId, period],
-    queryFn:   () => api.sectorDetail(sectorId ?? "", period),
-    staleTime: 15 * 60 * 1000,
-    enabled:   !!sectorId,
+    ...marketDataQueryOptions(
+      ["sectorDetail", sectorId, period],
+      () => api.sectorDetail(sectorId ?? "", period),
+      { staleTime: 15 * 60 * 1000, refetchInterval: false },
+    ),
+    enabled: !!sectorId,
   });
 
   const hdrTxt = isDark ? "#f1f5f9" : "#111827";
@@ -765,6 +775,17 @@ export default function SectorDetail() {
                 </div>
                 <div className="text-xs" style={{ color: muTxt }}>Approx. Market Cap</div>
               </div>
+            </div>
+            <div className="mt-3">
+              <DataFreshness
+                meta={
+                  pickMeta(data) ??
+                  (data?.asOf
+                    ? { source: data.source ?? "NSE", asOf: data.asOf, marketState: data.marketState }
+                    : null)
+                }
+                refreshKeys={["sectorDetail", sectorId, period]}
+              />
             </div>
           </div>
 

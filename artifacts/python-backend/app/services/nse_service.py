@@ -1,10 +1,16 @@
 import asyncio
+import logging
 import time
 from typing import Any, Optional
 import httpx
 
+logger = logging.getLogger(__name__)
+
+from . import market_cache_service as _mcs
+
 MAX_ENTRIES = 200
 _CACHE: dict[str, dict] = {}
+_CACHE_VERSION = 0   # tracks the market-state version of the entries above
 
 _cookies = ""
 _cookie_expiry = 0.0
@@ -25,7 +31,17 @@ HEADERS_API = {
 }
 
 
+def _flush_if_state_changed() -> None:
+    """Drop in-memory cache entries when market state has just transitioned."""
+    global _CACHE_VERSION, _CACHE
+    v = _mcs.cache_version()
+    if v != _CACHE_VERSION:
+        _CACHE.clear()
+        _CACHE_VERSION = v
+
+
 def _get_cache(key: str) -> Optional[Any]:
+    _flush_if_state_changed()
     entry = _CACHE.get(key)
     if entry and time.time() < entry["expiry"]:
         return entry["data"]
@@ -36,6 +52,7 @@ def _get_cache(key: str) -> Optional[Any]:
 
 def _set_cache(key: str, data: Any, ttl: int) -> None:
     global _CACHE
+    _flush_if_state_changed()
     if len(_CACHE) >= MAX_ENTRIES:
         now = time.time()
         expired = [k for k, v in _CACHE.items() if now > v["expiry"]]
@@ -71,8 +88,16 @@ async def _ensure_cookies() -> None:
         await _refresh_cookies()
 
 
+def _ttl_for(default_ttl: int) -> int:
+    """Shorten TTLs when market is open (data changes), keep long when closed."""
+    if _mcs.is_market_open():
+        return min(default_ttl, 60)
+    return default_ttl
+
+
 class NseService:
     async def fetch_nse(self, path: str, cache_key: str, ttl: int = 300, retries: int = 3) -> Optional[Any]:
+        ttl = _ttl_for(ttl)
         cached = _get_cache(cache_key)
         if cached is not None:
             return cached
@@ -133,6 +158,45 @@ class NseService:
             1800,
         )
 
+    async def fetch_nse_archive_text(
+        self,
+        url: str,
+        cache_key: str,
+        ttl: int = 86400,
+        retries: int = 2,
+    ) -> Optional[str]:
+        """Fetch a static-archive resource from nsearchives.nseindia.com (CSV /
+        text endpoints) using the same shared in-process cache and browser
+        headers as the JSON API path. Returns the raw text body on HTTP 200,
+        None otherwise (e.g. weekend/holiday 404s for daily reports).
+
+        Used by callers like fii_dii_service for the participant-OI archive
+        which only exists as a CSV — going through NseService keeps a single
+        place for header/UA/cache discipline."""
+        cached = _get_cache(cache_key)
+        if cached is not None:
+            return cached
+        headers = {
+            "User-Agent": HEADERS_BROWSER["User-Agent"],
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.nseindia.com/all-reports-derivatives",
+        }
+        for attempt in range(retries):
+            try:
+                async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                    resp = await client.get(url, headers=headers)
+                if resp.status_code == 200 and resp.text and len(resp.text) > 50:
+                    _set_cache(cache_key, resp.text, ttl)
+                    return resp.text
+                if resp.status_code in (429,):
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                return None  # 404 / 403 / etc — don't retry, holiday or unavailable
+            except Exception:
+                await asyncio.sleep(1)
+        return None
+
     async def get_historical_data(self, symbol: str, days: int = 90) -> list[dict]:
         """
         Fetch daily OHLCV from NSE India historical API (cookie method).
@@ -161,11 +225,41 @@ class NseService:
         )
 
         await _ensure_cookies()
-        headers = {**HEADERS_API, "Cookie": _cookies}
+        # Path-specific Referer — Akamai's WAF rejects bare-domain Referer for
+        # the historical endpoints. Plus retry-on-503 (transient Akamai
+        # bot-challenge) with one cookie refresh in between.
+        headers = {
+            **HEADERS_API,
+            "Cookie":  _cookies,
+            "Referer": f"https://www.nseindia.com/get-quotes/equity?symbol={symbol}",
+        }
         try:
             async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                # Warm session by hitting the equity quote page first — this
+                # is what the browser does before issuing the XHR.
+                try:
+                    await client.get(
+                        f"https://www.nseindia.com/get-quotes/equity?symbol={symbol}",
+                        headers={**HEADERS_BROWSER, "Cookie": _cookies},
+                    )
+                except Exception:
+                    pass
                 resp = await client.get(f"https://www.nseindia.com{path}", headers=headers)
+                if resp.status_code == 503:
+                    # Akamai bot-challenge — refresh cookies and retry once
+                    global _cookie_expiry
+                    _cookie_expiry = 0
+                    await _ensure_cookies()
+                    headers["Cookie"] = _cookies
+                    resp = await client.get(f"https://www.nseindia.com{path}", headers=headers)
                 if resp.status_code != 200:
+                    # Visible warning so the YAHOO-sealed disk fallback is
+                    # never silent. NSE historical is commonly Akamai-blocked
+                    # from data-center IPs (Replit / AWS / GCP).
+                    logger.warning(
+                        "NSE historical %s for %s — falling back to Yahoo",
+                        resp.status_code, symbol,
+                    )
                     return []
                 raw = resp.json()
                 rows = raw.get("data", [])

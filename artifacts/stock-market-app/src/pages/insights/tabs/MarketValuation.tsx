@@ -1,83 +1,129 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
-import { PageHeader, PillTabs, Card, Loading, EmptyState, MenuDropdown, ErrorState, useChartPalette } from "../_shared";
-import { LineChart as LCIcon, X } from "lucide-react";
+import { PageHeader, PillTabs, Card, Loading, EmptyState, MenuDropdown, useChartPalette } from "../_shared";
+import { LineChart as LCIcon, X, Info } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, Legend, CartesianGrid } from "recharts";
+import DataFreshness from "@/components/DataFreshness";
+import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 type Period = "1m" | "6m" | "1y" | "5y" | "10y";
-type Metric = "pe" | "pb" | "dy";
+type Metric = "price" | "indexed" | "change";
+type FxMode = "local" | "usd";
 
 interface PointBag { date: string; [key: string]: number | string; }
 
 interface ValuationResponse {
   available: boolean;
   message?: string;
+  metric?: Metric;
   series: PointBag[];
   indices: { code: string; label: string; lastPrice?: number; change?: number; changePct?: number; }[];
 }
 
-// Comprehensive list of NSE indices that have constituent data on yfinance.
-const ALL_INDEX_OPTIONS = [
-  { code: "^NSEI",                 label: "NIFTY 50" },
-  { code: "^NSEBANK",              label: "NIFTY BANK" },
-  { code: "^CNXIT",                label: "NIFTY IT" },
-  { code: "^CNXFMCG",              label: "NIFTY FMCG" },
-  { code: "^CNXAUTO",              label: "NIFTY AUTO" },
-  { code: "^CNXPHARMA",            label: "NIFTY PHARMA" },
-  { code: "^CNXMETAL",             label: "NIFTY METAL" },
-  { code: "^CNXENERGY",            label: "NIFTY ENERGY" },
-  { code: "^CNXREALTY",            label: "NIFTY REALTY" },
-  { code: "^CNXMEDIA",             label: "NIFTY MEDIA" },
-  { code: "^CNXPSUBANK",           label: "NIFTY PSU BANK" },
-  { code: "^CNXPSE",               label: "NIFTY PSE" },
-  { code: "^CNXINFRA",             label: "NIFTY INFRA" },
-  { code: "NIFTY_FIN_SERVICE.NS",  label: "NIFTY FINANCIAL SERVICES" },
-  { code: "^NSMIDCP",              label: "NIFTY MIDCAP 100" },
-  { code: "^CNXSC",                label: "NIFTY SMALLCAP 100" },
-  { code: "^CNX100",               label: "NIFTY 100" },
-  { code: "^CNX200",               label: "NIFTY 200" },
-  { code: "^CRSLDX",               label: "NIFTY 500" },
+const INDIA_INDEX_OPTIONS = [
+  { code: "^NSEI",                label: "NIFTY 50" },
+  { code: "^BSESN",              label: "SENSEX" },
+  { code: "^NSEBANK",             label: "NIFTY BANK" },
+  { code: "^CNXIT",               label: "NIFTY IT" },
+  { code: "^CNXFMCG",             label: "NIFTY FMCG" },
+  { code: "^CNXAUTO",             label: "NIFTY AUTO" },
+  { code: "^CNXPHARMA",           label: "NIFTY PHARMA" },
+  { code: "^CNXMETAL",            label: "NIFTY METAL" },
+  { code: "^CNXENERGY",           label: "NIFTY ENERGY" },
+  { code: "^CNXREALTY",           label: "NIFTY REALTY" },
+  { code: "^CNXMEDIA",            label: "NIFTY MEDIA" },
+  { code: "^CNXPSUBANK",          label: "NIFTY PSU BANK" },
+  { code: "^CNXPSE",              label: "NIFTY PSE" },
+  { code: "^CNXINFRA",            label: "NIFTY INFRA" },
+  { code: "NIFTY_FIN_SERVICE.NS", label: "NIFTY FINANCIAL SERVICES" },
+  { code: "^NSMIDCP",             label: "NIFTY MIDCAP 100" },
+  { code: "^CNXSC",               label: "NIFTY SMALLCAP 100" },
+  { code: "^CNX100",              label: "NIFTY 100" },
+  { code: "^CNX200",              label: "NIFTY 200" },
+  { code: "^CRSLDX",              label: "NIFTY 500" },
 ];
+
+const WORLD_INDEX_OPTIONS = [
+  // Americas
+  { code: "^GSPC",      label: "S&P 500 (US)" },
+  { code: "^DJI",       label: "Dow Jones (US)" },
+  { code: "^IXIC",      label: "NASDAQ (US)" },
+  // Europe
+  { code: "^FTSE",      label: "FTSE 100 (UK)" },
+  { code: "^GDAXI",     label: "DAX (Germany)" },
+  { code: "^FCHI",      label: "CAC 40 (France)" },
+  { code: "^STOXX50E",  label: "Euro Stoxx 50" },
+  // Asia Pacific
+  { code: "^N225",      label: "Nikkei 225 (Japan)" },
+  { code: "^HSI",       label: "Hang Seng (HK)" },
+  { code: "000001.SS",  label: "Shanghai Comp. (China)" },
+  { code: "^KS11",      label: "KOSPI (South Korea)" },
+  { code: "^AXJO",      label: "ASX 200 (Australia)" },
+];
+
+// Combined for labelFor() lookup
+const ALL_INDEX_OPTIONS = [...INDIA_INDEX_OPTIONS, ...WORLD_INDEX_OPTIONS];
 
 // Distinct, accessible chart colors that work in both themes.
 const CHART_COLORS = [
-  "#6366f1", // indigo
-  "#10b981", // emerald
-  "#f59e0b", // amber
-  "#ec4899", // pink
-  "#06b6d4", // cyan
-  "#a855f7", // purple
-  "#ef4444", // rose
-  "#84cc16", // lime
-  "#3b82f6", // blue
-  "#f97316", // orange
+  "#6366f1", "#10b981", "#f59e0b", "#ec4899", "#06b6d4",
+  "#a855f7", "#ef4444", "#84cc16", "#3b82f6", "#f97316",
 ];
+
+const METRIC_OPTIONS: { value: Metric; label: string }[] = [
+  { value: "indexed", label: "Indexed (100)" },
+  { value: "price",   label: "Price" },
+  { value: "change",  label: "% Change" },
+];
+
+const formatValue = (v: number | string | undefined, metric: Metric) => {
+  if (v === undefined || v === null || v === "") return "—";
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return "—";
+  if (metric === "change") return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
+  if (metric === "price")  return n.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+  return n.toFixed(2); // indexed → 100-based
+};
+
+// World indices set — used to detect multi-currency selections for the USD toggle
+const WORLD_INDEX_CODES = new Set(WORLD_INDEX_OPTIONS.map(o => o.code));
 
 export default function MarketValuation() {
   const [period, setPeriod] = useState<Period>("5y");
-  const [metric, setMetric] = useState<Metric>("pe");
+  const [metric, setMetric] = useState<Metric>("indexed");
+  const [fx, setFx]         = useState<FxMode>("local");
   const [selected, setSelected] = useState<string[]>(["^NSEI", "^NSEBANK"]);
   const [adding, setAdding] = useState("");
 
   const codes = selected.join(",");
 
+  // Show the USD toggle only when at least one world index is selected.
+  const hasMultiCurrency = selected.some(c => WORLD_INDEX_CODES.has(c));
+
   const palette = useChartPalette();
-  const cBorder = palette.border;
-  const cMuted  = palette.muted;
-  const cText   = palette.text;
-  const cSurf   = palette.surf;
-  const cAccent = palette.accent;
+  const { border: cBorder, muted: cMuted, text: cText, surf: cSurf, accent: cAccent } = palette;
 
-  const { data, isLoading, error } = useQuery<ValuationResponse>({
-    queryKey: ["insights/index-valuation", codes, period, metric],
-    queryFn: () => fetchApi(`/insights/index-valuation?indices=${encodeURIComponent(codes)}&period=${period}&metric=${metric}`),
-    enabled: codes.length > 0,
-    staleTime: 30 * 60_000,
-  });
+  const { data, isLoading, isFetching } = useQuery<ValuationResponse>(
+    marketDataQueryOptions<ValuationResponse, { enabled: boolean; placeholderData: (prev: ValuationResponse | undefined) => ValuationResponse | undefined }>(
+      ["insights/index-valuation", codes, period, metric, fx],
+      () => fetchApi(`/insights/index-valuation?indices=${encodeURIComponent(codes)}&period=${period}&metric=${metric}&fx=${fx}`),
+      { enabled: codes.length > 0, placeholderData: (prev) => prev },
+    ),
+  );
+  // Show data the moment we have any (placeholderData = previous response).
+  // `isFetching && !isLoading` means a background refetch is in flight — dim
+  // the chart slightly so the user sees something is happening but the page
+  // doesn't go fully blank.
+  const isRefetching = isFetching && !isLoading;
+  const valuationMeta = pickMeta(data);
 
-  const addable = useMemo(
-    () => ALL_INDEX_OPTIONS.filter(o => !selected.includes(o.code)),
+  const addableIndia = useMemo(
+    () => INDIA_INDEX_OPTIONS.filter(o => !selected.includes(o.code)),
+    [selected],
+  );
+  const addableWorld = useMemo(
+    () => WORLD_INDEX_OPTIONS.filter(o => !selected.includes(o.code)),
     [selected],
   );
 
@@ -91,12 +137,20 @@ export default function MarketValuation() {
   const labelFor = (code: string) =>
     ALL_INDEX_OPTIONS.find(o => o.code === code)?.label || code;
 
+  const subtitle =
+    metric === "indexed" ? "Compare relative performance of Indian and global indices, rebased to 100 at the start of the window."
+    : metric === "price" ? "Daily closing levels of selected indices."
+    : "Percent change of each index from the start of the window.";
+
   return (
     <div>
-      <PageHeader title="Market Valuation"
-        info="Historical price levels of selected indices. Add or remove sectors to compare."/>
+      <PageHeader title="Index Comparison" info={subtitle}/>
 
-      {/* Selected sector cards */}
+      <div className="mb-3">
+        <DataFreshness meta={valuationMeta} refreshKeys={[["insights/index-valuation", codes, period, metric]]} />
+      </div>
+
+      {/* Selected index cards */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
         {selected.map((code, i) => {
           const meta = data?.indices?.find(x => x.code === code);
@@ -110,7 +164,9 @@ export default function MarketValuation() {
                 </p>
                 {meta?.lastPrice != null && (
                   <p className="text-[11px] tabular-nums leading-tight">
-                    <span className="font-semibold text-gray-900 dark:text-white">{meta.lastPrice?.toFixed(2)}</span>
+                    <span className="font-semibold text-gray-900 dark:text-white">
+                      {meta.lastPrice.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                    </span>
                     <span className={`ml-1 ${(meta.change ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-500"}`}>
                       {(meta.change ?? 0) >= 0 ? "+" : ""}{meta.changePct?.toFixed(2)}%
                     </span>
@@ -128,41 +184,72 @@ export default function MarketValuation() {
           );
         })}
 
-        {/* Add another sector */}
-        {addable.length > 0 && selected.length < 6 && (
+        {/* Add another index — India */}
+        {addableIndia.length > 0 && selected.length < 6 && (
           <MenuDropdown
-            label="+ Add"
-            value={adding as string}
-            onChange={(v) => add(v as string)}
-            options={addable.map(o => ({ value: o.code, label: o.label }))}
-            placeholder="Pick a sector"
-            minButtonWidth={150}
-            maxButtonWidth={240}
+            label="+ India"
+            value={adding}
+            onChange={(v) => add(v)}
+            options={addableIndia.map(o => ({ value: o.code, label: o.label }))}
+            placeholder="Pick an index"
+            minButtonWidth={130}
+            maxButtonWidth={220}
+          />
+        )}
+
+        {/* Add another index — World */}
+        {addableWorld.length > 0 && selected.length < 6 && (
+          <MenuDropdown
+            label="+ World"
+            value={adding}
+            onChange={(v) => add(v)}
+            options={addableWorld.map(o => ({ value: o.code, label: o.label }))}
+            placeholder="Pick an index"
+            minButtonWidth={130}
+            maxButtonWidth={220}
           />
         )}
       </div>
 
-      {/* Period & metric controls */}
+      {/* Period, metric & FX controls */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <PillTabs value={period} onChange={(v) => setPeriod(v as Period)} options={[
           {value:"1m",label:"1M"},{value:"6m",label:"6M"},{value:"1y",label:"1Y"},{value:"5y",label:"5Y"},{value:"10y",label:"10Y"},
         ]}/>
-        <PillTabs value={metric} onChange={(v) => setMetric(v as Metric)} options={[
-          {value:"pe",label:"Price"},{value:"pb",label:"Normalized"},{value:"dy",label:"% Change"},
-        ]}/>
+        <div className="flex items-center gap-2 flex-wrap">
+          {hasMultiCurrency && (
+            <PillTabs
+              value={fx}
+              onChange={(v) => setFx(v as FxMode)}
+              options={[
+                { value: "local", label: "Local CCY" },
+                { value: "usd",   label: "USD" },
+              ]}
+            />
+          )}
+          <PillTabs value={metric} onChange={(v) => setMetric(v as Metric)} options={METRIC_OPTIONS}/>
+        </div>
       </div>
+
+      {/* USD conversion note */}
+      {fx === "usd" && hasMultiCurrency && (
+        <div className="mb-3 flex items-center gap-1.5 text-[11px] text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800/40 rounded-lg px-3 py-2">
+          <Info className="w-3.5 h-3.5 flex-shrink-0" />
+          All series converted to USD using daily FX rates — removes currency drag so you compare true USD returns.
+        </div>
+      )}
 
       {isLoading && <Loading />}
       {!isLoading && data && data.series.length === 0 && (
         <EmptyState
           icon={<LCIcon className="w-10 h-10" />}
-          title="No valuation history"
-          message={data.message || "Index valuation history not currently available."}
+          title="No history available"
+          message={data.message || "Index history not currently available."}
         />
       )}
 
       {data && data.series.length > 0 && (
-        <Card className="p-4">
+        <Card className={`p-4 transition-opacity duration-200 ${isRefetching ? "opacity-60" : "opacity-100"}`}>
           <div className="h-[460px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={data.series} margin={{ top: 8, right: 16, left: -8, bottom: 0 }}>
@@ -177,6 +264,8 @@ export default function MarketValuation() {
                   tick={{ fontSize: 11, fill: cMuted }}
                   stroke={cBorder}
                   width={56}
+                  tickFormatter={(v) => formatValue(v, metric)}
+                  domain={metric === "change" ? ["auto", "auto"] : ["auto", "auto"]}
                 />
                 <Tooltip
                   contentStyle={{
@@ -188,23 +277,31 @@ export default function MarketValuation() {
                   }}
                   labelStyle={{ color: cMuted, marginBottom: 4 }}
                   cursor={{ stroke: cAccent, strokeOpacity: 0.3 }}
+                  formatter={(value: number | string, name: string) => [formatValue(value, metric), labelFor(name)]}
                 />
-                <Legend wrapperStyle={{ fontSize: 12, color: cText }} />
-                {selected.map((code, i) => {
-                  const lbl = labelFor(code);
-                  return (
-                    <Line key={code}
-                          type="monotone"
-                          dataKey={lbl}
-                          stroke={CHART_COLORS[i % CHART_COLORS.length]}
-                          dot={false}
-                          strokeWidth={2}
-                          connectNulls />
-                  );
-                })}
+                <Legend
+                  wrapperStyle={{ fontSize: 12, color: cText }}
+                  formatter={(value: string) => labelFor(value)}
+                />
+                {selected.map((code, i) => (
+                  <Line key={code}
+                        type="monotone"
+                        dataKey={code}
+                        name={code}
+                        stroke={CHART_COLORS[i % CHART_COLORS.length]}
+                        dot={false}
+                        strokeWidth={2}
+                        connectNulls />
+                ))}
               </LineChart>
             </ResponsiveContainer>
           </div>
+          {data.message && (
+            <p className="mt-3 flex items-start gap-1.5 text-[11px] text-gray-500 dark:text-gray-400">
+              <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+              <span>{data.message}</span>
+            </p>
+          )}
         </Card>
       )}
     </div>

@@ -191,23 +191,67 @@ export default function TelegramBot({ embedded = false }: { embedded?: boolean }
       {/* Commands Reference */}
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">Supported Commands</CardTitle>
+          <CardTitle className="text-base flex items-center justify-between">
+            <span>Supported Commands</span>
+            <span className="text-xs text-gray-400 font-normal">
+              {(status as any)?.totalCommands ?? 0} total ·{" "}
+              {Object.values((status as any)?.invocationCounts ?? {}).reduce(
+                (a: number, b: any) => a + (Number(b) || 0), 0,
+              )}{" "}
+              invocations
+            </span>
+          </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {((status as any)?.commands ?? []).map((cmd: string) => {
-              const [c, ...rest] = cmd.split(" — ");
+          {(() => {
+            const reg = (status as any)?.commandRegistry ?? [];
+            const counts = (status as any)?.invocationCounts ?? {};
+            if (!reg.length) {
               return (
-                <div key={cmd} className="flex items-start gap-2 text-sm">
-                  <code className="bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded text-xs font-mono flex-shrink-0">{c}</code>
-                  <span className="text-gray-500 text-xs">{rest.join(" — ")}</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {((status as any)?.commands ?? []).map((cmd: string) => {
+                    const [c, ...rest] = cmd.split(" — ");
+                    return (
+                      <div key={cmd} className="flex items-start gap-2 text-sm">
+                        <code className="bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded text-xs font-mono flex-shrink-0">{c}</code>
+                        <span className="text-gray-500 text-xs">{rest.join(" — ")}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               );
-            })}
-          </div>
+            }
+            const byCat = reg.reduce((acc: any, c: any) => {
+              (acc[c.category] = acc[c.category] || []).push(c);
+              return acc;
+            }, {});
+            return (
+              <div className="space-y-4">
+                {Object.entries(byCat).map(([cat, items]: any) => (
+                  <div key={cat}>
+                    <p className="text-xs font-semibold text-gray-500 uppercase mb-1.5">{cat}</p>
+                    <div className="space-y-1">
+                      {(items as any[]).map((c) => (
+                        <div key={c.name} className="flex items-start gap-2 text-sm">
+                          <code className="bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded text-xs font-mono flex-shrink-0 min-w-[7rem]">
+                            {c.usage}
+                          </code>
+                          <span className="text-gray-500 text-xs flex-1">{c.summary}</span>
+                          <span className="text-xs text-blue-600 tabular-nums font-medium">
+                            {counts[c.name] ?? 0}×
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
           <div className="mt-3 p-3 bg-gray-50 rounded text-xs text-gray-500">
             <strong>Natural language works too:</strong> "analyze RELIANCE", "which sectors are up?",
             "show bullish patterns", "where to invest today?" — just type naturally.
+            Inline holdings: <code>RELIANCE:10@2400 TCS:5</code>
           </div>
         </CardContent>
       </Card>
