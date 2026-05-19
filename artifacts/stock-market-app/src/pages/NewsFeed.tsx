@@ -71,14 +71,15 @@ function TickerBanner({ articles, isDark }: { articles: NewsArticle[]; isDark: b
   const text = headlines.join("   ·   ");
   return (
     <div className="relative overflow-hidden flex items-center gap-0 rounded-2xl" style={{
-      background: isDark ? "linear-gradient(90deg,#0e1829 0%,#0a1020 100%)" : "linear-gradient(90deg,#eef2ff 0%,#f8fafc 100%)",
-      border: isDark ? "1px solid #162244" : "1px solid #c7d2fe",
+      background: isDark ? "linear-gradient(90deg,#0e1829 0%,#0a1020 100%)" : "#ffffff",
+      border: isDark ? "1px solid #162244" : "1px solid #e2e8f0",
+      borderLeft: isDark ? "1px solid #162244" : "4px solid #6366f1",
       minHeight: 44,
     }}>
       {/* LIVE badge */}
       <div className="flex items-center gap-2 px-4 py-2.5 shrink-0 border-r" style={{
-        borderColor: isDark ? "#162244" : "#c7d2fe",
-        background: isDark ? "rgba(99,102,241,0.1)" : "rgba(99,102,241,0.08)",
+        borderColor: isDark ? "#162244" : "#e2e8f0",
+        background: isDark ? "rgba(99,102,241,0.1)" : "#eef2ff",
       }}>
         <span className="relative flex h-2.5 w-2.5">
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-60" />
