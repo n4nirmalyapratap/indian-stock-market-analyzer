@@ -1,14 +1,17 @@
 """
 agents.py — Famous-Investor AI Council endpoints.
 
-  GET  /api/agents                         — list the 8 personas
-  GET  /api/agents/{symbol}                — run all 8 checklists (fast, no LLM)
+  GET  /api/agents                         — list the 16 personas
+  GET  /api/agents/screener/consensus      — near-unanimous buy/avoid picks from Nifty 50
+  GET  /api/agents/{symbol}                — run all 16 checklists (fast, no LLM)
   GET  /api/agents/{symbol}/council        — same + AI-written thesis per persona
   GET  /api/agents/{symbol}/{persona_id}   — single persona deep view + thesis
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
@@ -94,9 +97,89 @@ async def _load_stock(symbol: str) -> tuple[dict | None, JSONResponse | None]:
 
 @router.get("")
 async def list_agents():
-    """Return the 8 investor personas with their philosophies."""
+    """Return the 16 investor personas with their philosophies."""
     return {"personas": agents_service.list_personas(),
             "count":    len(agents_service.PERSONAS)}
+
+
+# ── Consensus screener (registered BEFORE /{symbol} to avoid routing conflict) ─
+
+_SCREENER_UNIVERSE = [
+    "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","ITC","SBIN","BAJFINANCE",
+    "HINDUNILVR","MARUTI","WIPRO","ASIANPAINT","LT","SUNPHARMA","TITAN",
+    "KOTAKBANK","AXISBANK","NESTLEIND","ULTRACEMCO","TATAMOTORS","TATASTEEL",
+    "ONGC","POWERGRID","NTPC","COALINDIA","JSWSTEEL","TECHM","HCLTECH",
+    "ADANIENT","DRREDDY",
+]
+_SCREENER_THRESHOLD = 14          # out of 16 personas — 87.5%
+_SCREENER_TTL_S     = 4 * 3600   # cache for 4 hours
+
+_screener_cache: dict = {}        # {"result": {...}, "ts": float}
+
+
+async def _run_one(symbol: str) -> dict | None:
+    """Load stock + run fast council for one symbol; returns None on failure."""
+    try:
+        detail, err = await _load_stock(symbol)
+        if err is not None or detail is None:
+            return None
+        result = agents_service.run_council(detail)
+        council = result.get("council", {})
+        return {
+            "symbol":         result.get("symbol", symbol),
+            "name":           result.get("name"),
+            "sector":         result.get("sector"),
+            "lastPrice":      result.get("lastPrice"),
+            "buyCount":       council.get("buyCount", 0),
+            "avoidCount":     council.get("avoidCount", 0),
+            "holdCount":      council.get("holdCount", 0),
+            "total":          sum([council.get("buyCount", 0),
+                                   council.get("avoidCount", 0),
+                                   council.get("holdCount", 0)]),
+            "avgScore":       round(council.get("avgScore", 0), 4),
+            "councilVerdict": council.get("verdict", "HOLD"),
+        }
+    except Exception as exc:
+        logger.warning("screener: failed for %s: %s", symbol, exc)
+        return None
+
+
+@router.get("/screener/consensus")
+async def get_consensus_screener():
+    """Screen the Nifty 50 universe for near-unanimous council consensus.
+
+    Returns stocks where ≥ 87.5% (14/16) of personas agree on BUY or AVOID.
+    Results are cached for 4 hours — first call may take 5-15 s while yfinance
+    fetches fundamentals; subsequent calls return instantly.
+    """
+    cached = _screener_cache.get("result")
+    if cached and (time.time() - _screener_cache.get("ts", 0)) < _SCREENER_TTL_S:
+        return cached
+
+    tasks = [_run_one(sym) for sym in _SCREENER_UNIVERSE]
+    all_results = await asyncio.gather(*tasks)
+    screened = [r for r in all_results if r is not None]
+
+    buy_picks   = sorted(
+        [r for r in screened if r["buyCount"]   >= _SCREENER_THRESHOLD],
+        key=lambda r: r["avgScore"], reverse=True,
+    )
+    avoid_picks = sorted(
+        [r for r in screened if r["avoidCount"] >= _SCREENER_THRESHOLD],
+        key=lambda r: r["avgScore"],
+    )
+
+    result = {
+        "buyPicks":       buy_picks,
+        "avoidPicks":     avoid_picks,
+        "thresholdPct":   round(_SCREENER_THRESHOLD / 16 * 100, 1),
+        "thresholdCount": _SCREENER_THRESHOLD,
+        "totalScreened":  len(screened),
+        "cachedAt":       __import__("datetime").datetime.utcnow().isoformat() + "Z",
+    }
+    _screener_cache["result"] = result
+    _screener_cache["ts"]     = time.time()
+    return result
 
 
 @router.get("/{symbol}")
