@@ -1,10 +1,10 @@
 """
 Telegram bot routes.
-  GET  /api/telegram/status       — bot status + webhook info
+  GET  /api/telegram/status       — bot status + webhook info + command registry
   GET  /api/telegram/messages     — message log
   POST /api/telegram/webhook      — Telegram webhook (called by Telegram servers)
   POST /api/telegram/set-webhook  — register webhook URL with Telegram
-  POST /api/telegram/test         — send a test message through the bot logic
+  POST /api/telegram/test         — preview a reply through the dispatcher
 """
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -19,6 +19,8 @@ from ..services.nse_service import NseService
 from ..services.yahoo_service import YahooService
 from ..services.price_service import PriceService
 from ..services.nlp_service import NlpService
+from ..services.bot_dispatcher import BotDispatcher
+from ..services import news_service as _news_module
 
 router = APIRouter(prefix="/telegram", tags=["telegram"])
 
@@ -30,7 +32,20 @@ _sectors  = SectorsService(_nse, _yahoo)
 _stocks   = StocksService(_nse, _yahoo)
 _patterns = PatternsService(_yahoo, _nse)
 _scanners = ScannersService(_price)
-_service  = TelegramService(_sectors, _stocks, _patterns, _scanners, _nlp)
+
+# Hydra engine is optional — wrap construction so a failure here doesn't block the bot
+try:
+    from ..services.hydra_service import HydraEngine
+    _hydra = HydraEngine()
+except Exception:  # pragma: no cover
+    _hydra = None
+
+_dispatcher = BotDispatcher(
+    sectors=_sectors, stocks=_stocks, patterns=_patterns, scanners=_scanners,
+    nlp=_nlp, hydra=_hydra, news=_news_module,
+)
+_service = TelegramService(_sectors, _stocks, _patterns, _scanners, _nlp,
+                           dispatcher=_dispatcher)
 
 
 def get_service() -> TelegramService:
@@ -38,13 +53,17 @@ def get_service() -> TelegramService:
     return _service
 
 
+def get_dispatcher() -> BotDispatcher:
+    """Shared dispatcher — exposed so the alert tick loop can use it too."""
+    return _dispatcher
+
+
 @router.get("/status")
 async def get_status():
     status = _service.get_status()
     status["mode"] = "polling"
     if _service.configured:
-        bot_info = await _service.get_bot_info()
-        status["botInfo"] = bot_info
+        status["botInfo"] = await _service.get_bot_info()
     return status
 
 
@@ -55,16 +74,14 @@ async def get_messages():
 
 @router.post("/webhook")
 async def telegram_webhook(request: Request):
-    """Receives updates from Telegram servers."""
     try:
         update = await request.json()
     except Exception:
         return JSONResponse(status_code=400, content={"error": "Invalid JSON"})
     try:
         await _service.process_update(update)
-    except Exception as e:
-        # Always return 200 to Telegram so it doesn't keep retrying
-        pass
+    except Exception:
+        pass  # always 200 so Telegram doesn't keep retrying
     return {"ok": True}
 
 
@@ -75,8 +92,7 @@ async def set_webhook(body: dict[str, Any]):
         return JSONResponse(status_code=400, content={"error": "url field is required"})
     if not url.startswith("https://"):
         return JSONResponse(status_code=400, content={"error": "Webhook URL must start with https://"})
-    result = await _service.set_webhook(url)
-    return result
+    return await _service.set_webhook(url)
 
 
 @router.post("/test")
@@ -89,15 +105,11 @@ async def test_message(body: dict[str, Any]):
 
 @router.get("/rotation-preview")
 async def rotation_preview():
-    """Return the pre-formatted sector rotation Telegram message for UI preview."""
     return await _service.get_rotation_message()
 
 
 @router.post("/send-rotation")
 async def send_rotation(body: dict[str, Any]):
-    """Send the sector rotation alert to a Telegram chat.
-    Body: { "chatId": "<chat_id>" }
-    """
     chat_id = body.get("chatId") or body.get("chat_id") or ""
     if not chat_id:
         return JSONResponse(status_code=400, content={"error": "chatId field is required"})

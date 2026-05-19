@@ -7,6 +7,8 @@ import {
   Filter, BarChart2, Loader2, Target,
 } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
+import DataFreshness from "@/components/DataFreshness";
+import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 // ─── Indicator Definitions ───────────────────────────────────────────────────
 
@@ -283,9 +285,10 @@ function ScannerCard({ scanner, isRunning, isSelected, onRun, onEdit, onDuplicat
 
           {/* Universe badges */}
           <div className="flex gap-1 mt-1.5 flex-wrap">
-            {scanner.universe?.map((u: string) => (
-              <span key={u} className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-md">{u}</span>
-            ))}
+            {scanner.universe?.map((u: string) => {
+              const LABELS: Record<string, string> = { NIFTY100: "Large Cap", MIDCAP: "Mid Cap", SMALLCAP: "Small Cap", MICROCAP: "Micro Cap", ALL: "All" };
+              return <span key={u} className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-md">{LABELS[u] ?? u}</span>;
+            })}
             <span className="text-xs text-gray-400">{scanner.conditions?.length} condition{scanner.conditions?.length !== 1 ? "s" : ""}</span>
           </div>
 
@@ -347,9 +350,11 @@ export default function Scanners() {
   const [result, setResult]         = useState<ScanResult | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const { data: scanners = [], isLoading } = useQuery({
-    queryKey: ["scanners"], queryFn: api.scanners, staleTime: 30_000,
-  });
+  const { data: scannersResp, isLoading } = useQuery(
+    marketDataQueryOptions(["scanners"], api.scannersWithMeta),
+  );
+  const scanners: Scanner[] = scannersResp?.scanners ?? [];
+  const scannersMeta = pickMeta(scannersResp);
 
   const saveMut = useMutation({
     mutationFn: (d: ScannerDraft & { id?: string }) =>
@@ -430,11 +435,28 @@ export default function Scanners() {
           <h1 className="text-2xl font-bold text-gray-900">Stock Scanners</h1>
           <p className="text-sm text-gray-500">Build, save & run custom condition-based scans across any universe</p>
         </div>
-        <button onClick={startNew}
-          className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 transition shadow-sm">
-          <Plus className="w-4 h-4" /> New Scanner
-        </button>
+        <div className="flex items-center gap-3 flex-wrap">
+          <DataFreshness meta={scannersMeta} refreshKeys={["scanners"]} />
+          <button onClick={startNew}
+            className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 transition shadow-sm">
+            <Plus className="w-4 h-4" /> New Scanner
+          </button>
+        </div>
       </div>
+
+      {/* Stale-universe banner — surfaces honestly when the AMFI cache failed
+          to load and we're scanning a hardcoded fallback list that may be
+          months out of date. Silent fallback is exactly the kind of thing
+          users rightly hate; flag it. */}
+      {scannersMeta?.universe && scannersMeta.universe.isLiveUniverse === false && (
+        <div className="mb-4 flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 text-xs">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">Scanning fallback universe ({scannersMeta.universe.totalSymbols} symbols)</p>
+            <p className="opacity-80">Live NSE/AMFI membership cache is unavailable — recently listed or delisted stocks may be missing. Re-running the universe builder will refresh this list.</p>
+          </div>
+        </div>
+      )}
 
       {/* Split layout */}
       <div className="flex gap-5 flex-1 min-h-0">
@@ -502,8 +524,13 @@ export default function Scanners() {
                 <div className="flex flex-wrap gap-6">
                   <div>
                     <p className="text-xs font-semibold text-gray-600 mb-2">Stock Universe *</p>
-                    <div className="flex gap-2">
-                      {["NIFTY100", "MIDCAP", "SMALLCAP"].map(u => {
+                    <div className="flex gap-2 flex-wrap">
+                      {([
+                        { key: "NIFTY100", label: "Large Cap" },
+                        { key: "MIDCAP",   label: "Mid Cap"   },
+                        { key: "SMALLCAP", label: "Small Cap" },
+                        { key: "MICROCAP", label: "Micro Cap" },
+                      ] as const).map(({ key: u, label }) => {
                         const active = draft.universe.includes(u);
                         return (
                           <button key={u} onClick={() => setDraft(d => ({
@@ -515,7 +542,7 @@ export default function Scanners() {
                                 ? "bg-indigo-600 text-white border-indigo-600"
                                 : "bg-white text-gray-600 border-gray-200 hover:border-indigo-300"
                             }`}
-                          >{u}</button>
+                          >{label}</button>
                         );
                       })}
                     </div>
@@ -654,6 +681,37 @@ export default function Scanners() {
                   </div>
                 </div>
               </div>
+
+              {/* Scan errors — surface per-symbol failures so a 0-match result
+                  can be distinguished from a failed scan. Honest data labels
+                  trump quietly hiding broken provider responses. */}
+              {Array.isArray((result as any).scanErrors) && (result as any).scanErrors.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                  <div className="flex items-center gap-2 text-amber-800">
+                    <AlertCircle className="w-4 h-4" />
+                    <p className="text-sm font-semibold">
+                      {(result as any).scanErrors.length} symbol{(result as any).scanErrors.length !== 1 ? "s" : ""} skipped due to data errors
+                    </p>
+                  </div>
+                  <details className="mt-2">
+                    <summary className="text-xs text-amber-700 cursor-pointer">Show details</summary>
+                    <ul className="mt-2 text-xs text-amber-700 space-y-0.5 max-h-40 overflow-y-auto font-mono">
+                      {(result as any).scanErrors.slice(0, 50).map((e: any, i: number) => (
+                        <li key={i}>{e.symbol ?? "?"}: {
+                          e.reason === "insufficient-history"
+                            ? `new listing — only ${e.got ?? "?"} bars available (need ${e.needed ?? "?"})`
+                            : e.reason === "insufficient-closes"
+                            ? "insufficient data"
+                            : e.error ?? e.message ?? e.reason ?? "unknown"
+                        }</li>
+                      ))}
+                      {(result as any).scanErrors.length > 50 && (
+                        <li className="opacity-70">…and {(result as any).scanErrors.length - 50} more</li>
+                      )}
+                    </ul>
+                  </details>
+                </div>
+              )}
 
               {/* No results */}
               {result.results?.length === 0 && (

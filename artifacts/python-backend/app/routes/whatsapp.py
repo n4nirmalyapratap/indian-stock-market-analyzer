@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
-from typing import Any, Optional
+from typing import Any
+
 from ..services.whatsapp_service import WhatsappService
 from ..services.sectors_service import SectorsService
 from ..services.stocks_service import StocksService
@@ -10,18 +11,40 @@ from ..services.nse_service import NseService
 from ..services.yahoo_service import YahooService
 from ..services.price_service import PriceService
 from ..services.nlp_service import NlpService
+from ..services.bot_dispatcher import BotDispatcher
+from ..services import news_service as _news_module
 
 router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
 
-_nse     = NseService()
-_yahoo   = YahooService()
-_price   = PriceService(_nse, _yahoo)
-_sectors = SectorsService(_nse, _yahoo)
-_stocks  = StocksService(_nse, _yahoo)
-_patterns= PatternsService(_yahoo, _nse)
-_scanners= ScannersService(_price)
-_nlp     = NlpService()
-_service = WhatsappService(_sectors, _stocks, _patterns, _scanners, _nlp)
+_nse      = NseService()
+_yahoo    = YahooService()
+_price    = PriceService(_nse, _yahoo)
+_sectors  = SectorsService(_nse, _yahoo)
+_stocks   = StocksService(_nse, _yahoo)
+_patterns = PatternsService(_yahoo, _nse)
+_scanners = ScannersService(_price)
+_nlp      = NlpService()
+
+try:
+    from ..services.hydra_service import HydraEngine
+    _hydra = HydraEngine()
+except Exception:  # pragma: no cover
+    _hydra = None
+
+_dispatcher = BotDispatcher(
+    sectors=_sectors, stocks=_stocks, patterns=_patterns, scanners=_scanners,
+    nlp=_nlp, hydra=_hydra, news=_news_module,
+)
+_service = WhatsappService(_sectors, _stocks, _patterns, _scanners, _nlp,
+                           dispatcher=_dispatcher)
+
+
+def get_service() -> WhatsappService:
+    return _service
+
+
+def get_dispatcher() -> BotDispatcher:
+    return _dispatcher
 
 
 @router.get("/status")
@@ -55,29 +78,19 @@ async def process_message(body: dict[str, Any]):
 
 @router.post("/twilio")
 async def twilio_webhook(request: Request):
-    """
-    Twilio WhatsApp webhook.
-    Twilio sends application/x-www-form-urlencoded with fields:
-      From  — sender number, e.g. "whatsapp:+911234567890"
-      Body  — message text
-      To    — your Twilio number
-    Returns TwiML XML so Twilio can send the reply back to the user.
-    """
     form = await request.form()
     from_number = form.get("From") or form.get("from") or "whatsapp:+unknown"
     text = form.get("Body") or form.get("body") or ""
     try:
-        result = await _service.process_message({"from": str(from_number), "text": str(text)})
+        result = await _service.process_message(
+            {"from": str(from_number), "text": str(text)}
+        )
         reply = result.get("response") or "Sorry, I could not process your request."
     except Exception as e:
         reply = f"Error: {e}"
-
-    # Escape XML special characters in the reply
     reply_safe = (
         str(reply)
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
+        .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         .replace('"', "&quot;")
     )
     twiml = (
