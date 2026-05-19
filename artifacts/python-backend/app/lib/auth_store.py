@@ -153,6 +153,43 @@ def ensure_primary_schema() -> None:
                     "CREATE INDEX IF NOT EXISTS idx_saved_user_updated "
                     "ON ai_analyst_saved(user_id, scope_type, updated_at DESC)"
                 )
+
+                # ── AI Analyst backtest results ────────────────────────────
+                # Every BUY/SELL verdict from ai_analyst_saved gets one row
+                # per evaluation horizon (1d, 5d, 30d). actual_return_pct is
+                # the realised % change from the price at verdict time to the
+                # close on the evaluation date. was_correct compares that
+                # against the verdict direction with a 0.5% deadband.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS ai_analyst_backtest (
+                        id                  BIGSERIAL PRIMARY KEY,
+                        saved_id            BIGINT NOT NULL
+                                            REFERENCES ai_analyst_saved(id) ON DELETE CASCADE,
+                        user_id             TEXT NOT NULL,
+                        ticker              TEXT NOT NULL,
+                        verdict             TEXT NOT NULL,
+                        confidence          TEXT,
+                        verdict_at_ms       BIGINT NOT NULL,
+                        verdict_price       DOUBLE PRECISION,
+                        horizon_days        INTEGER NOT NULL,
+                        evaluated_at_ms     BIGINT NOT NULL,
+                        actual_price        DOUBLE PRECISION,
+                        actual_return_pct   DOUBLE PRECISION,
+                        was_correct         BOOLEAN,
+                        notes               TEXT,
+                        UNIQUE (saved_id, horizon_days)
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_backtest_user_evaluated "
+                    "ON ai_analyst_backtest(user_id, evaluated_at_ms DESC)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_backtest_ticker "
+                    "ON ai_analyst_backtest(ticker, horizon_days)"
+                )
         _SCHEMA_READY = True
 
 

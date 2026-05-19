@@ -33,6 +33,7 @@ from app.routes.insights import router as insights_router
 from app.routes.agents import router as agents_router
 from app.routes.portfolio import router as portfolio_router
 from app.routes.ai_analyst import router as ai_analyst_router
+from app.routes.search import router as search_router
 from app.lib.auth_store import ensure_primary_schema
 from app.services.log_buffer import setup_ring_buffer
 from app.services.market_cache_service import is_market_open, cache_status
@@ -247,11 +248,12 @@ async def lifespan(app: FastAPI):
     rfr_task        = asyncio.create_task(_risk_free_rate_scheduler())
     bhav_task       = asyncio.create_task(_bhavcopy_refresh_scheduler())
     alerts_task     = asyncio.create_task(_bot_alerts_tick_loop())
+    backtest_task   = asyncio.create_task(_ai_backtest_scheduler())
     try:
         yield
     finally:
         for t in (poll_task, universe_task, warmup_task, transition_task,
-                  fixer_task, rfr_task, bhav_task, alerts_task):
+                  fixer_task, rfr_task, bhav_task, alerts_task, backtest_task):
             t.cancel()
             try:
                 await t
@@ -367,6 +369,29 @@ async def _bhavcopy_refresh_scheduler() -> None:
             await asyncio.sleep(24 * 3600)
         except asyncio.CancelledError:
             logger.info("Bhavcopy scheduler stopped.")
+            break
+
+
+async def _ai_backtest_scheduler() -> None:
+    """Evaluate every BUY/SELL verdict from the AI Analyst against actual
+    price moves at 1d / 5d / 30d horizons. Runs ~6h after startup and then
+    every 24h so the post-close prices are settled before we measure.
+    """
+    from app.services import ai_backtest_service
+    # Wait a few hours after startup so the first run lands after market close.
+    await asyncio.sleep(6 * 3600)
+    price_service = _PriceService(_NseService(), _YahooService())
+    while True:
+        try:
+            logger.info("AI backtest: scheduled run starting…")
+            result = await ai_backtest_service.evaluate_pending(price_service)
+            logger.info("AI backtest: %s", result)
+        except Exception as exc:
+            logger.warning("AI backtest scheduler error: %s", exc)
+        try:
+            await asyncio.sleep(24 * 3600)
+        except asyncio.CancelledError:
+            logger.info("AI backtest scheduler stopped.")
             break
 
 
@@ -503,3 +528,4 @@ app.include_router(insights_router,         prefix="/api")
 app.include_router(agents_router,            prefix="/api")
 app.include_router(portfolio_router,         prefix="/api")
 app.include_router(ai_analyst_router,         prefix="/api")
+app.include_router(search_router,              prefix="/api")

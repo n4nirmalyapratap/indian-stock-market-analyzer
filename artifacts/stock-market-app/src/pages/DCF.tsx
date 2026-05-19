@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useSearch } from "wouter";
 import { api, type DcfResponse } from "@/lib/api";
 import { Search, Calculator, TrendingUp, TrendingDown, Minus, AlertCircle } from "lucide-react";
+import { StockCombobox } from "@/components/StockCombobox";
 
 const QUICK_SYMBOLS = [
   "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR",
@@ -70,14 +71,13 @@ export default function DCF() {
       </div>
 
       <div className="flex gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
+        <div className="flex-1">
+          <StockCombobox
             value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            placeholder="Enter NSE symbol (e.g., RELIANCE)"
-            className="w-full pl-9 pr-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-300 text-sm"
+            onChange={setInput}
+            onSelect={(s) => { setInput(s.symbol); handleSearch(s.symbol); }}
+            onSubmit={() => handleSearch()}
+            placeholder="Enter NSE symbol or company name (e.g., RELIANCE)"
           />
         </div>
         <button

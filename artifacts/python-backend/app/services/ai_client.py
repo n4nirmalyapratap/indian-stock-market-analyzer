@@ -1,24 +1,39 @@
 """
 Centralized AI client for the Indian Stock Market Analyzer.
 
-Uses ONLY free, open-source models via OpenRouter (zero cost):
-  • Primary  : google/gemma-4-31b-it:free        (Gemma 4, Google)
-  • Fallback1: qwen/qwen3-30b-a3b:free            (Qwen 3, Chinese open-source)
-  • Fallback2: meta-llama/llama-3.3-70b-instruct:free  (Llama 3.3, Meta)
+Routes every call through OpenRouter (one API key, many models). Cascade
+prefers Grok first because the OpenRouter free tier on Google/Qwen/Llama
+hits rate limits often; Grok-4-Fast is on a generous free tier and falls
+through to paid Gemini → Claude → the original free models as backstops.
 
-NO paid services. NO OpenAI API key required.
-The openai Python SDK is used purely as an HTTP client to hit OpenRouter's
-free, OpenAI-compatible endpoint.
+Text cascade:
+  • Primary    : x-ai/grok-4-fast:free          (xAI, free, generous limits)
+  • Fallback 1 : google/gemini-flash-1.5         (paid, cheap, fast)
+  • Fallback 2 : anthropic/claude-3.5-sonnet     (paid, best quality)
+  • Fallback 3 : google/gemma-4-31b-it:free      (free, original primary)
+  • Fallback 4 : qwen/qwen3-30b-a3b:free         (free)
+  • Fallback 5 : meta-llama/llama-3.3-70b-instruct:free  (free)
 
-All credentials are read from the DB secrets store first (admin-managed),
-falling back to environment variables. No restart required after updating secrets.
+Vision cascade (for screenshot-style image input):
+  • Primary    : x-ai/grok-2-vision-1212
+  • Fallback 1 : google/gemini-flash-1.5         (multimodal-capable)
+  • Fallback 2 : anthropic/claude-3.5-sonnet     (multimodal-capable)
+
+All model IDs can be overridden via env / DB secrets (AI_MODEL,
+AI_FALLBACK_MODEL, AI_VISION_MODEL).
+
+Credentials are read from the DB secrets store first (admin-managed),
+falling back to env vars. No restart required after updating secrets.
 
 Usage:
-    from app.services.ai_client import ask, ask_stream
+    from app.services.ai_client import ask, ask_stream, ask_vision
 
     answer = await ask("Explain iron condor for a beginner")
     async for chunk in ask_stream("Summarise this SEBI circular: ..."):
         print(chunk, end="", flush=True)
+
+    # base64-encoded image
+    extracted = await ask_vision("Extract holdings as JSON.", image_b64=img_b64)
 """
 
 import os
@@ -41,12 +56,22 @@ def _s(key: str, default: str = "") -> str:
         return os.environ.get(key, default)
 
 
-# ── Free model cascade (OpenRouter only) ──────────────────────────────────────
-#   All three are :free tier — no charges, no API key billing.
+# ── Model cascade ─────────────────────────────────────────────────────────────
+# Grok first (generous free tier on OpenRouter), then paid Gemini/Claude for
+# quality fallback, then the original three free models as last-resort.
+# Anything in this list can be overridden via env or DB secrets.
 
-AI_MODEL    = "google/gemma-4-31b-it:free"
-_FALLBACK1  = "qwen/qwen3-30b-a3b:free"
-_FALLBACK2  = "meta-llama/llama-3.3-70b-instruct:free"
+AI_MODEL    = "x-ai/grok-4-fast:free"          # primary
+_FALLBACK1  = "google/gemini-flash-1.5"         # paid but cheap
+_FALLBACK2  = "anthropic/claude-3.5-sonnet"     # paid, best quality
+_FALLBACK3  = "google/gemma-4-31b-it:free"      # original primary
+_FALLBACK4  = "qwen/qwen3-30b-a3b:free"
+_FALLBACK5  = "meta-llama/llama-3.3-70b-instruct:free"
+
+# Vision-capable cascade for image inputs (screenshot extraction, etc.).
+AI_VISION_MODEL    = "x-ai/grok-2-vision-1212"
+_VISION_FALLBACK1  = "google/gemini-flash-1.5"
+_VISION_FALLBACK2  = "anthropic/claude-3.5-sonnet"
 
 
 def _get_ai_model() -> str:
@@ -55,6 +80,23 @@ def _get_ai_model() -> str:
 
 def _get_ai_fallback1() -> str:
     return _s("AI_FALLBACK_MODEL", _FALLBACK1)
+
+
+def _text_cascade(chosen: str = "") -> list[str]:
+    """Return the ordered list of text models to try."""
+    primary   = chosen or _get_ai_model()
+    fallback1 = _get_ai_fallback1()
+    return list(dict.fromkeys([
+        primary, fallback1, _FALLBACK2, _FALLBACK3, _FALLBACK4, _FALLBACK5,
+    ]))
+
+
+def _vision_cascade(chosen: str = "") -> list[str]:
+    """Return the ordered list of vision-capable models to try."""
+    primary = chosen or _s("AI_VISION_MODEL", AI_VISION_MODEL)
+    return list(dict.fromkeys([
+        primary, _VISION_FALLBACK1, _VISION_FALLBACK2,
+    ]))
 
 
 # ── Lazy OpenRouter client ─────────────────────────────────────────────────────
@@ -126,8 +168,9 @@ async def ask(
 ) -> str:
     """
     Send a prompt and return the full response.
-    Tries free models in order: Gemma 4 → Qwen 3 → Llama 3.3
-    All are free via OpenRouter — no charges.
+    Cascade: Grok-4-Fast (free) → Gemini Flash → Claude 3.5 Sonnet → free
+    fallbacks (Gemma 4 → Qwen 3 → Llama 3.3). Any model can be overridden
+    via the AI_MODEL / AI_FALLBACK_MODEL env vars or DB secrets.
     """
     or_c = _or()
     if not or_c:
@@ -138,12 +181,8 @@ async def ask(
         {"role": "user",   "content": prompt},
     ]
 
-    chosen    = model or _get_ai_model()
-    fallback1 = _get_ai_fallback1()
-    cascade   = list(dict.fromkeys([chosen, fallback1, _FALLBACK2]))  # unique, ordered
-
     last_exc: Exception = RuntimeError("no models tried")
-    for attempt_model in cascade:
+    for attempt_model in _text_cascade(model):
         try:
             result = await _call_with_retry(
                 or_c, attempt_model, messages, max_tokens, temperature,
@@ -155,8 +194,8 @@ async def ask(
             last_exc = exc
             log.warning("OpenRouter model %s unavailable: %s", attempt_model, str(exc)[:120])
 
-    log.error("All free models failed. Last error: %s", last_exc)
-    return "[AI unavailable: all free models are rate-limited — please retry in a minute]"
+    log.error("All models failed. Last error: %s", last_exc)
+    return "[AI unavailable: every model in the cascade is rate-limited or offline — please retry in a minute]"
 
 
 async def ask_stream(
@@ -167,8 +206,8 @@ async def ask_stream(
     temperature: float = 0.3,
 ) -> AsyncGenerator[str, None]:
     """
-    Stream response tokens. Falls back to ask() if streaming fails.
-    Uses free OpenRouter models only.
+    Stream response tokens. Falls back to ask() if streaming fails (which
+    runs the full Grok → Gemini → Claude → free-models cascade).
     """
     or_c = _or()
     if not or_c:
@@ -223,12 +262,8 @@ async def chat_with_history(
         return "[AI unavailable]"
 
     full_messages = [{"role": "system", "content": system}] + messages
-    chosen    = model or _get_ai_model()
-    fallback1 = _get_ai_fallback1()
-    cascade   = list(dict.fromkeys([chosen, fallback1, _FALLBACK2]))
-
     last_exc: Exception = RuntimeError("no models tried")
-    for attempt_model in cascade:
+    for attempt_model in _text_cascade(model):
         try:
             return await _call_with_retry(
                 or_c, attempt_model, full_messages, max_tokens,
@@ -238,8 +273,8 @@ async def chat_with_history(
             last_exc = exc
             log.warning("OpenRouter chat model %s failed: %s", attempt_model, str(exc)[:120])
 
-    log.error("All free chat models failed: %s", last_exc)
-    return "[AI unavailable: all free models are rate-limited — please retry in a minute]"
+    log.error("All chat models failed: %s", last_exc)
+    return "[AI unavailable: every model in the cascade is rate-limited or offline — please retry in a minute]"
 
 
 async def ask_ai_async(
@@ -251,7 +286,7 @@ async def ask_ai_async(
     """
     Convenience wrapper for the route layer.
     Takes a system prompt + conversation history and returns the AI reply.
-    Uses free OpenRouter models only (Gemma 4 → Qwen 3 → Llama 3.3).
+    Goes through the standard cascade (Grok → Gemini → Claude → free models).
     """
     return await chat_with_history(
         messages=history,
@@ -259,3 +294,65 @@ async def ask_ai_async(
         max_tokens=max_tokens,
         temperature=temperature,
     )
+
+
+# ── Vision (image-input) helper ───────────────────────────────────────────────
+
+async def ask_vision(
+    prompt: str,
+    *,
+    image_b64: str,
+    image_mime: str = "image/jpeg",
+    system: str = "You are a helpful financial assistant specialising in Indian markets.",
+    model: str = "",
+    max_tokens: int = 2048,
+    temperature: float = 0.1,
+) -> str:
+    """
+    Send a prompt + base64-encoded image and return the model's response.
+
+    Used for screenshot extraction (broker portfolio pages, etc.). Cascades
+    Grok-2-vision → Gemini Flash → Claude 3.5 Sonnet. All three accept the
+    OpenAI-style multimodal `messages` payload with an ``image_url`` block
+    holding a data URI.
+
+    Parameters
+    ----------
+    prompt :
+        The text instruction (e.g. "Extract holdings as JSON.").
+    image_b64 :
+        The raw image bytes, base64-encoded (no data URI prefix needed).
+    image_mime :
+        MIME type of the image — ``image/jpeg``, ``image/png``, ``image/webp``.
+    """
+    or_c = _or()
+    if not or_c:
+        return "[AI unavailable: OpenRouter integration not connected.]"
+
+    data_uri = f"data:{image_mime};base64,{image_b64}"
+    messages = [
+        {"role": "system", "content": system},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text",      "text": prompt},
+                {"type": "image_url", "image_url": {"url": data_uri}},
+            ],
+        },
+    ]
+
+    last_exc: Exception = RuntimeError("no vision models tried")
+    for attempt_model in _vision_cascade(model):
+        try:
+            result = await _call_with_retry(
+                or_c, attempt_model, messages, max_tokens, temperature,
+                retries=1, backoff=6.0,
+            )
+            log.info("AI Vision: answered by %s", attempt_model)
+            return result
+        except Exception as exc:
+            last_exc = exc
+            log.warning("Vision model %s unavailable: %s", attempt_model, str(exc)[:160])
+
+    log.error("All vision models failed. Last error: %s", last_exc)
+    return ""

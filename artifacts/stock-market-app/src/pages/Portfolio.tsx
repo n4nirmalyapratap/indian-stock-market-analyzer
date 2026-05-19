@@ -13,12 +13,13 @@ import {
 import {
   Briefcase, Plus, Trash2, Upload, RefreshCw, Loader2,
   TrendingUp, TrendingDown, AlertTriangle, Activity, PieChart as PieIcon,
-  ShieldAlert, Target, BarChart3, X, Edit3,
+  ShieldAlert, Target, BarChart3, X, Edit3, Camera, Check, AlertCircle,
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   PieChart, Pie, Cell, ScatterChart, Scatter, ZAxis, Legend, Line, ComposedChart,
 } from "recharts";
+import { StockCombobox } from "@/components/StockCombobox";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -256,6 +257,7 @@ function HoldingsTab({ pid }: { pid: string }) {
   const v = useValuation(pid);
   const [showAdd, setShowAdd] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showImportImage, setShowImportImage] = useState(false);
 
   const delTx = useMutation({
     mutationFn: (txId: string) => api.deletePortfolioTx(pid, txId),
@@ -283,6 +285,11 @@ function HoldingsTab({ pid }: { pid: string }) {
         <button onClick={() => setShowImport(true)}
           className="flex items-center gap-1 px-3 py-1.5 text-sm bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded hover:bg-gray-50 dark:hover:bg-gray-800">
           <Upload className="w-3.5 h-3.5" /> Import CSV
+        </button>
+        <button onClick={() => setShowImportImage(true)}
+          className="flex items-center gap-1 px-3 py-1.5 text-sm bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded hover:bg-gray-50 dark:hover:bg-gray-800"
+          title="Extract holdings from a broker screenshot using AI vision">
+          <Camera className="w-3.5 h-3.5" /> From screenshot
         </button>
         <button onClick={() => setShowAdd(true)}
           className="flex items-center gap-1 px-3 py-1.5 text-sm bg-indigo-600 hover:bg-indigo-700 text-white rounded">
@@ -366,6 +373,9 @@ function HoldingsTab({ pid }: { pid: string }) {
       )}
       {showImport && (
         <ImportCsvModal pid={pid} onClose={() => setShowImport(false)} />
+      )}
+      {showImportImage && (
+        <ImportScreenshotModal pid={pid} onClose={() => setShowImportImage(false)} />
       )}
     </div>
   );
@@ -460,9 +470,12 @@ function AddTxModal({ pid, onClose }: { pid: string; onClose: () => void }) {
   return (
     <Modal onClose={onClose} title="Add transaction">
       <div className="space-y-3">
-        <input value={form.symbol} onChange={(e) => setForm(f => ({ ...f, symbol: e.target.value }))}
-          placeholder="Symbol (e.g. RELIANCE)"
-          className="w-full px-3 py-2 text-sm bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-white/10 rounded" />
+        <StockCombobox
+          value={form.symbol}
+          onChange={(v) => setForm(f => ({ ...f, symbol: v }))}
+          onSelect={(s) => setForm(f => ({ ...f, symbol: s.symbol }))}
+          placeholder="Symbol or company name (e.g. RELIANCE)"
+        />
         <div className="grid grid-cols-3 gap-2">
           {(["BUY", "SELL", "DIVIDEND"] as const).map(s => (
             <button key={s} onClick={() => setForm(f => ({ ...f, side: s }))}
@@ -590,6 +603,233 @@ function ImportCsvModal({ pid, onClose }: { pid: string; onClose: () => void }) 
     </Modal>
   );
 }
+
+// ── Screenshot (Vision-LLM) import modal ─────────────────────────────────────
+
+type ExtractedRow = {
+  symbol: string;
+  qty: number;
+  avgPrice: number;
+  confidence: number;
+  rawName?: string | null;
+  // local-only flags
+  keep: boolean;
+  editing: boolean;
+};
+
+function ImportScreenshotModal({ pid, onClose }: { pid: string; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [pickedFile, setPickedFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [rows, setRows] = useState<ExtractedRow[]>([]);
+  const [applyResult, setApplyResult] = useState<{ rowsApplied: number; rowsRejected: number; errors: string[] } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // Step 1: upload + extract
+  const extractMut = useMutation({
+    mutationFn: () => {
+      if (!pickedFile) throw new Error("No file selected");
+      return api.extractPortfolioFromImage(pid, pickedFile);
+    },
+    onSuccess: (res) => {
+      // Auto-check rows with confidence >= 0.85; lower needs manual verify.
+      setRows(res.holdings.map(h => ({
+        ...h,
+        keep: h.confidence >= 0.85,
+        editing: false,
+      })));
+      setApplyResult(null);
+    },
+  });
+
+  // Step 2: commit user-confirmed rows
+  const applyMut = useMutation({
+    mutationFn: () => {
+      const kept = rows.filter(r => r.keep).map(r => ({
+        symbol: r.symbol,
+        qty: r.qty,
+        avgPrice: r.avgPrice,
+        confidence: r.confidence,
+        rawName: r.rawName,
+      }));
+      return api.applyExtractedHoldings(pid, kept);
+    },
+    onSuccess: (res) => {
+      setApplyResult(res);
+      qc.invalidateQueries({ queryKey: ["portfolio-valuation", pid] });
+      qc.invalidateQueries({ queryKey: ["portfolio-tx", pid] });
+    },
+  });
+
+  const onFile = (f: File) => {
+    setPickedFile(f);
+    setRows([]);
+    setApplyResult(null);
+    // Build a local preview URL so the user can see what was uploaded.
+    const url = URL.createObjectURL(f);
+    setPreview(url);
+  };
+
+  // Revoke the object URL when the modal is closed or replaced.
+  useEffect(() => {
+    return () => {
+      if (preview) URL.revokeObjectURL(preview);
+    };
+  }, [preview]);
+
+  const keptCount = rows.filter(r => r.keep).length;
+
+  const confidenceColor = (c: number) =>
+    c >= 0.85 ? "text-emerald-500"
+    : c >= 0.65 ? "text-amber-500"
+    : "text-rose-500";
+
+  return (
+    <Modal onClose={onClose} title="Import from broker screenshot">
+      <div className="space-y-3">
+        <p className="text-xs text-gray-500">
+          Upload a screenshot of your broker's holdings page (Zerodha Kite,
+          Groww, Upstox, etc.). Our AI vision model will read the rows and
+          let you confirm them before they're added to the portfolio.
+        </p>
+
+        {!rows.length && (
+          <>
+            <input ref={fileRef} type="file"
+              accept="image/jpeg,image/png,image/webp"
+              className="hidden"
+              onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
+            <button onClick={() => fileRef.current?.click()}
+              className="w-full px-3 py-6 text-sm bg-gray-50 dark:bg-gray-800 border border-dashed border-gray-300 dark:border-white/15 rounded hover:bg-gray-100 dark:hover:bg-gray-800/70">
+              <Camera className="w-5 h-5 inline mr-2" />
+              {pickedFile ? `Selected: ${pickedFile.name}` : "Choose a screenshot (JPG / PNG / WebP, max 5 MB)"}
+            </button>
+            {preview && (
+              <div className="rounded border border-gray-200 dark:border-white/10 overflow-hidden">
+                <img src={preview} alt="screenshot preview" className="w-full max-h-60 object-contain bg-gray-50 dark:bg-gray-800/40" />
+              </div>
+            )}
+            {extractMut.isError && (
+              <p className="text-xs text-rose-500">{(extractMut.error as Error).message}</p>
+            )}
+            <button
+              onClick={() => extractMut.mutate()}
+              disabled={!pickedFile || extractMut.isPending}
+              className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded"
+            >
+              {extractMut.isPending
+                ? <><Loader2 className="w-4 h-4 animate-spin inline mr-1" /> Extracting holdings…</>
+                : "Extract holdings"}
+            </button>
+          </>
+        )}
+
+        {rows.length > 0 && !applyResult && (
+          <>
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-gray-500">
+                {rows.length} rows found · {keptCount} selected · rows below 85% confidence need manual review
+              </span>
+              <div className="flex gap-1">
+                <button onClick={() => setRows(rs => rs.map(r => ({ ...r, keep: true })))}
+                  className="px-2 py-0.5 text-xs border border-gray-200 dark:border-white/10 rounded">Select all</button>
+                <button onClick={() => setRows(rs => rs.map(r => ({ ...r, keep: false })))}
+                  className="px-2 py-0.5 text-xs border border-gray-200 dark:border-white/10 rounded">Clear</button>
+              </div>
+            </div>
+            <div className="border border-gray-200 dark:border-white/10 rounded overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="bg-gray-50 dark:bg-gray-800/40 text-gray-500">
+                  <tr>
+                    <th className="px-2 py-1 text-left w-8"></th>
+                    <th className="px-2 py-1 text-left">Symbol</th>
+                    <th className="px-2 py-1 text-right">Qty</th>
+                    <th className="px-2 py-1 text-right">Avg ₹</th>
+                    <th className="px-2 py-1 text-right">Confidence</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r, i) => (
+                    <tr key={i} className={`border-t border-gray-100 dark:border-white/5 ${r.keep ? "" : "opacity-40"}`}>
+                      <td className="px-2 py-1">
+                        <input type="checkbox" checked={r.keep}
+                          onChange={() => setRows(rs => rs.map((x, j) => j === i ? { ...x, keep: !x.keep } : x))} />
+                      </td>
+                      <td className="px-2 py-1 font-mono">
+                        <input value={r.symbol}
+                          onChange={(e) => setRows(rs => rs.map((x, j) => j === i ? { ...x, symbol: e.target.value.toUpperCase() } : x))}
+                          className="w-24 px-1 bg-transparent border border-transparent hover:border-gray-300 dark:hover:border-white/10 rounded" />
+                        {r.rawName && (
+                          <div className="text-[10px] text-gray-400 font-sans">{r.rawName}</div>
+                        )}
+                      </td>
+                      <td className="px-2 py-1 text-right">
+                        <input type="number" value={r.qty}
+                          onChange={(e) => setRows(rs => rs.map((x, j) => j === i ? { ...x, qty: Number(e.target.value) } : x))}
+                          className="w-20 px-1 text-right bg-transparent border border-transparent hover:border-gray-300 dark:hover:border-white/10 rounded" />
+                      </td>
+                      <td className="px-2 py-1 text-right">
+                        <input type="number" step="0.01" value={r.avgPrice}
+                          onChange={(e) => setRows(rs => rs.map((x, j) => j === i ? { ...x, avgPrice: Number(e.target.value) } : x))}
+                          className="w-24 px-1 text-right bg-transparent border border-transparent hover:border-gray-300 dark:hover:border-white/10 rounded" />
+                      </td>
+                      <td className={`px-2 py-1 text-right font-mono ${confidenceColor(r.confidence)}`}>
+                        {(r.confidence * 100).toFixed(0)}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {applyMut.isError && (
+              <p className="text-xs text-rose-500">{(applyMut.error as Error).message}</p>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={() => applyMut.mutate()}
+                disabled={keptCount === 0 || applyMut.isPending}
+                className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded"
+              >
+                {applyMut.isPending
+                  ? <><Loader2 className="w-4 h-4 animate-spin inline mr-1" /> Importing…</>
+                  : <>Import {keptCount} {keptCount === 1 ? "row" : "rows"}</>}
+              </button>
+              <button onClick={() => { setRows([]); setPickedFile(null); setPreview(null); }}
+                className="px-4 py-2 text-sm border border-gray-200 dark:border-white/10 rounded">
+                Re-upload
+              </button>
+            </div>
+          </>
+        )}
+
+        {applyResult && (
+          <div className="text-xs bg-gray-50 dark:bg-gray-800/40 border border-gray-200 dark:border-white/10 rounded p-2 space-y-1">
+            <p className="flex items-center gap-1">
+              <Check className="w-3.5 h-3.5 text-emerald-500" />
+              Inserted <span className="font-medium text-emerald-500">{applyResult.rowsApplied}</span> rows
+              {applyResult.rowsRejected > 0 && <> · rejected <span className="text-rose-500">{applyResult.rowsRejected}</span></>}
+            </p>
+            {applyResult.errors.length > 0 && (
+              <details>
+                <summary className="cursor-pointer text-amber-500 flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5" /> {applyResult.errors.length} errors
+                </summary>
+                <ul className="list-disc pl-4 max-h-24 overflow-y-auto">
+                  {applyResult.errors.slice(0, 20).map((e, i) => <li key={i}>{e}</li>)}
+                </ul>
+              </details>
+            )}
+            <button onClick={onClose}
+              className="mt-2 w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded">
+              Done
+            </button>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 
 // ── Allocation tab ───────────────────────────────────────────────────────────
 
