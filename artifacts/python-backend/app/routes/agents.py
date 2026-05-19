@@ -14,8 +14,9 @@ import logging
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
@@ -124,9 +125,37 @@ _SCREENER_UNIVERSE: list[str] = list(dict.fromkeys(
     [s for s in (NIFTY100 + MIDCAP + SMALLCAP[:100]) if s and isinstance(s, str)]
 ))
 _SCREENER_THRESHOLD   = 14          # of 16 personas — 87.5%
-_SCREENER_TTL_S       = 24 * 3600   # full re-scan once per day
 _SCREENER_CONCURRENCY = 8           # parallel yfinance requests (rate-limit safe)
 _SCREENER_DB          = Path(__file__).parent.parent.parent / "market_cache" / "agents_screener.db"
+_IST                  = ZoneInfo("Asia/Kolkata")
+_NSE_CLOSE_HOUR       = 15          # NSE settles at 15:30 IST
+_NSE_CLOSE_MINUTE     = 30
+# Grace window after close before we trust EOD data sources to have caught up.
+_POST_CLOSE_GRACE_MIN = 30          # → refresh kicks in at 16:00 IST
+
+
+def _most_recent_nse_close() -> float:
+    """Return the unix timestamp of the most recent NSE market close.
+
+    Logic: take 'now' in IST, walk back day-by-day until we land on a weekday
+    whose 16:00 IST has already passed. That weekday's 15:30 IST close is the
+    most recent settlement. If today is a weekday and we are past 16:00 IST,
+    today qualifies; otherwise the previous trading day qualifies. This
+    correctly handles weekends and pre-market intraday calls.
+    """
+    now_ist = datetime.now(_IST)
+    today_close = now_ist.replace(hour=_NSE_CLOSE_HOUR,
+                                  minute=_NSE_CLOSE_MINUTE,
+                                  second=0, microsecond=0)
+    cutoff = today_close + timedelta(minutes=_POST_CLOSE_GRACE_MIN)
+    candidate = now_ist if now_ist >= cutoff else now_ist - timedelta(days=1)
+    # Walk back over weekends (Sat=5, Sun=6) to land on Friday's close.
+    while candidate.weekday() >= 5:
+        candidate -= timedelta(days=1)
+    close = candidate.replace(hour=_NSE_CLOSE_HOUR,
+                              minute=_NSE_CLOSE_MINUTE,
+                              second=0, microsecond=0)
+    return close.timestamp()
 
 _SCAN_LOCK  = threading.Lock()
 _SCAN_STATE = {"in_progress": False, "done": 0, "total": 0, "started_at": 0.0}
@@ -260,9 +289,13 @@ def _maybe_kick_scan(force: bool = False) -> None:
         if _SCAN_STATE["in_progress"]:
             return
         if not force:
-            last     = _db_meta_get("last_scan_at")
-            last_ts  = float(last) if last else 0.0
-            if last_ts > 0 and (time.time() - last_ts) < _SCREENER_TTL_S:
+            last        = _db_meta_get("last_scan_at")
+            last_ts     = float(last) if last else 0.0
+            last_close  = _most_recent_nse_close()
+            # Fresh only if the last scan completed AFTER the most recent NSE
+            # close — i.e. the cache reflects today's settlement (or Friday's
+            # on a weekend). Otherwise we re-scan in the background.
+            if last_ts >= last_close:
                 return
         _SCAN_STATE.update(
             in_progress=True, done=0,
