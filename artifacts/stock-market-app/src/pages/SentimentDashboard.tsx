@@ -163,9 +163,10 @@ function Speedometer({ score, label }: { score: number | null; label: string }) 
     );
   }
 
-  const L = ap(-90, r + 16);
-  const T = ap(0,   r + 18);
-  const R = ap(90,  r + 16);
+  // Place BEAR/BULL below the arc endpoints (inside viewBox), NEUTRAL above the peak
+  const leftEnd  = ap(-90, r);       // left arc terminus
+  const rightEnd = ap(90,  r);       // right arc terminus
+  const topPeak  = ap(0,   r + 18);  // just above the arc top
 
   return (
     <div className="flex flex-col items-center w-full">
@@ -226,10 +227,10 @@ function Speedometer({ score, label }: { score: number | null; label: string }) 
           {countedScore > 0 ? `+${countedScore}` : countedScore}
         </text>
 
-        {/* Axis labels */}
-        <text x={L.x - 4} y={L.y + 4} textAnchor="end"    fontSize="9" fill="#ef4444"    fontWeight="700">BEAR</text>
-        <text x={T.x}     y={T.y - 4} textAnchor="middle" fontSize="9" fill={axisNeutral} fontWeight="700">NEUTRAL</text>
-        <text x={R.x + 4} y={R.y + 4} textAnchor="start"  fontSize="9" fill="#10b981"    fontWeight="700">BULL</text>
+        {/* Axis labels — anchored below arc endpoints to stay inside viewBox */}
+        <text x={leftEnd.x}  y={leftEnd.y  + 18} textAnchor="middle" fontSize="9" fill="#ef4444"    fontWeight="700">BEAR</text>
+        <text x={topPeak.x}  y={topPeak.y  -  4} textAnchor="middle" fontSize="9" fill={axisNeutral} fontWeight="700">NEUTRAL</text>
+        <text x={rightEnd.x} y={rightEnd.y + 18} textAnchor="middle" fontSize="9" fill="#10b981"    fontWeight="700">BULL</text>
 
         {/* Scale ticks */}
         <text x="6"   y="186" fontSize="8" fill={axisNeutral} fontWeight="500">−100</text>
