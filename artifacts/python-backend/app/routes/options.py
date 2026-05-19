@@ -42,6 +42,9 @@ from ..services.options_chatbot import chat_reply, _AI_FALLBACK_REPLY
 from ..services import sebi_registry
 from ..services.risk_free_service import get_india_risk_free_rate
 from ..services import nse_bhavcopy_service as _bhav
+from ..services.nse_service import NseService
+
+_nse = NseService()
 
 router = APIRouter(prefix="/options", tags=["options"])
 logger = logging.getLogger("options_route")
@@ -143,54 +146,192 @@ async def get_spot(symbol: str):
 
 # ── GET /options/chain/{symbol} ───────────────────────────────────────────────
 
-@router.get("/chain/{symbol}")
-async def get_options_chain(symbol: str):
+def _normalise_nse_chain(payload: dict) -> tuple[list[str], dict]:
     """
-    Fetch the live NSE options chain for the nearest expiry via yfinance.
-    Returns calls and puts with strike, lastPrice, bid, ask, IV, OI, volume.
+    Convert NSE option chain payload (both new 'data' list format and legacy
+    'records' format) into {expiry: {calls:[…], puts:[…]}} + sorted expiry list.
     """
-    import yfinance as yf
-    import pandas as pd
+    import datetime
 
-    upper  = symbol.upper()
-    yf_sym = _to_yf_sym(upper)
+    # Detect format
+    if "records" in payload:
+        data_list     = payload["records"].get("data", [])
+        expiry_dates  = payload["records"].get("expiryDates", [])
+        date_fmt      = "%d-%b-%Y"
+        underlying    = payload["records"].get("underlyingValue", 0)
+    elif "data" in payload:
+        data_list = payload["data"]
+        unique: set[str] = set()
+        for e in data_list:
+            ed = e.get("expiryDate") or e.get("expiryDates")
+            if ed:
+                unique.add(ed)
+        sample   = next(iter(unique), "")
+        date_fmt = "%d-%m-%Y" if (sample and "-" in sample and sample.split("-")[1].isdigit()) else "%d-%b-%Y"
+        try:
+            expiry_dates = sorted(list(unique), key=lambda x: datetime.datetime.strptime(x, date_fmt))
+        except ValueError:
+            expiry_dates = sorted(list(unique))
+        underlying = 0
+        if data_list:
+            underlying = data_list[0].get("underlyingValue", 0) or 0
+    else:
+        return [], {}
 
-    def _fetch_chain() -> dict:
-        ticker = yf.Ticker(yf_sym)
-        exps   = ticker.options
-        if not exps:
-            raise ValueError("No options available for this symbol")
+    # Build per-expiry calls/puts
+    chain: dict = {}
+    for item in data_list:
+        exp = item.get("expiryDate") or item.get("expiryDates") or ""
+        if not exp:
+            continue
+        if exp not in chain:
+            chain[exp] = {"calls": [], "puts": []}
+        strike = item.get("strikePrice", 0)
 
-        selected = exps[:min(2, len(exps))]
-        result: dict = {}
-
-        for exp in selected:
-            chain = ticker.option_chain(exp)
-            calls = chain.calls[
-                ["strike", "lastPrice", "bid", "ask", "impliedVolatility",
-                 "openInterest", "volume", "inTheMoney"]
-            ].rename(columns={"impliedVolatility": "iv", "openInterest": "oi"}).copy()
-            puts  = chain.puts[
-                ["strike", "lastPrice", "bid", "ask", "impliedVolatility",
-                 "openInterest", "volume", "inTheMoney"]
-            ].rename(columns={"impliedVolatility": "iv", "openInterest": "oi"}).copy()
-
-            result[exp] = {
-                "calls": calls.fillna(0).to_dict("records"),
-                "puts":  puts.fillna(0).to_dict("records"),
+        def _leg(d: dict) -> dict:
+            return {
+                "strike":      strike,
+                "lastPrice":   d.get("lastPrice", 0) or 0,
+                "bid":         d.get("bidprice", d.get("bid", 0)) or 0,
+                "ask":         d.get("askPrice", d.get("ask", 0)) or 0,
+                "iv":          round((d.get("impliedVolatility", 0) or 0) / 100, 4),
+                "oi":          d.get("openInterest", 0) or 0,
+                "volume":      d.get("totalTradedVolume", d.get("volume", 0)) or 0,
+                "inTheMoney":  d.get("inTheMoney", False),
+                "change":      d.get("change", 0) or 0,
+                "pChange":     d.get("pChange", 0) or 0,
             }
-        return selected, result
+
+        if item.get("CE"):
+            chain[exp]["calls"].append(_leg(item["CE"]))
+        if item.get("PE"):
+            chain[exp]["puts"].append(_leg(item["PE"]))
+
+    # Sort strikes within each expiry
+    for exp in chain:
+        chain[exp]["calls"].sort(key=lambda x: x["strike"])
+        chain[exp]["puts"].sort(key=lambda x: x["strike"])
+
+    return expiry_dates, chain, underlying
+
+
+def _yahoo_chain_fallback(upper: str) -> tuple[list, dict]:
+    """Yahoo Finance fallback — returns (expiries, chain_dict)."""
+    import yfinance as yf
+    yf_sym = _to_yf_sym(upper)
+    ticker = yf.Ticker(yf_sym)
+    exps   = ticker.options
+    if not exps:
+        raise ValueError("No options available for this symbol")
+    selected = exps[:min(2, len(exps))]
+    result: dict = {}
+    for exp in selected:
+        ch = ticker.option_chain(exp)
+        calls = ch.calls[
+            ["strike", "lastPrice", "bid", "ask", "impliedVolatility",
+             "openInterest", "volume", "inTheMoney"]
+        ].rename(columns={"impliedVolatility": "iv", "openInterest": "oi"}).copy()
+        puts = ch.puts[
+            ["strike", "lastPrice", "bid", "ask", "impliedVolatility",
+             "openInterest", "volume", "inTheMoney"]
+        ].rename(columns={"impliedVolatility": "iv", "openInterest": "oi"}).copy()
+        result[exp] = {
+            "calls": calls.fillna(0).to_dict("records"),
+            "puts":  puts.fillna(0).to_dict("records"),
+        }
+    return list(selected), result
+
+
+@router.get("/chain/{symbol}")
+async def get_options_chain(symbol: str, expiry: Optional[str] = None):
+    """
+    Fetch the live NSE options chain.
+
+    Primary: NSE India native API (new NextApi + classic /api/option-chain-*
+    fallback) via the two-page cookie warm-up technique from nsepython.
+    Fallback: Yahoo Finance (used when NSE is Akamai-blocked from this IP).
+
+    Query param `expiry` (DD-Mon-YYYY) selects a specific expiry; omit for
+    the nearest two.
+    """
+    upper = symbol.upper()
+
+    # Determine instrument type
+    _IDX = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"}
+    instrument = "OPTIDX" if any(idx in upper for idx in _IDX) else "OPTSTK"
 
     try:
-        selected, chain_data = await asyncio.to_thread(_fetch_chain)
-        spot_info = await _fetch_spot_and_hv(symbol)
+        # 1 — Try NSE native chain
+        nse_payload = await _nse.get_option_chain(upper, expiry_date=expiry, instrument=instrument)
+        if nse_payload:
+            expiry_dates, chain_data, underlying = _normalise_nse_chain(nse_payload)
+            if chain_data:
+                spot_info = await _fetch_spot_and_hv(symbol)
+                spot      = spot_info.get("spot") or underlying or 0
+                # PCR for first expiry
+                pcr = _nse.calculate_pcr(nse_payload, 0)
+                return {
+                    "symbol":   upper,
+                    "spot":     spot,
+                    "expiries": expiry_dates[:4],
+                    "chain":    chain_data,
+                    "pcr":      pcr,
+                    "source":   "NSE",
+                }
 
+        # 2 — Yahoo Finance fallback
+        selected, chain_data = await asyncio.to_thread(_yahoo_chain_fallback, upper)
+        spot_info = await _fetch_spot_and_hv(symbol)
         return {
             "symbol":   upper,
-            "spot":     spot_info["spot"],
-            "expiries": list(selected),   # fixed: was "expiiries" (double-i)
+            "spot":     spot_info.get("spot", 0),
+            "expiries": selected,
             "chain":    chain_data,
+            "pcr":      None,
+            "source":   "YAHOO",
         }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Options chain fetch failed for %s: %s", upper, exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ── GET /options/expiries/{symbol} ────────────────────────────────────────────
+
+@router.get("/expiries/{symbol}")
+async def get_expiry_list(symbol: str):
+    """
+    Return sorted list of F&O expiry dates for a symbol from NSE NextApi.
+    Format: ["DD-Mon-YYYY", ...]
+    """
+    upper = symbol.upper()
+    _IDX  = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"}
+    instrument = "OPTIDX" if any(idx in upper for idx in _IDX) else "OPTSTK"
+    try:
+        dates = await _nse.get_expiry_list(upper, instrument=instrument)
+        return {"symbol": upper, "expiries": dates, "instrument": instrument}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ── GET /options/pcr/{symbol} ─────────────────────────────────────────────────
+
+@router.get("/pcr/{symbol}")
+async def get_pcr(symbol: str, expiry_index: int = 0):
+    """
+    Return the Put-Call Ratio for a symbol's nearest (or Nth) expiry.
+    """
+    upper = symbol.upper()
+    _IDX  = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"}
+    instrument = "OPTIDX" if any(idx in upper for idx in _IDX) else "OPTSTK"
+    try:
+        payload = await _nse.get_option_chain(upper, instrument=instrument)
+        if not payload:
+            raise HTTPException(status_code=503, detail="NSE option chain unavailable")
+        pcr = _nse.calculate_pcr(payload, expiry_index)
+        return {"symbol": upper, "expiry_index": expiry_index, "pcr": pcr}
     except HTTPException:
         raise
     except Exception as exc:
