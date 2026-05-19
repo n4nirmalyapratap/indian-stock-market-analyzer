@@ -262,6 +262,28 @@ export interface AgentsListResponse {
   count:    number;
 }
 
+export interface ConsensusPick {
+  symbol:         string;
+  name:           string | null;
+  sector:         string | null;
+  lastPrice:      number | null;
+  buyCount:       number;
+  avoidCount:     number;
+  holdCount:      number;
+  total:          number;
+  avgScore:       number;
+  councilVerdict: AgentVerdict;
+}
+
+export interface ConsensusScreenerResponse {
+  buyPicks:       ConsensusPick[];
+  avoidPicks:     ConsensusPick[];
+  thresholdPct:   number;
+  thresholdCount: number;
+  totalScreened:  number;
+  cachedAt:       string;
+}
+
 // ── Macro Pulse (India macro indicators) ─────────────────────────────────────
 
 export interface MacroTile {
@@ -552,6 +574,9 @@ export const api = {
   // ── Famous-Investor AI Council ──
   agentsList: () =>
     fetchApi<AgentsListResponse>("/agents"),
+
+  agentConsensusScreener: () =>
+    fetchApi<ConsensusScreenerResponse>("/agents/screener/consensus"),
 
   agentCouncil: (symbol: string) =>
     fetchApi<CouncilResponse>(`/agents/${encodeURIComponent(symbol)}`),

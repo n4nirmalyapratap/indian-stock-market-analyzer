@@ -3,13 +3,14 @@ import { useQuery } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
 import { api } from "@/lib/api";
 import {
-  Search, ArrowLeft, CheckCircle2, XCircle, MinusCircle, Sparkles,
+  ArrowLeft, CheckCircle2, XCircle, MinusCircle, Sparkles,
   TrendingUp, TrendingDown, Loader2, Quote, LayoutGrid, Grid3x3,
+  Users, ShieldAlert, ChevronRight,
 } from "lucide-react";
 
 // ─── Types — re-exported from shared api types so they stay in sync ──────────
 
-import type { AgentVerdict as Verdict, ChecklistItem, PersonaResult, CouncilResponse, PersonaRegion } from "@/lib/api";
+import type { AgentVerdict as Verdict, ChecklistItem, PersonaResult, CouncilResponse, PersonaRegion, ConsensusPick } from "@/lib/api";
 import { StockCombobox } from "@/components/StockCombobox";
 export type { Verdict, ChecklistItem, PersonaResult, CouncilResponse };
 
@@ -289,6 +290,146 @@ function PersonaThesisModal({ symbol, personaId, onClose }: {
   );
 }
 
+// ─── Consensus Spotlight cards ────────────────────────────────────────────────
+
+function ConsensusCard({
+  title, subtitle, icon, picks, emptyMsg, accentClass, chipClass, countClass, onSelect,
+}: {
+  title: string;
+  subtitle: string;
+  icon: React.ReactNode;
+  picks: ConsensusPick[];
+  emptyMsg: string;
+  accentClass: string;
+  chipClass: string;
+  countClass: string;
+  onSelect: (sym: string) => void;
+}) {
+  return (
+    <div className={`flex-1 min-w-0 rounded-2xl border overflow-hidden ${accentClass}`}>
+      <div className="px-4 py-3 flex items-center gap-2 border-b border-inherit">
+        {icon}
+        <div className="flex-1 min-w-0">
+          <div className="font-bold text-sm text-gray-900 dark:text-white">{title}</div>
+          <div className="text-[11px] text-gray-500 dark:text-gray-400">{subtitle}</div>
+        </div>
+        <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/60 dark:bg-black/30 text-gray-700 dark:text-gray-200">
+          {picks.length}
+        </span>
+      </div>
+
+      <div className="p-3">
+        {picks.length === 0 ? (
+          <p className="text-xs text-gray-400 dark:text-gray-500 text-center py-4 italic">{emptyMsg}</p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {picks.map((p) => (
+              <button
+                key={p.symbol}
+                onClick={() => onSelect(p.symbol)}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-all hover:shadow-sm active:scale-[0.99] ${chipClass}`}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-black text-sm tracking-tight text-gray-900 dark:text-white">{p.symbol}</span>
+                    {p.name && (
+                      <span className="text-[11px] text-gray-500 dark:text-gray-400 truncate max-w-[140px]">{p.name}</span>
+                    )}
+                  </div>
+                  {p.sector && (
+                    <span className="text-[10px] text-gray-400 dark:text-gray-500">{p.sector}</span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  {p.lastPrice != null && (
+                    <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">
+                      ₹{p.lastPrice.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                    </span>
+                  )}
+                  <span className={`text-[11px] font-black px-2 py-0.5 rounded-lg ${countClass}`}>
+                    {Math.max(p.buyCount, p.avoidCount)}/{p.total}
+                  </span>
+                  <span className="text-xs font-bold text-gray-500 dark:text-gray-400 w-8 text-right">
+                    {Math.round(p.avgScore * 100)}%
+                  </span>
+                  <ChevronRight className="w-3.5 h-3.5 text-gray-400" />
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ConsensusSpotlight({ onSelect }: { onSelect: (sym: string) => void }) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["agent-consensus-screener"],
+    queryFn:  () => api.agentConsensusScreener(),
+    staleTime: 4 * 3600 * 1000,
+    retry: 1,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-white/10 rounded-2xl p-6 flex flex-col items-center gap-3">
+        <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          Screening {30} Nifty stocks across all 16 personas…
+          <span className="block text-xs text-gray-400 dark:text-gray-500 mt-1">First load takes 10–20 s; cached for 4 h after that.</span>
+        </p>
+      </div>
+    );
+  }
+
+  if (error || !data) return null;
+
+  const pct = data.thresholdPct;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Users className="w-4 h-4 text-indigo-500" />
+        <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300">Council Consensus Spotlight</h2>
+        <span className="text-[11px] text-gray-400 dark:text-gray-500">
+          ≥ {pct}% of 16 personas agree · {data.totalScreened} stocks screened
+        </span>
+      </div>
+
+      <div className="flex gap-3 flex-col sm:flex-row">
+        <ConsensusCard
+          title="Strong Buy Consensus"
+          subtitle={`${data.buyPicks.length} stock${data.buyPicks.length !== 1 ? "s" : ""} · ≥${pct}% say BUY`}
+          icon={<TrendingUp className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />}
+          picks={data.buyPicks}
+          emptyMsg={`No stock currently has ≥${pct}% buy consensus. Market is mixed.`}
+          accentClass="border-emerald-200 dark:border-emerald-500/20 bg-emerald-50/50 dark:bg-emerald-500/5"
+          chipClass="bg-white dark:bg-gray-900 border-emerald-100 dark:border-emerald-500/15 hover:border-emerald-400 dark:hover:border-emerald-400"
+          countClass="bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
+          onSelect={onSelect}
+        />
+        <ConsensusCard
+          title="Strong Avoid Consensus"
+          subtitle={`${data.avoidPicks.length} stock${data.avoidPicks.length !== 1 ? "s" : ""} · ≥${pct}% say AVOID`}
+          icon={<ShieldAlert className="w-4 h-4 text-red-500 dark:text-red-400 shrink-0" />}
+          picks={data.avoidPicks}
+          emptyMsg={`No stock currently has ≥${pct}% avoid consensus. Market is mixed.`}
+          accentClass="border-red-200 dark:border-red-500/20 bg-red-50/50 dark:bg-red-500/5"
+          chipClass="bg-white dark:bg-gray-900 border-red-100 dark:border-red-500/15 hover:border-red-400 dark:hover:border-red-400"
+          countClass="bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-300"
+          onSelect={onSelect}
+        />
+      </div>
+
+      <p className="text-[10px] text-gray-400 dark:text-gray-600 text-center">
+        Click any stock to open its full Council report · verdicts are deterministic, not AI-generated
+      </p>
+    </div>
+  );
+}
+
 // ─── Search landing (when no symbol) ──────────────────────────────────────────
 
 function SearchLanding({ onSelect }: { onSelect: (sym: string) => void }) {
@@ -296,52 +437,56 @@ function SearchLanding({ onSelect }: { onSelect: (sym: string) => void }) {
   const popular = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","ITC","SBIN","BAJFINANCE","HINDUNILVR","MARUTI","WIPRO","ASIANPAINT"];
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6 py-6">
-      <div className="text-center space-y-2">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 text-xs font-medium">
-          <Sparkles className="w-3.5 h-3.5" /> AI Investor Council
+    <div className="max-w-5xl mx-auto space-y-8 py-6">
+      <div className="max-w-2xl mx-auto space-y-6">
+        <div className="text-center space-y-2">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 text-xs font-medium">
+            <Sparkles className="w-3.5 h-3.5" /> AI Investor Council
+          </div>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+            Ask the legends about any Indian stock
+          </h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 max-w-lg mx-auto">
+            Sixteen famous investors — eight global legends (Buffett, Graham, Lynch, Munger, Klarman, Marks, Dalio, Burry) plus eight Indian icons (Jhunjhunwala, Damani, Agrawal, Kedia, Veliyath, Ramesh Damani, Kacholia, Khanna) — run their documented checklists on any NSE stock and write a short AI thesis in their own voice.
+          </p>
         </div>
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-          Ask the legends about any Indian stock
-        </h1>
-        <p className="text-sm text-gray-500 dark:text-gray-400 max-w-lg mx-auto">
-          Sixteen famous investors — eight global legends (Buffett, Graham, Lynch, Munger, Klarman, Marks, Dalio, Burry) plus eight Indian icons (Jhunjhunwala, Damani, Agrawal, Kedia, Veliyath, Ramesh Damani, Kacholia, Khanna) — run their documented checklists on any NSE stock and write a short AI thesis in their own voice.
-        </p>
+
+        <form
+          onSubmit={(e) => { e.preventDefault(); if (input.trim()) onSelect(input.trim().toUpperCase()); }}
+          className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-white/10 rounded-xl p-4 flex gap-2"
+        >
+          <div className="flex-1">
+            <StockCombobox
+              autoFocus
+              value={input}
+              onChange={setInput}
+              onSelect={(s) => onSelect(s.symbol)}
+              onSubmit={() => input.trim() && onSelect(input.trim().toUpperCase())}
+              placeholder="Enter NSE symbol or company name (e.g. RELIANCE)…"
+            />
+          </div>
+          <button type="submit" className="px-4 py-1.5 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700">
+            Ask the Council
+          </button>
+        </form>
+
+        <div>
+          <p className="text-xs text-gray-400 uppercase tracking-wider mb-2">Popular stocks</p>
+          <div className="flex flex-wrap gap-2">
+            {popular.map((s) => (
+              <button
+                key={s}
+                onClick={() => onSelect(s)}
+                className="px-3 py-1 text-xs font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-full hover:border-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition"
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      <form
-        onSubmit={(e) => { e.preventDefault(); if (input.trim()) onSelect(input.trim().toUpperCase()); }}
-        className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-white/10 rounded-xl p-4 flex gap-2"
-      >
-        <div className="flex-1">
-          <StockCombobox
-            autoFocus
-            value={input}
-            onChange={setInput}
-            onSelect={(s) => onSelect(s.symbol)}
-            onSubmit={() => input.trim() && onSelect(input.trim().toUpperCase())}
-            placeholder="Enter NSE symbol or company name (e.g. RELIANCE)…"
-          />
-        </div>
-        <button type="submit" className="px-4 py-1.5 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700">
-          Ask the Council
-        </button>
-      </form>
-
-      <div>
-        <p className="text-xs text-gray-400 uppercase tracking-wider mb-2">Popular stocks</p>
-        <div className="flex flex-wrap gap-2">
-          {popular.map((s) => (
-            <button
-              key={s}
-              onClick={() => onSelect(s)}
-              className="px-3 py-1 text-xs font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-full hover:border-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition"
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-      </div>
+      <ConsensusSpotlight onSelect={onSelect} />
     </div>
   );
 }
