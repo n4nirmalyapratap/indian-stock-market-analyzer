@@ -16,6 +16,17 @@ import {
 type Verdict = "BUY" | "HOLD" | "SELL";
 type Confidence = "LOW" | "MEDIUM" | "HIGH";
 
+interface BiasCheck {
+  enabled: boolean;
+  lastPrice: number | null;
+  ma20: number | null;
+  biasPct: number | null;
+  threshold: number;
+  isExtended: boolean;
+  strongTrend: boolean;
+  warning: string | null;
+}
+
 interface Report {
   ticker: string;
   name: string;
@@ -25,6 +36,7 @@ interface Report {
   priceTarget: string;
   horizon: string;
   keyRisks: string[];
+  biasCheck?: BiasCheck;
   analysts: { fundamentals: string; news: string; technicals: string; macro: string };
   debate: { bull: string; bear: string };
   snapshot: { lastPrice?: number; pChange?: number; marketState?: string; asOfIst?: string };
@@ -599,6 +611,20 @@ export default function AIAnalyst() {
                    value={report.wallClockMs ? `${(report.wallClockMs / 1000).toFixed(1)}s` : "—"}
                    hint={`${report.modelsUsed.length} model${report.modelsUsed.length === 1 ? "" : "s"}`} />
             </div>
+
+            {/* Anti-FOMO bias check — only render when actually triggered */}
+            {report.biasCheck?.isExtended && report.biasCheck?.warning && (
+              <div className="px-5 py-3 border-t border-amber-200 dark:border-amber-900/40 bg-amber-50 dark:bg-amber-900/15">
+                <p className="text-[10px] uppercase tracking-wider text-amber-700 dark:text-amber-300 font-semibold mb-1 flex items-center gap-1.5">
+                  <AlertCircle className="w-3 h-3" /> Bias warning — stock looks extended
+                </p>
+                <p className="text-xs text-amber-800 dark:text-amber-200">{report.biasCheck.warning}</p>
+                <p className="text-[10px] text-amber-700/70 dark:text-amber-400/70 mt-1 font-mono">
+                  Bias {report.biasCheck.biasPct?.toFixed(1)}% vs MA20 ({report.biasCheck.threshold}% threshold
+                  {report.biasCheck.strongTrend ? ", uptrend allowance applied" : ""})
+                </p>
+              </div>
+            )}
 
             {/* Key risks */}
             {report.keyRisks?.length > 0 && (

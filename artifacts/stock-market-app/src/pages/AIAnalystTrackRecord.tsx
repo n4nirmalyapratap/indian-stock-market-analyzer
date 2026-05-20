@@ -130,11 +130,14 @@ function CallRow({ call }: { call: Call }) {
 }
 
 export default function AIAnalystTrackRecord() {
-  const { token } = useCustomAuth();
+  const { token, user } = useCustomAuth();
+  const isAdmin = !!user?.isAdmin;
   const [overall, setOverall]   = useState<OverallStats | null>(null);
   const [recent,  setRecent]    = useState<Call[]>([]);
   const [loading, setLoading]   = useState(true);
   const [error,   setError]     = useState<string>("");
+  // Non-admins can only see their own calls (the backend gates scope=all).
+  // Forcing scope=me when !isAdmin avoids a 403 if the admin toggle leaks.
   const [scope,   setScope]     = useState<"me" | "all">("me");
 
   useEffect(() => {
@@ -246,15 +249,17 @@ export default function AIAnalystTrackRecord() {
             >
               My calls
             </button>
-            <button
-              onClick={() => setScope("all")}
-              className={`px-2 py-1 rounded border ${scope === "all"
-                ? "bg-indigo-600 text-white border-indigo-600"
-                : "bg-white dark:bg-gray-900 border-gray-200 dark:border-white/10"}`}
-              title="App-wide stream (admin only)"
-            >
-              All calls
-            </button>
+            {isAdmin && (
+              <button
+                onClick={() => setScope("all")}
+                className={`px-2 py-1 rounded border ${scope === "all"
+                  ? "bg-indigo-600 text-white border-indigo-600"
+                  : "bg-white dark:bg-gray-900 border-gray-200 dark:border-white/10"}`}
+                title="App-wide stream — admin only"
+              >
+                All calls
+              </button>
+            )}
           </div>
         </div>
         <div className="rounded-xl border border-gray-200 dark:border-white/10 bg-white dark:bg-gray-900 overflow-hidden">
