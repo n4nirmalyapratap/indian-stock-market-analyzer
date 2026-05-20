@@ -10,6 +10,11 @@ NSE equity symbols get the .NS suffix unless already present.
 
 # Map index display names → Yahoo Finance tickers
 SYMBOL_MAP: dict[str, str] = {
+    # ── NSE equity overrides — tickers where SYMBOL.NS is broken on Yahoo
+    #    but the BSE code (XXXXXX.BO) works correctly. Add here whenever a
+    #    merger / rename causes the .NS form to go dark on Yahoo Finance. ──
+    "LTIM":        "540005.BO",   # LTIMindtree — LTIM.NS dark post-merger; BSE 540005 works
+
     # ── NSE Broad Market ──────────────────────────────────────────────────
     "NIFTY 50":                        "^NSEI",
     "NIFTY50":                         "^NSEI",
