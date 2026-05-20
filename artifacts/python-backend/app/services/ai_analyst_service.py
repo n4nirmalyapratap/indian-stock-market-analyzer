@@ -73,6 +73,10 @@ IST = timezone(timedelta(hours=5, minutes=30))
 DEFAULT_DAILY_QUOTA = 3      # free tier (admin-configurable via secret AI_ANALYST_DAILY_QUOTA)
 PAID_DAILY_QUOTA    = 25     # paid tier (no billing wired yet)
 
+# When RSS coverage of a ticker is below this many articles, we top up via
+# Tavily search (gated on TAVILY_API_KEY — otherwise the top-up is a no-op).
+_NEWS_TAVILY_FLOOR = 3
+
 
 def _daily_quota_limit() -> int:
     """Resolve the per-user daily quota.
@@ -574,13 +578,17 @@ async def _gather_context(ticker: str) -> dict:
             return {}
 
     async def _news():
+        # RSS feeds are the primary source — they're free, immediate, and
+        # already cached. For mid/small-cap tickers the RSS hit rate is
+        # thin, so we top up with Tavily when configured and the RSS
+        # match count is below `_NEWS_TAVILY_FLOOR`.
         try:
             feed = await news_service.get_news_feed(category="all", limit=80, offset=0)
         except Exception as e:
             logger.warning("ai_analyst: news fetch failed: %s", e)
-            return []
+            feed = {"articles": []}
         sym = upper.replace(".NS", "").replace(".BO", "")
-        out = []
+        out: list[dict] = []
         for art in feed.get("articles", [])[:80]:
             tickers = [t.upper() for t in (art.get("tickers") or [])]
             title = (art.get("title") or "").lower()
@@ -593,6 +601,31 @@ async def _gather_context(ticker: str) -> dict:
                 })
             if len(out) >= 8:
                 break
+
+        # Tavily top-up: when RSS coverage is thin, fetch from Tavily and
+        # merge in unique titles. Configured by TAVILY_API_KEY — if unset,
+        # the call returns [] immediately without an HTTP request.
+        if len(out) < _NEWS_TAVILY_FLOOR:
+            try:
+                from . import tavily_service  # noqa: PLC0415
+                tav = await tavily_service.search_ticker_news(sym, days=7, max_results=8)
+            except Exception as e:
+                logger.warning("ai_analyst: tavily fetch failed: %s", e)
+                tav = []
+            seen_titles = {(a.get("title") or "").lower().strip() for a in out}
+            for art in tav:
+                t = (art.get("title") or "").lower().strip()
+                if not t or t in seen_titles:
+                    continue
+                seen_titles.add(t)
+                out.append({
+                    "title":     art.get("title"),
+                    "source":    art.get("source"),
+                    "published": art.get("published"),
+                    "sentiment": art.get("sentiment"),
+                })
+                if len(out) >= 8:
+                    break
         return out
 
     async def _fii_dii():
@@ -1003,11 +1036,58 @@ async def _run_analysis_impl(ticker: str, user_id: str,
       confidence = (verdict_obj.get("confidence") or "MEDIUM").upper()
       headline = _scrub_advice((verdict_obj.get("headline") or
                                 "Synthesis incomplete — review the analyst notes.").strip())
+
+      # ── Anti-FOMO / bias-rate check ───────────────────────────────────────
+      # If the verdict is BUY but the stock is already trading well above its
+      # 20-day moving average, downgrade to HOLD with a "wait for pullback"
+      # warning. Strong trend stacks (MA5>MA10>MA20) get a relaxed threshold
+      # so legitimate momentum setups aren't suppressed. See bias_check.py.
+      from . import bias_check  # noqa: PLC0415
+      ta = (ctx.get("stockDetail") or {}).get("technicalAnalysis") or {}
+      bb_middle = ((ta.get("bollingerBands") or {}).get("middle"))
+      last_price_for_bias = (ctx.get("stockDetail") or {}).get("lastPrice") \
+                            or ta.get("currentPrice")
+      hist_closes = [
+          float(row.get("close") or 0)
+          for row in ((ctx.get("stockDetail") or {}).get("historicalData") or [])
+          if row.get("close") is not None
+      ]
+      bias_assessment = bias_check.assess(
+          last_price=last_price_for_bias,
+          closes=hist_closes if hist_closes else None,
+          # bb_middle is SMA20 by Bollinger Bands convention; use it as our
+          # MA20 anchor when present (cheaper than re-deriving from closes).
+          ma20=float(bb_middle) if bb_middle is not None else None,
+      )
+      downgraded_verdict, bias_warning = bias_check.downgrade_verdict_if_chasing(
+          verdict, bias_assessment,
+      )
+      if downgraded_verdict != verdict:
+          logger.info(
+              "ai_analyst: %s BUY→%s (bias=%.1f%% > %s%%)",
+              upper, downgraded_verdict,
+              bias_assessment.get("biasPct") or 0,
+              bias_assessment.get("threshold"),
+          )
+          verdict = downgraded_verdict
+
       yield _ev("trader", status="done", partial=json.dumps(verdict_obj))
 
       # Phase 4 — Risk gate
       yield _ev("risk", status="running")
       # Already scrubbed all components; the risk gate is the final assembly.
+      # If the bias check fired, prepend the warning to keyRisks so it's the
+      # first thing the user sees — and lower the confidence one notch.
+      base_risks = verdict_obj.get("keyRisks") or []
+      if bias_warning:
+          base_risks = [bias_warning] + list(base_risks)
+          # Step confidence down one notch when we downgraded — keeps the
+          # report honest about the regime change.
+          if confidence == "HIGH":
+              confidence = "MEDIUM"
+          elif confidence == "MEDIUM":
+              confidence = "LOW"
+
       report = {
           "ticker":     upper,
           "name":       (ctx["stockDetail"].get("info") or {}).get("longName")
@@ -1017,7 +1097,8 @@ async def _run_analysis_impl(ticker: str, user_id: str,
           "headline":   headline,
           "priceTarget": verdict_obj.get("priceTarget") or "N/A",
           "horizon":    verdict_obj.get("horizon") or "3-6 months",
-          "keyRisks":   verdict_obj.get("keyRisks") or [],
+          "keyRisks":   base_risks,
+          "biasCheck":  bias_assessment,
           "analysts": {
               "fundamentals": notes.get("fundamentals", ""),
               "news":         notes.get("news", ""),
