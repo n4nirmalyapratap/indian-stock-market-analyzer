@@ -288,8 +288,7 @@ class SectorsService:
             if len(disk_by_symbol) == len(SECTOR_INDICES):
                 sectors = sorted(
                     disk_by_symbol.values(),
-                    key=lambda x: x["pChange"],
-                    reverse=True,
+                    key=lambda x: (x["pChange"] is None, -(x["pChange"] or 0)),
                 )
 
         # Live path — open market, or some disk snapshots are missing.
@@ -432,7 +431,7 @@ class SectorsService:
                     "source": "NSE",
                     "yahooTicker": sector["yahooTicker"],
                 })
-        return sorted(results, key=lambda s: s["pChange"], reverse=True)
+        return sorted(results, key=lambda s: (s["pChange"] is None, -(s["pChange"] or 0)))
 
     def _get_default_sectors(self) -> list[dict]:
         return [
@@ -1162,8 +1161,8 @@ class SectorsService:
         top_picks = self._build_top_picks(enriched, eco_phase, favored)
 
         # ── Market breadth ────────────────────────────────────────────────────
-        advancing = sum(1 for s in score_sectors if s.get("pChange", 0) > 0)
-        declining = sum(1 for s in score_sectors if s.get("pChange", 0) < 0)
+        advancing = sum(1 for s in score_sectors if (s.get("pChange") or 0) > 0)
+        declining = sum(1 for s in score_sectors if (s.get("pChange") or 0) < 0)
         total = len(score_sectors)
 
         # ── Signal counts across tiers ────────────────────────────────────────

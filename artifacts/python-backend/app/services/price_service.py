@@ -201,6 +201,59 @@ class PriceService:
                     "marketState": market_state,
                 }
 
+        # 2b. History-derived synthetic quote — last resort when both NSE and
+        # Yahoo return no usable price (e.g. BSE-only tickers that Yahoo
+        # misidentifies post-merger, like LTIM→540005.BO).  We pull the most
+        # recent historical bar from PriceService (which DOES succeed via the
+        # symbol_map BSE override) and synthesise a minimal quote so the
+        # watchlist / details panel shows the correct EOD close instead of ₹0.
+        # 2b applies in ALL market states — during open hours LTIM-style tickers
+        # still have no live feed (NSE can't serve them, Yahoo returns None price).
+        # History-derived is the only honest option; source="HISTORY_DERIVED" tells
+        # the UI it is EOD data, not a live price.
+        if snap is None:
+            try:
+                bars = await self.get_historical_data(sym, 5)
+                if bars and len(bars) >= 2:
+                    last = bars[-1]
+                    prev = bars[-2]
+                    eod_close  = float(last.get("close") or 0)
+                    eod_prev   = float(prev.get("close") or 0)
+                    if eod_close:
+                        synth_change  = round(eod_close - eod_prev, 2) if eod_prev else 0
+                        synth_pchange = (
+                            round(synth_change / eod_prev * 100, 4)
+                            if eod_prev else 0
+                        )
+                        synth_quote = {
+                            "symbol":       sym,
+                            "companyName":  sym,
+                            "lastPrice":    eod_close,
+                            "change":       synth_change,
+                            "pChange":      synth_pchange,
+                            "open":         float(last.get("open") or 0),
+                            "dayHigh":      float(last.get("high") or 0),
+                            "dayLow":       float(last.get("low") or 0),
+                            "previousClose": eod_prev,
+                            "volume":       int(last.get("volume") or 0),
+                            "source":       "HISTORY",
+                            "servedFrom":   "HISTORY_DERIVED",
+                        }
+                        snap = {
+                            "quote":       synth_quote,
+                            "source":      "HISTORY",
+                            "servedFrom":  "HISTORY_DERIVED",
+                            "asOf":        last.get("date", _disk._now_ist().isoformat()),
+                            "marketState": market_state,
+                        }
+                        logger.info(
+                            "Quote for %s synthesised from history (Yahoo/NSE both "
+                            "returned no price — likely post-merger BSE-only ticker).",
+                            sym,
+                        )
+            except Exception as _he:
+                logger.debug("History-derived quote fallback failed for %s: %s", sym, _he)
+
         if snap is None:
             return None
 
