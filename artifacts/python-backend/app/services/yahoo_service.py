@@ -181,22 +181,29 @@ class YahooService:
                     if not meta:
                         return None
                     meta = meta.get("meta", {})
-                    prev_close = meta.get("chartPreviousClose", 0) or 0
-                    price = meta.get("regularMarketPrice", 0) or 0
+                    # Yahoo misidentifies some post-merger / BSE-only equities as
+                    # MUTUALFUND and returns regularMarketPrice: None.  Treat a
+                    # missing price as a failed quote so the caller can fall
+                    # through to the disk-EOD overlay — never return ₹0.00.
+                    raw_price = meta.get("regularMarketPrice")
+                    if raw_price is None:
+                        return None
+                    price = float(raw_price) or 0
+                    prev_close = float(meta.get("chartPreviousClose") or 0)
                     data = {
                         "symbol": symbol,
                         "companyName": meta.get("longName", symbol),
                         "lastPrice": price,
                         "change": price - prev_close,
                         "pChange": ((price - prev_close) / prev_close * 100) if prev_close else 0,
-                        "open": meta.get("regularMarketOpen", 0),
-                        "dayHigh": meta.get("regularMarketDayHigh", 0),
-                        "dayLow": meta.get("regularMarketDayLow", 0),
+                        "open": meta.get("regularMarketOpen") or 0,
+                        "dayHigh": meta.get("regularMarketDayHigh") or 0,
+                        "dayLow": meta.get("regularMarketDayLow") or 0,
                         "previousClose": prev_close,
-                        "volume": meta.get("regularMarketVolume", 0),
-                        "marketCap": meta.get("marketCap", 0),
-                        "fiftyTwoWeekHigh": meta.get("52WeekHigh", 0),
-                        "fiftyTwoWeekLow": meta.get("52WeekLow", 0),
+                        "volume": meta.get("regularMarketVolume") or 0,
+                        "marketCap": meta.get("marketCap") or 0,
+                        "fiftyTwoWeekHigh": meta.get("52WeekHigh") or 0,
+                        "fiftyTwoWeekLow": meta.get("52WeekLow") or 0,
                         "source": "YAHOO",
                     }
                     _set_cache(cache_key, data, _quote_ttl())
