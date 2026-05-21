@@ -299,6 +299,69 @@ def delete_transaction(user_id: str, portfolio_id: str, tx_id: str) -> bool:
     return True
 
 
+def delete_transactions_bulk(user_id: str, portfolio_id: str,
+                              tx_ids: list[str]) -> dict:
+    """Delete multiple transactions and roll back their cash impact in one
+    atomic round-trip.
+
+    Each row's cash delta is reversed — the same arithmetic as
+    ``delete_transaction`` but vectorised. We do this in a single
+    transaction so a mid-batch crash leaves the portfolio in a consistent
+    state (either every row + cash adjustment lands, or none of them do).
+
+    Returns ``{"deleted": int, "skipped": int}``. Rows that don't belong
+    to this portfolio (e.g. a stale tx_id from a different page) are
+    skipped, not errored — keeps batch DELETE forgiving.
+    """
+    if not get_portfolio(user_id, portfolio_id):
+        return {"deleted": 0, "skipped": len(tx_ids or []), "error": "portfolio not found"}
+    if not tx_ids:
+        return {"deleted": 0, "skipped": 0}
+
+    clean_ids = [str(t) for t in tx_ids if t]
+    if not clean_ids:
+        return {"deleted": 0, "skipped": 0}
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, side, qty, price, fees FROM portfolio_transactions "
+                "WHERE id = ANY(%s) AND portfolio_id = %s",
+                (clean_ids, portfolio_id),
+            )
+            rows = cur.fetchall()
+            if not rows:
+                return {"deleted": 0, "skipped": len(clean_ids)}
+
+            total_cash_delta = 0.0
+            for row in rows:
+                side  = row["side"]
+                qty   = float(row["qty"])
+                price = float(row["price"])
+                fees  = float(row["fees"] or 0)
+                if side == "BUY":
+                    total_cash_delta += +(qty * price + fees)
+                elif side == "SELL":
+                    total_cash_delta += -(qty * price - fees)
+                else:  # DIVIDEND
+                    total_cash_delta += -(qty * price)
+
+            cur.execute(
+                "DELETE FROM portfolio_transactions WHERE id = ANY(%s) "
+                "AND portfolio_id = %s",
+                (clean_ids, portfolio_id),
+            )
+            deleted = cur.rowcount
+            cur.execute(
+                "UPDATE portfolios SET cash = cash + %s, updated_at = %s "
+                "WHERE id = %s",
+                (total_cash_delta, _now_ms(), portfolio_id),
+            )
+        conn.commit()
+
+    return {"deleted": deleted, "skipped": len(clean_ids) - deleted}
+
+
 # ── Holdings derivation ──────────────────────────────────────────────────────
 
 def derive_holdings(portfolio_id: str) -> list[dict]:

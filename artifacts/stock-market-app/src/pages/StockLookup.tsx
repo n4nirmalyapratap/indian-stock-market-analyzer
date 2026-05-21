@@ -9,6 +9,7 @@ import StockFinancials from "@/components/financials/StockFinancials";
 import TechnicalSummary from "@/components/technicals/TechnicalSummary";
 import DataFreshness from "@/components/DataFreshness";
 import { StockCombobox } from "@/components/StockCombobox";
+import TickerNewsPanel from "@/components/TickerNewsPanel";
 import { marketDataQueryOptions, pickMeta } from "@/lib/marketData";
 
 const NIFTY100_QUICK = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","ITC","SBIN","BHARTIARTL","KOTAKBANK","BAJFINANCE","AXISBANK","MARUTI","HCLTECH","WIPRO","TITAN","SUNPHARMA"];
@@ -186,6 +187,9 @@ export default function StockLookup() {
           {view === "financials" && (
             <StockFinancials symbol={data.symbol} />
           )}
+
+          {/* Latest news for this ticker (RSS + Tavily top-up when thin) */}
+          <TickerNewsPanel symbol={data.symbol} limit={15} />
         </div>
       )}
 

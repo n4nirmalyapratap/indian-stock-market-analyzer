@@ -269,6 +269,24 @@ async def saved_delete(sid: int, request: Request):
     return {"deleted": sid}
 
 
+class BulkDeleteBody(BaseModel):
+    """Body for the bulk-delete endpoint. Capped at 500 ids so a runaway
+    client can't trigger an expensive ANY-array delete."""
+    ids: list[int] = Field(..., min_length=1, max_length=500)
+
+
+@router.post("/saved/bulk-delete")
+async def saved_delete_bulk(body: BulkDeleteBody, request: Request):
+    """Delete many saved analyses in one call.
+
+    Returns the number of rows actually deleted. We POST (not DELETE) with
+    a body because DELETE-with-body has spotty support across nginx /
+    cloudflare / corporate proxies.
+    """
+    count = svc.delete_saved_bulk(_user_id(request), body.ids)
+    return {"requested": len(body.ids), "deleted": count}
+
+
 # ── Backtest / track-record endpoints ─────────────────────────────────────────
 # Show how the AI Analyst's BUY/SELL verdicts have actually played out.
 # Honest stats build trust; hiding them only hides bad calls until users

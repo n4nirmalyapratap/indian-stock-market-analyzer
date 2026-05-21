@@ -6,6 +6,7 @@ import {
   Building2, GitCompare, ListChecks,
 } from "lucide-react";
 import { useCustomAuth } from "@/context/CustomAuthContext";
+import { api } from "@/lib/api";
 
 type Scope = "single" | "pair" | "group";
 type Verdict = "BUY" | "HOLD" | "SELL";
@@ -120,6 +121,30 @@ export default function SavedAnalyses() {
   const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
 
+  // Bulk-select state. Stored as a Set<number> so toggle is O(1) and the
+  // header checkbox can reason about "all visible items selected" without
+  // a linear scan on every render.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  const allVisibleIds = useMemo(() => items.map(i => i.id), [items]);
+  const allSelected = allVisibleIds.length > 0 &&
+                      allVisibleIds.every(id => selected.has(id));
+  const toggleOne = (id: number) =>
+    setSelected(s => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleAll = () =>
+    setSelected(s =>
+      allSelected ? new Set() : new Set(allVisibleIds));
+
+  // Clear selection when the user switches tab/search so they don't
+  // accidentally bulk-delete items they can't see anymore.
+  useEffect(() => { setSelected(new Set()); }, [tab, q]);
+
   const load = useCallback(async () => {
     if (!token) return;
     setLoading(true); setErr(null);
@@ -152,10 +177,37 @@ export default function SavedAnalyses() {
       });
       if (!r.ok) throw new Error(await _friendlyError(r));
       setItems(prev => prev.filter(x => x.id !== row.id));
+      // If this row was in the selection set, drop it.
+      setSelected(s => { const n = new Set(s); n.delete(row.id); return n; });
     } catch (e: any) {
       setErr(_friendlyMessage(e));
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const onDeleteSelected = async () => {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    if (!confirm(`Delete ${ids.length} saved analyses? This cannot be undone.`)) return;
+    setBulkBusy(true);
+    setErr(null);
+    try {
+      const res = await api.deleteSavedAnalysesBulk(ids);
+      // Remove every deleted id from the visible list. We rely on the
+      // server's `deleted` count for the toast, but optimistically drop
+      // all `ids` from the local state — any that weren't actually
+      // deleted (e.g. concurrent delete from another tab) will re-appear
+      // when the user refreshes or changes scope/search.
+      setItems(prev => prev.filter(x => !selected.has(x.id)));
+      setSelected(new Set());
+      if (res.deleted < ids.length) {
+        setErr(`Deleted ${res.deleted} of ${ids.length} — ${ids.length - res.deleted} were already gone.`);
+      }
+    } catch (e: any) {
+      setErr(_friendlyMessage(e));
+    } finally {
+      setBulkBusy(false);
     }
   };
 
@@ -285,11 +337,59 @@ export default function SavedAnalyses() {
           )}
         </div>
       ) : (
-        <ul className="space-y-2">
-          {items.map(row => (
-            <li key={row.id}
-                className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-lg p-3 sm:p-4">
-              <div className="flex items-start gap-3 flex-wrap">
+        <>
+          {/* Bulk-select toolbar — only shown when there's anything to select.
+              Sticky-ish behaviour kept simple (just a small bar at the top
+              of the list) so users can see it without scrolling. */}
+          <div className="flex items-center gap-3 px-3 py-2 bg-gray-50 dark:bg-gray-800/40 border border-gray-200 dark:border-white/10 rounded-lg text-xs">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                ref={el => { if (el) el.indeterminate = !allSelected && selected.size > 0; }}
+                onChange={toggleAll}
+              />
+              <span className="font-medium text-gray-700 dark:text-gray-200">
+                {selected.size === 0
+                  ? "Select all"
+                  : `${selected.size} selected`}
+              </span>
+            </label>
+            {selected.size > 0 && (
+              <>
+                <button
+                  onClick={() => setSelected(new Set())}
+                  className="text-gray-500 hover:text-gray-800 dark:hover:text-gray-200"
+                >
+                  Clear
+                </button>
+                <span className="flex-1" />
+                <button
+                  onClick={onDeleteSelected}
+                  disabled={bulkBusy}
+                  className="px-3 py-1 rounded text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 inline-flex items-center gap-1"
+                >
+                  {bulkBusy
+                    ? <Loader2 className="w-3 h-3 animate-spin" />
+                    : <Trash2 className="w-3 h-3" />}
+                  Delete {selected.size}
+                </button>
+              </>
+            )}
+          </div>
+
+          <ul className="space-y-2 mt-2">
+            {items.map(row => (
+              <li key={row.id}
+                  className={`bg-white dark:bg-gray-900 border ${selected.has(row.id) ? "border-indigo-300 dark:border-indigo-700" : "border-gray-200 dark:border-white/10"} rounded-lg p-3 sm:p-4`}>
+                <div className="flex items-start gap-3 flex-wrap">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={selected.has(row.id)}
+                    onChange={() => toggleOne(row.id)}
+                    aria-label={`Select ${row.scope} analysis ${row.id}`}
+                  />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     {row.scope === "single" && (
@@ -363,7 +463,8 @@ export default function SavedAnalyses() {
               </div>
             </li>
           ))}
-        </ul>
+          </ul>
+        </>
       )}
     </div>
   );

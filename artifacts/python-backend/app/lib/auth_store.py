@@ -190,6 +190,76 @@ def ensure_primary_schema() -> None:
                     "CREATE INDEX IF NOT EXISTS idx_backtest_ticker "
                     "ON ai_analyst_backtest(ticker, horizon_days)"
                 )
+
+                # ── Email digest subscriptions + send queue ────────────────
+                # Each row = (user_id, group_name, recipient_email) — a user
+                # can have multiple subscriptions routed to different inboxes
+                # (e.g. their own + their advisor's), each scoped to a
+                # different subset of their portfolio's symbols.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS email_digest_subs (
+                        id              BIGSERIAL PRIMARY KEY,
+                        user_id         TEXT NOT NULL,
+                        group_name      TEXT NOT NULL DEFAULT 'default',
+                        recipient_email TEXT NOT NULL,
+                        symbols         TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+                        send_time_ist   TEXT NOT NULL DEFAULT '18:00',
+                        enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+                        last_sent_date_ist TEXT,
+                        created_at      BIGINT NOT NULL,
+                        updated_at      BIGINT NOT NULL,
+                        UNIQUE (user_id, group_name)
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_digest_subs_user "
+                    "ON email_digest_subs(user_id)"
+                )
+
+                # The queue. Inserted by the scheduler when a subscription is
+                # due; drained by the SMTP worker with token-bucket throttle.
+                # Keeping subject/html/text materialised on the row means a
+                # subscription edit between enqueue and send doesn't change
+                # what gets delivered.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS email_digest_queue (
+                        id              BIGSERIAL PRIMARY KEY,
+                        sub_id          BIGINT NOT NULL
+                                         REFERENCES email_digest_subs(id) ON DELETE CASCADE,
+                        recipient_email TEXT NOT NULL,
+                        subject         TEXT NOT NULL,
+                        body_html       TEXT NOT NULL,
+                        body_text       TEXT NOT NULL,
+                        status          TEXT NOT NULL DEFAULT 'pending',
+                                         -- pending | sent | failed
+                        attempts        INTEGER NOT NULL DEFAULT 0,
+                        last_error      TEXT,
+                        enqueued_at_ms  BIGINT NOT NULL,
+                        sent_at_ms      BIGINT,
+                        next_retry_ms   BIGINT
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_digest_queue_status "
+                    "ON email_digest_queue(status, next_retry_ms NULLS FIRST)"
+                )
+
+                # Daily send-counter for token-bucket throttle. One row per
+                # `date_ist` so the counter resets cleanly at the IST day
+                # boundary without any explicit "reset at midnight" job.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS email_digest_send_counter (
+                        date_ist        TEXT PRIMARY KEY,
+                        sends_today     INTEGER NOT NULL DEFAULT 0,
+                        updated_at_ms   BIGINT NOT NULL
+                    )
+                    """
+                )
         _SCHEMA_READY = True
 
 

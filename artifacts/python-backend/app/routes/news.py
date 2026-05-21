@@ -49,6 +49,24 @@ async def get_feed(
     return data
 
 
+@router.get("/ticker")
+async def get_ticker_news(
+    symbol: str = Query(..., min_length=1, max_length=24,
+                        description="NSE ticker e.g. RELIANCE"),
+    limit:  int = Query(20, ge=1, le=50),
+):
+    """Return news for one ticker — RSS matches + Tavily top-up if
+    coverage is thin. Shape matches /api/news/feed so the frontend can
+    reuse the same article-card components."""
+    data = await news_service.get_ticker_news(symbol, limit=limit)
+    if isinstance(data, dict):
+        data.setdefault("meta", _meta(
+            source=data.get("source", news_service.NEWS_SOURCE_LABEL),
+            as_of_iso=data.get("refreshedAt"),
+        ))
+    return data
+
+
 @router.get("/deals")
 async def get_deals():
     return await news_service.get_deals()

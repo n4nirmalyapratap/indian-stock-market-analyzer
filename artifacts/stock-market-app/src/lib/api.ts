@@ -1,5 +1,67 @@
 // ─── Shared response types ────────────────────────────────────────────────────
 
+export interface TaxReportRow {
+  symbol:        string;
+  qty:           number;
+  buyDate:       string;
+  buyPrice:      number;
+  sellDate:      string;
+  sellPrice:     number;
+  buyCost:       number;
+  sellValue:     number;
+  gainLoss:      number;
+  holdingDays:   number;
+  feeAllocated:  number;
+}
+
+export interface TaxReportSection {
+  rows:        TaxReportRow[];
+  count:       number;
+  totalGains:  number;
+  totalLosses: number;
+  net:         number;
+}
+
+export interface TaxReportDividend {
+  symbol:   string;
+  date:     string;
+  qty:      number;
+  perShare: number;
+  amount:   number;
+}
+
+export interface TaxReportUnmatched {
+  symbol:        string;
+  sellDate:      string;
+  sellPrice:     number;
+  unmatchedQty:  number;
+}
+
+export interface TaxReport {
+  portfolioId: string;
+  fy:          string;
+  fyStart:     string;
+  fyEnd:       string;
+  shortTerm:   TaxReportSection;
+  longTerm:    TaxReportSection;
+  dividends:   { rows: TaxReportDividend[]; count: number; total: number };
+  unmatched:   { sells: TaxReportUnmatched[]; count: number };
+  notes:       string[];
+  error?:      string;
+}
+
+export interface EmailDigestSubscription {
+  id:              number;
+  groupName:       string;
+  recipientEmail:  string;
+  symbols:         string[];
+  sendTimeIst:     string;     // "HH:MM" 24-hour
+  enabled:         boolean;
+  lastSentDateIst: string | null;
+  createdAt:       number;
+  updatedAt:       number;
+}
+
 export interface SectorData {
   name: string;
   symbol: string;
@@ -677,6 +739,60 @@ export const api = {
 
   newsRefresh: () => fetchApi<{ ok: boolean }>("/news/refresh", { method: "POST" }),
 
+  // ── Email digest ──
+  emailDigestList: () =>
+    fetchApi<{ subscriptions: EmailDigestSubscription[] }>("/email-digest/subscriptions"),
+  emailDigestUpsert: (body: {
+    groupName?: string;
+    recipientEmail: string;
+    symbols?: string[];
+    sendTimeIst?: string;
+    enabled?: boolean;
+  }) =>
+    fetchApi<EmailDigestSubscription>("/email-digest/subscriptions", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    }),
+  emailDigestDelete: (id: number) =>
+    fetchApi<{ deleted: number }>(`/email-digest/subscriptions/${id}`, {
+      method: "DELETE",
+    }),
+  emailDigestConfig: () =>
+    fetchApi<{
+      configured: boolean;
+      host: string; port: number;
+      fromAddress: string; useTls: boolean;
+      sendsPerMin: number; sendsPerDay: number;
+    }>("/email-digest/config"),
+  emailDigestSendNow: (id: number) =>
+    fetchApi<{ queued: boolean; subject: string }>(`/email-digest/send-now/${id}`, {
+      method: "POST",
+    }),
+
+  // Per-stock news (RSS matched to this ticker + Tavily top-up when thin).
+  // Used by the "Latest news" panel on Stock Lookup and AI Analyst pages.
+  tickerNews: (symbol: string, limit = 20) =>
+    fetchApi<{
+      symbol: string;
+      articles: Array<{
+        title:    string;
+        summary?: string;
+        url:      string;
+        source:   string;
+        published?: string;
+        category?: string;
+        sentiment?: string | null;
+        image?:    string | null;
+        via?:      string;
+      }>;
+      total: number;
+      source: string;
+      tavilyUsed: boolean;
+      fetchedAt?: string;
+      refreshedAt?: string;
+    }>(`/news/ticker?symbol=${encodeURIComponent(symbol)}&limit=${limit}`),
+
   // ── Portfolio Manager ──
   portfolios: () =>
     fetchApi<{ portfolios: Portfolio[] }>("/portfolio"),
@@ -711,6 +827,46 @@ export const api = {
     fetchApi<{ success: boolean; id: string }>(
       `/portfolio/${encodeURIComponent(pid)}/transactions/${encodeURIComponent(txId)}`,
       { method: "DELETE" },
+    ),
+
+  // Bulk delete — POST (not DELETE) because DELETE-with-body has shaky
+  // proxy support. The cash impact of each row is reversed atomically.
+  deletePortfolioTxBulk: (pid: string, ids: string[]) =>
+    fetchApi<{ requested: number; deleted: number; skipped: number }>(
+      `/portfolio/${encodeURIComponent(pid)}/transactions/bulk-delete`,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ ids }),
+      },
+    ),
+
+  // ── Tax report (Indian FY, FIFO capital gains) ──
+  taxReportFys: (pid: string) =>
+    fetchApi<{ fys: string[] }>(
+      `/portfolio/${encodeURIComponent(pid)}/tax-report/fys`,
+    ),
+  taxReport: (pid: string, fy: string) => {
+    const q = fy ? `?fy=${encodeURIComponent(fy)}` : "";
+    return fetchApi<TaxReport>(
+      `/portfolio/${encodeURIComponent(pid)}/tax-report${q}`,
+    );
+  },
+  taxReportCsvUrl: (pid: string, fy: string) =>
+    // Returns a URL the browser can hit directly (with the bearer token
+    // attached by the existing fetch wrapper — we open it via fetch+blob
+    // download to keep the auth header intact).
+    `/api/portfolio/${encodeURIComponent(pid)}/tax-report.csv${fy ? `?fy=${encodeURIComponent(fy)}` : ""}`,
+
+  // Bulk delete for AI Analyst saved analyses.
+  deleteSavedAnalysesBulk: (ids: number[]) =>
+    fetchApi<{ requested: number; deleted: number }>(
+      "/ai-analyst/saved/bulk-delete",
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ ids }),
+      },
     ),
 
   importPortfolioCsv: (pid: string, csv: string) =>
