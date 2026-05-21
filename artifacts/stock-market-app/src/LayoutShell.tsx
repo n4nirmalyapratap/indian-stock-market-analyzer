@@ -8,7 +8,7 @@ import {
   Microscope, Brain, TrendingUp, CandlestickChart,
   Settings, ChevronRight, ChevronLeft, Sun, Moon,
   Newspaper, Gauge, Sparkles, Users, Briefcase, Calculator,
-  LogOut,
+  LogOut, Mail,
 } from "lucide-react";
 
 export const MAIN_NAV = [
@@ -27,6 +27,7 @@ export const MAIN_NAV = [
   { path: "/hydra",      label: "AI Analyzer",     icon: Brain },
   { path: "/options",    label: "Options Tester",  icon: TrendingUp },
   { path: "/portfolio",  label: "Portfolio",       icon: Briefcase },
+  { path: "/email-digest", label: "Email Digest",  icon: Mail },
 ];
 
 export function NavLink({ path, label, icon: Icon, open, indent = false }: {

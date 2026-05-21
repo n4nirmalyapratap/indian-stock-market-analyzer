@@ -9,6 +9,7 @@ import {
 import { useCustomAuth } from "@/context/CustomAuthContext";
 import { friendlyError, friendlyMessage, sanitizeTicker } from "@/lib/friendlyError";
 import { StockCombobox } from "@/components/StockCombobox";
+import TickerNewsPanel from "@/components/TickerNewsPanel";
 import {
   RadialBarChart, RadialBar, PolarAngleAxis,
 } from "recharts";
@@ -690,6 +691,9 @@ export default function AIAnalyst() {
               </div>
             )}
           </div>
+
+          {/* Latest news for this ticker — RSS + Tavily top-up if thin */}
+          <TickerNewsPanel symbol={report.ticker} limit={12} compact />
 
           {/* Disclaimer footer */}
           <div className="bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-900/30 rounded-lg p-4 text-xs text-amber-900 dark:text-amber-200">

@@ -92,10 +92,12 @@ async def nlp_query(body: dict[str, Any]):
             else:
                 all_sectors = await _sectors.get_all_sectors()
                 if signal == "CALL":
-                    result["data"] = [s for s in all_sectors if s.get("pChange", 0) > 0]
+                    # Guard against pChange=None — `dict.get(k, 0)` returns the
+                    # value even when it's None, which would TypeError on `> 0`.
+                    result["data"] = [s for s in all_sectors if (s.get("pChange") or 0) > 0]
                     result["message"] = "Sectors with positive performance today"
                 elif signal == "PUT":
-                    result["data"] = [s for s in all_sectors if s.get("pChange", 0) < 0]
+                    result["data"] = [s for s in all_sectors if (s.get("pChange") or 0) < 0]
                     result["message"] = "Sectors with negative performance today"
                 else:
                     result["data"] = all_sectors

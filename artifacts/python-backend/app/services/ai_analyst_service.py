@@ -509,6 +509,31 @@ def delete_saved(user_id: str, sid: int) -> bool:
         return deleted
 
 
+def delete_saved_bulk(user_id: str, ids: list[int]) -> int:
+    """Delete multiple saved analyses by id, scoped to one user.
+
+    Returns the number of rows actually deleted (≤ len(ids)). Rows belonging
+    to other users are silently skipped — the `user_id` clause makes this
+    safe even when the client sends ids it doesn't own. Empty list returns 0
+    without a DB round-trip.
+    """
+    if not ids:
+        return 0
+    clean = [int(i) for i in ids if i is not None]
+    if not clean:
+        return 0
+    with _conn() as c:
+        with c.cursor() as cur:
+            cur.execute(
+                "DELETE FROM ai_analyst_saved "
+                "WHERE id = ANY(%s) AND user_id = %s",
+                (clean, user_id or "anonymous"),
+            )
+            count = cur.rowcount
+        c.commit()
+    return count
+
+
 def admin_stats() -> dict:
     """Aggregate metrics for admin dashboard, computed off the saved store."""
     week_ago_ts = int((datetime.now(tz=IST) - timedelta(days=7)).timestamp())

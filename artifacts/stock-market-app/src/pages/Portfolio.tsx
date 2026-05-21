@@ -49,6 +49,7 @@ const TABS = [
   { key: "risk",       label: "Risk",        icon: ShieldAlert },
   { key: "optimizer",  label: "Optimizer",   icon: Target     },
   { key: "performance",label: "Performance", icon: Activity   },
+  { key: "tax",        label: "Tax",         icon: BarChart3  },
 ] as const;
 type TabKey = typeof TABS[number]["key"];
 
@@ -131,6 +132,7 @@ export default function PortfolioPage() {
         {tab === "risk"        && <RiskTab pid={activePid} />}
         {tab === "optimizer"   && <OptimizerTab pid={activePid} />}
         {tab === "performance" && <PerformanceTab pid={activePid} />}
+        {tab === "tax"         && <TaxTab pid={activePid} />}
       </>}
     </div>
   );
@@ -363,6 +365,7 @@ function HoldingsTab({ pid }: { pid: string }) {
       )}
 
       <TransactionList
+        pid={pid}
         txs={txQ.data?.transactions ?? []}
         loading={txQ.isLoading}
         onDelete={(id) => delTx.mutate(id)}
@@ -381,20 +384,81 @@ function HoldingsTab({ pid }: { pid: string }) {
   );
 }
 
-function TransactionList({ txs, loading, onDelete }: {
-  txs: any[]; loading: boolean; onDelete: (id: string) => void;
+function TransactionList({ pid, txs, loading, onDelete }: {
+  pid: string; txs: any[]; loading: boolean; onDelete: (id: string) => void;
 }) {
+  const qc = useQueryClient();
+
+  // Bulk-select state. Identical pattern to SavedAnalyses — Set<string>
+  // for O(1) toggle, "all visible" computed from the current `txs` array.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const allVisibleIds = useMemo(() => txs.map(t => t.id as string), [txs]);
+  const allSelected = allVisibleIds.length > 0 &&
+                      allVisibleIds.every(id => selected.has(id));
+  const toggleOne = (id: string) =>
+    setSelected(s => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleAll = () =>
+    setSelected(s =>
+      allSelected ? new Set() : new Set(allVisibleIds));
+
+  const bulkDel = useMutation({
+    mutationFn: () => api.deletePortfolioTxBulk(pid, Array.from(selected)),
+    onSuccess: () => {
+      setSelected(new Set());
+      // Both valuation AND tx list are stale after a bulk delete.
+      qc.invalidateQueries({ queryKey: ["portfolio-valuation", pid] });
+      qc.invalidateQueries({ queryKey: ["portfolio-tx", pid] });
+    },
+  });
+
   if (loading) return null;
   if (txs.length === 0) return null;
+
   return (
     <details className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-white/10 rounded-xl">
-      <summary className="cursor-pointer px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-        Transactions ({txs.length})
+      <summary className="cursor-pointer px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-3">
+        <span>Transactions ({txs.length})</span>
+        {selected.size > 0 && (
+          <span className="text-xs text-indigo-600 dark:text-indigo-300">
+            · {selected.size} selected
+          </span>
+        )}
+        {selected.size > 0 && (
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              if (confirm(`Delete ${selected.size} transactions? Cash will be rolled back atomically.`)) {
+                bulkDel.mutate();
+              }
+            }}
+            disabled={bulkDel.isPending}
+            className="ml-auto px-3 py-1 rounded text-xs text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 inline-flex items-center gap-1"
+          >
+            {bulkDel.isPending
+              ? <Loader2 className="w-3 h-3 animate-spin" />
+              : <Trash2 className="w-3 h-3" />}
+            Delete {selected.size}
+          </button>
+        )}
       </summary>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead className="bg-gray-50 dark:bg-gray-800/50 text-gray-500">
             <tr>
+              <th className="w-8 px-3 py-1.5">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  ref={el => { if (el) el.indeterminate = !allSelected && selected.size > 0; }}
+                  onChange={toggleAll}
+                  aria-label="Select all transactions"
+                />
+              </th>
               <th className="text-left px-3 py-1.5">Date</th>
               <th className="text-left px-3 py-1.5">Symbol</th>
               <th className="text-left px-3 py-1.5">Side</th>
@@ -407,7 +471,15 @@ function TransactionList({ txs, loading, onDelete }: {
           </thead>
           <tbody>
             {txs.map((t) => (
-              <tr key={t.id} className="border-t border-gray-100 dark:border-white/5">
+              <tr key={t.id} className={`border-t border-gray-100 dark:border-white/5 ${selected.has(t.id) ? "bg-indigo-50/40 dark:bg-indigo-500/10" : ""}`}>
+                <td className="px-3 py-1.5">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(t.id)}
+                    onChange={() => toggleOne(t.id)}
+                    aria-label={`Select transaction ${t.id}`}
+                  />
+                </td>
                 <td className="px-3 py-1.5">{String(t.tradedAt).slice(0, 10)}</td>
                 <td className="px-3 py-1.5 font-medium">{t.symbol}</td>
                 <td className={`px-3 py-1.5 font-semibold ${
@@ -1219,6 +1291,237 @@ function Loading() {
   return (
     <div className="p-12 text-center text-gray-400 flex items-center justify-center gap-2">
       <Loader2 className="w-4 h-4 animate-spin" /> Crunching numbers…
+    </div>
+  );
+}
+
+
+// ── Tax tab (Indian FY, FIFO capital gains) ──────────────────────────────────
+
+function TaxTab({ pid }: { pid: string }) {
+  const { token } = useCustomAuth();
+  const [fy, setFy] = useState<string>("");
+
+  // Available FYs are the ones with transactions. We pre-select the most
+  // recent one (the API already sorts newest-first).
+  const fysQ = useQuery({
+    queryKey: ["tax-fys", pid],
+    queryFn:  () => api.taxReportFys(pid),
+  });
+
+  useEffect(() => {
+    if (!fy && fysQ.data?.fys && fysQ.data.fys.length > 0) {
+      setFy(fysQ.data.fys[0]);
+    }
+  }, [fy, fysQ.data]);
+
+  const reportQ = useQuery({
+    queryKey: ["tax-report", pid, fy],
+    queryFn:  () => api.taxReport(pid, fy),
+    enabled:  !!fy,
+  });
+
+  const downloadCsv = async () => {
+    // We hit the CSV endpoint through fetch (not <a href>) so the bearer
+    // token gets attached. Then trigger a blob download.
+    const url = api.taxReportCsvUrl(pid, fy);
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      alert(`CSV download failed: HTTP ${res.status}`);
+      return;
+    }
+    const blob = await res.blob();
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `tax-report-${fy}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+  };
+
+  if (fysQ.isLoading) return <Loading />;
+  if (fysQ.isError) return <ErrorBox msg={(fysQ.error as Error).message} />;
+  if (!fysQ.data || fysQ.data.fys.length === 0) {
+    return (
+      <div className="p-8 text-center text-gray-400">
+        No transactions yet — once you add or import buys/sells, FYs will
+        appear here.
+      </div>
+    );
+  }
+
+  const report = reportQ.data;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="text-xs text-gray-500 flex items-center gap-2">
+          Financial Year
+          <select
+            value={fy}
+            onChange={(e) => setFy(e.target.value)}
+            className="px-2 py-1.5 text-sm bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded"
+          >
+            {fysQ.data.fys.map(f => (
+              <option key={f} value={f}>FY {f}</option>
+            ))}
+          </select>
+        </label>
+        <button
+          onClick={downloadCsv}
+          disabled={!report || reportQ.isLoading}
+          className="ml-auto px-3 py-1.5 text-sm bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded inline-flex items-center gap-1"
+        >
+          <BarChart3 className="w-3.5 h-3.5" /> Download CSV
+        </button>
+      </div>
+
+      {reportQ.isLoading && <Loading />}
+      {reportQ.isError && <ErrorBox msg={(reportQ.error as Error).message} />}
+
+      {report && !("error" in report && report.error) && (
+        <>
+          {/* Headline KPIs */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <KpiCard label={`STCG (FY ${report.fy})`}
+                     value={`₹${fmtNum(report.shortTerm.net)}`}
+                     hint={`${report.shortTerm.count} matched lots`}
+                     tone={report.shortTerm.net >= 0 ? "pos" : "neg"} />
+            <KpiCard label={`LTCG (FY ${report.fy})`}
+                     value={`₹${fmtNum(report.longTerm.net)}`}
+                     hint={`${report.longTerm.count} matched lots`}
+                     tone={report.longTerm.net >= 0 ? "pos" : "neg"} />
+            <KpiCard label="Dividends"
+                     value={`₹${fmtNum(report.dividends.total)}`}
+                     hint={`${report.dividends.count} payouts`}
+                     tone="mute" />
+            <KpiCard label="Unmatched sells"
+                     value={String(report.unmatched.count)}
+                     hint="Likely missing buy history"
+                     tone={report.unmatched.count > 0 ? "warn" : "mute"} />
+          </div>
+
+          {/* STCG + LTCG tables */}
+          <TaxSection title="Short-Term Capital Gains" rows={report.shortTerm.rows} />
+          <TaxSection title="Long-Term Capital Gains"  rows={report.longTerm.rows}  />
+
+          {/* Dividends */}
+          {report.dividends.rows.length > 0 && (
+            <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-white/10 rounded-xl overflow-hidden">
+              <div className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                Dividends received
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 dark:bg-gray-800/50 text-gray-500">
+                    <tr>
+                      <th className="text-left px-3 py-1.5">Symbol</th>
+                      <th className="text-left px-3 py-1.5">Date</th>
+                      <th className="text-right px-3 py-1.5">Qty</th>
+                      <th className="text-right px-3 py-1.5">Per share</th>
+                      <th className="text-right px-3 py-1.5">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.dividends.rows.map((r, i) => (
+                      <tr key={i} className="border-t border-gray-100 dark:border-white/5">
+                        <td className="px-3 py-1.5 font-mono">{r.symbol}</td>
+                        <td className="px-3 py-1.5">{r.date}</td>
+                        <td className="px-3 py-1.5 text-right">{r.qty}</td>
+                        <td className="px-3 py-1.5 text-right">₹{fmtNum(r.perShare)}</td>
+                        <td className="px-3 py-1.5 text-right font-medium">₹{fmtNum(r.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Unmatched warning */}
+          {report.unmatched.sells.length > 0 && (
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-3">
+              <p className="text-xs font-semibold text-amber-700 dark:text-amber-300 mb-1">
+                ⚠ {report.unmatched.sells.length} unmatched sell(s) — likely missing buy history
+              </p>
+              <ul className="text-xs text-amber-800 dark:text-amber-200 list-disc pl-5">
+                {report.unmatched.sells.map((u, i) => (
+                  <li key={i}>
+                    <span className="font-mono">{u.symbol}</span> sold {u.unmatchedQty} on {u.sellDate} @ ₹{fmtNum(u.sellPrice)}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-[10px] text-amber-700/80 dark:text-amber-400/70 mt-1">
+                Add the original BUY transactions and re-run the report to clear these.
+              </p>
+            </div>
+          )}
+
+          {/* Notes / disclaimers */}
+          <div className="text-[11px] text-gray-400 space-y-1 pt-2 border-t border-gray-100 dark:border-white/5">
+            {report.notes.map((n, i) => <p key={i}>· {n}</p>)}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function KpiCard({ label, value, hint, tone }:
+  { label: string; value: string; hint?: string; tone: "pos" | "neg" | "mute" | "warn" }) {
+  const cls = tone === "pos" ? "text-emerald-600 dark:text-emerald-300"
+            : tone === "neg" ? "text-rose-600 dark:text-rose-300"
+            : tone === "warn" ? "text-amber-600 dark:text-amber-300"
+            : "text-gray-700 dark:text-gray-200";
+  return (
+    <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-white/10 rounded-xl p-3">
+      <p className="text-[10px] uppercase tracking-wide text-gray-500">{label}</p>
+      <p className={`text-xl font-mono font-semibold mt-1 ${cls}`}>{value}</p>
+      {hint && <p className="text-[10px] text-gray-400 mt-1">{hint}</p>}
+    </div>
+  );
+}
+
+function TaxSection({ title, rows }: { title: string; rows: any[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-white/10 rounded-xl overflow-hidden">
+      <div className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+        {title} <span className="text-gray-400 text-xs">· {rows.length} matched lots</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead className="bg-gray-50 dark:bg-gray-800/50 text-gray-500">
+            <tr>
+              <th className="text-left px-3 py-1.5">Symbol</th>
+              <th className="text-right px-3 py-1.5">Qty</th>
+              <th className="text-left px-3 py-1.5">Bought</th>
+              <th className="text-right px-3 py-1.5">Buy ₹</th>
+              <th className="text-left px-3 py-1.5">Sold</th>
+              <th className="text-right px-3 py-1.5">Sell ₹</th>
+              <th className="text-right px-3 py-1.5">Held (d)</th>
+              <th className="text-right px-3 py-1.5">Gain/Loss</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} className="border-t border-gray-100 dark:border-white/5">
+                <td className="px-3 py-1.5 font-mono">{r.symbol}</td>
+                <td className="px-3 py-1.5 text-right">{r.qty}</td>
+                <td className="px-3 py-1.5">{r.buyDate}</td>
+                <td className="px-3 py-1.5 text-right">₹{fmtNum(r.buyPrice)}</td>
+                <td className="px-3 py-1.5">{r.sellDate}</td>
+                <td className="px-3 py-1.5 text-right">₹{fmtNum(r.sellPrice)}</td>
+                <td className="px-3 py-1.5 text-right">{r.holdingDays}</td>
+                <td className={`px-3 py-1.5 text-right font-medium ${r.gainLoss >= 0 ? TONE.pos : TONE.neg}`}>
+                  ₹{fmtNum(r.gainLoss)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

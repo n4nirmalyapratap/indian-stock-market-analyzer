@@ -34,6 +34,7 @@ from app.routes.agents import router as agents_router
 from app.routes.portfolio import router as portfolio_router
 from app.routes.ai_analyst import router as ai_analyst_router
 from app.routes.search import router as search_router
+from app.routes.email_digest import router as email_digest_router
 from app.lib.auth_store import ensure_primary_schema
 from app.services.log_buffer import setup_ring_buffer
 from app.services.market_cache_service import is_market_open, cache_status
@@ -249,11 +250,14 @@ async def lifespan(app: FastAPI):
     bhav_task       = asyncio.create_task(_bhavcopy_refresh_scheduler())
     alerts_task     = asyncio.create_task(_bot_alerts_tick_loop())
     backtest_task   = asyncio.create_task(_ai_backtest_scheduler())
+    digest_sched_task  = asyncio.create_task(_email_digest_scheduler())
+    digest_worker_task = asyncio.create_task(_email_digest_worker())
     try:
         yield
     finally:
         for t in (poll_task, universe_task, warmup_task, transition_task,
-                  fixer_task, rfr_task, bhav_task, alerts_task, backtest_task):
+                  fixer_task, rfr_task, bhav_task, alerts_task, backtest_task,
+                  digest_sched_task, digest_worker_task):
             t.cancel()
             try:
                 await t
@@ -369,6 +373,50 @@ async def _bhavcopy_refresh_scheduler() -> None:
             await asyncio.sleep(24 * 3600)
         except asyncio.CancelledError:
             logger.info("Bhavcopy scheduler stopped.")
+            break
+
+
+async def _email_digest_scheduler() -> None:
+    """Wake every minute and enqueue any digest whose send time has arrived.
+    Enqueue is cheap (read N rows, render N digests, insert N queue rows);
+    actual SMTP dispatch happens in `_email_digest_worker` below."""
+    from app.services import email_digest_service
+    await asyncio.sleep(30)  # let the rest of startup settle
+    price_service = _PriceService(_NseService(), _YahooService())
+    while True:
+        try:
+            stats = await email_digest_service.enqueue_due_digests(price_service)
+            if stats["enqueued"]:
+                logger.info("email_digest scheduler: %s", stats)
+        except Exception as exc:
+            logger.warning("email_digest scheduler error: %s", exc)
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            logger.info("Email digest scheduler stopped.")
+            break
+
+
+async def _email_digest_worker() -> None:
+    """Drain the queue at the configured burst-cap rate. SMTP send is a
+    blocking syscall — we offload it to a thread so the event loop stays
+    responsive for the rest of the API."""
+    from app.services import email_digest_service
+    await asyncio.sleep(45)  # land slightly after the scheduler's first tick
+    while True:
+        try:
+            stats = await asyncio.to_thread(email_digest_service.drain_queue)
+            if stats["sent"] or stats["failed"]:
+                logger.info("email_digest worker: %s", stats)
+        except Exception as exc:
+            logger.warning("email_digest worker error: %s", exc)
+        try:
+            # 60 seconds keeps us comfortably under Gmail's per-minute limits
+            # — the burst cap inside drain_queue is what actually enforces the
+            # rate; this is just the polling cadence.
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            logger.info("Email digest worker stopped.")
             break
 
 
@@ -529,3 +577,4 @@ app.include_router(agents_router,            prefix="/api")
 app.include_router(portfolio_router,         prefix="/api")
 app.include_router(ai_analyst_router,         prefix="/api")
 app.include_router(search_router,              prefix="/api")
+app.include_router(email_digest_router,         prefix="/api")

@@ -48,7 +48,28 @@ _CACHE_TTL = {
     "feed":   8 * 60,    # 8 minutes for RSS news
     "deals":  30 * 60,   # 30 minutes for deals
     "events": 15 * 60,   # 15 minutes for NSE events
+    # Per-ticker Tavily top-up — short TTL so repeated searches for the same
+    # symbol in the news feed don't hammer the Tavily API, but the user still
+    # gets fresh stories within 5 minutes of new coverage being published.
+    "ticker": 5 * 60,
 }
+
+
+def _looks_like_ticker(s: str) -> bool:
+    """Cheap heuristic: 2-15 uppercase chars (after stripping common suffixes)
+    looks like an NSE ticker. We use it to decide whether a free-text search
+    query is worth firing a Tavily call for."""
+    if not s:
+        return False
+    cleaned = s.strip().upper()
+    for suffix in ("-EQ", ".NS", ".BO"):
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)]
+    if not 2 <= len(cleaned) <= 15:
+        return False
+    return cleaned.replace("-", "").replace("&", "").isalnum() and any(
+        c.isalpha() for c in cleaned
+    )
 
 
 def _cache_get(key: str) -> Optional[dict]:
@@ -643,6 +664,15 @@ def _classify_event(purpose: str) -> str:
 # dashboard's provenance pill so the UI can show one honest label.
 NEWS_SOURCE_LABEL = "RSS feeds + ScanX sitemap"
 
+# When the user types a ticker-shaped query in the news feed search and the
+# RSS filter returns fewer than this many matches, we top up via Tavily.
+_TAVILY_FLOOR = 3
+
+# The dedicated per-stock news endpoint has a higher floor because the
+# expectation is that the panel actually shows news for that one stock —
+# 5+ articles is the minimum useful set.
+_TICKER_TAVILY_FLOOR = 5
+
 
 async def get_news_feed(
     category: str = "all",
@@ -671,6 +701,62 @@ async def get_news_feed(
             if q in a["title"].lower() or q in a["summary"].lower()
         ]
 
+    # ── Tavily top-up ────────────────────────────────────────────────────────
+    # If the user typed a ticker-shaped query and RSS came back thin, augment
+    # with Tavily search. Gated to keep cost predictable:
+    #   - category in ("all", "market") only (skip "corporate"/"deals"/"general"
+    #     because Tavily isn't a corporate-events / bulk-deals source)
+    #   - query looks like a ticker (uppercase, 2-15 chars)
+    #   - RSS returned fewer than `_TAVILY_FLOOR` articles
+    #   - Result is cached per-symbol for 5 minutes (see _CACHE_TTL["ticker"])
+    # If TAVILY_API_KEY isn't set the helper is a no-op, so this is safe to
+    # leave on by default.
+    tavily_used = False
+    if (
+        search
+        and category in ("all", "market")
+        and len(articles) < _TAVILY_FLOOR
+        and _looks_like_ticker(search)
+    ):
+        symbol_key = search.strip().upper()
+        cache_key  = f"ticker:{symbol_key}"
+        cached = _cache_get(cache_key)
+        if cached:
+            tav_articles = cached["data"]
+        else:
+            try:
+                from . import tavily_service  # noqa: PLC0415
+                tav_articles = await tavily_service.search_ticker_news(
+                    symbol_key, days=7, max_results=10,
+                )
+            except Exception:
+                tav_articles = []
+            _cache_set(cache_key, tav_articles)
+
+        if tav_articles:
+            tavily_used = True
+            # Dedupe by lowercase title against what RSS already returned.
+            seen = {(a.get("title") or "").lower().strip() for a in articles}
+            for art in tav_articles:
+                t = (art.get("title") or "").lower().strip()
+                if not t or t in seen:
+                    continue
+                seen.add(t)
+                # Project Tavily's shape into the RSS article shape the
+                # frontend expects (category + tickers fields).
+                articles.append({
+                    "title":     art.get("title"),
+                    "summary":   art.get("summary") or "",
+                    "url":       art.get("url") or "",
+                    "source":    art.get("source") or "tavily",
+                    "published": art.get("published") or "",
+                    "category":  "market",
+                    "tickers":   [symbol_key],
+                    "sentiment": art.get("sentiment"),
+                    "image":     None,
+                    "via":       "tavily",   # provenance marker for the UI
+                })
+
     total = len(articles)
     return {
         "articles":    articles[offset: offset + limit],
@@ -680,7 +766,93 @@ async def get_news_feed(
         "refreshedAt": _iso_from_ts(entry["ts"]),
         "categories":  ["all", "market", "corporate", "general", "deals"],
         "sources":     sources_health,
-        "source":      NEWS_SOURCE_LABEL,
+        "source":      (NEWS_SOURCE_LABEL + " + Tavily")
+                        if tavily_used else NEWS_SOURCE_LABEL,
+        "tavilyUsed":  tavily_used,
+    }
+
+
+async def get_ticker_news(symbol: str, limit: int = 20) -> dict:
+    """Return news matched to a single ticker, blending RSS + Tavily.
+
+    Strategy:
+      1. Pull the cached RSS feed (re-fills if stale, same as get_news_feed).
+      2. Filter articles whose `tickers` list contains the symbol OR whose
+         title contains the symbol (case-insensitive).
+      3. If the RSS match count is still below ``_TICKER_TAVILY_FLOOR``, top
+         up via Tavily with a 5-minute per-symbol cache.
+
+    Returns the same shape as ``get_news_feed`` so the frontend can reuse
+    the existing article card components.
+    """
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return {"articles": [], "total": 0, "symbol": "",
+                "tavilyUsed": False, "source": NEWS_SOURCE_LABEL}
+
+    # Step 1: RSS pass
+    entry = _cache_get("feed")
+    if entry is None:
+        payload = await _fetch_all_feeds()
+        _cache_set("feed", payload)
+        entry = _CACHE["feed"]
+
+    feed_articles = entry["data"]["articles"]
+    sym_lc = sym.lower()
+    matched: list[dict] = []
+    for art in feed_articles:
+        tickers = [t.upper() for t in (art.get("tickers") or [])]
+        title_lc = (art.get("title") or "").lower()
+        if sym in tickers or sym_lc in title_lc:
+            matched.append(art)
+
+    # Step 2: Tavily top-up (cached per symbol)
+    tavily_used = False
+    if len(matched) < _TICKER_TAVILY_FLOOR:
+        cache_key = f"ticker:{sym}"
+        cached_tav = _cache_get(cache_key)
+        if cached_tav:
+            tav_articles = cached_tav["data"]
+        else:
+            try:
+                from . import tavily_service  # noqa: PLC0415
+                tav_articles = await tavily_service.search_ticker_news(
+                    sym, days=14, max_results=12,
+                )
+            except Exception:
+                tav_articles = []
+            _cache_set(cache_key, tav_articles)
+
+        if tav_articles:
+            tavily_used = True
+            seen = {(a.get("title") or "").lower().strip() for a in matched}
+            for art in tav_articles:
+                t = (art.get("title") or "").lower().strip()
+                if not t or t in seen:
+                    continue
+                seen.add(t)
+                matched.append({
+                    "title":     art.get("title"),
+                    "summary":   art.get("summary") or "",
+                    "url":       art.get("url") or "",
+                    "source":    art.get("source") or "tavily",
+                    "published": art.get("published") or "",
+                    "category":  "market",
+                    "tickers":   [sym],
+                    "sentiment": art.get("sentiment"),
+                    "image":     None,
+                    "via":       "tavily",
+                })
+
+    lim = max(1, min(50, int(limit)))
+    return {
+        "symbol":     sym,
+        "articles":   matched[:lim],
+        "total":      len(matched),
+        "source":     (NEWS_SOURCE_LABEL + " + Tavily") if tavily_used else NEWS_SOURCE_LABEL,
+        "tavilyUsed": tavily_used,
+        "fetchedAt":  datetime.now(timezone.utc).isoformat(),
+        "refreshedAt": _iso_from_ts(entry["ts"]),
     }
 
 

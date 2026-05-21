@@ -169,6 +169,96 @@ async def delete_transaction(pid: str, tx_id: str, request: Request):
     return {"success": True, "id": tx_id}
 
 
+class BulkDeleteTxBody(BaseModel):
+    """Body for the portfolio transaction bulk-delete endpoint. Capped at
+    500 ids — well over any human-scale tradebook clean-up batch."""
+    ids: list[str] = Field(..., min_length=1, max_length=500)
+
+
+@router.post("/{pid}/transactions/bulk-delete")
+async def delete_transactions_bulk(pid: str, body: BulkDeleteTxBody, request: Request):
+    """Delete many transactions in one shot and roll back their cash
+    impact atomically. Useful for undoing a bad CSV import. We POST (not
+    DELETE) because DELETE-with-body has shaky proxy support."""
+    res = ps.delete_transactions_bulk(_user_id(request), pid, body.ids)
+    if res.get("error"):
+        return JSONResponse(status_code=404, content=res)
+    return {"requested": len(body.ids), **res}
+
+
+# ── Capital-gains tax report ─────────────────────────────────────────────────
+
+@router.get("/{pid}/tax-report")
+async def get_tax_report(
+    pid: str,
+    request: Request,
+    fy: str = "",
+):
+    """Build the FIFO-matched capital-gains report for a financial year.
+
+    Query params:
+        fy — Indian FY string like "2024-25". If omitted, defaults to the
+             FY that's currently in progress in IST (April-to-March).
+
+    Response: see tax_report_service.compute_report.
+    """
+    from ..services import tax_report_service as trs  # noqa: PLC0415
+    uid = _user_id(request)
+    if not fy:
+        # Default to the in-progress FY (April-to-March in IST).
+        import datetime as _dt
+        from datetime import timezone as _tz, timedelta as _td
+        now_ist = _dt.datetime.now(tz=_tz(_td(hours=5, minutes=30)))
+        start_year = now_ist.year if now_ist.month >= 4 else now_ist.year - 1
+        fy = f"{start_year}-{str(start_year + 1)[-2:]}"
+    try:
+        return trs.compute_report(uid, pid, fy)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{pid}/tax-report/fys")
+async def list_tax_fys(pid: str, request: Request):
+    """List every FY that has at least one transaction in this portfolio,
+    newest first. Powers the FY selector on the frontend."""
+    from ..services import tax_report_service as trs  # noqa: PLC0415
+    return {"fys": trs.list_available_fys(_user_id(request), pid)}
+
+
+@router.get("/{pid}/tax-report.csv")
+async def get_tax_report_csv(
+    pid: str,
+    request: Request,
+    fy: str = "",
+):
+    """Download the report as CSV. Filename includes the FY so the user
+    can save multiple years without overwriting."""
+    from fastapi.responses import PlainTextResponse  # noqa: PLC0415
+    from ..services import tax_report_service as trs  # noqa: PLC0415
+    uid = _user_id(request)
+    if not fy:
+        import datetime as _dt
+        from datetime import timezone as _tz, timedelta as _td
+        now_ist = _dt.datetime.now(tz=_tz(_td(hours=5, minutes=30)))
+        start_year = now_ist.year if now_ist.month >= 4 else now_ist.year - 1
+        fy = f"{start_year}-{str(start_year + 1)[-2:]}"
+    try:
+        report = trs.compute_report(uid, pid, fy)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if "error" in report:
+        raise HTTPException(status_code=404, detail=report["error"])
+    csv_text = trs.to_csv(report)
+    safe_fy = fy.replace("/", "-")
+    return PlainTextResponse(
+        content=csv_text,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="tax-report-{safe_fy}.csv"',
+        },
+    )
+
+
 @router.post("/{pid}/import")
 async def import_csv(pid: str, req: ImportReq, request: Request):
     res = ps.import_transactions(_user_id(request), pid, req.csv)
@@ -524,7 +614,9 @@ async def compute_risk(pid: str, req: RiskReq, request: Request):
 
     # Portfolio-level Sortino + Sharpe + max-DD via the equity curve
     perf = await ps.equity_curve(user_id, pid, _price, days=req.lookbackDays)
-    equity_closes = [pt["equity"] for pt in (perf or {}).get("series", []) if pt.get("equity", 0) > 0] if perf else []
+    # Guard against equity=None on a gap day — `dict.get(k, 0)` returns the value
+    # even when it's None, which would TypeError on `> 0`.
+    equity_closes = [pt["equity"] for pt in (perf or {}).get("series", []) if (pt.get("equity") or 0) > 0] if perf else []
     pf_sharpe  = hv.sharpe_ratio(equity_closes,  risk_free_rate_annual=req.riskFreeRate) if equity_closes else {}
     pf_sortino = hv.sortino_ratio(equity_closes, risk_free_rate_annual=req.riskFreeRate) if equity_closes else {}
     pf_dd      = hv.max_drawdown(equity_closes) if equity_closes else {}

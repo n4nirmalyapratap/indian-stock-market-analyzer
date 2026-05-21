@@ -26,6 +26,7 @@ import AIAnalyst from "@/pages/AIAnalyst";
 import AIAnalystCompare from "@/pages/AIAnalystCompare";
 import AIAnalystScan from "@/pages/AIAnalystScan";
 import AIAnalystTrackRecord from "@/pages/AIAnalystTrackRecord";
+import EmailDigestSettings from "@/pages/EmailDigestSettings";
 import SavedAnalyses from "@/pages/SavedAnalyses";
 import GlobalAssistant from "@/components/GlobalAssistant";
 import { ThemeProvider } from "@/context/ThemeContext";
@@ -116,6 +117,7 @@ function AppRoutes() {
         <Route path="/portfolio"       component={Portfolio} />
         <Route path="/dcf"             component={DCF} />
         <Route path="/settings"        component={SettingsPage} />
+        <Route path="/email-digest"    component={EmailDigestSettings} />
         <Route path="/chart/:symbol"   component={ChartView} />
         <Route component={NotFound} />
       </Switch>
