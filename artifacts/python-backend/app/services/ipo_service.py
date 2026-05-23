@@ -85,6 +85,112 @@ def _classify(item: dict) -> str:
     return "upcoming"
 
 
+def _norm_name(name: str) -> str:
+    """Lowercase + strip suffixes/punctuation so the same company spelled
+    slightly differently across NSE and ipowatch collapses to one key.
+    Used to deduplicate the two sources when we merge them in
+    `IpoService.get_calendar`.
+    """
+    import re  # noqa: PLC0415
+    s = (name or "").lower()
+    s = re.sub(r"\b(limited|ltd|pvt|private|co\.?|inc\.?|corp\.?|company)\b", "", s)
+    s = re.sub(r"[^\w\s]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+_DATE_RANGE_RE = None
+
+
+def _parse_gmp_date_range(s: str) -> tuple[Optional[str], Optional[str]]:
+    """ipowatch.in dates come as `21-25 May` or `26 May - 29 May` style
+    strings. We pull out the open / close ISO dates best-effort.
+
+    Returns (openIso, closeIso). Either may be None when the string can't
+    be parsed — the UI is defensive about missing dates.
+    """
+    import re  # noqa: PLC0415
+    from datetime import date as _date  # noqa: PLC0415
+    global _DATE_RANGE_RE
+    if _DATE_RANGE_RE is None:
+        # Matches '21-25 May' OR '21 May-25 May' OR '21 May - 25 May'
+        _DATE_RANGE_RE = re.compile(
+            r"(\d{1,2})\s*(?:([A-Za-z]+))?\s*[-–to]+\s*(\d{1,2})\s*([A-Za-z]+)",
+            re.I,
+        )
+    if not s or not isinstance(s, str):
+        return (None, None)
+    m = _DATE_RANGE_RE.search(s)
+    if not m:
+        return (None, None)
+    d1, m1, d2, m2 = m.groups()
+    months = {"jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
+              "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12}
+    mn1 = months.get((m1 or m2 or "").lower()[:3])
+    mn2 = months.get((m2 or "").lower()[:3])
+    if not mn1 or not mn2:
+        return (None, None)
+    today = _date.today()
+    year = today.year
+    try:
+        d_open  = _date(year, mn1, int(d1)).isoformat()
+        d_close = _date(year, mn2, int(d2)).isoformat()
+        return (d_open, d_close)
+    except (ValueError, TypeError):
+        return (None, None)
+
+
+def _synth_issue_from_gmp(row: dict) -> Optional[dict]:
+    """Convert an ipowatch.in row into the same flat IpoIssue shape that
+    `_normalise_issue` produces from NSE rows.
+
+    Used for IPOs that ipowatch tracks but NSE doesn't return — the bulk
+    of SME issues (BSE SME entirely, and many NSE EMERGE issues missing
+    from the public upcoming-issues feed). Subscription multiples are
+    absent because only NSE exposes them; the UI handles that gracefully.
+
+    Returns None when the row lacks the bare minimum (name + status) to
+    be useful.
+    """
+    name = (row.get("name") or "").strip()
+    if not name:
+        return None
+    status = (row.get("status") or "").lower()
+    if status not in ("open", "upcoming", "closed"):
+        status = "open"  # default to open so the UI shows it somewhere
+    if status == "closed":
+        return None  # don't surface listed IPOs on the open/upcoming tabs
+    raw_type = (row.get("type") or "").lower()
+    is_sme   = "sme" in raw_type
+    series   = "SME" if is_sme else "EQ"
+    # Synth a stable symbol slug from the name so the frontend's key={symbol}
+    # doesn't collide across rows. Pure cosmetic — these slugs aren't real
+    # NSE/BSE tickers.
+    import re  # noqa: PLC0415
+    slug = re.sub(r"[^A-Z0-9]", "", name.upper())[:24] or name.upper()[:24]
+    # Price band: ipowatch only stores the cap price, treat it as priceHigh.
+    price_high = row.get("priceBand")
+    open_iso, close_iso = _parse_gmp_date_range(row.get("date") or "")
+    return {
+        "symbol":       slug,
+        "companyName":  name,
+        "series":       series,
+        "isSme":        is_sme,
+        "isReit":       False,
+        "openDate":     open_iso,
+        "closeDate":    close_iso,
+        "priceLow":     None,
+        "priceHigh":    float(price_high) if isinstance(price_high, (int, float)) else None,
+        "lotSize":      None,
+        "issueSizeCr":  None,
+        "issueShares":  None,
+        "status":       "open" if status == "open" else "upcoming",
+        "rawStatus":    status,
+        # Mark provenance so the UI can show a small "ipowatch source" hint
+        # if it ever wants to.
+        "fromGmpOnly":  True,
+    }
+
+
 def _normalise_issue(item: dict) -> dict:
     """Flatten a raw NSE upcoming-issues row into the shape the UI consumes."""
     low, high = _parse_price_band(item.get("issuePrice") or item.get("priceBand"))
@@ -155,12 +261,25 @@ class IpoService:
         self._nse = nse
 
     async def get_calendar(self) -> dict:
-        """Fetch the combined open+upcoming list, then enrich every OPEN
-        issue with its live subscription multiples and tag both open and
-        upcoming issues with grey-market-premium data when available
-        (parallel fetches for everything)."""
-        # NSE list + GMP scrape concurrently — neither depends on the other.
-        raw, gmp_table = await asyncio.gather(
+        """Build the combined open+upcoming IPO list.
+
+        Two sources:
+          1. **NSE mainboard** via `/api/all-upcoming-issues?category=ipo` —
+             authoritative for NSE-listed mainboard issues, ships subscription
+             multiples for OPEN issues.
+          2. **ipowatch.in** GMP table — covers BSE SME, NSE SME (EMERGE),
+             and mainboard. SME IPOs are listed here but NOT on NSE's public
+             upcoming-issues feed, so this is the only practical source for
+             the bulk of SME activity.
+
+        Strategy: NSE rows are the spine (richer data). For every ipowatch
+        row whose company name isn't already in the NSE list, we synthesise
+        a thinner IpoIssue with whatever ipowatch gives us (name, gmp,
+        priceBand, type=SME/Mainboard, status). The user gets a complete
+        IPO calendar instead of the silently-truncated mainboard-only list.
+        """
+        # NSE mainboard + ipowatch.in scrape concurrently.
+        raw_main, gmp_table = await asyncio.gather(
             self._nse.fetch_nse(
                 "/api/all-upcoming-issues?category=ipo",
                 "ipo-upcoming-issues",
@@ -169,12 +288,41 @@ class IpoService:
             gmp_service.fetch_gmp_table(),
             return_exceptions=True,
         )
-        if isinstance(raw, Exception) or not isinstance(raw, list):
-            return {"available": False, "message": "NSE IPO feed unavailable.", "open": [], "upcoming": []}
+        main_ok = isinstance(raw_main, list)
         if isinstance(gmp_table, Exception):
             gmp_table = {"byName": {}, "fetchedAt": None}
 
-        items = [_normalise_issue(it) for it in raw if isinstance(it, dict) and it.get("symbol")]
+        # ── Step 1: normalise the NSE mainboard list ──────────────────────
+        seen_names: set[str] = set()
+        items: list[dict] = []
+        if main_ok:
+            for it in raw_main:
+                if not isinstance(it, dict) or not it.get("symbol"):
+                    continue
+                norm = _normalise_issue(it)
+                items.append(norm)
+                seen_names.add(_norm_name(norm.get("companyName") or ""))
+
+        # ── Step 2: add SME / unknown issues from ipowatch.in ─────────────
+        # Any name in ipowatch that isn't already in NSE's list gets
+        # synthesised. SME issues land here exclusively because NSE
+        # doesn't publish them on the upcoming-issues endpoint.
+        gmp_by_name = (gmp_table or {}).get("byName") or {}
+        for _key, row in gmp_by_name.items():
+            company = (row.get("name") or "").strip()
+            if not company:
+                continue
+            if _norm_name(company) in seen_names:
+                continue
+            synth = _synth_issue_from_gmp(row)
+            if synth is None:
+                continue
+            items.append(synth)
+            seen_names.add(_norm_name(company))
+
+        if not items:
+            return {"available": False, "message": "No IPO data available right now.",
+                    "open": [], "upcoming": []}
 
         # Enrich OPEN issues with subscription multiples concurrently.
         open_items = [it for it in items if it["status"] == "open"]

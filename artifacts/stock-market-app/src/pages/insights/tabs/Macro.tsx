@@ -4,7 +4,7 @@ import {
   Tooltip, CartesianGrid, ReferenceLine, Legend,
 } from "recharts";
 import {
-  TrendingUp, TrendingDown, Minus, Activity, Sparkles, ExternalLink, CheckCircle2, XCircle,
+  TrendingUp, TrendingDown, Minus, Activity, Sparkles, ExternalLink, CheckCircle2, XCircle, AlertTriangle,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { MacroQuote, MacroSeriesPoint, MacroYieldCurvePoint } from "@/lib/api";
@@ -38,18 +38,39 @@ function fmtTileDelta(d: number | null | undefined, unit: string): string {
   return `${sign}${d.toFixed(2)}${unit}`;
 }
 
+/** Days between `asOf` (YYYY-MM-DD or full ISO) and today.  Returns null
+ *  if the date can't be parsed — we'd rather show nothing than falsely
+ *  badge fresh data as stale. */
+function ageDays(asOf: string | null | undefined): number | null {
+  if (!asOf) return null;
+  const d = new Date(asOf.slice(0, 10));
+  if (isNaN(d.getTime())) return null;
+  return Math.floor((Date.now() - d.getTime()) / 86_400_000);
+}
+
 function HeadlineTile({
-  label, unit, value, delta, deltaUnit, asOf,
+  label, unit, value, delta, deltaUnit, asOf, freshDays = 90,
 }: {
   label: string; unit: string;
   value: number | null; delta: number | null; deltaUnit: string;
   asOf: string | null;
+  /** Tile is flagged stale when asOf is older than this many days. */
+  freshDays?: number;
 }) {
   const up   = (delta ?? 0) > 0;
   const down = (delta ?? 0) < 0;
+  // Honest data-freshness signal — FRED's OECD-mirrored India series can
+  // lag by months/years. Surface that visibly so the user knows the value
+  // isn't real-time.
+  const days  = ageDays(asOf);
+  const stale = days != null && days > freshDays;
   return (
-    <Card className="p-4">
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">{label}</p>
+    <Card className={`p-4 ${stale ? "border-amber-300 dark:border-amber-600/60" : ""}`}
+          title={stale ? `Data is ${days} days old — upstream source hasn't updated` : undefined}>
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 flex items-center gap-1">
+        {label}
+        {stale && <AlertTriangle className="w-3 h-3 text-amber-500" />}
+      </p>
       <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">{fmtTileValue(value, unit)}</p>
       <p
         className={`text-xs font-semibold flex items-center gap-1 mt-1
@@ -63,8 +84,8 @@ function HeadlineTile({
         {fmtTileDelta(delta, deltaUnit)}
       </p>
       {asOf && (
-        <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1.5 truncate">
-          as of {asOf.slice(0, 10)}
+        <p className={`text-[10px] mt-1.5 truncate ${stale ? "text-amber-600 dark:text-amber-400 font-medium" : "text-gray-400 dark:text-gray-500"}`}>
+          as of {asOf.slice(0, 10)}{stale && days != null ? ` · ${days}d old` : ""}
         </p>
       )}
     </Card>
@@ -219,30 +240,50 @@ export default function Macro() {
       />
 
       {/* ── Headline tiles ──────────────────────────────────────────────── */}
+      {/*
+        Backend supplies `*Now` fields (repoNow / cpiNow / iipNow / wpiNow /
+        gdpNow) populated by the multi-source orchestrator:
+            Manual override → Trading Economics → RBI direct →
+            DBnomics → FRED → World Bank
+        Frontend prefers these for the value/asOf shown, falling back to
+        `last(series)` only when the backend hasn't been updated.
+      */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <HeadlineTile
           label="RBI Repo"
           unit="%"
-          value={repoNow?.value ?? null}
-          delta={repoNow && repoPrev ? repoNow.value - repoPrev.value : null}
+          value={data.repoNow?.value ?? repoNow?.value ?? null}
+          delta={
+            (data.repoNow?.value ?? repoNow?.value) != null && repoPrev
+              ? (data.repoNow?.value ?? repoNow!.value) - repoPrev.value
+              : null
+          }
           deltaUnit="pp"
-          asOf={repoNow?.date ?? null}
+          asOf={data.repoNow?.asOf ?? repoNow?.date ?? null}
         />
         <HeadlineTile
           label="CPI YoY"
           unit="%"
-          value={cpiNow?.value ?? null}
-          delta={cpiNow && cpiPrev ? cpiNow.value - cpiPrev.value : null}
+          value={data.cpiNow?.value ?? cpiNow?.value ?? null}
+          delta={
+            (data.cpiNow?.value ?? cpiNow?.value) != null && cpiPrev
+              ? (data.cpiNow?.value ?? cpiNow!.value) - cpiPrev.value
+              : null
+          }
           deltaUnit="pp"
-          asOf={cpiNow?.date ?? null}
+          asOf={data.cpiNow?.asOf ?? cpiNow?.date ?? null}
         />
         <HeadlineTile
           label="IIP YoY"
           unit="%"
-          value={iipNow?.value ?? null}
-          delta={iipNow && iipPrev ? iipNow.value - iipPrev.value : null}
+          value={data.iipNow?.value ?? iipNow?.value ?? null}
+          delta={
+            (data.iipNow?.value ?? iipNow?.value) != null && iipPrev
+              ? (data.iipNow?.value ?? iipNow!.value) - iipPrev.value
+              : null
+          }
           deltaUnit="pp"
-          asOf={iipNow?.date ?? null}
+          asOf={data.iipNow?.asOf ?? iipNow?.date ?? null}
         />
         <HeadlineTile
           label="USD/INR"

@@ -201,6 +201,16 @@ TIER_BY_NAME = {t["tier"]: t for t in TIERS}
 _CACHE: dict = {}
 _CACHE_VERSION: int = 0
 
+# Live-overlay cache. Without this, every cached `get_sector_rotation`
+# call also called `get_all_sectors()` (the live NSE feed) — so the
+# expensive 4h-cached rotation got an unintended live-fetch tax on
+# every request. We cache the overlay separately: 30s while market is
+# open, 5min while closed. Both are short enough that pChange stays
+# accurate; long enough that 5 page-loads in a row pay one fetch.
+_OVERLAY_CACHE: dict = {}
+_OVERLAY_TTL_OPEN_SEC   = 30
+_OVERLAY_TTL_CLOSED_SEC = 5 * 60
+
 
 def _flush_if_state_changed() -> None:
     """Drop the rotation cache whenever the market state transitions."""
@@ -386,14 +396,102 @@ class SectorsService:
     async def get_sector_rotation(self) -> dict:
         fresh = _get_cache()
         if fresh:
-            return fresh
+            # Re-overlay live prices on cached analysis so rotation.sectors
+            # stays in sync with /sectors and /sector-analytics/heatmap.
+            # The expensive momentum/phase analysis stays cached (4h TTL),
+            # but pChange/lastPrice are pulled live each call.
+            return await self._overlay_live_prices(fresh)
 
         stale = _get_stale()
         if stale:
             asyncio.create_task(self._compute_rotation())
-            return stale
+            return await self._overlay_live_prices(stale)
 
         return await self._compute_rotation()
+
+    async def _overlay_live_prices(self, rotation: dict) -> dict:
+        """Refresh price fields on cached rotation.sectors from get_all_sectors().
+
+        Why: _compute_rotation() caches its full output for 4 hours, but the
+        live sectors feed (/sectors, /sector-analytics/heatmap) refreshes
+        every 5 minutes via the cache-version mechanism. After market close
+        the post-settlement values can change within minutes; without this
+        overlay the Sector cards/table would show stale pChange while the
+        heatmap on the same page shows the current one.
+
+        Overlays ONLY price-related fields (pChange, lastPrice, change,
+        open/high/low/previousClose, source/servedFrom/asOf/marketState/
+        eodSealed/eodDate). Momentum/tier/focus/advanceDeclineRatio stay
+        from the cached analysis. marketBreadth (advancing/declining) is
+        recomputed from the overlaid pChange to stay consistent.
+
+        Performance: the overlay's only cost is a single `get_all_sectors()`
+        call (which itself may hit NSE allIndices + seal-on-read). We cache
+        the post-overlay rotation for 30s-5min so repeated /rotation reads
+        within that window pay zero upstream cost.
+
+        Fail-open: any exception returns the cached rotation unchanged.
+        """
+        # Short-window cache so back-to-back page renders don't re-fetch
+        # the live sectors feed. Cache key includes the cached rotation's
+        # timestamp so a freshly-computed rotation invalidates the overlay.
+        cache_key = rotation.get("timestamp") or rotation.get("date") or "no-key"
+        ttl = (_OVERLAY_TTL_OPEN_SEC if _disk.is_market_open()
+               else _OVERLAY_TTL_CLOSED_SEC)
+        hit = _OVERLAY_CACHE.get(cache_key)
+        if hit and (time.time() - hit[0]) < ttl:
+            return hit[1]
+
+        try:
+            live = await self.get_all_sectors()
+            by_symbol = {s["symbol"]: s for s in live}
+            new_sectors = []
+            for s in rotation.get("sectors", []):
+                live_s = by_symbol.get(s.get("symbol"))
+                if not live_s:
+                    new_sectors.append(s)
+                    continue
+                new_sectors.append({
+                    **s,
+                    "lastPrice":     live_s.get("lastPrice"),
+                    "change":        live_s.get("change"),
+                    "pChange":       live_s.get("pChange"),
+                    "previousClose": live_s.get("previousClose"),
+                    "open":          live_s.get("open"),
+                    "high":          live_s.get("high"),
+                    "low":           live_s.get("low"),
+                    "source":        live_s.get("source", s.get("source")),
+                    "servedFrom":    live_s.get("servedFrom", s.get("servedFrom")),
+                    "asOf":          live_s.get("asOf", s.get("asOf")),
+                    "marketState":   live_s.get("marketState", s.get("marketState")),
+                    "eodSealed":     live_s.get("eodSealed", s.get("eodSealed")),
+                    "eodDate":       live_s.get("eodDate", s.get("eodDate")),
+                })
+            result = {**rotation, "sectors": new_sectors}
+            # Recompute breadth from overlaid pChange so the BreadthBar
+            # matches the SectorTable on the same page.
+            if "marketBreadth" in result:
+                score_sectors = [s for s in new_sectors if s.get("symbol") != "NIFTY 50"]
+                advancing = sum(1 for s in score_sectors if (s.get("pChange") or 0) > 0)
+                declining = sum(1 for s in score_sectors if (s.get("pChange") or 0) < 0)
+                total     = len(score_sectors)
+                result["marketBreadth"] = {
+                    **result["marketBreadth"],
+                    "advancing":          advancing,
+                    "declining":          declining,
+                    "unchanged":          total - advancing - declining,
+                    "total":              total,
+                    "advanceDeclineRatio":round(advancing / declining, 2) if declining else None,
+                    "breadthScore":       round((advancing / total) * 100, 1) if total else 0,
+                }
+                result["adRatio"] = round(advancing / declining, 2) if declining else None
+            # Stash for the next 30s (open) / 5min (closed) so back-to-back
+            # /rotation reads don't repeat the live-fetch.
+            _OVERLAY_CACHE[cache_key] = (time.time(), result)
+            return result
+        except Exception as e:
+            logger.warning("Sector rotation live-price overlay failed: %s", e)
+            return rotation
 
     async def get_sector_detail(self, symbol: str) -> dict | None:
         sectors = await self.get_all_sectors()
@@ -480,6 +578,18 @@ class SectorsService:
         state = _disk.current_market_state()
         if state not in ("CLOSED", "WEEKEND"):
             return 0
+
+        # Defer same-day sealing until 15:45 IST. NSE's closing-auction
+        # settlement (3:30–3:40 PM) and final index publication land a few
+        # minutes after 15:30. Sealing the 3:30:00 last regular-trading
+        # tick before that window completes would lock in a value that
+        # differs from NSE's official close — and `eodSealed=True`
+        # prevents us from re-sealing later. WEEKEND state is always past
+        # the cutoff, so this only gates the same-day CLOSED path.
+        if state == "CLOSED":
+            now = _disk._now_ist()
+            if (now.hour, now.minute) < (15, 45):
+                return 0
 
         # Skip the round-trip to NSE if every sector already has an
         # NSE-sealed snapshot for today.

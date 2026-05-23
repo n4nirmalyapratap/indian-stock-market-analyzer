@@ -260,6 +260,89 @@ def ensure_primary_schema() -> None:
                     )
                     """
                 )
+                # Admin-set overrides for macro indicators. When set, the
+                # macro service uses these instead of the FRED/Trading
+                # Economics chain — useful for surfacing fresh values
+                # after an RBI meeting before upstream providers publish.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS macro_overrides (
+                        indicator      TEXT PRIMARY KEY,
+                        value          DOUBLE PRECISION NOT NULL,
+                        as_of          TEXT NOT NULL,
+                        note           TEXT NOT NULL DEFAULT '',
+                        set_by         TEXT NOT NULL DEFAULT '',
+                        updated_at_ms  BIGINT NOT NULL
+                    )
+                    """
+                )
+                # FII / DII daily flow history. Replaces the prior SQLite
+                # cache (market_cache/fii_dii_cache.db) which lived in a
+                # non-persistent Docker volume and got wiped on every
+                # container restart. Storing here so the data survives
+                # restarts and a background scheduler can keep it fresh
+                # without relying on someone opening the page.
+                #
+                # Equity rows populate fii_buy/sell/net + dii_buy/sell/net.
+                # F&O rows populate fii_long/short + dii_long/short (+ client
+                # and pro long/short). Net is stored explicitly for both.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS fii_dii_history (
+                        segment        TEXT NOT NULL,
+                        date           DATE NOT NULL,
+                        fii_buy        DOUBLE PRECISION,
+                        fii_sell       DOUBLE PRECISION,
+                        fii_net        DOUBLE PRECISION,
+                        dii_buy        DOUBLE PRECISION,
+                        dii_sell       DOUBLE PRECISION,
+                        dii_net        DOUBLE PRECISION,
+                        fii_long       DOUBLE PRECISION,
+                        fii_short      DOUBLE PRECISION,
+                        dii_long       DOUBLE PRECISION,
+                        dii_short      DOUBLE PRECISION,
+                        client_long    DOUBLE PRECISION,
+                        client_short   DOUBLE PRECISION,
+                        pro_long       DOUBLE PRECISION,
+                        pro_short      DOUBLE PRECISION,
+                        created_at_ms  BIGINT NOT NULL,
+                        updated_at_ms  BIGINT NOT NULL,
+                        PRIMARY KEY (segment, date)
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fii_dii_history_seg_date "
+                    "ON fii_dii_history (segment, date DESC)"
+                )
+                # Per-user broker API credentials. Each row is one
+                # (user, broker) pairing — a user can wire up multiple
+                # brokers and have them all queried in priority order.
+                # `encrypted_creds` is a Fernet-encrypted JSON blob whose
+                # shape varies by broker (e.g. Dhan needs {client_id,
+                # access_token}, Zerodha needs {api_key, api_secret,
+                # access_token, ...}). Encryption key is derived from
+                # SESSION_SECRET so the DB dump alone leaks nothing.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS user_broker_keys (
+                        user_id            TEXT NOT NULL,
+                        broker             TEXT NOT NULL,
+                        encrypted_creds    TEXT NOT NULL,
+                        active             BOOLEAN NOT NULL DEFAULT TRUE,
+                        last_test_status   TEXT NOT NULL DEFAULT '',
+                        last_test_at_ms    BIGINT,
+                        last_test_error    TEXT NOT NULL DEFAULT '',
+                        created_at_ms      BIGINT NOT NULL,
+                        updated_at_ms      BIGINT NOT NULL,
+                        PRIMARY KEY (user_id, broker)
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_user_broker_keys_user "
+                    "ON user_broker_keys (user_id)"
+                )
         _SCHEMA_READY = True
 
 

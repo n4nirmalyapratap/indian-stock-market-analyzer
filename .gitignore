@@ -69,3 +69,5 @@ artifacts/python-backend/scripts/__pycache__/*
 .env
 artifacts/python-backend/hydra_prices.db
 artifacts/python-backend/data
+artifacts/python-backend/data/nse_options_cache.sqlite
+artifacts/python-backend/market_cache/fii_dii_cache.db

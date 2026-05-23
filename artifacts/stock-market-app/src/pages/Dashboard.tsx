@@ -6,6 +6,7 @@ import ChartButton from "@/components/ChartButton";
 import DataFreshness from "@/components/DataFreshness";
 import MacroStrip from "@/components/macro/MacroStrip";
 import GlobalIndicesPanel from "@/components/GlobalIndicesPanel";
+import TopMoversPanel from "@/components/TopMoversPanel";
 import { marketDataQueryOptions, pickMeta } from "@/lib/marketData";
 
 // ── Pure helpers (exported for unit tests) ──────────────────────────────────
@@ -85,9 +86,15 @@ export default function Dashboard() {
     }),
   );
 
-  const rotBusy = rotLoading || rotFetching;
-  const patBusy = patLoading || patFetching;
-  const isRefreshing = refreshing || rotBusy || patBusy;
+  // Show per-card loaders ONLY on the initial fetch (when there's no
+  // cached data yet). Background refetches (every 60s while market is
+  // open) keep the previous values rendered — flashing a spinner on
+  // each refetch made the dashboard FEEL slow even when it wasn't.
+  // The top-bar refresh button still tracks isFetching via
+  // `isRefreshing` below so the manual refresh action stays visible.
+  const rotBusy = rotLoading;
+  const patBusy = patLoading;
+  const isRefreshing = refreshing || rotFetching || patFetching;
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -151,6 +158,10 @@ export default function Dashboard() {
       </div>
 
       <GlobalIndicesPanel />
+
+      {/* Top Movers — per cap-segment gainers/losers, refreshes on its own
+          cadence via marketDataQueryOptions. */}
+      <TopMoversPanel />
 
       <div className="grid md:grid-cols-2 gap-6">
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm p-5 relative overflow-hidden">

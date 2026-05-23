@@ -3,6 +3,7 @@ import { useTheme } from "@/context/ThemeContext";
 import {
   User, Mail, Shield, LogOut, Sun, Moon, KeyRound,
 } from "lucide-react";
+import BrokerKeysSection from "@/components/BrokerKeysSection";
 
 function Avatar({ name }: { name: string }) {
   const initials = name.trim().split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2) || "?";
@@ -111,6 +112,9 @@ export default function SettingsPage() {
           </button>
         </div>
       </div>
+
+      {/* ── Broker integrations (BYO-key) ──────────────────────────────── */}
+      <BrokerKeysSection />
 
       {/* ── Sign out ──────────────────────────────────────────────────────── */}
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-white/[0.06]">

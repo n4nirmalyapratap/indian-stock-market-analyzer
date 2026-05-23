@@ -298,6 +298,69 @@ async def _attempt_rbi_dbie() -> dict[str, Any]:
     return await _probe_url("https://www.rbi.org.in/scripts/BS_PressReleaseDisplay.aspx")
 
 
+# Known stable URLs that publish the current repo rate prominently.
+# RBI's homepage and the "Key Indicators" page both render it as plain HTML
+# text, which we can regex for.  Cloud IPs are frequently blocked from
+# rbi.org.in, so we try multiple URLs and fail-open fast.
+_RBI_DIRECT_URLS = (
+    "https://www.rbi.org.in/home.aspx",
+    "https://www.rbi.org.in/Scripts/BS_KeyIndicators.aspx",
+    "https://www.rbi.org.in/",
+)
+
+
+async def _fetch_rbi_repo_direct() -> Optional[dict[str, Any]]:
+    """Best-effort direct fetch of the RBI policy repo rate.
+
+    Tries a handful of public RBI URLs and regexes the rate out of the page
+    text. Returns {date, value, source} on success, or None on any failure
+    (no exception ever escapes — the caller must be able to fall back to
+    FRED). The `date` is today's IST date because RBI publishes the
+    *current* rate, not a historical observation point.
+
+    Reality check: rbi.org.in is often blocked from cloud egress IPs, so
+    this function will frequently return None in production. That's fine —
+    we degrade to FRED with a staleness warning.
+    """
+    # Be generous with patterns — RBI's HTML varies across pages and we
+    # only need a match from any one of them. We require "policy" or
+    # "repo" near a "X.YY%" anywhere in the page.
+    import re  # noqa: PLC0415 — only used in this hot path
+
+    patterns = [
+        re.compile(r"policy\s*repo\s*rate[^0-9]{0,60}(\d{1,2}\.\d{1,2})\s*%", re.I | re.S),
+        re.compile(r"repo\s*rate[^0-9]{0,60}(\d{1,2}\.\d{1,2})\s*%",          re.I | re.S),
+    ]
+    headers = {"User-Agent": "Mozilla/5.0 (NiftyNode macro)"}
+    for url in _RBI_DIRECT_URLS:
+        try:
+            async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as client:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code != 200 or not resp.text:
+                    continue
+                text = resp.text
+            for pat in patterns:
+                m = pat.search(text)
+                if m:
+                    try:
+                        rate = float(m.group(1))
+                    except (TypeError, ValueError):
+                        continue
+                    # Sanity bound — RBI repo rate has been between 4% and 10%
+                    # for the last 20+ years. Reject obvious mismatches.
+                    if 3.0 <= rate <= 12.0:
+                        # RBI publishes the live rate (no observation date),
+                        # so we date-stamp it 'today'. The downstream UI's
+                        # staleness check uses this date.
+                        today_iso = datetime.now(timezone.utc).date().isoformat()
+                        log.info("RBI repo direct fetch ok: %s%% from %s", rate, url)
+                        return {"date": today_iso, "value": rate, "source": "RBI"}
+        except Exception as e:
+            log.debug("RBI direct fetch failed for %s: %s", url, str(e)[:80])
+            continue
+    return None
+
+
 async def _attempt_mospi_wpi() -> dict[str, Any]:
     """Best-effort probe of the Office of the Economic Adviser for WPI."""
     return await _probe_url("https://eaindustry.nic.in/")
@@ -306,6 +369,268 @@ async def _attempt_mospi_wpi() -> dict[str, Any]:
 async def _attempt_ccil_yields() -> dict[str, Any]:
     """Best-effort probe of CCIL India for the G-Sec yield curve page."""
     return await _probe_url("https://www.ccilindia.com/RiskManagement/SecuritiesSegment/Pages/IndianGovernmentBondData.aspx")
+
+
+# ── IMF Public API — free, no key required ─────────────────────────────────
+# Genuinely free (unlike Trading Economics — confirmed paid-only). The IMF
+# SDMX-JSON service publishes India CPI and Financial Statistics monthly,
+# often fresher than FRED's OECD mirror.  Used as a primary fresh source
+# in the resolution chain for indicators IMF tracks.
+IMF_API_BASE = "https://www.imf.org/external/datamapper/api/v1"
+# Per-indicator IMF series codes.  Limited coverage by design — we only
+# claim IMF for indicators it actually publishes for India.
+IMF_INDICATORS = {
+    "cpi": "PCPIPCH",   # Inflation, consumer prices, annual %
+    "gdp": "NGDP_RPCH", # Real GDP growth, annual %
+}
+
+
+async def _fetch_imf_indicator(indicator_key: str) -> Optional[dict[str, Any]]:
+    """Best-effort fetch from the IMF datamapper API. Returns {date, value}
+    using the most-recent annual observation, or None when IMF doesn't
+    cover the indicator or the call fails."""
+    series = IMF_INDICATORS.get(indicator_key)
+    if not series:
+        return None
+    url = f"{IMF_API_BASE}/{series}/IND"
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+            resp = await client.get(url, headers={"User-Agent": "NiftyNode/1.0 (+macro-imf)"})
+            if resp.status_code != 200:
+                log.debug("IMF non-200 for %s: %s", indicator_key, resp.status_code)
+                return None
+            payload = resp.json()
+    except Exception as e:
+        log.debug("IMF fetch failed for %s: %s", indicator_key, str(e)[:80])
+        return None
+    try:
+        # Response shape: {"values": {<series>: {"IND": {"2024": <value>, ...}}}}
+        values = (payload.get("values") or {}).get(series) or {}
+        ind = values.get("IND") or {}
+        if not ind:
+            return None
+        # Pick the most-recent year present.
+        latest_year = max(ind.keys(), key=lambda y: int(y) if str(y).isdigit() else 0)
+        v = ind[latest_year]
+        if v is None:
+            return None
+        return {"date": f"{latest_year}-01-01", "value": float(v)}
+    except (TypeError, ValueError, KeyError, AttributeError) as e:
+        log.debug("IMF parse failed for %s: %s", indicator_key, str(e)[:80])
+        return None
+
+
+# ── DBnomics — free, no key required ────────────────────────────────────────
+# Aggregator over IMF, BIS, OECD, World Bank, ECB. For some India indicators
+# the underlying series are fresher than FRED's OECD mirror.
+DBN_BASE = "https://api.db.nomics.world/v22/series"
+DBN_SERIES = {
+    "repo":    "BIS/cbpol/M.IN",              # BIS Central Bank policy rate, monthly
+    "cpi":     "IMF/CPI/M.IN.PCPI_IX",        # IMF CPI Index, monthly
+    "iip":     "OECD/MEI/IND.PRINTO01.IXOBSA.M",  # OECD industrial production, monthly
+    "yield10": "OECD/MEI/IND.IRLTLT01.ST.M",  # OECD 10-year govt bond yield, monthly
+}
+
+
+async def _fetch_dbnomics_indicator(indicator_key: str) -> Optional[list[dict[str, Any]]]:
+    """Fetch a DBnomics series. Returns a list of {date, value} dicts,
+    oldest → newest, or None on failure. Compatible with the FRED series
+    shape so callers can mix-and-match."""
+    series_id = DBN_SERIES.get(indicator_key)
+    if not series_id:
+        return None
+    url = f"{DBN_BASE}/{series_id}?observations=1"
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+            resp = await client.get(url, headers={"User-Agent": "NiftyNode/1.0 (+macro-dbn)"})
+            if resp.status_code != 200:
+                log.debug("DBnomics non-200 for %s: %s", indicator_key, resp.status_code)
+                return None
+            payload = resp.json()
+    except Exception as e:
+        log.debug("DBnomics fetch failed for %s: %s", indicator_key, str(e)[:80])
+        return None
+    # DBnomics returns: { series: { docs: [{ period: [...], value: [...] }] } }
+    try:
+        docs = (payload.get("series") or {}).get("docs") or []
+        if not docs:
+            return None
+        doc = docs[0]
+        periods = doc.get("period") or []
+        values  = doc.get("value")  or []
+        out: list[dict[str, Any]] = []
+        for p, v in zip(periods, values):
+            if v in (None, "NA"):
+                continue
+            try:
+                # Period strings come as 'YYYY-MM' or 'YYYY-MM-DD'; pad to ISO.
+                date_s = str(p)
+                if len(date_s) == 7:
+                    date_s = f"{date_s}-01"
+                out.append({"date": date_s, "value": float(v)})
+            except (TypeError, ValueError):
+                continue
+        return out or None
+    except Exception as e:
+        log.debug("DBnomics parse failed for %s: %s", indicator_key, str(e)[:80])
+        return None
+
+
+# ── Admin overrides (PG table macro_overrides) ──────────────────────────────
+
+
+def _get_override(indicator: str) -> Optional[dict[str, Any]]:
+    """Return an admin-set override for `indicator` or None.
+
+    Wraps the PG read so the macro service stays decoupled from auth_store
+    failure modes. Any DB exception fails open (no override applied)."""
+    try:
+        from app.lib.auth_store import get_conn, ensure_primary_schema  # noqa: PLC0415
+        ensure_primary_schema()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT value, as_of, note FROM macro_overrides WHERE indicator = %s",
+                    (indicator,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return {
+                    "value": float(row["value"]),
+                    "date":  row["as_of"],
+                    "note":  row.get("note") or "",
+                }
+    except Exception as e:
+        log.debug("Override read failed for %s: %s", indicator, str(e)[:80])
+        return None
+
+
+# ── Orchestrator: resolve a single indicator from all sources ───────────────
+
+
+async def _resolve_indicator(
+    indicator: str,
+    fred_series: Optional[list[dict[str, Any]]] = None,
+    wb_series:   Optional[list[dict[str, Any]]] = None,
+    rbi_live:    Optional[dict[str, Any]]       = None,
+) -> tuple[Optional[float], Optional[str], str, Optional[str]]:
+    """Resolve a single macro indicator across all available sources.
+
+    Strategy: **manual override wins absolutely** (it's an explicit human
+    signal), then among the remaining sources we pick the one with the
+    FRESHEST observation date. This avoids the trap where (e.g.) DBnomics
+    returns an OECD India series that's older than FRED's mirror of the
+    same OECD data — taking "first match" would silently regress to a
+    less-fresh value than what FRED alone provided.
+
+    Returns `(value, as_of, served_from, note)`. (None, None, "none", None)
+    only when every source failed.
+
+    Callers pre-fetch FRED/WB/RBI in the parent gather; IMF and DBnomics
+    HTTP calls happen here, skipped when a manual override exists.
+    """
+    # 1. Manual override always wins — it's an explicit human decision.
+    o = _get_override(indicator)
+    if o is not None:
+        return o["value"], o["date"], "Manual", o.get("note") or None
+
+    # 2. Fire IMF + DBnomics in parallel. Previously these were awaited
+    # sequentially — that's the main reason the macro page got slow.
+    # Each is ~1-2s on a normal network; running them concurrently
+    # cuts ~50% off the resolver latency per indicator.
+    imf_task = asyncio.create_task(_fetch_imf_indicator(indicator))
+    dbn_task = asyncio.create_task(_fetch_dbnomics_indicator(indicator))
+    imf, dbn = await asyncio.gather(imf_task, dbn_task, return_exceptions=True)
+
+    candidates: list[tuple[str, float, str]] = []
+    if isinstance(imf, dict) and imf.get("value") is not None and imf.get("date"):
+        candidates.append((imf["date"], imf["value"], "IMF"))
+
+    if indicator == "repo" and rbi_live and rbi_live.get("value") is not None and rbi_live.get("date"):
+        candidates.append((rbi_live["date"], rbi_live["value"], "RBI"))
+
+    if isinstance(dbn, list) and dbn:
+        last = dbn[-1]
+        if last.get("value") is not None and last.get("date"):
+            candidates.append((last["date"], last["value"], "DBnomics"))
+
+    if fred_series:
+        last = fred_series[-1]
+        if last.get("value") is not None and last.get("date"):
+            candidates.append((last["date"], last["value"], "FRED"))
+
+    if wb_series:
+        last = wb_series[-1]
+        if last.get("value") is not None and last.get("date"):
+            candidates.append((last["date"], last["value"], "WorldBank"))
+
+    if not candidates:
+        return None, None, "none", None
+
+    # 3. Pick the freshest by date string (ISO dates compare correctly as
+    # strings). Tie-break on the original list order — earlier-listed
+    # sources are considered higher quality when dates match.
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    best_date, best_value, best_src = candidates[0]
+    return best_value, best_date, best_src, None
+
+
+async def _resolve_yoy_indicator(
+    indicator: str,
+    fred_yoy_now: Optional[float],
+    fred_as_of:   Optional[str],
+    fred_fallback_served: str = "FRED",
+) -> tuple[Optional[float], Optional[str], str]:
+    """Resolve a YoY% indicator (CPI, IIP, WPI, GDP) across sources.
+
+    Same strategy as `_resolve_indicator`: manual override wins absolutely,
+    then pick the FRESHEST date among remaining sources. Avoids the same
+    regression where IMF's annual point (e.g. 2025-01-01) would silently
+    preempt FRED's monthly point (e.g. 2025-03-01) just because IMF was
+    listed first.
+
+    Returns (value, as_of, served_from).
+    """
+    o = _get_override(indicator)
+    if o is not None:
+        return o["value"], o["date"], "Manual"
+
+    candidates: list[tuple[str, float, str]] = []
+    imf = await _fetch_imf_indicator(indicator)
+    if imf and imf.get("value") is not None and imf.get("date"):
+        candidates.append((imf["date"], imf["value"], "IMF"))
+    if fred_yoy_now is not None and fred_as_of:
+        candidates.append((fred_as_of, fred_yoy_now, fred_fallback_served))
+
+    if not candidates:
+        return fred_yoy_now, fred_as_of, fred_fallback_served
+
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    best_date, best_value, best_src = candidates[0]
+    return best_value, best_date, best_src
+
+
+def _is_stale(as_of_iso: Optional[str], threshold_days: int = 90) -> tuple[bool, Optional[int]]:
+    """Return (is_stale, age_in_days) for an asOf date string.
+
+    `is_stale=True` when the data point is older than `threshold_days`.
+    Used by the UI to surface an amber 'data is N days old' warning so
+    users don't treat a months-old FRED reading as the live RBI policy
+    rate. Returns (False, None) when the date can't be parsed (don't
+    falsely flag fresh data as stale due to a parsing failure).
+    """
+    if not as_of_iso:
+        return False, None
+    try:
+        # Accept either pure date 'YYYY-MM-DD' or full ISO timestamps.
+        date_part = as_of_iso[:10]
+        d = datetime.strptime(date_part, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return False, None
+    today = datetime.now(timezone.utc).date()
+    age = (today - d).days
+    return age > threshold_days, age
 
 
 def _yoy_change(series: list[dict[str, Any]], lag: int = 12) -> Optional[float]:
@@ -380,19 +705,24 @@ class MacroService:
         if cached is not None:
             return cached
 
-        # Fetch FRED + Yahoo + World Bank fallbacks all in one round-trip.
-        # WB is fetched eagerly alongside FRED so there is no sequential penalty;
-        # it is only used when the corresponding FRED series comes back empty.
-        (repo_s, cpi_s, iip_s, yld_s, usdinr_q, brent_q,
-         wb_cpi_s, wb_iip_s) = await asyncio.gather(
+        # One big parallel gather for EVERY upstream the strip needs.
+        # Previously WPI and GDP were fetched serially AFTER this block —
+        # adding ~4-6 seconds to every strip request. Now everything goes
+        # in one round-trip and the gather completes at the slowest tail.
+        (repo_s, cpi_s, iip_s, wpi_s, gdp_s, yld_s,
+         usdinr_q, brent_q,
+         wb_cpi_s, wb_iip_s, rbi_repo_live) = await asyncio.gather(
             _fetch_fred_series(FRED_SERIES["repo"]),
             _fetch_fred_series(FRED_SERIES["cpi"]),
             _fetch_fred_series(FRED_SERIES["iip"]),
+            _fetch_fred_series(FRED_SERIES["wpi"]),
+            _fetch_fred_series(FRED_SERIES["gdp"]),
             _fetch_fred_series(FRED_SERIES["yield10"]),
             self._yahoo_quote("usdinr"),
             self._yahoo_quote("brent"),
             _fetch_wb_series(WB_SERIES["cpi"]),   # annual CPI index fallback
             _fetch_wb_series(WB_SERIES["iip"]),   # annual industry growth % fallback
+            _fetch_rbi_repo_direct(),             # live repo from rbi.org.in
         )
 
         # Apply World Bank fallbacks for any FRED series that returned empty.
@@ -405,14 +735,25 @@ class MacroService:
         if iip_from_wb:
             iip_s = wb_iip_s  # WB NV.IND.TOTL.KD.ZG is already annual growth %
 
-        # Repo rate — value is in percent already; delta vs previous reading.
+        # Repo rate — walk the full source chain (override → TE → RBI direct →
+        # DBnomics → FRED → WB). Delta is computed against the most recent
+        # FRED observation we have so an honest 'change from last-known prior'
+        # is shown even when the live source supplied a fresher value.
         repo_now, repo_prev = _last_two(repo_s)
+        repo_value, repo_as_of, repo_served, _repo_note = await _resolve_indicator(
+            "repo", fred_series=repo_s, rbi_live=rbi_repo_live,
+        )
+        if repo_value is not None:
+            repo_delta_base = repo_now["value"] if (repo_now and repo_served != "FRED") else (
+                repo_prev["value"] if repo_prev else None
+            )
+            repo_delta = (repo_value - repo_delta_base) if repo_delta_base is not None else None
+        else:
+            repo_delta = None
         repo_tile = self._tile(
             "repo", "RBI Repo", "%",
-            repo_now["value"] if repo_now else None,
-            (repo_now["value"] - repo_prev["value"]) if repo_now and repo_prev else None,
-            "pp",
-            repo_now["date"] if repo_now else None,
+            repo_value, repo_delta, "pp", repo_as_of,
+            served_from=repo_served,
         )
 
         # CPI — convert level series to YoY %.
@@ -421,12 +762,23 @@ class MacroService:
         cpi_min  = cpi_lag + 2
         cpi_yoy_now  = _yoy_change(cpi_s, lag=cpi_lag)
         cpi_yoy_prev = _yoy_change(cpi_s[:-1], lag=cpi_lag) if len(cpi_s) > cpi_min else None
+        # CPI YoY — preferred sources (override / TE) return YoY% directly;
+        # fall back to YoY computed off the FRED level series. The compute
+        # path stays as-is so the deterministic test outcome is unchanged
+        # when neither override nor TE is available.
+        cpi_val, cpi_date, cpi_served = await _resolve_yoy_indicator(
+            "cpi",
+            fred_yoy_now=cpi_yoy_now,
+            fred_as_of=cpi_s[-1]["date"] if cpi_s else None,
+            fred_fallback_served="WorldBank" if cpi_from_wb else "FRED",
+        )
         cpi_tile = self._tile(
             "cpi", "CPI YoY", "%",
-            cpi_yoy_now,
-            (cpi_yoy_now - cpi_yoy_prev) if cpi_yoy_now is not None and cpi_yoy_prev is not None else None,
+            cpi_val,
+            (cpi_val - cpi_yoy_prev) if cpi_val is not None and cpi_yoy_prev is not None else None,
             "pp",
-            cpi_s[-1]["date"] if cpi_s else None,
+            cpi_date,
+            served_from=cpi_served,
         )
 
         # IIP — FRED is monthly index (compute YoY); WB is already annual growth %.
@@ -439,12 +791,19 @@ class MacroService:
             iip_yoy_now  = _yoy_change(iip_s, lag=12)
             iip_yoy_prev = _yoy_change(iip_s[:-1], lag=12) if len(iip_s) > 13 else None
             iip_as_of    = iip_s[-1]["date"] if iip_s else None
+        iip_val, iip_date, iip_served = await _resolve_yoy_indicator(
+            "iip",
+            fred_yoy_now=iip_yoy_now,
+            fred_as_of=iip_as_of,
+            fred_fallback_served="WorldBank" if iip_from_wb else "FRED",
+        )
         iip_tile = self._tile(
             "iip", "IIP YoY", "%",
-            iip_yoy_now,
-            (iip_yoy_now - iip_yoy_prev) if iip_yoy_now is not None and iip_yoy_prev is not None else None,
+            iip_val,
+            (iip_val - iip_yoy_prev) if iip_val is not None and iip_yoy_prev is not None else None,
             "pp",
-            iip_as_of,
+            iip_date,
+            served_from=iip_served,
         )
 
         # USD/INR — live; delta is intraday % change from Yahoo.
@@ -454,16 +813,24 @@ class MacroService:
             usdinr_q.get("pChange") if usdinr_q else None,
             "%",
             _now_iso(),
+            served_from="Yahoo",
         )
 
-        # India 10Y — FRED monthly series, value already in percent.
+        # India 10Y — orchestrator chain (override → TE → DBnomics → FRED).
+        # Value is already a percent in every source so no transformation
+        # is needed.
         yld_now, yld_prev = _last_two(yld_s)
+        yld_val, yld_date, yld_served, _ = await _resolve_indicator(
+            "yield10", fred_series=yld_s,
+        )
+        yld_delta_base = yld_prev["value"] if yld_prev else None
         yld_tile = self._tile(
             "yield10", "India 10Y", "%",
-            yld_now["value"] if yld_now else None,
-            (yld_now["value"] - yld_prev["value"]) if yld_now and yld_prev else None,
+            yld_val,
+            (yld_val - yld_delta_base) if yld_val is not None and yld_delta_base is not None else None,
             "pp",
-            yld_now["date"] if yld_now else None,
+            yld_date,
+            served_from=yld_served,
         )
 
         # Brent — live; delta is intraday % change.
@@ -473,10 +840,44 @@ class MacroService:
             brent_q.get("pChange") if brent_q else None,
             "%",
             _now_iso(),
+            served_from="Yahoo",
+        )
+
+        # WPI YoY — FRED series already fetched in the gather above.
+        wpi_fred_now, wpi_fred_prev = _last_two(wpi_s)
+        wpi_val, wpi_date, wpi_served = await _resolve_yoy_indicator(
+            "wpi",
+            fred_yoy_now=wpi_fred_now["value"] if wpi_fred_now else None,
+            fred_as_of=wpi_fred_now["date"]    if wpi_fred_now else None,
+        )
+        wpi_tile = self._tile(
+            "wpi", "WPI YoY", "%",
+            wpi_val,
+            (wpi_val - wpi_fred_prev["value"]) if wpi_val is not None and wpi_fred_prev else None,
+            "pp",
+            wpi_date,
+            served_from=wpi_served,
+        )
+
+        # GDP YoY — FRED series already fetched in the gather above.
+        gdp_fred_now, gdp_fred_prev = _last_two(gdp_s)
+        gdp_val, gdp_date, gdp_served = await _resolve_yoy_indicator(
+            "gdp",
+            fred_yoy_now=gdp_fred_now["value"] if gdp_fred_now else None,
+            fred_as_of=gdp_fred_now["date"]    if gdp_fred_now else None,
+        )
+        gdp_tile = self._tile(
+            "gdp", "GDP YoY", "%",
+            gdp_val,
+            (gdp_val - gdp_fred_prev["value"]) if gdp_val is not None and gdp_fred_prev else None,
+            "pp",
+            gdp_date,
+            served_from=gdp_served,
         )
 
         out = {
-            "tiles": [repo_tile, cpi_tile, iip_tile, usdinr_tile, yld_tile, brent_tile],
+            "tiles": [repo_tile, cpi_tile, iip_tile, wpi_tile, gdp_tile,
+                      usdinr_tile, yld_tile, brent_tile],
             "fetchedAt": _now_iso(),
             "sources": [
                 {"id": "fred",  "label": "FRED API",      "covers": "Repo, CPI, IIP, 10Y",
@@ -599,15 +1000,87 @@ class MacroService:
              "url": ccil_probe.get("url"), "note": ccil_probe.get("note")},
         ]
 
+        # Resolve the latest-point headline values via the orchestrator
+        # chain (override → IMF → DBnomics → FRED → WB), running all six
+        # tiles in parallel. Previously these awaited sequentially —
+        # each `_resolve_*` makes 2 outbound HTTP calls (IMF + DBnomics),
+        # so 6 sequential resolvers × 2 HTTP each = up to 12 sequential
+        # round-trips ≈ 10-20s of unnecessary latency on the dashboard.
+        # asyncio.gather collapses that to the slowest tail.
+        cpi_last_yoy = _yoy_change(cpi_s, lag=(1 if cpi_from_wb else 12))
+        if iip_from_wb:
+            iip_last_yoy = iip_s[-1]["value"] if iip_s else None
+            iip_last_as  = iip_s[-1]["date"]  if iip_s else None
+        else:
+            iip_last_yoy = _yoy_change(iip_s, lag=12)
+            iip_last_as  = iip_s[-1]["date"] if iip_s else None
+        wpi_last = wpi_s[-1] if wpi_s else None
+        gdp_last = gdp_s[-1] if gdp_s else None
+
+        (repo_tuple, cpi_tuple, iip_tuple, wpi_tuple, gdp_tuple,
+         yld_tuple) = await asyncio.gather(
+            _resolve_indicator(
+                "repo", fred_series=repo_s, rbi_live=None,
+            ),
+            _resolve_yoy_indicator(
+                "cpi",
+                fred_yoy_now=cpi_last_yoy,
+                fred_as_of=cpi_s[-1]["date"] if cpi_s else None,
+                fred_fallback_served="WorldBank" if cpi_from_wb else "FRED",
+            ),
+            _resolve_yoy_indicator(
+                "iip",
+                fred_yoy_now=iip_last_yoy,
+                fred_as_of=iip_last_as,
+                fred_fallback_served="WorldBank" if iip_from_wb else "FRED",
+            ),
+            _resolve_yoy_indicator(
+                "wpi",
+                fred_yoy_now=wpi_last["value"] if wpi_last else None,
+                fred_as_of=wpi_last["date"]    if wpi_last else None,
+            ),
+            _resolve_yoy_indicator(
+                "gdp",
+                fred_yoy_now=gdp_last["value"] if gdp_last else None,
+                fred_as_of=gdp_last["date"]    if gdp_last else None,
+            ),
+            _resolve_indicator(
+                "yield10", fred_series=yld10_s,
+            ),
+        )
+        repo_now_v, repo_now_d, repo_now_src, _ = repo_tuple
+        cpi_now_v,  cpi_now_d,  cpi_now_src    = cpi_tuple
+        iip_now_v,  iip_now_d,  iip_now_src    = iip_tuple
+        wpi_now_v,  wpi_now_d,  wpi_now_src    = wpi_tuple
+        gdp_now_v,  gdp_now_d,  gdp_now_src    = gdp_tuple
+        yld_now_v,  yld_now_d,  yld_now_src, _ = yld_tuple
+
+        def _point(v: Optional[float], d: Optional[str], src: str) -> dict[str, Any]:
+            """Bundle (value, date, source, isStale, staleDays) for one
+            headline indicator so the frontend can render provenance + warning
+            without re-implementing the staleness math client-side."""
+            is_stale, age = _is_stale(d)
+            return {"value": v, "asOf": d, "servedFrom": src,
+                    "isStale": is_stale, "staleDays": age}
+
         out = {
             "rateTimeline": rate_timeline,
             "cpi":          cpi_yoy,
             "wpi":          wpi_yoy,
             "iip":          iip_yoy,
             "gdp":          gdp_yoy,
+            # `*Now` headline values — populated by the multi-source
+            # orchestrator. Frontend prefers these over `last(series)` so
+            # admin overrides and live sources take effect immediately.
+            "repoNow":    _point(repo_now_v, repo_now_d, repo_now_src),
+            "cpiNow":     _point(cpi_now_v,  cpi_now_d,  cpi_now_src),
+            "iipNow":     _point(iip_now_v,  iip_now_d,  iip_now_src),
+            "wpiNow":     _point(wpi_now_v,  wpi_now_d,  wpi_now_src),
+            "gdpNow":     _point(gdp_now_v,  gdp_now_d,  gdp_now_src),
             "yieldCurve": {
-                "ind10yNow":     (yld10_s[-1]["value"] if yld10_s else None),
-                "ind10yAsOf":    (yld10_s[-1]["date"]  if yld10_s else None),
+                "ind10yNow":     yld_now_v,
+                "ind10yAsOf":    yld_now_d,
+                "ind10yServedFrom": yld_now_src,
                 "ind10yHistory": yield_history,
                 "snapshot":      yield_curve_snapshot,   # multi-tenor curve
             },
@@ -631,15 +1104,34 @@ class MacroService:
         tid: str, label: str, unit: str,
         value: Optional[float], delta: Optional[float], delta_unit: str,
         as_of: Optional[str],
+        served_from: str = "FRED",
+        stale_threshold_days: int = 90,
     ) -> dict[str, Any]:
+        """Build a tile dict.
+
+        `served_from` records which upstream source provided the value
+        (FRED, RBI, MOSPI, Yahoo, …) so the UI can show provenance and
+        admins can audit which path served the data.
+
+        `isStale` / `staleDays` let the UI badge tiles where the underlying
+        observation date is older than `stale_threshold_days` — most
+        common with FRED's OECD-mirrored India series that lag by months.
+        Yahoo-quoted tiles (USD/INR, Brent) are always 'today' so they
+        never flag stale, but having the flag on every tile keeps the
+        response shape uniform.
+        """
+        is_stale, age_days = _is_stale(as_of, stale_threshold_days)
         return {
-            "id":        tid,
-            "label":     label,
-            "unit":      unit,
-            "value":     value,
-            "delta":     delta,
-            "deltaUnit": delta_unit,
-            "asOf":      as_of,
+            "id":         tid,
+            "label":      label,
+            "unit":       unit,
+            "value":      value,
+            "delta":      delta,
+            "deltaUnit":  delta_unit,
+            "asOf":       as_of,
+            "servedFrom": served_from,
+            "isStale":    is_stale,
+            "staleDays":  age_days,
         }
 
     @staticmethod

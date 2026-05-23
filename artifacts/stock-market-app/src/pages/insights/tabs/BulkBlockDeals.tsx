@@ -8,6 +8,7 @@ import {
   Briefcase, Search, X, ArrowUpRight, ArrowDownRight, RefreshCw, TrendingUp, Calendar,
 } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
+import StockLogo from "@/components/StockLogo";
 
 interface Deal {
   date: string;
@@ -356,23 +357,10 @@ function DealTypePill({ type }: { type: "BULK" | "BLOCK" }) {
   );
 }
 
-function StockLogo({ logo, symbol, size = 32 }: { logo?: string; symbol: string; size?: number }) {
-  const [err, setErr] = useState(false);
-  const initial = (symbol || "?").slice(0, 2).toUpperCase();
-  if (err || !logo) return (
-    <div style={{ width: size, height: size }}
-      className="rounded-lg flex items-center justify-center text-[10px] font-bold text-white bg-gradient-to-br from-indigo-500 to-violet-600 flex-shrink-0">
-      {initial}
-    </div>
-  );
-  return (
-    <img
-      src={logo} alt={symbol} loading="lazy"
-      onError={() => setErr(true)}
-      style={{ width: size, height: size }}
-      className="rounded-lg object-contain bg-white border border-gray-200 dark:border-gray-700 p-0.5 flex-shrink-0"/>
-  );
-}
+// StockLogo moved to `@/components/StockLogo` — drop-in replacement; the
+// `logo` prop is accepted as `src` for back-compat with the backend's
+// pre-attached Dhan CDN URL but the component will construct its own
+// URL from the symbol if `src` is missing.
 
 function toTitleCase(s: string): string {
   return (s || "").toLowerCase().replace(/\b\w/g, c => c.toUpperCase());

@@ -617,3 +617,179 @@ async def delete_bug(bug_id: str, request: Request):
     if deleted == 0:
         return JSONResponse(status_code=404, content={"error": "Bug not found"})
     return {"deleted": True}
+
+
+# ── Macro indicator overrides ────────────────────────────────────────────────
+# Lets an admin punch in fresh values for repo / CPI / IIP / WPI / GDP / 10Y
+# when upstream providers haven't published yet (e.g. immediately after an
+# RBI policy meeting). Stored in macro_overrides (auth_store schema), read
+# by macro_service._get_override() with highest priority in the source chain.
+
+# Indicators we accept overrides for — keeps the API surface narrow and
+# rejects typos like 'repp' before they hit the DB.
+_ALLOWED_MACRO_INDICATORS = {"repo", "cpi", "iip", "wpi", "gdp", "yield10"}
+
+
+@router.get("/admin/macro/overrides")
+async def list_macro_overrides(request: Request):
+    """Return every admin-set override currently in effect."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.lib.auth_store import ensure_primary_schema  # noqa: PLC0415
+    ensure_primary_schema()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT indicator, value, as_of, note, set_by, updated_at_ms "
+                "FROM macro_overrides ORDER BY indicator"
+            )
+            rows = cur.fetchall()
+    return {"overrides": [dict(r) for r in rows]}
+
+
+@router.put("/admin/macro/overrides/{indicator}")
+async def set_macro_override(indicator: str, request: Request):
+    """Upsert an override for a single indicator.
+
+    Body: { value: number, asOf: "YYYY-MM-DD", note?: string }
+    The macro service caches its strip/dashboard responses for 24h; touching
+    an override clears that cache so the change shows up immediately.
+    """
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    if indicator not in _ALLOWED_MACRO_INDICATORS:
+        return JSONResponse(status_code=400, content={
+            "error": f"Unknown indicator {indicator!r}. "
+                     f"Allowed: {sorted(_ALLOWED_MACRO_INDICATORS)}"})
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON"})
+    try:
+        value = float(body.get("value"))
+        as_of = str(body.get("asOf") or "").strip()
+        note  = str(body.get("note") or "").strip()[:200]
+    except (TypeError, ValueError):
+        return JSONResponse(status_code=400, content={"error": "value must be a number"})
+    if not as_of or len(as_of) < 8:
+        return JSONResponse(status_code=400, content={"error": "asOf must be YYYY-MM-DD"})
+
+    # Determine the admin's identifying email/name for the audit trail.
+    set_by = ""
+    try:
+        from app.lib.auth_tokens import verify_token  # noqa: PLC0415
+        payload = verify_token(request.headers.get("X-Admin-Token", ""), required_scope="admin")
+        set_by  = str(payload.get("email") or payload.get("sub") or "")[:120]
+    except Exception:
+        pass
+
+    from app.lib.auth_store import ensure_primary_schema  # noqa: PLC0415
+    ensure_primary_schema()
+    now_ms = int(time.time() * 1000)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO macro_overrides (indicator, value, as_of, note, set_by, updated_at_ms)
+                     VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (indicator) DO UPDATE
+                        SET value         = EXCLUDED.value,
+                            as_of         = EXCLUDED.as_of,
+                            note          = EXCLUDED.note,
+                            set_by        = EXCLUDED.set_by,
+                            updated_at_ms = EXCLUDED.updated_at_ms
+                """,
+                (indicator, value, as_of, note, set_by, now_ms),
+            )
+
+    # Invalidate the macro 24h in-memory cache so the override shows up
+    # on the next /macro/strip request rather than after up to 24h.
+    try:
+        from app.services import macro_service as _ms  # noqa: PLC0415
+        _ms._cache.clear()
+    except Exception:
+        pass
+
+    return {"indicator": indicator, "value": value, "asOf": as_of, "setBy": set_by}
+
+
+# ── FII/DII status + force-refresh ──────────────────────────────────────────
+# Lets admins verify the daily scheduler is populating every segment (equity
+# AND the 4 F&O segments) and trigger a backfill on demand when NSE archives
+# come back online after a block.
+
+@router.get("/admin/fii-dii/status")
+async def fii_dii_status(request: Request):
+    """Return per-segment row counts + freshest date for FII/DII history.
+
+    Useful for diagnosing 'why is the F&O tab empty' — equity will usually
+    have rows, F&O may be empty if nsearchives.nseindia.com is blocked from
+    this container's egress.
+    """
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.lib.auth_store import ensure_primary_schema  # noqa: PLC0415
+    ensure_primary_schema()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT segment, COUNT(*) AS rows, MIN(date) AS first_date, "
+                "       MAX(date) AS last_date, MAX(updated_at_ms) AS last_updated_ms "
+                "FROM fii_dii_history GROUP BY segment ORDER BY segment"
+            )
+            rows = cur.fetchall()
+    out = []
+    for r in rows:
+        out.append({
+            "segment":         r["segment"],
+            "rows":            int(r["rows"] or 0),
+            "firstDate":       str(r["first_date"]) if r["first_date"] else None,
+            "lastDate":        str(r["last_date"])  if r["last_date"]  else None,
+            "lastUpdatedMs":   int(r["last_updated_ms"]) if r["last_updated_ms"] else None,
+        })
+    expected = {"equity", "index_future", "index_option", "stock_future", "stock_option"}
+    present  = {r["segment"] for r in out}
+    return {
+        "segments":  out,
+        "missing":   sorted(expected - present),
+        "fetchedAt": int(time.time() * 1000),
+    }
+
+
+@router.post("/admin/fii-dii/refresh")
+async def fii_dii_refresh(request: Request):
+    """Trigger an immediate scheduled_daily_fetch tick — same code the
+    background scheduler runs every 24h. Useful after NSE archives come
+    back online to backfill the missing window without waiting."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.services.fii_dii_service import FiiDiiService  # noqa: PLC0415
+    svc = FiiDiiService()
+    try:
+        result = await svc.scheduled_daily_fetch(gap_days=30)
+        return result
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={
+            "ok": False, "error": f"FII/DII refresh failed: {exc}"})
+
+
+@router.delete("/admin/macro/overrides/{indicator}")
+async def delete_macro_override(indicator: str, request: Request):
+    """Remove an override so the macro service falls back to live sources."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    if indicator not in _ALLOWED_MACRO_INDICATORS:
+        return JSONResponse(status_code=400, content={"error": f"Unknown indicator {indicator!r}"})
+    from app.lib.auth_store import ensure_primary_schema  # noqa: PLC0415
+    ensure_primary_schema()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM macro_overrides WHERE indicator = %s", (indicator,))
+            removed = cur.rowcount
+    # Clear cache so the fallback value shows up immediately.
+    try:
+        from app.services import macro_service as _ms  # noqa: PLC0415
+        _ms._cache.clear()
+    except Exception:
+        pass
+    return {"indicator": indicator, "removed": removed > 0}

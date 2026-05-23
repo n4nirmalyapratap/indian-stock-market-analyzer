@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { TrendingUp, TrendingDown, Loader2, Minus } from "lucide-react";
+import { TrendingUp, TrendingDown, Loader2, Minus, AlertTriangle } from "lucide-react";
 import { api } from "@/lib/api";
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -26,14 +26,26 @@ function Tile({ tile }: { tile: MacroTile }) {
   const up   = (tile.delta ?? 0) > 0;
   const down = (tile.delta ?? 0) < 0;
   const flat = tile.delta == null || tile.delta === 0;
+  // Honest data-freshness signal — FRED's OECD-mirrored India series often
+  // lag by 12–40 months, which silently misleads users who treat the tile
+  // as a live policy/CPI reading. The badge + tooltip make the lag visible.
+  const stale = tile.isStale === true;
+  const staleTip = stale && tile.staleDays != null
+    ? `Data is ${tile.staleDays} days old — source: ${tile.servedFrom ?? "FRED"}`
+    : "";
 
   return (
     <Link
       href="/insights/macro"
-      className="flex-1 min-w-0 group bg-white dark:bg-gray-800 rounded-lg border border-gray-100 dark:border-gray-700 px-3 py-2 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition cursor-pointer"
+      title={staleTip || undefined}
+      className={`flex-1 min-w-0 group bg-white dark:bg-gray-800 rounded-lg border px-3 py-2 hover:shadow-sm transition cursor-pointer
+        ${stale
+          ? "border-amber-300 dark:border-amber-600/60 hover:border-amber-400 dark:hover:border-amber-500"
+          : "border-gray-100 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-600"}`}
     >
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 truncate">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 truncate flex items-center gap-1">
         {tile.label}
+        {stale && <AlertTriangle className="w-2.5 h-2.5 text-amber-500" />}
       </p>
       <div className="flex items-baseline justify-between gap-1 mt-0.5">
         <span className="text-sm font-bold text-gray-900 dark:text-white truncate">
@@ -63,6 +75,12 @@ interface MacroTile {
   delta: number | null;
   deltaUnit: string;
   asOf: string | null;
+  // Optional provenance/staleness fields surfaced by the backend so the UI
+  // can warn when a tile is months/years old (common with FRED's OECD
+  // mirrors of Indian data).
+  servedFrom?: string;
+  isStale?:    boolean;
+  staleDays?:  number | null;
 }
 
 export default function MacroStrip() {
