@@ -46,22 +46,32 @@ function IndexRow({ idx }: { idx: GlobalIndex }) {
         <span className="text-sm leading-none">{idx.flag}</span>
         <span className="truncate">{idx.name}</span>
       </span>
-      <div className="flex items-center gap-2 flex-shrink-0 ml-2">
-        <span className="text-xs font-medium tabular-nums text-gray-900 dark:text-white">
-          {fmtVal(idx.value)}
-        </span>
+      {idx.source_blocked ? (
         <span
-          className={`text-[11px] font-semibold tabular-nums flex items-center gap-0.5 w-[58px] justify-end
-            ${up   ? "text-green-600 dark:text-green-400" : ""}
-            ${down ? "text-red-500  dark:text-red-400"   : ""}
-            ${!up && !down ? "text-gray-400 dark:text-gray-500" : ""}`}
+          className="text-[10px] px-1.5 py-0.5 rounded font-medium flex-shrink-0 ml-2"
+          style={{ background: "rgba(156,163,175,0.12)", color: "#9ca3af" }}
+          title="Data not available — NSE IFSC feed is not accessible from this server"
         >
-          {up   && <TrendingUp   className="w-2.5 h-2.5 flex-shrink-0" />}
-          {down && <TrendingDown className="w-2.5 h-2.5 flex-shrink-0" />}
-          {!up && !down && <Minus className="w-2.5 h-2.5 flex-shrink-0" />}
-          {fmtPct(idx.pChange)}
+          Unavailable
         </span>
-      </div>
+      ) : (
+        <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+          <span className="text-xs font-medium tabular-nums text-gray-900 dark:text-white">
+            {fmtVal(idx.value)}
+          </span>
+          <span
+            className={`text-[11px] font-semibold tabular-nums flex items-center gap-0.5 w-[58px] justify-end
+              ${up   ? "text-green-600 dark:text-green-400" : ""}
+              ${down ? "text-red-500  dark:text-red-400"   : ""}
+              ${!up && !down ? "text-gray-400 dark:text-gray-500" : ""}`}
+          >
+            {up   && <TrendingUp   className="w-2.5 h-2.5 flex-shrink-0" />}
+            {down && <TrendingDown className="w-2.5 h-2.5 flex-shrink-0" />}
+            {!up && !down && <Minus className="w-2.5 h-2.5 flex-shrink-0" />}
+            {fmtPct(idx.pChange)}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

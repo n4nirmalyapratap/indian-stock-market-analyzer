@@ -3506,11 +3506,10 @@ GLOBAL_INDICES_DEF: list[dict] = [
     {"symbol": "^NSEI",        "name": "Nifty 50",    "region": "India", "flag": "🇮🇳"},
     {"symbol": "^BSESN",       "name": "SENSEX",      "region": "India", "flag": "🇮🇳"},
     {"symbol": "^INDIAVIX",    "name": "India VIX",   "region": "India", "flag": "🇮🇳"},
-    # GIFT Nifty trades on NSE IFSC. Yahoo's ticker for it has shifted a
-    # few times since the 2023 SGX migration; the form below works for
-    # most users today. If Yahoo returns None for this, the row shows '—'
-    # — better than hiding GIFT Nifty entirely.
-    {"symbol": "GIFTNIFTY1!.NS", "name": "GIFT Nifty",  "region": "India", "flag": "🇮🇳"},
+    # GIFT Nifty (NSE IFSC) — Yahoo Finance has no working ticker for this
+    # contract; all known variants (GIFTNIFTY1!.NS, GN=F, etc.) return None.
+    # We mark it source_blocked so the UI shows an explicit badge instead of "—".
+    {"symbol": "_GIFT_NIFTY_UNAVAIL", "name": "GIFT Nifty", "region": "India", "flag": "🇮🇳", "source_blocked": True},
 ]
 _GLOBAL_REGION_ORDER = ["Americas", "Europe", "Asia Pacific", "India"]
 
@@ -3524,6 +3523,10 @@ def _fetch_global_indices_sync() -> list[dict]:
         tkrs = yf.Tickers(" ".join(symbols))
         for meta in GLOBAL_INDICES_DEF:
             sym = meta["symbol"]
+            # Skip Yahoo fetch for explicitly unavailable sources
+            if meta.get("source_blocked"):
+                results.append({**meta, "value": None, "change": None, "pChange": None})
+                continue
             try:
                 t  = tkrs.tickers.get(sym)
                 fi = t.fast_info  # type: ignore[union-attr]

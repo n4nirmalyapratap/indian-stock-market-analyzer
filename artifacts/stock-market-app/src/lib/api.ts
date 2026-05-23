@@ -390,13 +390,14 @@ export interface MacroStripResponse {
 }
 
 export interface GlobalIndex {
-  symbol:  string;
-  name:    string;
-  region:  string;
-  flag:    string;
-  value:   number | null;
-  change:  number | null;
-  pChange: number | null;
+  symbol:        string;
+  name:          string;
+  region:        string;
+  flag:          string;
+  value:         number | null;
+  change:        number | null;
+  pChange:       number | null;
+  source_blocked?: boolean;
 }
 
 export interface GlobalIndicesRegion {
