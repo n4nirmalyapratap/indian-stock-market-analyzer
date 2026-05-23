@@ -10,6 +10,7 @@ import {
   ArrowUpRight, ArrowDownRight, Sparkles, Building2, Search, Layers, X,
 } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
+import StockLogo from "@/components/StockLogo";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend,
@@ -573,7 +574,7 @@ function HoldingsPanel({ holdings, amcLogo }: { holdings: Holdings; amcLogo?: st
                 <tr key={(r.isin || r.symbol) + r.name} className="border-t border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/20">
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-2 min-w-0">
-                      <StockLogo logo={r.logo} symbol={r.symbol}/>
+                      <StockLogo symbol={r.symbol} size={28} shape="circle" />
                       <div className="min-w-0">
                         <div className="flex items-center gap-1 min-w-0">
                           <span className="font-medium text-gray-900 dark:text-white truncate max-w-[180px]" title={r.name}>{r.name || r.symbol}</span>
@@ -646,19 +647,6 @@ function ActionBadge({ action }: { action: string }) {
   return <span className="text-[10px] text-gray-400 dark:text-gray-500">—</span>;
 }
 
-function StockLogo({ logo, symbol }: { logo: string; symbol: string }) {
-  const [err, setErr] = useState(false);
-  const initial = (symbol || "?").slice(0, 2).toUpperCase();
-  if (err || !logo) return (
-    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500/20 to-fuchsia-500/20 border border-gray-200 dark:border-gray-700 flex items-center justify-center text-[9px] font-bold text-indigo-700 dark:text-indigo-300 flex-shrink-0">
-      {initial}
-    </div>
-  );
-  return (
-    <img src={logo} alt={symbol} onError={() => setErr(true)}
-      className="w-7 h-7 rounded-full object-contain bg-white border border-gray-200 dark:border-gray-700 flex-shrink-0"/>
-  );
-}
 
 /* Filter bar trigger button — uniform pill with icon + tiny label + value. */
 function FilterTrigger(

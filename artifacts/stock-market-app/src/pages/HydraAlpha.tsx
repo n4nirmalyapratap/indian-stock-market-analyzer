@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { fetchApi } from "@/lib/api";
 import { BrandLogo } from "@/components/BrandLogo";
+import StockLogo from "@/components/StockLogo";
 import {
   Brain, Zap, BarChart3, Shield, TrendingUp, TrendingDown,
   Minus, Send, RefreshCw, ChevronDown, ChevronUp, Info,
@@ -159,7 +160,10 @@ function SupervisorTab() {
       return (
         <div className="mt-2 bg-white dark:bg-gray-800 border border-indigo-100 dark:border-indigo-900 rounded-lg p-3 space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-gray-600">{r.symbol} — {r.horizonDays}d Forecast</span>
+            <div className="flex items-center gap-2">
+              <StockLogo symbol={r.symbol} size={24} shape="circle" />
+              <span className="text-xs font-semibold text-gray-600">{r.symbol} — {r.horizonDays}d Forecast</span>
+            </div>
             <SignalBadge signal={r.direction} />
           </div>
           <div className="grid grid-cols-3 gap-2 text-center">
@@ -181,7 +185,11 @@ function SupervisorTab() {
       return (
         <div className="mt-2 bg-white dark:bg-gray-800 border border-purple-100 dark:border-purple-900 rounded-lg p-3 space-y-1">
           <div className="flex justify-between items-center">
-            <span className="text-xs font-semibold">{r.symbolA} / {r.symbolB}</span>
+            <div className="flex items-center gap-1.5">
+              <StockLogo symbol={r.symbolA} size={22} shape="circle" />
+              <StockLogo symbol={r.symbolB} size={22} shape="circle" />
+              <span className="text-xs font-semibold">{r.symbolA} / {r.symbolB}</span>
+            </div>
             <SignalBadge signal={r.signal?.signal || "HOLD"} />
           </div>
           <div className="grid grid-cols-3 gap-2 text-xs text-center">
@@ -701,6 +709,7 @@ function VaRTab() {
               <div className="space-y-2">
                 {r.breakdown.map((b: any) => (
                   <div key={b.symbol} className="flex items-center gap-3">
+                    <StockLogo symbol={b.symbol} size={24} shape="circle" />
                     <span className="text-sm font-medium w-24">{b.symbol}</span>
                     <span className="text-xs text-gray-500 w-16">{(b.weight * 100).toFixed(0)}% weight</span>
                     <div className="flex-1 bg-gray-100 rounded-full h-2">

@@ -11,6 +11,7 @@ import DataFreshness from "@/components/DataFreshness";
 import { StockCombobox } from "@/components/StockCombobox";
 import TickerNewsPanel from "@/components/TickerNewsPanel";
 import { marketDataQueryOptions, pickMeta } from "@/lib/marketData";
+import StockLogo from "@/components/StockLogo";
 
 const NIFTY100_QUICK = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","ITC","SBIN","BHARTIARTL","KOTAKBANK","BAJFINANCE","AXISBANK","MARUTI","HCLTECH","WIPRO","TITAN","SUNPHARMA"];
 
@@ -119,12 +120,15 @@ export default function StockLookup() {
           {/* Stock header */}
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
             <div className="flex items-start justify-between">
-              <div>
+              <div className="flex items-start gap-3">
+                <StockLogo symbol={data.symbol} name={data.companyName} size={44} shape="rounded" className="flex-shrink-0 mt-0.5" />
+                <div>
                 <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
                   {data.companyName || data.symbol}
                   <ChartButton symbol={data.symbol} />
                 </h2>
                 <p className="text-sm text-gray-500">{data.symbol} • {data.industry || data.sector || "NSE"}</p>
+                </div>
               </div>
               <div className="text-right">
                 <p className="text-2xl font-bold text-gray-900">₹{data.lastPrice?.toLocaleString("en-IN", { minimumFractionDigits: 2 }) || "—"}</p>
