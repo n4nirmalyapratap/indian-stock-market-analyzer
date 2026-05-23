@@ -6,7 +6,8 @@ import {
   LayoutTemplate, PanelRight, X, Search,
   ChevronDown, Calendar,
 } from "lucide-react";
-import ChartPanel, { type DrawingTool, type Drawing, type ChartType, INDICATOR_CATALOG } from "@/components/trading/ChartPanel";
+import ChartPanel, { type DrawingTool, type Drawing, type ChartType } from "@/components/trading/ChartPanel";
+import { INDICATOR_CATALOG } from "@/lib/indicator-catalog";
 import WatchlistPanel, { type WatchlistPanelHandle } from "@/components/trading/WatchlistPanel";
 import LeftDrawingBar from "@/components/trading/LeftDrawingBar";
 import { useTheme } from "@/context/ThemeContext";

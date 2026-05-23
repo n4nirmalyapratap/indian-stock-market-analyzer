@@ -3,7 +3,7 @@ import {
   formatAdRatio,
   shortSectorName,
   formatPctChange,
-} from "../../pages/Dashboard";
+} from "../dashboard-helpers";
 import {
   pickMeta,
   isMarketOpenIST,
