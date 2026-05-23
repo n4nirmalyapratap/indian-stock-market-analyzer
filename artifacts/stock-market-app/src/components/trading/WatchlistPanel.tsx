@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from "react";
 import { Plus, Trash2, ChevronDown, Check, X, Pencil, Star } from "lucide-react";
 import { fetchApi } from "@/lib/api";
+import StockLogo from "@/components/StockLogo";
 
 export interface WatchlistItem {
   symbol: string;
@@ -432,6 +433,9 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd, theme }, r
               {/* Active indicator stripe */}
               {isOn && <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-r" style={{ background: "#6366f1" }} />}
 
+              {/* Logo */}
+              <StockLogo symbol={sym} size={28} shape="circle" className="shrink-0" />
+
               {/* Symbol + company */}
               <div className="flex-1 min-w-0">
                 <div className="text-[12px] font-semibold leading-tight truncate" style={{ color: C.sym }}>{sym}</div>
@@ -504,15 +508,18 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd, theme }, r
         >
           <div className="px-3 pt-3 pb-1">
             {/* Symbol label */}
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "#6366f1" }}>
-                {activeSymbol}
-              </span>
-              {stockDetail.companyName && (
-                <span className="text-[9px] truncate ml-2 max-w-[100px]" style={{ color: C.detLbl }}>
-                  {stockDetail.companyName}
+            <div className="flex items-center gap-2 mb-1.5">
+              <StockLogo symbol={activeSymbol} size={26} shape="circle" className="shrink-0" />
+              <div className="flex-1 min-w-0 flex items-center justify-between">
+                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "#6366f1" }}>
+                  {activeSymbol}
                 </span>
-              )}
+                {stockDetail.companyName && (
+                  <span className="text-[9px] truncate ml-2 max-w-[100px]" style={{ color: C.detLbl }}>
+                    {stockDetail.companyName}
+                  </span>
+                )}
+              </div>
             </div>
 
             {/* Price + change */}
