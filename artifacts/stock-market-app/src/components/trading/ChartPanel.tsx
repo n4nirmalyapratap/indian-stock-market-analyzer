@@ -8,6 +8,7 @@ import {
   calcOBV, calcROC, calcAO, calcCMF, calcTRIX, calcADX,
 } from "@/lib/indicators";
 import { fetchApi } from "@/lib/api";
+import StockLogo from "@/components/StockLogo";
 
 export type DrawingTool =
   "none" |
@@ -2088,6 +2089,10 @@ export default function ChartPanel({
     >
       {/* ── Header ──────────────────────────────────────────────────────── */}
       <div className="flex items-start gap-3 px-3 py-1.5 shrink-0" style={{ borderBottom: `1px solid ${TC.headBor}` }}>
+        {/* Logo — only for individual stocks, not indices (which have spaces) */}
+        {!symbol.includes(" ") && (
+          <StockLogo symbol={symbol} size={30} shape="circle" className="shrink-0 mt-0.5" />
+        )}
         {/* Symbol + price + OHLCV */}
         <div className="flex flex-col justify-center min-w-0">
           {/* Row 1: symbol name + OHLCV on hover */}
