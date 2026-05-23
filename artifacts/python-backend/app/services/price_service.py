@@ -450,7 +450,8 @@ class PriceService:
                             "quote":       synth_quote,
                             "source":      "HISTORY",
                             "servedFrom":  "HISTORY_DERIVED",
-                            "asOf":        last.get("date", _disk._now_ist().isoformat()),
+                            "asOf":        _disk._now_ist().isoformat(),
+                            "eodDate":     last.get("date"),
                             "marketState": market_state,
                         }
                         logger.info(

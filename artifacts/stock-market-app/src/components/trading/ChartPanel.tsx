@@ -303,10 +303,6 @@ const IND_CATALOG: IndicatorDef[] = [
 
 const IND_BY_KEY: Record<string, IndicatorDef> = Object.fromEntries(IND_CATALOG.map(d => [d.key, d]));
 
-// Public catalog for menu rendering in TradingPlatform (typed metadata only)
-export const INDICATOR_CATALOG = IND_CATALOG.map(d => ({
-  key: d.key, label: d.label, pillColor: d.pillColor, group: d.group, paneOwn: d.paneOwn, needsVolume: !!d.needsVolume,
-}));
 
 function uid() { return Math.random().toString(36).slice(2, 9); }
 
