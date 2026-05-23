@@ -33,6 +33,8 @@ from app.routes.insights import router as insights_router
 from app.routes.agents import router as agents_router
 from app.routes.portfolio import router as portfolio_router
 from app.routes.ai_analyst import router as ai_analyst_router
+from app.routes.top_movers import router as top_movers_router
+from app.routes.user_broker_keys import router as user_broker_keys_router
 from app.routes.search import router as search_router
 from app.routes.email_digest import router as email_digest_router
 from app.lib.auth_store import ensure_primary_schema
@@ -252,12 +254,13 @@ async def lifespan(app: FastAPI):
     backtest_task   = asyncio.create_task(_ai_backtest_scheduler())
     digest_sched_task  = asyncio.create_task(_email_digest_scheduler())
     digest_worker_task = asyncio.create_task(_email_digest_worker())
+    fii_dii_task    = asyncio.create_task(_fii_dii_scheduler())
     try:
         yield
     finally:
         for t in (poll_task, universe_task, warmup_task, transition_task,
                   fixer_task, rfr_task, bhav_task, alerts_task, backtest_task,
-                  digest_sched_task, digest_worker_task):
+                  digest_sched_task, digest_worker_task, fii_dii_task):
             t.cancel()
             try:
                 await t
@@ -373,6 +376,73 @@ async def _bhavcopy_refresh_scheduler() -> None:
             await asyncio.sleep(24 * 3600)
         except asyncio.CancelledError:
             logger.info("Bhavcopy scheduler stopped.")
+            break
+
+
+async def _fii_dii_scheduler() -> None:
+    """Keep the FII/DII history table fresh without depending on anyone
+    opening the insights page.
+
+    Schedule:
+      * On startup → run once after a brief settle delay, so any gap
+        accumulated while the container was down gets healed before the
+        first user request.
+      * Daily   → run every 24h. The fetch itself is gap-aware (asks for
+        the last 30 trading days and upserts whatever PG doesn't already
+        have), so the exact tick time doesn't matter — even if a tick is
+        missed the next one heals the gap.
+
+    Loud-fallback: never raises out of the loop — every tick logs a
+    summary line so operators can see when the data last refreshed.
+    """
+    from app.services.fii_dii_service import FiiDiiService  # noqa: PLC0415
+    svc = FiiDiiService()
+    # Brief startup delay so the rest of boot logging settles first.
+    await asyncio.sleep(8)
+    # We run two cadences in this single coroutine:
+    #   * Recent-day F&O healer  — every 4h, last 7 weekdays only
+    #   * Full daily tick        — every 24h, 30-day gap-fill across all segments
+    # Counter tracks how many 4h ticks have elapsed; the 24h tick triggers
+    # every 6 of them (4h × 6 = 24h). Keeps everything in one async task.
+    tick_count = 0
+    while True:
+        try:
+            if tick_count % 6 == 0:
+                # Full daily tick — every segment, 30-day gap fill.
+                result = await svc.scheduled_daily_fetch(gap_days=30)
+                segments = result.get("segments", {})
+                ok_count = sum(1 for r in segments.values()
+                               if r.get("ok") and (r.get("rows") or 0) > 0)
+                logger.info("FII/DII daily tick: %d/%d segments populated",
+                            ok_count, len(segments))
+                for seg, r in segments.items():
+                    if r.get("ok"):
+                        rows   = r.get("rows") or 0
+                        latest = r.get("latest") or "—"
+                        flag   = "" if rows > 0 else "  ← EMPTY (upstream blocked?)"
+                        logger.info("  %-14s : %4d rows, latest=%s%s",
+                                    seg, rows, latest, flag)
+                    else:
+                        logger.warning("  %-14s : FAILED — %s",
+                                       seg, r.get("error", "unknown"))
+            else:
+                # Aggressive F&O recent-day healer — last 7 weekdays only.
+                # Bypasses the 24h HTTP cache for missing dates so a
+                # previously-empty body doesn't suppress the retry.
+                heal = await svc.heal_recent_fno_gaps(lookback_days=7)
+                if heal.get("missing", 0) > 0:
+                    logger.info("FII/DII F&O recent-heal: %d/%d days missing → filled %d",
+                                heal.get("missing"), heal.get("checked"), heal.get("filled"))
+                    for d in heal.get("days", []):
+                        flag = "ok" if d.get("ok") else "still missing"
+                        logger.info("  %s: %s", d.get("date"), flag)
+        except Exception as exc:
+            logger.warning("FII/DII scheduler tick failed: %s", exc)
+        tick_count += 1
+        try:
+            await asyncio.sleep(4 * 3600)  # 4 hours between ticks
+        except asyncio.CancelledError:
+            logger.info("FII/DII scheduler stopped.")
             break
 
 
@@ -576,5 +646,7 @@ app.include_router(insights_router,         prefix="/api")
 app.include_router(agents_router,            prefix="/api")
 app.include_router(portfolio_router,         prefix="/api")
 app.include_router(ai_analyst_router,         prefix="/api")
+app.include_router(top_movers_router,          prefix="/api")
+app.include_router(user_broker_keys_router,    prefix="/api")
 app.include_router(search_router,              prefix="/api")
 app.include_router(email_digest_router,         prefix="/api")

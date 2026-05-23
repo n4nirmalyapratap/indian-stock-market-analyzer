@@ -686,20 +686,58 @@ def _parse_generic_row(row: dict) -> Optional[dict]:
 
 
 def parse_tradebook_csv(text: str) -> dict:
-    """Parse a CSV string and return {format, transactions, errors}."""
+    """Parse a CSV string and return {format, transactions, errors}.
+
+    Two paths:
+      * **Headered tradebook** (Zerodha / Upstox / generic) — finds a header
+        row by keyword and dispatches to the matching row parser.
+      * **Headerless holdings export** (e.g. Dhan) — when no header is
+        found, falls through to shape-based detection. Each holding becomes
+        a synthetic BUY at the file's BuyAvg using today's date.
+    """
     if not text or not text.strip():
         return {"format": "unknown", "transactions": [], "errors": ["Empty CSV"]}
 
-    # Some Zerodha/Upstox exports prefix metadata rows; find the header row.
     lines = text.splitlines()
-    header_idx = 0
+
+    # ── Headered path (Zerodha / Upstox / generic) ────────────────────────────
+    header_idx = _find_header_row(lines)
+    if header_idx is not None:
+        return _parse_headered_csv(lines[header_idx:])
+
+    # ── Headerless path (Dhan-style holdings export) ──────────────────────────
+    if _detect_headerless_format(lines) == "dhan-holdings":
+        return _parse_dhan_holdings(lines, _iso())
+
+    return {
+        "format": "unknown",
+        "transactions": [],
+        "errors": [
+            "Could not detect file format. Expected either a tradebook with "
+            "headers (Zerodha/Upstox: symbol, side, qty, price, date) or a "
+            "Dhan-style holdings export (Name, Qty, BuyAvg, ...)."
+        ],
+    }
+
+
+def _find_header_row(lines: list[str]) -> Optional[int]:
+    """Return the index of the first row that looks like a CSV header, or
+    None if no header keyword is found. Header keywords: symbol, scrip,
+    instrument, tradingsymbol — covers Zerodha/Upstox/generic tradebooks."""
     for i, ln in enumerate(lines):
         low = ln.lower()
-        if ("symbol" in low or "scrip" in low or "instrument" in low) and "," in ln:
-            header_idx = i
-            break
+        if "," in ln and any(
+            h in low for h in ("symbol", "scrip", "instrument", "tradingsymbol")
+        ):
+            return i
+    return None
 
-    cleaned = "\n".join(lines[header_idx:])
+
+def _parse_headered_csv(header_and_data_lines: list[str]) -> dict:
+    """Parse rows that have a recognizable header line at index 0 of the
+    slice (Zerodha / Upstox / generic). Extracted so the dispatch logic in
+    `parse_tradebook_csv` stays linear and readable."""
+    cleaned = "\n".join(header_and_data_lines)
     reader  = csv.DictReader(io.StringIO(cleaned))
     headers = reader.fieldnames or []
     fmt     = _detect_format(headers)
@@ -718,6 +756,138 @@ def parse_tradebook_csv(text: str) -> dict:
         except Exception as exc:
             errors.append(f"row {i}: {exc}")
     return {"format": fmt, "transactions": txs, "errors": errors}
+
+
+# ── Headerless holdings-export support (Dhan, etc.) ──────────────────────────
+
+_HOLDINGS_FOOTER_PREFIXES = (
+    "investment", "note", "total", "current value", "overall", "today's p&l",
+)
+
+
+def _is_number(s: str) -> bool:
+    """True if `s` parses cleanly as a number once commas are stripped."""
+    try:
+        float((s or "").replace(",", "").strip())
+        return True
+    except (ValueError, AttributeError):
+        return False
+
+
+def _detect_headerless_format(lines: list[str]) -> Optional[str]:
+    """When no header row is found, detect a headerless broker export by
+    row shape. Currently recognizes Dhan portfolio CSV (8 columns:
+    Name, Qty, BuyAvg, Investment, LTP, CurrentValue, P&L, P&L%).
+
+    Scans the first 5 non-blank rows looking for ANY row whose first cell
+    is non-numeric (a company name) and whose next two cells parse as
+    numbers (qty + BuyAvg). One match is enough — footer rows in this
+    format have a non-numeric third cell ('Current Value'), so they
+    won't false-positive."""
+    checked = 0
+    for ln in lines:
+        if not ln.strip():
+            continue
+        cells = [c.strip() for c in ln.split(",")]
+        if len(cells) < 8:
+            continue
+        if cells[0] and not _is_number(cells[0]) and _is_number(cells[1]) and _is_number(cells[2]):
+            return "dhan-holdings"
+        checked += 1
+        if checked >= 5:
+            break
+    return None
+
+
+def _parse_dhan_holdings(lines: list[str], tradedAt_iso: str) -> dict:
+    """Parse a Dhan portfolio export — each holding becomes one synthetic
+    BUY transaction.
+
+    Column layout (positional, no headers):
+        0: Name       1: Qty       2: BuyAvg    3: Investment
+        4: LTP        5: CurValue  6: P&L       7: P&L%
+
+    Behaviour:
+      * Blank rows and footer rows ('Investment', 'NOTE', 'Total', …)
+        are silently skipped.
+      * Symbol is resolved from the company name via universe.COMPANY_MAP;
+        unmatched names fall through to an uppercased raw name so the row
+        still imports and the user can fix the ticker manually.
+      * Rows with qty=0 or invalid price are skipped with an error.
+    """
+    reader  = csv.reader(io.StringIO("\n".join(lines)))
+    txs: list[dict]    = []
+    errors: list[str] = []
+    for i, cells in enumerate(reader, start=1):
+        if not cells or not cells[0].strip():
+            continue
+        first_low = cells[0].strip().lower()
+        if any(first_low.startswith(p) for p in _HOLDINGS_FOOTER_PREFIXES):
+            continue
+        if len(cells) < 3:
+            continue
+        name = cells[0].strip()
+        try:
+            qty     = float(cells[1].replace(",", "").strip())
+            buy_avg = float(cells[2].replace(",", "").strip())
+        except (ValueError, IndexError) as exc:
+            errors.append(f"row {i} ({name}): {exc}")
+            continue
+        if qty <= 0 or buy_avg < 0:
+            errors.append(f"row {i} ({name}): non-positive qty or price")
+            continue
+        txs.append({
+            "symbol":   _resolve_symbol(name),
+            "side":     "BUY",
+            "qty":      qty,
+            "price":    buy_avg,
+            "fees":     0.0,
+            "tradedAt": tradedAt_iso,
+            "source":   "dhan-csv",
+        })
+    return {"format": "dhan-holdings", "transactions": txs, "errors": errors}
+
+
+def _resolve_symbol(name: str) -> str:
+    """Map a company name to an NSE ticker using `universe.COMPANY_MAP`.
+
+    Order:
+      1. `name` is already a known ticker → use it
+      2. Exact case-insensitive match against a company name → that ticker
+      3. Company name starts with `name` (prefix match) → that ticker
+      4. `name` appears inside a company name (substring, name ≥4 chars)
+      5. Fallback: uppercased raw name (so the row still imports — user can
+         fix the ticker after import; quote lookup will gracefully show '—')
+    """
+    name_s = (name or "").strip()
+    if not name_s:
+        return name_s
+
+    # Local import: universe module imports lazily to avoid pulling in
+    # the universe data when this service is loaded for tests that don't
+    # exercise CSV import.
+    from ..lib import universe  # noqa: PLC0415
+
+    name_upper = name_s.upper()
+    if name_upper in universe.ALL_SYMBOLS:
+        return name_upper
+
+    name_lower = name_s.lower()
+    # 2. Exact name match
+    for sym, company in universe.COMPANY_MAP.items():
+        if (company or "").strip().lower() == name_lower:
+            return sym
+    # 3. Prefix match
+    for sym, company in universe.COMPANY_MAP.items():
+        if (company or "").strip().lower().startswith(name_lower):
+            return sym
+    # 4. Substring match (only for reasonably specific names)
+    if len(name_lower) >= 4:
+        for sym, company in universe.COMPANY_MAP.items():
+            if name_lower in (company or "").strip().lower():
+                return sym
+
+    return name_upper
 
 
 # Hard limits for arbitrary-Excel uploads — protects against zip-bombs,
@@ -809,34 +979,24 @@ def xlsx_bytes_to_csv(xlsx_bytes: bytes) -> str:
     return buf.getvalue()
 
 
-def import_transactions(user_id: str, portfolio_id: str, csv_text: str) -> dict:
-    """Parse a tradebook CSV and import every valid row.
+def _commit_parsed_transactions(
+    portfolio_id: str,
+    txs: list[dict],
+    errors: list[str],
+) -> tuple[int, list[str]]:
+    """Validate and atomically insert a pre-parsed transaction list.
 
-    Behaviour:
-      * Each row is pre-validated independently. Rows that fail validation
-        are skipped and surfaced in `errors[]` so the user can fix and
-        re-upload only the bad rows (a hard fail-the-whole-batch policy
-        would force users to re-clean a 500-row tradebook over a single
-        typo).
-      * The valid rows that survive validation are then inserted in a
-        single SQLite transaction (`executemany` + the rolled-up cash
-        UPDATE) — so the actual DB write is atomic: either every valid
-        row is committed or none of them are. There is no partial
-        DB-write state on infrastructure failure.
+    Extracted so both `import_transactions` (auto-detected parse) and
+    `import_with_mapping` (user-specified column mapping) share the same
+    validation + DB-write path. The cash rollup is single-statement so the
+    portfolio's cash balance stays in lock-step with the inserted rows.
 
-    Returns `{format, rowsParsed, rowsInserted, errors[]}`.
+    Returns (rows_inserted, errors). The caller's errors list is mutated.
     """
-    if not get_portfolio(user_id, portfolio_id):
-        return {"error": "portfolio not found"}
-
-    parsed = parse_tradebook_csv(csv_text)
-
-    # Pre-validate + normalise every row first; if any row fails we abort
-    # before touching the DB so import is genuinely all-or-nothing.
     now = _now_ms()
     prepared: list[tuple] = []
     cash_delta_total = 0.0
-    for tx in parsed["transactions"]:
+    for tx in txs:
         try:
             side_u = (tx.get("side") or "").upper()
             if side_u not in ("BUY", "SELL", "DIVIDEND"):
@@ -860,32 +1020,56 @@ def import_transactions(user_id: str, portfolio_id: str, csv_text: str) -> dict:
             else:  # DIVIDEND
                 cash_delta_total += qty_f * price_f
         except Exception as exc:
-            parsed["errors"].append(f"{tx.get('symbol')}: {exc}")
+            errors.append(f"{tx.get('symbol')}: {exc}")
 
-    inserted = 0
-    if prepared:
-        # psycopg's connection context manager opens an implicit transaction
-        # on first execute and commits on exit / rolls back on exception, so
-        # we don't need explicit BEGIN/commit/rollback here.
-        try:
-            with _connect() as conn:
-                with conn.cursor() as cur:
-                    cur.executemany(
-                        "INSERT INTO portfolio_transactions"
-                        "(id,portfolio_id,symbol,side,qty,price,fees,"
-                        " traded_at,source,note,inserted_at) "
-                        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                        prepared,
-                    )
-                    cur.execute(
-                        "UPDATE portfolios SET cash = cash + %s, "
-                        "updated_at = %s WHERE id=%s",
-                        (cash_delta_total, now, portfolio_id),
-                    )
-                conn.commit()
-                inserted = len(prepared)
-        except Exception as exc:
-            parsed["errors"].append(f"import rolled back: {exc}")
+    if not prepared:
+        return 0, errors
+    try:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO portfolio_transactions"
+                    "(id,portfolio_id,symbol,side,qty,price,fees,"
+                    " traded_at,source,note,inserted_at) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    prepared,
+                )
+                cur.execute(
+                    "UPDATE portfolios SET cash = cash + %s, "
+                    "updated_at = %s WHERE id=%s",
+                    (cash_delta_total, now, portfolio_id),
+                )
+            conn.commit()
+            return len(prepared), errors
+    except Exception as exc:
+        errors.append(f"import rolled back: {exc}")
+        return 0, errors
+
+
+def import_transactions(user_id: str, portfolio_id: str, csv_text: str) -> dict:
+    """Parse a tradebook CSV and import every valid row.
+
+    Behaviour:
+      * Each row is pre-validated independently. Rows that fail validation
+        are skipped and surfaced in `errors[]` so the user can fix and
+        re-upload only the bad rows (a hard fail-the-whole-batch policy
+        would force users to re-clean a 500-row tradebook over a single
+        typo).
+      * The valid rows that survive validation are then inserted in a
+        single SQLite transaction (`executemany` + the rolled-up cash
+        UPDATE) — so the actual DB write is atomic: either every valid
+        row is committed or none of them are. There is no partial
+        DB-write state on infrastructure failure.
+
+    Returns `{format, rowsParsed, rowsInserted, errors[]}`.
+    """
+    if not get_portfolio(user_id, portfolio_id):
+        return {"error": "portfolio not found"}
+
+    parsed = parse_tradebook_csv(csv_text)
+    inserted, parsed["errors"] = _commit_parsed_transactions(
+        portfolio_id, parsed["transactions"], parsed["errors"]
+    )
 
     return {
         "format":          parsed["format"],
@@ -893,6 +1077,238 @@ def import_transactions(user_id: str, portfolio_id: str, csv_text: str) -> dict:
         "rowsInserted":    inserted,
         "errors":          parsed["errors"],
     }
+
+
+# ── Two-step import: preview + apply with explicit mapping ───────────────────
+#
+# Lets the frontend show a 'map source columns → system fields' popup before
+# committing, so users can verify the auto-detected mapping or correct it for
+# a broker format we don't pre-recognize.
+
+# System fields the mapping editor exposes. Keep this small — these are the
+# only fields the importer actually uses (everything else is derived).
+MAPPABLE_FIELDS = ("symbol", "side", "qty", "price", "tradedAt", "fees")
+
+
+def _source_columns(lines: list[str], header_idx: Optional[int]) -> tuple[list[str], list[list[str]]]:
+    """Return (column labels, sample data rows) for the mapping UI.
+
+    For headered files the labels are the header cells verbatim. For
+    headerless files we generate positional labels ('Col 1', 'Col 2', …)
+    and return the first non-footer non-blank rows as samples — so the
+    popup can show e.g. 'Col 1 (CRISIL)' next to 'Symbol' and the user
+    can verify the mapping at a glance.
+    """
+    if header_idx is not None:
+        reader = csv.reader(io.StringIO(lines[header_idx]))
+        headers = [c.strip() for c in next(reader, [])]
+        data_lines = lines[header_idx + 1:]
+    else:
+        headers = []
+        data_lines = lines
+
+    samples: list[list[str]] = []
+    sample_reader = csv.reader(io.StringIO("\n".join(data_lines)))
+    for cells in sample_reader:
+        if not cells or not (cells[0] or "").strip():
+            continue
+        first_low = (cells[0] or "").strip().lower()
+        if any(first_low.startswith(p) for p in _HOLDINGS_FOOTER_PREFIXES):
+            continue
+        samples.append([c.strip() for c in cells])
+        if len(samples) >= 5:
+            break
+
+    if not headers and samples:
+        # Headerless — synthesize positional labels matching the widest
+        # sample row's column count.
+        max_cols = max(len(r) for r in samples)
+        headers = [f"Col {i + 1}" for i in range(max_cols)]
+
+    return headers, samples
+
+
+def _suggest_mapping(fmt: str, headers: list[str]) -> dict:
+    """Pre-fill the mapping editor with our best guess.
+
+    For headerless 'dhan-holdings' we use the known positional layout.
+    For headered formats we fuzzy-match each system field to the header
+    that most likely contains it (substring, case-insensitive)."""
+    if fmt == "dhan-holdings":
+        # Positional: Name, Qty, BuyAvg, Investment, LTP, CurValue, P&L, P&L%
+        return {"symbol": 0, "qty": 1, "price": 2,
+                "side": None, "tradedAt": None, "fees": None}
+
+    cols_low = [(i, (c or "").lower()) for i, c in enumerate(headers)]
+
+    def _find(*keywords: str) -> Optional[int]:
+        for kw in keywords:
+            for i, c in cols_low:
+                if kw in c:
+                    return i
+        return None
+
+    return {
+        "symbol":   _find("symbol", "scrip", "tradingsymbol", "instrument"),
+        "side":     _find("side", "trade_type", "buy/sell", "buy_sell"),
+        "qty":      _find("qty", "quantity"),
+        "price":    _find("price", "rate", "trade_price"),
+        "tradedAt": _find("date", "trade_date", "traded_at"),
+        "fees":     _find("brokerage", "fees", "charges"),
+    }
+
+
+def _synth_defaults(fmt: str) -> dict:
+    """Default values for fields that don't exist in the source file.
+
+    Currently only headerless holdings exports need this — they're missing
+    side (we synthesize BUY) and date (we use today's ISO timestamp)."""
+    if fmt == "dhan-holdings":
+        return {"side": "BUY", "tradedAt": _iso()}
+    return {}
+
+
+def analyze_csv(csv_text: str) -> dict:
+    """Inspect a CSV without committing — returns everything the frontend
+    needs to render the mapping popup: detected format, source columns,
+    a few sample rows, an auto-suggested mapping, and synthetic-field
+    defaults. No DB writes.
+    """
+    if not csv_text or not csv_text.strip():
+        return {
+            "format": "unknown", "headerless": True,
+            "sourceColumns": [], "sampleRows": [],
+            "suggestedMapping": {}, "syntheticDefaults": {},
+            "totalRows": 0, "errors": ["Empty CSV"],
+        }
+    lines = csv_text.splitlines()
+    header_idx = _find_header_row(lines)
+    headerless_fmt = _detect_headerless_format(lines) if header_idx is None else None
+
+    if header_idx is not None:
+        # Use a temporary DictReader to extract the format key, then walk
+        # the actual rows manually below to count them.
+        reader = csv.DictReader(io.StringIO("\n".join(lines[header_idx:])))
+        fmt = _detect_format(reader.fieldnames or [])
+    elif headerless_fmt:
+        fmt = headerless_fmt
+    else:
+        fmt = "unknown"
+
+    headers, samples = _source_columns(lines, header_idx)
+    return {
+        "format":            fmt,
+        "headerless":        header_idx is None,
+        "sourceColumns":     headers,
+        "sampleRows":        samples,
+        "suggestedMapping":  _suggest_mapping(fmt, headers),
+        "syntheticDefaults": _synth_defaults(fmt),
+        "totalRows":         len(samples),  # the modal only previews a few
+        "errors":            [] if fmt != "unknown" else [
+            "Could not auto-detect a known broker format — please map the "
+            "columns manually below."
+        ],
+    }
+
+
+def _parse_with_mapping(
+    csv_text: str,
+    header_idx: Optional[int],
+    mapping: dict,
+    synth: dict,
+) -> tuple[list[dict], list[str]]:
+    """Walk the CSV and build transactions using the user-provided mapping.
+
+    `mapping` maps each system field (symbol/side/qty/price/tradedAt/fees)
+    to either a column index (int) into the row's cells, or None to use
+    `synth[field]` instead.
+    """
+    lines = csv_text.splitlines()
+    data_start = (header_idx + 1) if header_idx is not None else 0
+    reader = csv.reader(io.StringIO("\n".join(lines[data_start:])))
+    txs: list[dict] = []
+    errors: list[str] = []
+
+    def _col(cells: list[str], field: str) -> Optional[str]:
+        idx = mapping.get(field)
+        if idx is None:
+            v = synth.get(field)
+            return None if v is None else str(v)
+        if isinstance(idx, int) and 0 <= idx < len(cells):
+            return cells[idx].strip()
+        return None
+
+    for i, cells in enumerate(reader, start=data_start + 1):
+        if not cells or not (cells[0] or "").strip():
+            continue
+        first_low = (cells[0] or "").strip().lower()
+        if any(first_low.startswith(p) for p in _HOLDINGS_FOOTER_PREFIXES):
+            continue
+        try:
+            sym_raw   = _col(cells, "symbol")
+            qty_raw   = _col(cells, "qty")
+            price_raw = _col(cells, "price")
+            side_raw  = (_col(cells, "side") or "BUY")
+            date_raw  = _col(cells, "tradedAt") or _iso()
+            fees_raw  = _col(cells, "fees")
+
+            if not sym_raw or qty_raw is None or price_raw is None:
+                errors.append(f"row {i}: missing symbol/qty/price")
+                continue
+
+            qty   = float(str(qty_raw).replace(",", ""))
+            price = float(str(price_raw).replace(",", ""))
+            fees  = float(str(fees_raw).replace(",", "")) if fees_raw else 0.0
+            side  = side_raw.strip().upper()
+            if side.startswith("DIV"):
+                side = "DIVIDEND"
+            elif side and side[0] == "S":
+                side = "SELL"
+            else:
+                side = "BUY"  # default for B, BUY, anything else
+
+            txs.append({
+                "symbol":   _resolve_symbol(sym_raw),
+                "side":     side,
+                "qty":      qty,
+                "price":    price,
+                "fees":     fees,
+                "tradedAt": date_raw,
+                "source":   "mapped-csv",
+            })
+        except Exception as exc:
+            errors.append(f"row {i}: {exc}")
+    return txs, errors
+
+
+def import_with_mapping(
+    user_id: str,
+    portfolio_id: str,
+    csv_text: str,
+    mapping: dict,
+    synth: Optional[dict] = None,
+) -> dict:
+    """Import a CSV using a user-supplied column mapping (from the mapping
+    popup) instead of relying on auto-detected broker format.
+
+    Returns the same shape as `import_transactions` so the frontend doesn't
+    have to branch on the response.
+    """
+    if not get_portfolio(user_id, portfolio_id):
+        return {"error": "portfolio not found"}
+    lines = csv_text.splitlines()
+    header_idx = _find_header_row(lines)
+    txs, errors = _parse_with_mapping(csv_text, header_idx, mapping, synth or {})
+    inserted, errors = _commit_parsed_transactions(portfolio_id, txs, errors)
+    return {
+        "format":          "mapped",
+        "rowsParsed":      len(txs),
+        "rowsInserted":    inserted,
+        "errors":          errors,
+    }
+
+
+# ── End two-step import ──────────────────────────────────────────────────────
 
 
 # ── Performance vs benchmark ─────────────────────────────────────────────────

@@ -16,9 +16,10 @@ import SecretsPage from "@/pages/SecretsPage";
 import { getAdminToken, clearAdminToken } from "@/lib/api";
 import JobsPage from "@/pages/JobsPage";
 import AiAnalystPage from "@/pages/AiAnalystPage";
+import MacroOverridesPage from "@/pages/MacroOverridesPage";
 import {
   Activity, Users, Terminal, MessageCircle, Send,
-  ChevronLeft, ChevronRight, LogOut, ShieldAlert, ShieldCheck, Bug, KeyRound, Layers, Brain,
+  ChevronLeft, ChevronRight, LogOut, ShieldAlert, ShieldCheck, Bug, KeyRound, Layers, Brain, LineChart,
 } from "lucide-react";
 
 const queryClient = new QueryClient({
@@ -37,6 +38,7 @@ const NAV = [
   { path: "/",          label: "App Status",   icon: Activity      },
   { path: "/jobs",      label: "Jobs",         icon: Layers        },
   { path: "/ai-analyst",label: "AI Analyst",   icon: Brain         },
+  { path: "/macro",     label: "Macro Pulse",  icon: LineChart     },
   { path: "/users",     label: "Users",        icon: Users         },
   { path: "/whatsapp",  label: "WhatsApp Bot", icon: MessageCircle },
   { path: "/telegram",  label: "Telegram Bot", icon: Send          },
@@ -157,6 +159,7 @@ function AppRoutes({ onSignOut }: { onSignOut: () => void }) {
         <Route path="/"         component={AppStatus} />
         <Route path="/jobs"     component={JobsPage} />
         <Route path="/ai-analyst" component={AiAnalystPage} />
+        <Route path="/macro"    component={MacroOverridesPage} />
         <Route path="/users"    component={UsersPage} />
         <Route path="/whatsapp" component={() => <WhatsAppBot />} />
         <Route path="/telegram" component={() => <TelegramBot />} />

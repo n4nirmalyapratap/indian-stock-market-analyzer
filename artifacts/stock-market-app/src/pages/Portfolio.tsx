@@ -9,6 +9,7 @@ import {
   PortfolioPerformance,
   PortfolioValuation,
   PortfolioImportResult,
+  PortfolioImportPreview,
 } from "@/lib/api";
 import {
   Briefcase, Plus, Trash2, Upload, RefreshCw, Loader2,
@@ -587,70 +588,233 @@ function AddTxModal({ pid, onClose }: { pid: string; onClose: () => void }) {
 
 // ── CSV import modal ─────────────────────────────────────────────────────────
 
+// System fields the mapping editor exposes. Order matches the popup row
+// order. Keep aligned with `MAPPABLE_FIELDS` in portfolio_service.py.
+const MAPPABLE_FIELDS: ReadonlyArray<{
+  key: "symbol" | "side" | "qty" | "price" | "tradedAt" | "fees";
+  label: string;
+  required: boolean;
+}> = [
+  { key: "symbol",   label: "Symbol / Stock",  required: true  },
+  { key: "qty",      label: "Quantity",        required: true  },
+  { key: "price",    label: "Price (₹)",       required: true  },
+  { key: "side",     label: "Side (BUY/SELL)", required: false },
+  { key: "tradedAt", label: "Trade date",      required: false },
+  { key: "fees",     label: "Fees / Brokerage",required: false },
+];
+
 function ImportCsvModal({ pid, onClose }: { pid: string; onClose: () => void }) {
   const qc = useQueryClient();
-  const [csv, setCsv] = useState("");
-  const [pickedFile, setPickedFile] = useState<File | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Three steps: pick file → review/edit mapping → see result.
+  const [step, setStep] = useState<"pick" | "mapping" | "done">("pick");
+  const [pickedFile, setPickedFile] = useState<File | null>(null);
+  const [pastedCsv, setPastedCsv] = useState("");
+  const [preview, setPreview] = useState<PortfolioImportPreview | null>(null);
+  const [mapping, setMapping] = useState<Record<string, number | null>>({});
+  const [synth, setSynth] = useState<Record<string, string>>({});
   const [result, setResult] = useState<(PortfolioImportResult & { source_filename?: string }) | null>(null);
 
-  // .xlsx is binary — must go via multipart upload.  CSV/TXT can either go
-  // via paste-textarea (legacy JSON path) or via file upload.  Routing on
-  // pickedFile preserves both flows.
-  const mut = useMutation({
-    mutationFn: () => pickedFile
-      ? api.importPortfolioFile(pid, pickedFile)
-      : api.importPortfolioCsv(pid, csv),
+  // ── Step 1: file → preview ──────────────────────────────────────────────────
+  const previewMut = useMutation({
+    mutationFn: async () => {
+      // Pasted-CSV path: wrap the text in a synthetic File so the same
+      // multipart endpoint serves both flows. Avoids a second JSON endpoint.
+      const file = pickedFile
+        ?? new File([pastedCsv], "pasted.csv", { type: "text/csv" });
+      return api.previewPortfolioImport(pid, file);
+    },
     onSuccess: (res) => {
-      setResult(res);
+      setPreview(res);
+      setMapping({ ...res.suggestedMapping });
+      setSynth({ ...res.syntheticDefaults });
+      setStep("mapping");
+    },
+  });
+
+  // ── Step 2: mapping → commit ────────────────────────────────────────────────
+  const importMut = useMutation({
+    mutationFn: () => {
+      if (!preview) throw new Error("No preview");
+      return api.importPortfolioWithMapping(pid, preview.csvText, mapping, synth);
+    },
+    onSuccess: (res) => {
+      setResult({ ...res, source_filename: preview?.source_filename });
+      setStep("done");
       qc.invalidateQueries({ queryKey: ["portfolio-valuation", pid] });
       qc.invalidateQueries({ queryKey: ["portfolio-tx", pid] });
     },
   });
 
-  const onFile = (f: File) => {
-    setPickedFile(f);
-    // Binary spreadsheet formats — never try to read as text.  Match the
-    // backend allow-list (.xlsx, .xlsm) so .xlsm doesn't fall into the
-    // FileReader text path and arrive as garbled UTF-8.
-    const isBinarySheet = /\.(xlsx|xlsm)$/i.test(f.name);
-    if (isBinarySheet) {
-      setCsv(`[Excel file selected: ${f.name} — will be uploaded as-is]`);
-    } else {
-      const r = new FileReader();
-      r.onload = (e) => setCsv(String(e.target?.result ?? ""));
-      r.readAsText(f);
-    }
-  };
+  const onFile = (f: File) => { setPickedFile(f); setPastedCsv(""); };
+
+  // Title reflects current step so users know where they are.
+  const title = step === "pick"    ? "Import tradebook (CSV or Excel)"
+              : step === "mapping" ? "Map columns → system fields"
+              :                      "Import complete";
 
   return (
-    <Modal onClose={onClose} title="Import tradebook (CSV or Excel)">
-      <div className="space-y-3">
-        <p className="text-xs text-gray-500">
-          Drop in a Zerodha Console export, an Upstox tradebook, or any
-          CSV/XLSX with
-          <code className="mx-1 px-1 bg-gray-100 dark:bg-gray-800 rounded">symbol, side, qty, price, date</code>
-          columns.
-        </p>
-        <input ref={fileRef} type="file"
-          accept=".csv,.xlsx,.xlsm,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-          className="hidden"
-          onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
-        <button onClick={() => fileRef.current?.click()}
-          className="w-full px-3 py-2 text-sm bg-gray-50 dark:bg-gray-800 border border-dashed border-gray-300 dark:border-white/15 rounded hover:bg-gray-100 dark:hover:bg-gray-800/70">
-          <Upload className="w-3.5 h-3.5 inline mr-1" />
-          {pickedFile ? `Selected: ${pickedFile.name}` : "Choose CSV or Excel file…"}
-        </button>
-        <textarea
-          value={csv} onChange={(e) => { setCsv(e.target.value); setPickedFile(null); }}
-          placeholder="…or paste CSV content here"
-          rows={8}
-          className="w-full px-3 py-2 text-xs font-mono bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-white/10 rounded"
-        />
-        {result && (
-          <div className="text-xs bg-gray-50 dark:bg-gray-800/40 border border-gray-200 dark:border-white/10 rounded p-2 space-y-1">
+    <Modal onClose={onClose} title={title}>
+      {step === "pick" && (
+        <div className="space-y-3">
+          <p className="text-xs text-gray-500">
+            Drop in a Zerodha Console export, an Upstox tradebook, a Dhan
+            portfolio CSV, or anything similar. We'll show you the detected
+            columns next so you can confirm or fix the mapping.
+          </p>
+          <input ref={fileRef} type="file"
+            accept=".csv,.xlsx,.xlsm,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            className="hidden"
+            onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
+          <button onClick={() => fileRef.current?.click()}
+            className="w-full px-3 py-2 text-sm bg-gray-50 dark:bg-gray-800 border border-dashed border-gray-300 dark:border-white/15 rounded hover:bg-gray-100 dark:hover:bg-gray-800/70">
+            <Upload className="w-3.5 h-3.5 inline mr-1" />
+            {pickedFile ? `Selected: ${pickedFile.name}` : "Choose CSV or Excel file…"}
+          </button>
+          <textarea
+            value={pastedCsv} onChange={(e) => { setPastedCsv(e.target.value); setPickedFile(null); }}
+            placeholder="…or paste CSV content here"
+            rows={6}
+            className="w-full px-3 py-2 text-xs font-mono bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-white/10 rounded"
+          />
+          {previewMut.error && (
+            <p className="text-xs text-red-500">
+              {(previewMut.error as Error).message || "Preview failed"}
+            </p>
+          )}
+          <div className="flex gap-2">
+            <button onClick={() => previewMut.mutate()}
+              disabled={(!pastedCsv.trim() && !pickedFile) || previewMut.isPending}
+              className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded">
+              {previewMut.isPending ? <Loader2 className="w-4 h-4 animate-spin inline" /> : "Continue →"}
+            </button>
+            <button onClick={onClose}
+              className="px-4 py-2 text-sm border border-gray-200 dark:border-white/10 rounded">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {step === "mapping" && preview && (
+        <div className="space-y-3">
+          <div className="text-xs bg-gray-50 dark:bg-gray-800/40 border border-gray-200 dark:border-white/10 rounded p-2">
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              <span>Detected format: <span className="font-medium text-indigo-500">{preview.format}</span></span>
+              {preview.headerless && <span className="text-amber-500">No header row</span>}
+              <span>Columns: <span className="font-medium">{preview.sourceColumns.length}</span></span>
+            </div>
+            {preview.errors.length > 0 && (
+              <p className="text-amber-500 mt-1">{preview.errors[0]}</p>
+            )}
+          </div>
+
+          <p className="text-xs text-gray-500">
+            For each system field, pick which source column to read from. Leave
+            optional fields blank to use the defaults shown.
+          </p>
+
+          <div className="border border-gray-200 dark:border-white/10 rounded overflow-hidden">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 dark:bg-gray-800/60">
+                <tr className="text-left">
+                  <th className="px-2 py-1.5 font-medium">System field</th>
+                  <th className="px-2 py-1.5 font-medium">Source column</th>
+                  <th className="px-2 py-1.5 font-medium">Sample value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {MAPPABLE_FIELDS.map(({ key, label, required }) => {
+                  const colIdx = mapping[key];
+                  const sample = (colIdx != null && preview.sampleRows[0]?.[colIdx]) || "";
+                  const synthVal = synth[key];
+                  return (
+                    <tr key={key} className="border-t border-gray-200 dark:border-white/10">
+                      <td className="px-2 py-1.5">
+                        {label}{required && <span className="text-red-500">*</span>}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <select
+                          value={colIdx == null ? "" : String(colIdx)}
+                          onChange={(e) =>
+                            setMapping(m => ({
+                              ...m,
+                              [key]: e.target.value === "" ? null : Number(e.target.value),
+                            }))
+                          }
+                          className="w-full px-2 py-1 text-xs bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded"
+                        >
+                          <option value="">— not in file —</option>
+                          {preview.sourceColumns.map((c, i) => (
+                            <option key={i} value={i}>{c}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-2 py-1.5">
+                        {colIdx != null ? (
+                          <code className="text-gray-700 dark:text-gray-300">{sample || "—"}</code>
+                        ) : synthVal != null ? (
+                          <input
+                            value={synthVal}
+                            onChange={(e) => setSynth(s => ({ ...s, [key]: e.target.value }))}
+                            className="w-full px-1.5 py-0.5 text-xs bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded"
+                          />
+                        ) : (
+                          <span className="text-gray-400">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {preview.sampleRows.length > 0 && (
+            <details className="text-xs">
+              <summary className="cursor-pointer text-gray-500">Preview first {preview.sampleRows.length} row(s) raw</summary>
+              <div className="mt-1 max-h-32 overflow-auto border border-gray-200 dark:border-white/10 rounded">
+                <table className="w-full">
+                  <tbody>
+                    {preview.sampleRows.map((row, ri) => (
+                      <tr key={ri} className="border-t border-gray-200 dark:border-white/10">
+                        {row.map((cell, ci) => (
+                          <td key={ci} className="px-2 py-1 font-mono">{cell}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          )}
+
+          {importMut.error && (
+            <p className="text-xs text-red-500">
+              {(importMut.error as Error).message || "Import failed"}
+            </p>
+          )}
+
+          <div className="flex gap-2">
+            <button onClick={() => setStep("pick")}
+              className="px-4 py-2 text-sm border border-gray-200 dark:border-white/10 rounded">← Back</button>
+            <button onClick={() => importMut.mutate()}
+              disabled={
+                importMut.isPending
+                || MAPPABLE_FIELDS.filter(f => f.required).some(f => mapping[f.key] == null)
+              }
+              className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded">
+              {importMut.isPending
+                ? <Loader2 className="w-4 h-4 animate-spin inline" />
+                : "Import with this mapping"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step === "done" && result && (
+        <div className="space-y-3">
+          <div className="text-xs bg-gray-50 dark:bg-gray-800/40 border border-gray-200 dark:border-white/10 rounded p-3 space-y-1">
             {result.source_filename && <p>File: <span className="font-medium">{result.source_filename}</span></p>}
-            <p>Format detected: <span className="font-medium">{result.format}</span></p>
             <p>Rows parsed: <span className="font-medium">{result.rowsParsed}</span> · inserted: <span className="font-medium text-emerald-500">{result.rowsInserted}</span></p>
             {result.errors.length > 0 && (
               <details>
@@ -661,17 +825,10 @@ function ImportCsvModal({ pid, onClose }: { pid: string; onClose: () => void }) 
               </details>
             )}
           </div>
-        )}
-        <div className="flex gap-2">
-          <button onClick={() => mut.mutate()}
-            disabled={(!csv.trim() && !pickedFile) || mut.isPending}
-            className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded">
-            {mut.isPending ? <Loader2 className="w-4 h-4 animate-spin inline" /> : "Import"}
-          </button>
           <button onClick={onClose}
-            className="px-4 py-2 text-sm border border-gray-200 dark:border-white/10 rounded">Close</button>
+            className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded">Done</button>
         </div>
-      </div>
+      )}
     </Modal>
   );
 }

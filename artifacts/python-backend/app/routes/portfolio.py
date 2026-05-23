@@ -267,40 +267,108 @@ async def import_csv(pid: str, req: ImportReq, request: Request):
     return res
 
 
-@router.post("/{pid}/import-file")
-async def import_file(pid: str, request: Request, file: UploadFile = File(...)):
-    """Upload a tradebook as a file — accepts .csv or .xlsx.
-    Excel workbooks are flattened to CSV (first sheet only) before parsing
-    so the same column conventions apply (Zerodha / Upstox / generic
-    symbol,side,qty,price,date)."""
-    # Cap the upload at 10 MB to prevent memory-exhaustion DoS. A real
-    # tradebook for a human is well under 1 MB even after years of trading.
+async def _read_upload_as_csv(file: UploadFile) -> tuple[Optional[str], Optional[JSONResponse]]:
+    """Shared upload-to-CSV helper used by both /import-file and
+    /preview-import. Returns (csv_text, None) on success, or
+    (None, JSONResponse) on failure so the caller can `return` it directly.
+    """
     _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
     raw = await file.read(_MAX_UPLOAD_BYTES + 1)
     if not raw:
-        return JSONResponse(status_code=400, content={"error": "Empty file"})
+        return None, JSONResponse(status_code=400, content={"error": "Empty file"})
     if len(raw) > _MAX_UPLOAD_BYTES:
-        return JSONResponse(
+        return None, JSONResponse(
             status_code=413,
             content={"error": f"File too large (>{_MAX_UPLOAD_BYTES // (1024 * 1024)} MB)."},
         )
     name = (file.filename or "").lower()
     try:
         if name.endswith(".xlsx") or name.endswith(".xlsm"):
-            csv_text = ps.xlsx_bytes_to_csv(raw)
-        elif name.endswith(".csv") or name.endswith(".txt") or not name:
-            csv_text = raw.decode("utf-8", errors="replace")
-        else:
-            return JSONResponse(status_code=400,
-                content={"error": f"Unsupported file type: {file.filename!r}. "
-                                  "Upload a .csv or .xlsx tradebook."})
+            return ps.xlsx_bytes_to_csv(raw), None
+        if name.endswith(".csv") or name.endswith(".txt") or not name:
+            return raw.decode("utf-8", errors="replace"), None
+        return None, JSONResponse(status_code=400,
+            content={"error": f"Unsupported file type: {file.filename!r}. "
+                              "Upload a .csv or .xlsx tradebook."})
     except Exception as exc:
-        return JSONResponse(status_code=400,
+        return None, JSONResponse(status_code=400,
             content={"error": f"Could not read file: {exc}"})
+
+
+@router.post("/{pid}/import-file")
+async def import_file(pid: str, request: Request, file: UploadFile = File(...)):
+    """Upload a tradebook as a file — accepts .csv or .xlsx.
+    Excel workbooks are flattened to CSV (first sheet only) before parsing
+    so the same column conventions apply (Zerodha / Upstox / generic
+    symbol,side,qty,price,date).
+
+    This endpoint auto-detects format and commits immediately — used by the
+    legacy single-step import. The new mapping-popup flow uses
+    /preview-import + /import-with-mapping instead.
+    """
+    csv_text, err = await _read_upload_as_csv(file)
+    if err is not None:
+        return err
     res = ps.import_transactions(_user_id(request), pid, csv_text)
     if res.get("error"):
         return JSONResponse(status_code=404, content=res)
     res["source_filename"] = file.filename
+    return res
+
+
+# ── Two-step import (mapping popup) ──────────────────────────────────────────
+
+class ImportWithMappingReq(BaseModel):
+    """Body for the second step of the mapping-popup flow.
+
+    `csvText` is the same text the user uploaded, echoed back from the
+    preview response — so the server doesn't have to hold any temporary
+    upload state between the two calls.
+
+    `mapping` is `{field: column_index_or_null}` for every system field
+    the importer knows about (symbol/side/qty/price/tradedAt/fees).
+    `synth` provides values for fields the user left unmapped (e.g.
+    side="BUY" and tradedAt=<today> for a Dhan holdings export).
+    """
+    csvText: str  = Field(..., max_length=10 * 1024 * 1024)
+    mapping: dict = Field(..., description="System field -> column index (or null)")
+    synth:   Optional[dict] = Field(default=None,
+        description="Defaults for fields not present in the source file.")
+
+
+@router.post("/{pid}/preview-import")
+async def preview_import(pid: str, request: Request, file: UploadFile = File(...)):
+    """Step 1 of the mapping-popup flow — parses the upload WITHOUT
+    committing anything, returns the detected format, source columns,
+    sample rows, suggested mapping, and synthetic-field defaults so the
+    frontend can render a 'map columns → system fields' popup.
+
+    No DB writes happen here. The user's confirmed mapping comes back via
+    `/import-with-mapping`.
+    """
+    if not ps.get_portfolio(_user_id(request), pid):
+        return JSONResponse(status_code=404, content={"error": "portfolio not found"})
+    csv_text, err = await _read_upload_as_csv(file)
+    if err is not None:
+        return err
+    preview = ps.analyze_csv(csv_text)
+    # Echo the CSV back to the client so step 2 doesn't need to re-upload.
+    preview["csvText"]         = csv_text
+    preview["source_filename"] = file.filename
+    return preview
+
+
+@router.post("/{pid}/import-with-mapping")
+async def import_with_mapping(pid: str, req: ImportWithMappingReq, request: Request):
+    """Step 2 of the mapping-popup flow — commits transactions using the
+    user's explicit column mapping (which may match or override our
+    auto-suggested mapping from /preview-import).
+    """
+    res = ps.import_with_mapping(
+        _user_id(request), pid, req.csvText, req.mapping, req.synth or {},
+    )
+    if res.get("error"):
+        return JSONResponse(status_code=404, content=res)
     return res
 
 

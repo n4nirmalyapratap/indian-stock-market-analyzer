@@ -24,6 +24,19 @@ from . import market_cache_service as _disk
 
 logger = logging.getLogger(__name__)
 
+# Broker slug → service module path. Phase 9 dispatch table for the
+# user-priority tier added to `get_quote_with_meta` and
+# `get_historical_data`. Adding a new broker (e.g. when Groww ships) is
+# one entry here plus the matching service file under
+# `app/services/<broker>_service.py` with `get_quote` / `get_historical`.
+_BROKER_MODULES: dict[str, str] = {
+    "dhan":      "app.services.dhan_service",
+    "zerodha":   "app.services.zerodha_service",
+    "upstox":    "app.services.upstox_service",
+    "angel_one": "app.services.angel_one_service",
+    "groww":     "app.services.groww_service",
+}
+
 
 class PriceService:
     def __init__(self, nse: NseService, yahoo: YahooService):
@@ -37,6 +50,7 @@ class PriceService:
         symbol: str,
         days: int = 90,
         force_refresh: bool = False,
+        user_id: Optional[str] = None,
     ) -> list[dict]:
         """
         Returns a list of daily OHLCV dicts sorted oldest → newest:
@@ -55,6 +69,16 @@ class PriceService:
         # row count (newly listed names may legitimately have <5 bars), so
         # we don't gate them.
         min_rows = max(5, min(days // 4, 20)) if (is_idx and days >= 10) else 1
+
+        # 0. User's broker keys (Phase 9, highest priority). When the user
+        # has any active broker configured we try each in deterministic
+        # order. Broker data isn't persisted to the disk cache because
+        # those caches are user-agnostic — mixing per-user creds into the
+        # shared cache would leak data across tenants.
+        if user_id and not force_refresh:
+            broker_bars = await self._try_user_brokers_history(user_id, symbol, days)
+            if broker_bars:
+                return broker_bars
 
         # 1. Disk cache — only when market is closed AND we have a sealed snapshot
         if not force_refresh and not _disk.is_market_open():
@@ -81,11 +105,49 @@ class PriceService:
             except Exception as e:
                 logger.debug("NSE historical fetch failed for %s: %s", symbol, e)
 
+        # 2b. BSE direct (second-exchange fallback for historical). Free,
+        # no API key. Slots before Yahoo because it's a real Indian
+        # exchange source vs Yahoo's aggregated data.
+        try:
+            from . import bse_service as _bse  # noqa: PLC0415
+            bse_data = await _bse.get_historical(symbol, days)
+            if bse_data and len(bse_data) >= 10:
+                _disk.save_to_disk(symbol, days, bse_data, source="BSE")
+                return bse_data
+        except Exception as e:
+            logger.debug("BSE historical fetch failed for %s: %s", symbol, e)
+
         # 3. Yahoo Finance (fallback)
         yahoo_data = await self.yahoo.get_historical_data(symbol, days)
         if yahoo_data:
             _disk.save_to_disk(symbol, days, yahoo_data, source="YAHOO")
-        return yahoo_data or []
+            return yahoo_data
+
+        # 4. Twelve Data (free 800/day with admin key) — only fires when an
+        # API key is configured. Independent infra so it survives Yahoo
+        # outages. Returns the same OHLCV shape.
+        try:
+            from . import twelve_data_service as _td  # noqa: PLC0415
+            td_data = await _td.get_historical(symbol, days)
+            if td_data:
+                _disk.save_to_disk(symbol, days, td_data, source="TWELVE_DATA")
+                return td_data
+        except Exception as e:
+            logger.debug("Twelve Data historical failed for %s: %s", symbol, e)
+
+        # 5. Stooq (free, no key, EOD only) — last resort for historical.
+        # Polish-based infra, uncorrelated with NSE/Yahoo, has 10+ years of
+        # Indian EOD data when reachable.
+        try:
+            from . import stooq_service as _stooq  # noqa: PLC0415
+            stooq_data = await _stooq.get_historical_csv(symbol, days)
+            if stooq_data:
+                _disk.save_to_disk(symbol, days, stooq_data, source="STOOQ")
+                return stooq_data
+        except Exception as e:
+            logger.debug("Stooq historical failed for %s: %s", symbol, e)
+
+        return []
 
     async def get_historical_with_meta(self, symbol: str, days: int = 90) -> dict:
         """Same as `get_historical_data` but returns provenance metadata."""
@@ -115,16 +177,100 @@ class PriceService:
 
     # ── Quote (single price snapshot) ─────────────────────────────────────────
 
-    async def get_quote(self, symbol: str) -> Optional[dict]:
+    async def get_quote(self, symbol: str, user_id: Optional[str] = None) -> Optional[dict]:
         """
         Real-time quote — NSE primary, Yahoo fallback.
         Returns the bare quote dict (back-compat). Use `get_quote_with_meta`
         when you also need provenance.
+
+        Pass `user_id` to enable the user's configured broker tier as the
+        highest-priority source (Dhan/Zerodha/Upstox/Angel One/Groww).
         """
-        snap = await self.get_quote_with_meta(symbol)
+        snap = await self.get_quote_with_meta(symbol, user_id=user_id)
         return snap.get("quote") if snap else None
 
-    async def get_quote_with_meta(self, symbol: str) -> Optional[dict]:
+    async def _try_user_brokers(self, user_id: str, symbol: str) -> Optional[dict]:
+        """Try every active broker the user has configured, in deterministic
+        order, and return the first successful quote.
+
+        This is the top-priority tier in `get_quote_with_meta` when a
+        `user_id` is supplied — Phase 9 of the multi-source roadmap. Each
+        broker client is imported lazily so users without broker keys pay
+        zero import cost.
+
+        Failures (network, expired token, unknown symbol) are swallowed —
+        the chain in `get_quote_with_meta` falls through to NSE / BSE /
+        Yahoo / … so the user never sees a hard error from a misconfigured
+        broker key, just the next tier's result.
+        """
+        try:
+            from app.lib.broker_keys import list_active_creds_for_user  # noqa: PLC0415
+            active = list_active_creds_for_user(user_id)
+        except Exception as exc:
+            logger.debug("broker_keys lookup failed for %s: %s", user_id, exc)
+            return None
+        if not active:
+            return None
+        market_state = _disk.current_market_state()
+        # Dispatch table — slug → lazy importer for the broker's get_quote.
+        # Keep aligned with `_BROKER_MODULES` below (historical fetcher).
+        for broker, creds in active:
+            mod = _BROKER_MODULES.get(broker)
+            if not mod:
+                continue
+            try:
+                import importlib  # noqa: PLC0415
+                m = importlib.import_module(mod)
+                fn = getattr(m, "get_quote", None)
+                if fn is None:
+                    continue
+                q = await fn(symbol, creds)
+                if q:
+                    return {
+                        "quote":       q,
+                        "source":      broker.upper(),
+                        "asOf":        _disk._now_ist().isoformat(),
+                        "marketState": market_state,
+                    }
+            except Exception as exc:
+                logger.debug("broker %s get_quote failed for %s: %s",
+                             broker, symbol, str(exc)[:120])
+                continue
+        return None
+
+    async def _try_user_brokers_history(
+        self, user_id: str, symbol: str, days: int,
+    ) -> list[dict]:
+        """Historical-data variant of `_try_user_brokers`. Returns the
+        first non-empty list of bars from any active broker, or [] if
+        none have data for this symbol."""
+        try:
+            from app.lib.broker_keys import list_active_creds_for_user  # noqa: PLC0415
+            active = list_active_creds_for_user(user_id)
+        except Exception:
+            return []
+        if not active:
+            return []
+        for broker, creds in active:
+            mod = _BROKER_MODULES.get(broker)
+            if not mod:
+                continue
+            try:
+                import importlib  # noqa: PLC0415
+                m = importlib.import_module(mod)
+                fn = getattr(m, "get_historical", None)
+                if fn is None:
+                    continue
+                bars = await fn(symbol, days, creds)
+                if bars:
+                    return bars
+            except Exception as exc:
+                logger.debug("broker %s get_historical failed for %s: %s",
+                             broker, symbol, str(exc)[:120])
+                continue
+        return []
+
+    async def get_quote_with_meta(self, symbol: str, user_id: Optional[str] = None) -> Optional[dict]:
         """Returns `{quote, source, asOf, marketState}` or None.
 
         Crucially — when the market is closed and we have an EOD-sealed
@@ -137,59 +283,87 @@ class PriceService:
 
         snap: Optional[dict] = None
 
-        # 1. NSE primary
-        try:
-            nse_quote = await self.nse.get_stock_quote(sym)
-            if nse_quote and nse_quote.get("priceInfo"):
-                p    = nse_quote["priceInfo"]
-                info = nse_quote.get("info") or nse_quote.get("metadata") or {}
-                # NSE exposes the *real* sector classification in
-                # `industryInfo.sector` — `info.sector` is almost always blank.
-                # Falling through gives "Unknown" which makes sector
-                # concentration meaningless, so prefer the rich source.
-                ind_info = nse_quote.get("industryInfo") or {}
-                sec_info = nse_quote.get("securityInfo") or {}
-                week_high = p.get("weekHighLow", {}) or {}
-                # Market cap = issuedSize (shares outstanding) × lastPrice.
-                # NSE doesn't ship marketCap directly but issuedSize is the
-                # exact same authoritative number that nseindia.com uses.
-                last_price = p.get("lastPrice") or 0
-                issued = sec_info.get("issuedSize") or 0
-                derived_mcap = (
-                    float(issued) * float(last_price)
-                    if issued and last_price else None
-                )
-                quote = {
-                    "symbol":         sym,
-                    "companyName":    info.get("companyName", sym),
-                    "industry":       ind_info.get("industry") or info.get("industry"),
-                    "sector":         ind_info.get("sector") or info.get("sector"),
-                    "macroSector":    ind_info.get("macro"),
-                    "basicIndustry":  ind_info.get("basicIndustry"),
-                    "lastPrice":      last_price,
-                    "change":         p.get("change"),
-                    "pChange":        p.get("pChange"),
-                    "open":           p.get("open"),
-                    "dayHigh":        p.get("intraDayHighLow", {}).get("max") or p.get("dayHigh"),
-                    "dayLow":         p.get("intraDayHighLow", {}).get("min") or p.get("dayLow"),
-                    "previousClose":  p.get("previousClose"),
-                    "volume":         p.get("totalTradedVolume"),
-                    "fiftyTwoWeekHigh": week_high.get("max"),
-                    "fiftyTwoWeekLow":  week_high.get("min"),
-                    "marketCap":      derived_mcap,
-                    "issuedSize":     float(issued) if issued else None,
-                    "source":         "NSE",
-                }
-                snap = {
-                    "quote":       quote,
-                    "source":      "NSE",
-                    "asOf":        _disk._now_ist().isoformat(),
-                    "marketState": market_state,
-                }
-        except Exception as e:
-            logger.debug("NSE quote failed for %s: %s", sym, e)
+        # 0. User's broker keys (highest priority when `user_id` provided).
+        # Walks the user's active broker integrations in order; first
+        # successful quote wins. Failures here silently fall through to
+        # the public sources below so a misconfigured broker key never
+        # produces a hard error.
+        if user_id:
+            snap = await self._try_user_brokers(user_id, sym)
 
-        # 2. Yahoo fallback
+        # 1. NSE primary — skipped when the broker tier already supplied a
+        # quote. The whole block is gated on `snap is None` so we don't
+        # spend an NSE HTTP round-trip we don't need.
+        if snap is None:
+            try:
+                nse_quote = await self.nse.get_stock_quote(sym)
+                if nse_quote and nse_quote.get("priceInfo"):
+                    p    = nse_quote["priceInfo"]
+                    info = nse_quote.get("info") or nse_quote.get("metadata") or {}
+                    # NSE exposes the *real* sector classification in
+                    # `industryInfo.sector` — `info.sector` is almost always blank.
+                    # Falling through gives "Unknown" which makes sector
+                    # concentration meaningless, so prefer the rich source.
+                    ind_info = nse_quote.get("industryInfo") or {}
+                    sec_info = nse_quote.get("securityInfo") or {}
+                    week_high = p.get("weekHighLow", {}) or {}
+                    # Market cap = issuedSize (shares outstanding) × lastPrice.
+                    # NSE doesn't ship marketCap directly but issuedSize is the
+                    # exact same authoritative number that nseindia.com uses.
+                    last_price = p.get("lastPrice") or 0
+                    issued = sec_info.get("issuedSize") or 0
+                    derived_mcap = (
+                        float(issued) * float(last_price)
+                        if issued and last_price else None
+                    )
+                    quote = {
+                        "symbol":         sym,
+                        "companyName":    info.get("companyName", sym),
+                        "industry":       ind_info.get("industry") or info.get("industry"),
+                        "sector":         ind_info.get("sector") or info.get("sector"),
+                        "macroSector":    ind_info.get("macro"),
+                        "basicIndustry":  ind_info.get("basicIndustry"),
+                        "lastPrice":      last_price,
+                        "change":         p.get("change"),
+                        "pChange":        p.get("pChange"),
+                        "open":           p.get("open"),
+                        "dayHigh":        p.get("intraDayHighLow", {}).get("max") or p.get("dayHigh"),
+                        "dayLow":         p.get("intraDayHighLow", {}).get("min") or p.get("dayLow"),
+                        "previousClose":  p.get("previousClose"),
+                        "volume":         p.get("totalTradedVolume"),
+                        "fiftyTwoWeekHigh": week_high.get("max"),
+                        "fiftyTwoWeekLow":  week_high.get("min"),
+                        "marketCap":      derived_mcap,
+                        "issuedSize":     float(issued) if issued else None,
+                        "source":         "NSE",
+                    }
+                    snap = {
+                        "quote":       quote,
+                        "source":      "NSE",
+                        "asOf":        _disk._now_ist().isoformat(),
+                        "marketState": market_state,
+                    }
+            except Exception as e:
+                logger.debug("NSE quote failed for %s: %s", sym, e)
+
+        # 2. BSE direct (second-exchange fallback) — most NSE stocks are
+        # dual-listed; BSE runs on different infra than NSE so this works
+        # when NSE is Akamai-blocked. Free, no API key.
+        if snap is None:
+            try:
+                from . import bse_service as _bse  # noqa: PLC0415
+                bse_q = await _bse.get_quote(sym)
+                if bse_q:
+                    snap = {
+                        "quote":       bse_q,
+                        "source":      "BSE",
+                        "asOf":        _disk._now_ist().isoformat(),
+                        "marketState": market_state,
+                    }
+            except Exception as e:
+                logger.debug("BSE quote failed for %s: %s", sym, e)
+
+        # 3. Yahoo fallback
         if snap is None:
             y = await self.yahoo.get_quote(sym)
             if y:
@@ -200,6 +374,39 @@ class PriceService:
                     "asOf":        _disk._now_ist().isoformat(),
                     "marketState": market_state,
                 }
+
+        # 2c. Twelve Data fallback (only fires when admin set
+        # TWELVE_DATA_API_KEY in the secrets store).
+        if snap is None:
+            try:
+                from . import twelve_data_service as _td  # noqa: PLC0415
+                td_q = await _td.get_quote(sym)
+                if td_q:
+                    snap = {
+                        "quote":       td_q,
+                        "source":      "TWELVE_DATA",
+                        "asOf":        _disk._now_ist().isoformat(),
+                        "marketState": market_state,
+                    }
+            except Exception as e:
+                logger.debug("Twelve Data quote failed for %s: %s", sym, e)
+
+        # 2d. Stooq fallback — EOD only, no key. Returns yesterday's close
+        # during market hours but that's better than no quote at all when
+        # NSE + Yahoo + Twelve Data all fail.
+        if snap is None:
+            try:
+                from . import stooq_service as _stooq  # noqa: PLC0415
+                stooq_q = await _stooq.get_quote(sym)
+                if stooq_q:
+                    snap = {
+                        "quote":       stooq_q,
+                        "source":      "STOOQ",
+                        "asOf":        _disk._now_ist().isoformat(),
+                        "marketState": market_state,
+                    }
+            except Exception as e:
+                logger.debug("Stooq quote failed for %s: %s", sym, e)
 
         # 2b. History-derived synthetic quote — last resort when both NSE and
         # Yahoo return no usable price (e.g. BSE-only tickers that Yahoo

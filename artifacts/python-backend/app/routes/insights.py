@@ -3503,8 +3503,14 @@ GLOBAL_INDICES_DEF: list[dict] = [
     {"symbol": "^KS11",     "name": "KOSPI",         "region": "Asia Pacific", "flag": "🇰🇷"},
     {"symbol": "^AXJO",     "name": "ASX 200",       "region": "Asia Pacific", "flag": "🇦🇺"},
     # India
-    {"symbol": "^NSEI",     "name": "Nifty 50",      "region": "India",        "flag": "🇮🇳"},
-    {"symbol": "^BSESN",    "name": "SENSEX",        "region": "India",        "flag": "🇮🇳"},
+    {"symbol": "^NSEI",        "name": "Nifty 50",    "region": "India", "flag": "🇮🇳"},
+    {"symbol": "^BSESN",       "name": "SENSEX",      "region": "India", "flag": "🇮🇳"},
+    {"symbol": "^INDIAVIX",    "name": "India VIX",   "region": "India", "flag": "🇮🇳"},
+    # GIFT Nifty trades on NSE IFSC. Yahoo's ticker for it has shifted a
+    # few times since the 2023 SGX migration; the form below works for
+    # most users today. If Yahoo returns None for this, the row shows '—'
+    # — better than hiding GIFT Nifty entirely.
+    {"symbol": "GIFTNIFTY1!.NS", "name": "GIFT Nifty",  "region": "India", "flag": "🇮🇳"},
 ]
 _GLOBAL_REGION_ORDER = ["Americas", "Europe", "Asia Pacific", "India"]
 

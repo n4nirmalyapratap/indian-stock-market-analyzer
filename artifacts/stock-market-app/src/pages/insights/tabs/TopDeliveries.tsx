@@ -10,6 +10,7 @@ import {
   ListFilter, Check, Trophy, CalendarCheck,
 } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
+import StockLogo from "@/components/StockLogo";
 
 interface DeliveryItem {
   symbol: string;
@@ -682,18 +683,5 @@ function SectorMetric({ label, value, accent = false }: { label: string; value: 
   );
 }
 
-function StockLogo({ logo, symbol, size = 32 }: { logo?: string; symbol: string; size?: number }) {
-  const [err, setErr] = useState(false);
-  const initial = (symbol || "?").slice(0, 2).toUpperCase();
-  if (err || !logo) return (
-    <div style={{ width: size, height: size }}
-      className="rounded-lg flex items-center justify-center text-[10px] font-bold text-white bg-gradient-to-br from-violet-500 to-indigo-600 flex-shrink-0">
-      {initial}
-    </div>
-  );
-  return (
-    <img src={logo} alt={symbol} loading="lazy" onError={() => setErr(true)}
-      style={{ width: size, height: size }}
-      className="rounded-lg object-contain bg-white border border-gray-200 dark:border-gray-700 p-0.5 flex-shrink-0"/>
-  );
-}
+// StockLogo moved to `@/components/StockLogo` — same call signature, so
+// no changes at the call sites above.

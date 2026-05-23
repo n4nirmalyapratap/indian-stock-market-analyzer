@@ -359,6 +359,11 @@ export interface MacroTile {
   delta:     number | null;
   deltaUnit: string;
   asOf:      string | null;
+  // Provenance + staleness — added by the multi-source orchestrator. Optional
+  // for backward-compat; older backends without the chain won't send these.
+  servedFrom?: string;
+  isStale?:    boolean;
+  staleDays?:  number | null;
 }
 
 export interface MacroSource {
@@ -418,17 +423,37 @@ export interface MacroQuote {
   name?:    string;
 }
 
+/** Headline value resolved by the backend's multi-source orchestrator
+ *  (Manual override → Trading Economics → RBI direct → DBnomics → FRED →
+ *  World Bank). Carries the provenance + staleness signal so the UI can
+ *  warn when a tile is months old. */
+export interface MacroHeadlinePoint {
+  value:       number | null;
+  asOf:        string | null;
+  servedFrom:  string;          // "Manual" | "TradingEconomics" | "RBI" | "DBnomics" | "FRED" | "WorldBank"
+  isStale:     boolean;
+  staleDays:   number | null;
+}
+
 export interface MacroDashboardResponse {
   rateTimeline: MacroSeriesPoint[];
   cpi:          MacroSeriesPoint[];
   wpi:          MacroSeriesPoint[];
   iip:          MacroSeriesPoint[];
   gdp:          MacroSeriesPoint[];
+  // Headline values from the orchestrator (preferred over last(series) by
+  // the tile components for fresh-data display).
+  repoNow?:     MacroHeadlinePoint;
+  cpiNow?:      MacroHeadlinePoint;
+  iipNow?:      MacroHeadlinePoint;
+  wpiNow?:      MacroHeadlinePoint;
+  gdpNow?:      MacroHeadlinePoint;
   yieldCurve: {
-    ind10yNow:     number | null;
-    ind10yAsOf:    string | null;
-    ind10yHistory: MacroSeriesPoint[];
-    snapshot:      MacroYieldCurvePoint[];
+    ind10yNow:        number | null;
+    ind10yAsOf:       string | null;
+    ind10yServedFrom?: string;
+    ind10yHistory:    MacroSeriesPoint[];
+    snapshot:         MacroYieldCurvePoint[];
   };
   currencyStrip: {
     usdinr: MacroQuote;
@@ -661,6 +686,44 @@ export const api = {
   macroDashboard: () => fetchApi<MacroDashboardResponse>("/insights/macro"),
   globalIndices:  () => fetchApi<GlobalIndicesResponse>("/insights/global-indices"),
 
+  // ── Top Movers (Dashboard tab) ──
+  topMoversAll: (count = 10) =>
+    fetchApi<TopMoversAllResponse>(`/dashboard/top-movers/all?count=${count}`),
+  topMovers: (segment: "large" | "mid" | "small" | "micro", count = 10) =>
+    fetchApi<TopMoversResponse>(
+      `/dashboard/top-movers?segment=${segment}&count=${count}`,
+    ),
+
+  // ── User broker API keys (Settings) ──
+  // Stored encrypted in PG via Phase 2; the GET never returns decrypted
+  // credentials, only metadata. PUT replaces creds and resets the test
+  // status; DELETE removes the row entirely.
+  listBrokerKeys: () =>
+    fetchApi<{ keys: BrokerKeyMeta[] }>(`/user/broker-keys`),
+  upsertBrokerKey: (
+    broker: string,
+    creds: Record<string, string>,
+    active = true,
+  ) =>
+    fetchApi<BrokerKeyMeta>(
+      `/user/broker-keys/${encodeURIComponent(broker)}`,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ creds, active }),
+      },
+    ),
+  deleteBrokerKey: (broker: string) =>
+    fetchApi<{ removed: boolean }>(
+      `/user/broker-keys/${encodeURIComponent(broker)}`,
+      { method: "DELETE" },
+    ),
+  testBrokerKey: (broker: string) =>
+    fetchApi<{ ok: boolean; message: string; stub?: boolean }>(
+      `/user/broker-keys/${encodeURIComponent(broker)}/test`,
+      { method: "POST" },
+    ),
+
   patterns: (params?: { universe?: string; signal?: string; category?: string }) => {
     const filtered = Object.fromEntries(
       Object.entries(params ?? {}).filter(([, v]) => v != null && v !== ""),
@@ -882,6 +945,32 @@ export const api = {
       { method: "POST", body: fd },  // browser sets multipart boundary
     );
   },
+
+  // ── Two-step import (mapping popup) ────────────────────────────────────────
+  // Step 1: upload file, get detected columns + suggested mapping + preview.
+  // Step 2: send back the same CSV text + user-confirmed mapping to commit.
+  previewPortfolioImport: (pid: string, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return fetchApi<PortfolioImportPreview>(
+      `/portfolio/${encodeURIComponent(pid)}/preview-import`,
+      { method: "POST", body: fd },
+    );
+  },
+  importPortfolioWithMapping: (
+    pid: string,
+    csvText: string,
+    mapping: Record<string, number | null>,
+    synth: Record<string, string>,
+  ) =>
+    fetchApi<PortfolioImportResult>(
+      `/portfolio/${encodeURIComponent(pid)}/import-with-mapping`,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ csvText, mapping, synth }),
+      },
+    ),
 
   // Vision-LLM extraction from a broker screenshot. Returns extracted rows
   // + confidence; nothing is written to the DB until applyExtractedHoldings
@@ -1371,6 +1460,73 @@ export interface PortfolioImportResult {
   rowsParsed:   number;
   rowsInserted: number;
   errors:       string[];
+}
+
+// ── Top Movers (Dashboard tab) ─────────────────────────────────────────────
+export interface TopMoverRow {
+  symbol:        string;
+  name?:         string | null;
+  lastPrice?:    number | null;
+  change?:       number | null;
+  pChange:       number;
+  open?:         number | null;
+  dayHigh?:      number | null;
+  dayLow?:       number | null;
+  previousClose?: number | null;
+  volume?:       number | null;
+  valueLakhs?:   number | null;
+  yearHigh?:     number | null;
+  yearLow?:      number | null;
+}
+export interface TopMoversResponse {
+  available:    boolean;
+  segment:      "large" | "mid" | "small" | "micro";
+  label?:       string;
+  indexSlug?:   string;
+  asOf?:        string;
+  marketState?: string;
+  totalScanned?: number;
+  gainers:      TopMoverRow[];
+  losers:       TopMoverRow[];
+  message?:     string;
+  /** Which upstream provided the values: "NSE" (bulk index endpoint) or
+   *  "Yahoo" (per-stock fallback when NSE blocked us). */
+  servedFrom?:  string;
+}
+export interface TopMoversAllResponse {
+  fetchedAt: string;
+  segments:  Record<"large" | "mid" | "small" | "micro", TopMoversResponse>;
+}
+
+// ── User broker API key metadata ────────────────────────────────────────────
+// Returned by /user/broker-keys list endpoint. Note: this NEVER contains the
+// actual credentials — the API deliberately never returns decrypted values
+// over HTTP. The frontend uses `configured` to render the per-broker card
+// state but always asks the user to re-enter on update.
+export interface BrokerKeyMeta {
+  broker:          string;
+  active:          boolean;
+  configured:      boolean;
+  lastTestStatus?: string;   // "ok" | "failed" | ""
+  lastTestAtMs?:   number;
+  lastTestError?:  string;
+  createdAt?:      number;
+  updatedAt?:      number;
+}
+
+/** Preview returned by /portfolio/{pid}/preview-import — drives the
+ *  mapping popup before any DB writes happen. */
+export interface PortfolioImportPreview {
+  format:            string;
+  headerless:        boolean;
+  sourceColumns:     string[];
+  sampleRows:        string[][];
+  suggestedMapping:  Record<string, number | null>;
+  syntheticDefaults: Record<string, string>;
+  totalRows:         number;
+  errors:            string[];
+  csvText:           string;
+  source_filename?:  string;
 }
 
 export interface PortfolioRiskParams {

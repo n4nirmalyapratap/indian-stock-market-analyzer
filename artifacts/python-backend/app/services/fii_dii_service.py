@@ -105,31 +105,180 @@ def parse_fno_row(r: dict, prefix: str) -> dict:
         "pro_short":         _f(r, f"{prefix}ProShort"),
     }
 
-def save_to_db(df: pd.DataFrame, table: str):
-    if df.empty: return
-    os.makedirs(_CACHE_DIR, exist_ok=True)
+# ── Persistence: PostgreSQL ──────────────────────────────────────────────────
+#
+# Replaces the prior SQLite cache (market_cache/fii_dii_cache.db) which lived
+# in a non-persistent Docker volume and was wiped on every container restart.
+# All FII/DII history now lives in `fii_dii_history` keyed by (segment, date)
+# so the data survives restarts and a scheduler can keep it fresh
+# independently of anyone opening the page.
+
+# Columns that exist on the unified history table. Keep aligned with the
+# CREATE TABLE in auth_store.ensure_primary_schema.
+_PG_COLS = (
+    "segment", "date",
+    "fii_buy", "fii_sell", "fii_net",
+    "dii_buy", "dii_sell", "dii_net",
+    "fii_long", "fii_short",
+    "dii_long", "dii_short",
+    "client_long", "client_short",
+    "pro_long", "pro_short",
+)
+_PG_FLOW_COLS = _PG_COLS[2:]  # everything except segment + date
+
+
+def _now_ms() -> int:
+    import time as _time  # noqa: PLC0415
+    return int(_time.time() * 1000)
+
+
+def _segment_to_table_name(table: str) -> str:
+    """Back-compat helper — old code called load_from_db('fii_dii_equity').
+    Strip the prefix so we can pass the bare segment name through."""
+    if table.startswith("fii_dii_"):
+        return table[len("fii_dii_"):]
+    return table
+
+
+def _row_to_pg_params(segment: str, row: dict, now_ms: int) -> tuple:
+    """Convert a parsed flow row dict into the positional tuple expected
+    by the UPSERT statement, normalising missing fields to None."""
+    return (
+        segment,
+        row.get("date"),
+        row.get("fii_buy"),  row.get("fii_sell"), row.get("fii_net"),
+        row.get("dii_buy"),  row.get("dii_sell"), row.get("dii_net"),
+        row.get("fii_long"), row.get("fii_short"),
+        row.get("dii_long"), row.get("dii_short"),
+        row.get("client_long"), row.get("client_short"),
+        row.get("pro_long"), row.get("pro_short"),
+        now_ms,  # created_at_ms (used only on INSERT)
+        now_ms,  # updated_at_ms (refreshed on every UPSERT)
+    )
+
+
+def _pg_upsert_rows(segment: str, df: pd.DataFrame) -> int:
+    """Upsert a DataFrame of rows into fii_dii_history.
+
+    Each row is keyed by (segment, date). Conflicts UPDATE non-key fields,
+    so re-fetching a day's data overwrites placeholders or corrected values
+    without inserting duplicates. Returns number of rows written.
+    """
+    if df is None or df.empty:
+        return 0
+    from app.lib.auth_store import ensure_primary_schema, get_conn  # noqa: PLC0415
+    ensure_primary_schema()
+
+    # Normalise date to a Python date object so psycopg can bind it directly.
+    work = df.copy()
+    work["date"] = pd.to_datetime(work["date"]).dt.date
+    now_ms = _now_ms()
+
+    # Materialise the param tuples first so the cursor.executemany() call
+    # below sees a uniform shape and any per-row conversion exception
+    # surfaces before we open the connection.
+    params: list[tuple] = []
+    for r in work.to_dict(orient="records"):
+        params.append(_row_to_pg_params(segment, r, now_ms))
+
+    if not params:
+        return 0
+
+    cols_sql = ", ".join(_PG_COLS) + ", created_at_ms, updated_at_ms"
+    placeholders = ", ".join(["%s"] * (len(_PG_COLS) + 2))
+    update_sql = ", ".join(f"{c} = EXCLUDED.{c}" for c in _PG_FLOW_COLS)
+
+    sql = (
+        f"INSERT INTO fii_dii_history ({cols_sql}) "
+        f"VALUES ({placeholders}) "
+        f"ON CONFLICT (segment, date) DO UPDATE SET "
+        f"{update_sql}, updated_at_ms = EXCLUDED.updated_at_ms"
+    )
     with _db_lock:
-        with sqlite3.connect(_DB_FILE) as conn:
-            df.to_sql(table, conn, if_exists="replace", index=False)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(sql, params)
+    return len(params)
+
+
+def _pg_load_rows(segment: str, start: datetime | None = None,
+                  end: datetime | None = None) -> pd.DataFrame | None:
+    """Read fii_dii_history rows for a segment, optionally filtered to a
+    date range. Returns a pandas DataFrame matching the shape the rest of
+    the service expects, or None when no rows exist for that segment."""
+    from app.lib.auth_store import ensure_primary_schema, get_conn  # noqa: PLC0415
+    ensure_primary_schema()
+    where = ["segment = %s"]
+    params: list[Any] = [segment]
+    if start is not None:
+        where.append("date >= %s")
+        params.append(pd.Timestamp(start).date())
+    if end is not None:
+        where.append("date <= %s")
+        params.append(pd.Timestamp(end).date())
+    sql = (
+        f"SELECT {', '.join(_PG_COLS)} FROM fii_dii_history "
+        f"WHERE {' AND '.join(where)} ORDER BY date"
+    )
+    with _db_lock:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, tuple(params))
+                rows = cur.fetchall()
+    if not rows:
+        return None
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"])
+    return df
+
+
+def _pg_date_range(segment: str) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    """Return (min_date, max_date) in PG for the given segment, or (None,
+    None) when no rows exist. Used by the gap-fill logic to decide what
+    needs fetching."""
+    from app.lib.auth_store import ensure_primary_schema, get_conn  # noqa: PLC0415
+    ensure_primary_schema()
+    with _db_lock:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT MIN(date), MAX(date) FROM fii_dii_history WHERE segment = %s",
+                    (segment,),
+                )
+                row = cur.fetchone()
+    if not row:
+        return None, None
+    # psycopg with dict_row returns a dict; with default it returns a tuple.
+    if isinstance(row, dict):
+        values = list(row.values())
+    else:
+        values = list(row)
+    lo, hi = values[0], values[1]
+    if lo is None:
+        return None, None
+    return pd.Timestamp(lo), pd.Timestamp(hi)
+
+
+# ── Back-compat shims ────────────────────────────────────────────────────────
+# Old call sites used these table-name-based helpers. Keep them so any
+# external caller (tests, scripts) still works during the transition.
+
+def save_to_db(df: pd.DataFrame, table: str):
+    """Back-compat: writes via PG instead of SQLite."""
+    segment = _segment_to_table_name(table)
+    _pg_upsert_rows(segment, df)
+
 
 def load_from_db(table: str) -> pd.DataFrame | None:
-    if not os.path.exists(_DB_FILE): return None
-    with _db_lock:
-        try:
-            with sqlite3.connect(_DB_FILE) as conn:
-                df = pd.read_sql(f"SELECT * FROM {table}", conn)
-            # SQLite stores datetimes as ISO strings (YYYY-MM-DD HH:MM:SS).
-            # Use ISO8601 strict parsing to avoid pandas' dayfirst heuristic
-            # mis-interpreting unambiguous ISO strings.
-            df["date"] = pd.to_datetime(df["date"], format="ISO8601")
-            return df
-        except Exception:
-            return None
+    """Back-compat: reads from PG instead of SQLite."""
+    segment = _segment_to_table_name(table)
+    return _pg_load_rows(segment)
+
 
 def get_cached_date_range(table: str):
-    df = load_from_db(table)
-    if df is None or df.empty: return None, None
-    return df["date"].min(), df["date"].max()
+    """Back-compat: returns PG min/max for the segment."""
+    segment = _segment_to_table_name(table)
+    return _pg_date_range(segment)
 
 def _load_old_json_history() -> pd.DataFrame:
     """Migrate the old single-day snapshot cache if it exists."""
@@ -276,20 +425,30 @@ class FiiDiiService:
             df = df.sort_values("date").drop_duplicates("date").reset_index(drop=True)
         return df
 
-    async def _fetch_fno_archive_day(self, day) -> dict[str, dict]:
+    async def _fetch_fno_archive_day(self, day, verbose: bool = False) -> dict[str, dict]:
         """Download and parse one day's fao_participant_oi CSV. Returns
         a dict {segment_name: row_dict} for all 4 F&O segments. Empty dict
         on weekend/holiday/error.
 
         Routed through NseService.fetch_nse_archive_text so we share its
         in-process cache and header discipline rather than spinning up an
-        ad-hoc httpx client here."""
+        ad-hoc httpx client here.
+
+        `verbose=True` raises log level from DEBUG to INFO/WARNING so the
+        scheduler's recent-day healer can surface exactly which dates fail
+        and why — DEBUG-level failures were invisible in production logs
+        and let weeks of F&O gaps accumulate silently.
+        """
         date_str = day.strftime("%d%m%Y")
         url = _FNO_ARCHIVE_URL.format(date=date_str)
         cache_key = f"fno_oi_{date_str}"
         try:
             text = await self.nse.fetch_nse_archive_text(url, cache_key, ttl=86400)
             if not text or len(text) < 50:
+                if verbose:
+                    logger.warning("F&O archive empty for %s (NSE returned no body — "
+                                   "likely 404 / not yet published / endpoint blocked)",
+                                   day.strftime("%Y-%m-%d"))
                 return {}
             text = text.strip()
             # Header line is wrapped in stray quotes; skip it and parse the rest.
@@ -347,9 +506,16 @@ class FiiDiiService:
                     "pro_long":     _sum(pro_row, long_cols),
                     "pro_short":    _sum(pro_row, short_cols),
                 }
+            if verbose:
+                logger.info("F&O archive ok for %s — %d segments parsed",
+                            day.strftime("%Y-%m-%d"), len(out))
             return out
         except Exception as e:
-            logger.debug("fao archive fetch failed for %s: %s", date_str, e)
+            if verbose:
+                logger.warning("F&O archive fetch FAILED for %s: %s",
+                               day.strftime("%Y-%m-%d"), str(e)[:120])
+            else:
+                logger.debug("fao archive fetch failed for %s: %s", date_str, e)
             return {}
 
     async def get_historical(self, segment: str, start: datetime, end: datetime) -> pd.DataFrame:
@@ -561,6 +727,141 @@ class FiiDiiService:
             buckets[k]["fiiNet"] = round(buckets[k]["fiiNet"], 2)
             buckets[k]["diiNet"] = round(buckets[k]["diiNet"], 2)
         return [buckets[k] for k in order]
+
+    # ── Daily-refresh entry points (called by main.py scheduler) ─────────────
+    #
+    # Two callers:
+    #   * Startup gap-fill — walks the last `gap_days` trading days and
+    #     fetches any that aren't already in PG. Survives long downtimes
+    #     where the scheduler missed runs.
+    #   * Daily tick — fetches just today's snapshot + archive. Cheap.
+
+    async def heal_recent_fno_gaps(self, lookback_days: int = 7) -> dict:
+        """Aggressively re-check the last `lookback_days` weekdays for F&O
+        data and fetch any that PG is missing.
+
+        Why this exists: the daily 24h scheduler missed recent days
+        because (a) early ticks ran before NSE published that day's archive
+        and (b) cached 'empty response' results from earlier failures
+        persisted in the 24h NSE HTTP cache, suppressing retries.
+
+        This method:
+          * Builds the list of expected weekdays in the window.
+          * Queries PG for which of those dates already have F&O rows
+            (using `index_future` as the representative segment — all 4
+            F&O segments are written together by `fetch_fno_historical`).
+          * Force-refetches only the missing dates with `force_refresh=True`
+            on the NSE call so a previously-cached empty body doesn't
+            short-circuit the retry.
+          * Persists every segment from each successful day.
+
+        Returns a status dict with per-date outcomes for the admin UI.
+        """
+        from datetime import timezone  # noqa: PLC0415
+        today = datetime.now(timezone.utc).date()
+        expected_days: list = []
+        cur = today - timedelta(days=lookback_days)
+        while cur <= today:
+            if cur.weekday() < 5:
+                expected_days.append(cur)
+            cur += timedelta(days=1)
+
+        # Which of those days does PG already have?
+        loop = asyncio.get_running_loop()
+        existing = await loop.run_in_executor(
+            None, _pg_load_rows, "index_future",
+            datetime.combine(expected_days[0], datetime.min.time()) if expected_days else None,
+            datetime.combine(expected_days[-1], datetime.min.time()) if expected_days else None,
+        )
+        present_dates: set = set()
+        if existing is not None and not existing.empty:
+            present_dates = {d.date() for d in pd.to_datetime(existing["date"])}
+
+        missing = [d for d in expected_days if d not in present_dates]
+        if not missing:
+            return {"checked": len(expected_days), "missing": 0, "filled": 0, "days": []}
+
+        # Bypass any cached empty bodies — recent days that failed earlier
+        # need a real retry, not a replay of the cached failure.
+        outcomes: list[dict] = []
+        all_per_segment: dict[str, list[dict]] = {seg: [] for seg in _FNO_SEGMENT_COLS}
+        sem = asyncio.Semaphore(2)  # be polite — recent archive is small
+
+        async def _one(d):
+            async with sem:
+                # Invalidate the NSE HTTP cache for this specific archive
+                # so we make a fresh network call instead of replaying any
+                # previously-cached empty body.
+                try:
+                    self.nse._cache.pop(f"fno_oi_{d.strftime('%d%m%Y')}", None)  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                rows = await self._fetch_fno_archive_day(d, verbose=True)
+                outcomes.append({
+                    "date":   d.strftime("%Y-%m-%d"),
+                    "ok":     bool(rows),
+                    "segments": list(rows.keys()),
+                })
+                for seg, row in rows.items():
+                    all_per_segment[seg].append(row)
+
+        await asyncio.gather(*[_one(d) for d in missing], return_exceptions=True)
+
+        # Persist whatever we got across all 4 F&O segments.
+        filled = 0
+        for seg, rows in all_per_segment.items():
+            if not rows:
+                continue
+            seg_df = pd.DataFrame(rows)
+            seg_df["date"] = pd.to_datetime(seg_df["date"], format="ISO8601")
+            seg_df = seg_df.sort_values("date").drop_duplicates("date").reset_index(drop=True)
+            written = await loop.run_in_executor(None, _pg_upsert_rows, seg, seg_df)
+            # Count each calendar day at most once (rows is per-segment).
+            if seg == "index_future":
+                filled = written
+
+        return {
+            "checked": len(expected_days),
+            "missing": len(missing),
+            "filled":  filled,
+            "days":    outcomes,
+        }
+
+    async def scheduled_daily_fetch(self, gap_days: int = 30) -> dict:
+        """Pull today's flows + heal any gaps in the last `gap_days` for
+        every supported segment, upserting into PG. Called by a background
+        scheduler so users never have to open the page for data to refresh.
+
+        Always returns a status dict (never raises) so the caller can log
+        without try/except clutter.
+        """
+        end_date = datetime.today()
+        start_date = end_date - timedelta(days=gap_days)
+        per_segment: dict[str, dict] = {}
+        for seg in ("equity", "index_future", "index_option",
+                    "stock_future", "stock_option"):
+            try:
+                # get_historical handles "what's missing in the cache" via
+                # its existing gap-merge logic; switching that cache from
+                # SQLite to PG (above) means this single call now fills
+                # everything missing in the last `gap_days` window.
+                df = await self.get_historical(seg, start_date, end_date)
+                per_segment[seg] = {
+                    "ok":       True,
+                    "rows":     int(0 if df is None or df.empty else len(df)),
+                    "latest":   None if df is None or df.empty
+                                else df["date"].max().strftime("%Y-%m-%d"),
+                }
+            except Exception as exc:
+                logger.warning("FII/DII scheduled fetch failed for %s: %s",
+                               seg, str(exc)[:160])
+                per_segment[seg] = {"ok": False, "error": str(exc)[:160]}
+        return {
+            "ok":       True,
+            "from":     start_date.strftime("%Y-%m-%d"),
+            "to":       end_date.strftime("%Y-%m-%d"),
+            "segments": per_segment,
+        }
 
     async def backfill_all(self, days: int = 400) -> dict:
         """One-shot backfill of every supported segment into the local SQLite cache.
