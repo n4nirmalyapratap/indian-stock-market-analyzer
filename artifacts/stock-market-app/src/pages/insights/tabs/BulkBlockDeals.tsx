@@ -233,7 +233,7 @@ function HighlightCard({ deal }: { deal: Deal }) {
   return (
     <div className="flex-shrink-0 w-[260px] rounded-xl border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800/60 p-3 shadow-sm hover:shadow-md hover:border-indigo-200 dark:hover:border-indigo-500/40 transition">
       <div className="flex items-start gap-2.5">
-        <StockLogo logo={deal.logo} symbol={deal.symbol} size={36}/>
+        <StockLogo symbol={deal.symbol} size={36}/>
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-1">
             <div className="flex items-center gap-1 min-w-0">

@@ -178,7 +178,7 @@ function HighlightCard({ item }: { item: FoBanItem }) {
   return (
     <div className="flex-shrink-0 w-[240px] rounded-xl border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800/60 p-3 shadow-sm hover:shadow-md hover:border-indigo-200 dark:hover:border-indigo-500/40 transition">
       <div className="flex items-start gap-2.5">
-        <StockLogo logo={item.logo} symbol={item.symbol} size={36}/>
+        <StockLogo symbol={item.symbol} size={36}/>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold text-gray-900 dark:text-white truncate" title={item.name}>
             {item.name}

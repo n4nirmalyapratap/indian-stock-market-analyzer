@@ -551,7 +551,7 @@ function HighlightCard({ item, rank }: { item: DeliveryItem; rank: number }) {
     <div className="flex-shrink-0 w-[260px] rounded-xl border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800/60 p-3 shadow-sm hover:shadow-md hover:border-violet-200 dark:hover:border-violet-500/40 transition">
       <div className="flex items-start gap-2.5">
         <div className="relative">
-          <StockLogo logo={item.logo} symbol={item.symbol} size={36}/>
+          <StockLogo symbol={item.symbol} size={36}/>
           <span className="absolute -top-1 -left-1 w-4 h-4 rounded-full bg-violet-500 text-white text-[9px] font-bold flex items-center justify-center shadow-sm">
             {rank}
           </span>
