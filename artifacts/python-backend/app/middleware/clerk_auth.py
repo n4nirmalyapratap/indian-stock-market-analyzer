@@ -62,6 +62,12 @@ class AppAuthMiddleware(BaseHTTPMiddleware):
         if path.startswith("/api/auth"):
             return await call_next(request)
 
+        # Logo images are public — no auth token available in <img> tags.
+        # The admin CRUD sub-routes (/api/admin/logos/…) are covered by the
+        # /api/admin prefix check above and enforce their own token check.
+        if path.startswith("/api/logos/"):
+            return await call_next(request)
+
         if not path.startswith("/api") or path in self.SKIP_PATHS:
             return await call_next(request)
 

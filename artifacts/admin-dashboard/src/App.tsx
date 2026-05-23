@@ -17,9 +17,10 @@ import { getAdminToken, clearAdminToken } from "@/lib/api";
 import JobsPage from "@/pages/JobsPage";
 import AiAnalystPage from "@/pages/AiAnalystPage";
 import MacroOverridesPage from "@/pages/MacroOverridesPage";
+import LogoCachePage from "@/pages/LogoCachePage";
 import {
   Activity, Users, Terminal, MessageCircle, Send,
-  ChevronLeft, ChevronRight, LogOut, ShieldAlert, ShieldCheck, Bug, KeyRound, Layers, Brain, LineChart,
+  ChevronLeft, ChevronRight, LogOut, ShieldAlert, ShieldCheck, Bug, KeyRound, Layers, Brain, LineChart, Image,
 } from "lucide-react";
 
 const queryClient = new QueryClient({
@@ -46,6 +47,7 @@ const NAV = [
   { path: "/bugs",      label: "Bug Tracker",  icon: Bug           },
   { path: "/sebi",      label: "SEBI Audit",   icon: ShieldCheck   },
   { path: "/secrets",   label: "Secrets",      icon: KeyRound      },
+  { path: "/logos",     label: "Logo Cache",   icon: Image         },
 ];
 
 function NavLink({ path, label, icon: Icon, open }: {
@@ -167,6 +169,7 @@ function AppRoutes({ onSignOut }: { onSignOut: () => void }) {
         <Route path="/bugs"     component={BugReportsPage} />
         <Route path="/sebi"     component={SebiAuditPage} />
         <Route path="/secrets"  component={SecretsPage} />
+        <Route path="/logos"    component={LogoCachePage} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

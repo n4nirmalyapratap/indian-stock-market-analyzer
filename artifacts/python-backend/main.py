@@ -37,6 +37,7 @@ from app.routes.top_movers import router as top_movers_router
 from app.routes.user_broker_keys import router as user_broker_keys_router
 from app.routes.search import router as search_router
 from app.routes.email_digest import router as email_digest_router
+from app.routes.logos import router as logos_router
 from app.lib.auth_store import ensure_primary_schema
 from app.services.log_buffer import setup_ring_buffer
 from app.services.market_cache_service import is_market_open, cache_status
@@ -650,3 +651,4 @@ app.include_router(top_movers_router,          prefix="/api")
 app.include_router(user_broker_keys_router,    prefix="/api")
 app.include_router(search_router,              prefix="/api")
 app.include_router(email_digest_router,         prefix="/api")
+app.include_router(logos_router,                prefix="/api")

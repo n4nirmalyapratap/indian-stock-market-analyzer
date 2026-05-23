@@ -3,26 +3,25 @@
  *
  * Logo source
  * -----------
- * Dhan hosts logos for every NSE-listed symbol at a stable public CDN URL:
- *   https://images.dhan.co/symbol/<NSE_SYMBOL>.png
+ * Logos are served from our own backend at `/api/logos/<SYMBOL>`. The
+ * backend fetches from Dhan's CDN on first access and caches the raw PNG
+ * binary in PostgreSQL, so the external CDN is called at most once per
+ * symbol and our pages load logos from localhost (< 1 ms vs CDN round-trip).
  *
- * No auth, no API key, no rate-limit (it's a static-asset CDN). We've been
- * using this URL in Insights→MfHoldings, Insights→BulkBlockDeals and
- * Insights→TopDeliveries — each had its own local copy of an `<img>`
- * with onError fallback. This component is the centralized version.
+ * Admins can override the fetch key for any symbol (e.g. LTIM → LTIMindtree)
+ * from the Admin Dashboard → Logo Cache page.
  *
  * Symbol normalisation
  * --------------------
  * Strips the suffixes that show up in tickers from various sources
  * (`.NS`, `.BO`, `-EQ`, `:NSE`, `:BSE`) before building the URL so
- * `RELIANCE.NS`, `RELIANCE-EQ`, and `RELIANCE` all hit the same asset.
+ * `RELIANCE.NS`, `RELIANCE-EQ`, and `RELIANCE` all hit the same cache row.
  *
  * Fallback
  * --------
- * On image-load error (Dhan doesn't have a logo for that symbol — true
- * for ~5% of long-tail tickers and for SME issues) the component shows
- * a deterministic colored circle/square with the symbol's first letter.
- * Same visual treatment Groww / Zerodha use when a logo isn't available.
+ * On image-load error (backend returns 204 — no logo for that symbol) the
+ * component shows a deterministic colored circle/square with the symbol's
+ * first letter. Same visual treatment Groww / Zerodha use.
  *
  * Variants
  * --------
@@ -40,16 +39,15 @@ interface StockLogoProps {
   size?: number;
   /** Layout / visual shape. Default rounded-lg square. */
   shape?: "rounded" | "circle";
-  /** Optional explicit URL — bypasses Dhan CDN URL construction.
-   *  Used by the Insights tabs where the backend already attaches a
-   *  pre-built Dhan URL (or an alternative source). When absent we
-   *  build the URL from the symbol. */
+  /** Optional explicit URL — bypasses the backend cache endpoint.
+   *  Used when the caller has already built a Dhan URL or an alternative
+   *  source (e.g. AMC logo from Insights tabs). */
   logo?: string | null;
   className?: string;
 }
 
 
-/** Cleanest form of an NSE ticker — also used as the Dhan CDN key. */
+/** Cleanest form of an NSE ticker — used as the cache key. */
 function _normalizeSymbol(sym: string): string {
   let s = (sym || "").trim().toUpperCase();
   for (const suffix of [".NS", ".BO", "-EQ", ":NSE", ":BSE"]) {
@@ -91,18 +89,17 @@ export default function StockLogo({
   logo,
   className = "",
 }: StockLogoProps) {
-  // Track image errors so we render the fallback after the first failure.
-  // Reset on URL change so a re-mount with a different symbol re-tries.
   const [errored, setErrored] = useState(false);
   const clean = _normalizeSymbol(symbol);
+
+  // If the caller passes an explicit logo URL (e.g. AMC logos from Insights),
+  // use it directly without going through the backend cache.
   const url = (logo && logo.length > 0)
     ? logo
-    : (clean ? `https://images.dhan.co/symbol/${clean}.png` : "");
+    : (clean ? `/api/logos/${clean}` : "");
 
   const radius = shape === "circle" ? "rounded-full" : "rounded-lg";
   const sizeStyle = { width: size, height: size };
-  // Initials font scales with badge size — keeps the letter readable
-  // at 16px and not overbearing at 64px.
   const fontPx = Math.max(9, Math.round(size * 0.36));
 
   if (!url || errored) {
@@ -119,8 +116,6 @@ export default function StockLogo({
     );
   }
 
-  // Real logo from Dhan CDN. White background + thin padding keeps
-  // transparent-PNG logos legible against dark mode.
   return (
     <img
       src={url}

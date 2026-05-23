@@ -343,6 +343,26 @@ def ensure_primary_schema() -> None:
                     "CREATE INDEX IF NOT EXISTS idx_user_broker_keys_user "
                     "ON user_broker_keys (user_id)"
                 )
+                # Stock logo cache. Binary PNG/SVG stored once, served from
+                # our backend so the Dhan CDN is never called again after the
+                # first fetch. `fetch_symbol` is what we ask Dhan for —
+                # normally the same as `symbol` but admins can override it
+                # (e.g. LTIM → LTIMindtree if Dhan uses the old ticker).
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS stock_logos (
+                        symbol          TEXT PRIMARY KEY,
+                        fetch_symbol    TEXT NOT NULL,
+                        image_data      BYTEA,
+                        content_type    TEXT NOT NULL DEFAULT 'image/png',
+                        bytes_size      INTEGER,
+                        fetch_ok        BOOLEAN NOT NULL DEFAULT FALSE,
+                        updated_by      TEXT NOT NULL DEFAULT '',
+                        fetched_at_ms   BIGINT NOT NULL,
+                        updated_at_ms   BIGINT NOT NULL
+                    )
+                    """
+                )
         _SCHEMA_READY = True
 
 
