@@ -201,9 +201,9 @@ class YahooService:
                         "dayLow": meta.get("regularMarketDayLow") or 0,
                         "previousClose": prev_close,
                         "volume": meta.get("regularMarketVolume") or 0,
-                        "marketCap": meta.get("marketCap") or 0,
-                        "fiftyTwoWeekHigh": meta.get("52WeekHigh") or 0,
-                        "fiftyTwoWeekLow": meta.get("52WeekLow") or 0,
+                        "marketCap": meta.get("marketCap") or None,
+                        "fiftyTwoWeekHigh": meta.get("fiftyTwoWeekHigh") or meta.get("52WeekHigh") or None,
+                        "fiftyTwoWeekLow": meta.get("fiftyTwoWeekLow") or meta.get("52WeekLow") or None,
                         "source": "YAHOO",
                     }
                     _set_cache(cache_key, data, _quote_ttl())
