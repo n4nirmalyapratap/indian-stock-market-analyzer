@@ -29,16 +29,11 @@ from pydantic import BaseModel, Field
 from ..services import portfolio_service as ps
 from ..services import portfolio_optimizer_service as opt
 from ..services import hydra_var_service as hv
-from ..services.nse_service import NseService
-from ..services.yahoo_service import YahooService
-from ..services.price_service import PriceService
+from ..services import registry as svc
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
-_nse   = NseService()
-_yahoo = YahooService()
-_price = PriceService(_nse, _yahoo)
 
 
 def _user_id(request: Request) -> str:
@@ -602,7 +597,7 @@ def _parse_vision_response(text: str) -> list[dict]:
 
 @router.get("/{pid}/valuation")
 async def get_valuation(pid: str, request: Request):
-    val = await ps.value_portfolio(_user_id(request), pid, _price)
+    val = await ps.value_portfolio(_user_id(request), pid, svc.price)
     if val is None:
         return JSONResponse(status_code=404, content={"error": "portfolio not found"})
     return val
@@ -631,7 +626,7 @@ async def compute_risk_get(
 @router.post("/{pid}/risk")
 async def compute_risk(pid: str, req: RiskReq, request: Request):
     user_id = _user_id(request)
-    val = await ps.value_portfolio(user_id, pid, _price)
+    val = await ps.value_portfolio(user_id, pid, svc.price)
     if val is None:
         return JSONResponse(status_code=404, content={"error": "portfolio not found"})
     holdings = val["holdings"]
@@ -645,7 +640,7 @@ async def compute_risk(pid: str, req: RiskReq, request: Request):
 
     async def _hist(sym: str) -> tuple[str, list[float]]:
         try:
-            data = await _price.get_historical_data(sym, req.lookbackDays)
+            data = await svc.price.get_historical_data(sym, req.lookbackDays)
             return sym, [float(d["close"]) for d in (data or []) if d.get("close")]
         except Exception as exc:
             logger.warning("portfolio.risk: %s history failed: %s", sym, exc)
@@ -681,7 +676,7 @@ async def compute_risk(pid: str, req: RiskReq, request: Request):
         })
 
     # Portfolio-level Sortino + Sharpe + max-DD via the equity curve
-    perf = await ps.equity_curve(user_id, pid, _price, days=req.lookbackDays)
+    perf = await ps.equity_curve(user_id, pid, svc.price, days=req.lookbackDays)
     # Guard against equity=None on a gap day — `dict.get(k, 0)` returns the value
     # even when it's None, which would TypeError on `> 0`.
     equity_closes = [pt["equity"] for pt in (perf or {}).get("series", []) if (pt.get("equity") or 0) > 0] if perf else []
@@ -710,7 +705,7 @@ async def compute_risk(pid: str, req: RiskReq, request: Request):
 @router.get("/{pid}/performance")
 async def performance(pid: str, request: Request, benchmark: str = "NIFTY 50",
                       days: int = 365):
-    perf = await ps.equity_curve(_user_id(request), pid, _price,
+    perf = await ps.equity_curve(_user_id(request), pid, svc.price,
                                  days=days, benchmark=benchmark)
     if perf is None:
         return JSONResponse(status_code=404, content={"error": "portfolio not found"})
@@ -722,7 +717,7 @@ async def performance(pid: str, request: Request, benchmark: str = "NIFTY 50",
 @router.post("/{pid}/optimize")
 async def optimize(pid: str, req: OptimizeReq, request: Request):
     user_id = _user_id(request)
-    val = await ps.value_portfolio(user_id, pid, _price)
+    val = await ps.value_portfolio(user_id, pid, svc.price)
     if val is None:
         return JSONResponse(status_code=404, content={"error": "portfolio not found"})
 
@@ -738,7 +733,7 @@ async def optimize(pid: str, req: OptimizeReq, request: Request):
 
     async def _hist(sym: str) -> tuple[str, list[float]]:
         try:
-            data = await _price.get_historical_data(sym, 400)
+            data = await svc.price.get_historical_data(sym, 400)
             return sym, [float(d["close"]) for d in (data or []) if d.get("close")]
         except Exception as exc:
             logger.warning("portfolio.optimize: %s history failed: %s", sym, exc)

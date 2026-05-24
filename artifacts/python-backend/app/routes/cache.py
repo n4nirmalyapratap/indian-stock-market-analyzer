@@ -1,11 +1,8 @@
 from fastapi import APIRouter, BackgroundTasks
 from app.services.market_cache_service import cache_status, warmup_cache
-from app.services.yahoo_service import YahooService
-from app.services.nse_service import NseService
-from app.services.price_service import PriceService
+from app.services import registry as svc
 
 router = APIRouter()
-_price = PriceService(NseService(), YahooService())
 
 _warmup_running = False
 
@@ -25,7 +22,7 @@ async def trigger_warmup(background_tasks: BackgroundTasks):
     async def _run():
         global _warmup_running
         try:
-            result = await warmup_cache(_price)
+            result = await warmup_cache(svc.price)
             return result
         finally:
             _warmup_running = False

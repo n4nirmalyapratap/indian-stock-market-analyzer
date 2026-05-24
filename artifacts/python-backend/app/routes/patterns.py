@@ -1,17 +1,9 @@
 from fastapi import APIRouter, Query
 from typing import Optional
-from ..services.patterns_service import PatternsService
-from ..services.yahoo_service import YahooService
-from ..services.nse_service import NseService
-from ..services.price_service import PriceService
+from ..services import registry as svc
 from ..services import market_cache_service as _disk
 
 router = APIRouter(prefix="/patterns", tags=["patterns"])
-
-_yahoo = YahooService()
-_nse = NseService()
-_price = PriceService(_nse, _yahoo)
-_service = PatternsService(_yahoo, _nse, _price)
 
 
 def _meta() -> dict:
@@ -32,7 +24,7 @@ async def _get_patterns(
     signal: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
 ):
-    res = await _service.get_patterns(universe, signal, category)
+    res = await svc.patterns.get_patterns(universe, signal, category)
     if isinstance(res, dict):
         res.setdefault("meta", _meta())
     return res
@@ -43,4 +35,4 @@ router.add_api_route("/", _get_patterns, methods=["GET"])
 
 @router.post("/scan")
 async def trigger_scan():
-    return await _service.trigger_scan()
+    return await svc.patterns.trigger_scan()

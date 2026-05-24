@@ -33,6 +33,7 @@ import { api, TopMoverRow, TopMoversAllResponse } from "@/lib/api";
 import { marketDataQueryOptions } from "@/lib/marketData";
 import ChartButton from "@/components/ChartButton";
 import StockLogo from "@/components/StockLogo";
+import { fmtPct } from "@/lib/format";
 
 type Segment = "large" | "mid" | "small" | "micro";
 
@@ -47,10 +48,6 @@ const SEGMENTS: { key: Segment; label: string; description: string }[] = [
 // the panel scan-friendly without dominating the dashboard.
 const INLINE_COUNT = 3;
 
-function fmtPct(v: number | null | undefined): string {
-  if (v == null || isNaN(v)) return "—";
-  return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
-}
 function fmtPrice(v: number | null | undefined): string {
   if (v == null || isNaN(v)) return "—";
   return `₹${v.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;

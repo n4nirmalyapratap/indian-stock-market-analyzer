@@ -8,26 +8,10 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from ..services.nlp_service import NlpService
-from ..services.stocks_service import StocksService
-from ..services.sectors_service import SectorsService
-from ..services.patterns_service import PatternsService
-from ..services.scanners_service import ScannersService
-from ..services.nse_service import NseService
-from ..services.yahoo_service import YahooService
-from ..services.price_service import PriceService
+from ..services import registry as svc
 from ..lib.universe import SECTOR_SYMBOLS
 
 router = APIRouter(prefix="/nlp", tags=["nlp"])
-
-_nse      = NseService()
-_yahoo    = YahooService()
-_price    = PriceService(_nse, _yahoo)
-_nlp      = NlpService()
-_stocks   = StocksService(_nse, _yahoo)
-_sectors  = SectorsService(_nse, _yahoo)
-_patterns = PatternsService(_yahoo, _nse)
-_scanners = ScannersService(_price)
 
 
 @router.post("/query")
@@ -38,7 +22,7 @@ async def nlp_query(body: dict[str, Any]):
 
     # Guard NLP parsing — OSError if spaCy model missing, etc.
     try:
-        parsed = _nlp.parse(text)
+        parsed = svc.nlp.parse(text)
     except Exception:
         logger.exception("NLP parse failed for query")
         return JSONResponse(
@@ -74,23 +58,23 @@ async def nlp_query(body: dict[str, Any]):
 
         elif intent == "stock_analysis":
             if stocks:
-                details = await _stocks.get_stock_details(stocks[0])
+                details = await svc.stocks.get_stock_details(stocks[0])
                 result["data"] = details
                 result["resolvedSymbol"] = stocks[0]
                 if len(stocks) > 1:
                     result["otherSymbols"] = stocks[1:]
             else:
-                nifty100 = await _stocks.get_nifty100_stocks()
+                nifty100 = await svc.stocks.get_nifty100_stocks()
                 result["data"] = nifty100[:20]
                 result["message"] = "No specific stock symbol detected. Showing Nifty 100 overview."
 
         elif intent == "sector_query":
             if sectors:
-                sector_data = await _sectors.get_sector_detail(sectors[0])
+                sector_data = await svc.sectors.get_sector_detail(sectors[0])
                 result["data"] = sector_data
                 result["resolvedSector"] = sectors[0]
             else:
-                all_sectors = await _sectors.get_all_sectors()
+                all_sectors = await svc.sectors.get_all_sectors()
                 if signal == "CALL":
                     # Guard against pChange=None — `dict.get(k, 0)` returns the
                     # value even when it's None, which would TypeError on `> 0`.
@@ -103,11 +87,11 @@ async def nlp_query(body: dict[str, Any]):
                     result["data"] = all_sectors
 
         elif intent == "rotation_query":
-            rotation = await _sectors.get_sector_rotation()
+            rotation = await svc.sectors.get_sector_rotation()
             result["data"] = rotation
 
         elif intent == "pattern_scan":
-            patterns_result = await _patterns.get_patterns(signal=signal)
+            patterns_result = await svc.patterns.get_patterns(signal=signal)
             patterns_list   = patterns_result.get("patterns", [])
 
             if sectors:
@@ -126,7 +110,7 @@ async def nlp_query(body: dict[str, Any]):
             result["data"] = patterns_result
 
         elif intent == "scanner_run":
-            all_scanners = _scanners.get_all_scanners()
+            all_scanners = svc.scanners.get_all_scanners()
             matched = None
             query_lower = text.lower()
             for sc in all_scanners:
@@ -134,7 +118,7 @@ async def nlp_query(body: dict[str, Any]):
                     matched = sc
                     break
             if matched:
-                run_result = await _scanners.run_scanner(matched["id"])
+                run_result = await svc.scanners.run_scanner(matched["id"])
                 result["data"] = run_result
                 result["resolvedScanner"] = matched["name"]
             else:
@@ -142,7 +126,7 @@ async def nlp_query(body: dict[str, Any]):
                 result["message"] = "Listed available scanners. Specify a scanner name to run one."
 
         elif intent == "analytics":
-            all_sectors = await _sectors.get_all_sectors()
+            all_sectors = await svc.sectors.get_all_sectors()
             result["data"] = {
                 "sectors": all_sectors,
                 "message": (

@@ -9,15 +9,8 @@ from fastapi.responses import JSONResponse, Response
 from typing import Any
 
 from ..services.whatsapp_service import WhatsappService
-from ..services.sectors_service import SectorsService
-from ..services.stocks_service import StocksService
-from ..services.patterns_service import PatternsService
-from ..services.scanners_service import ScannersService
-from ..services.nse_service import NseService
-from ..services.yahoo_service import YahooService
-from ..services.price_service import PriceService
-from ..services.nlp_service import NlpService
 from ..services.bot_dispatcher import BotDispatcher
+from ..services import registry as svc
 from ..services import news_service as _news_module
 
 logger = logging.getLogger(__name__)
@@ -56,14 +49,6 @@ def _verify_twilio_signature(request: Request, form: dict[str, str]) -> bool:
 
 router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
 
-_nse      = NseService()
-_yahoo    = YahooService()
-_price    = PriceService(_nse, _yahoo)
-_sectors  = SectorsService(_nse, _yahoo)
-_stocks   = StocksService(_nse, _yahoo)
-_patterns = PatternsService(_yahoo, _nse)
-_scanners = ScannersService(_price)
-_nlp      = NlpService()
 
 try:
     from ..services.hydra_service import HydraEngine
@@ -72,10 +57,10 @@ except Exception:  # pragma: no cover
     _hydra = None
 
 _dispatcher = BotDispatcher(
-    sectors=_sectors, stocks=_stocks, patterns=_patterns, scanners=_scanners,
-    nlp=_nlp, hydra=_hydra, news=_news_module,
+    sectors=svc.sectors, stocks=svc.stocks, patterns=svc.patterns, scanners=svc.scanners,
+    nlp=svc.nlp, hydra=_hydra, news=_news_module,
 )
-_service = WhatsappService(_sectors, _stocks, _patterns, _scanners, _nlp,
+_service = WhatsappService(svc.sectors, svc.stocks, svc.patterns, svc.scanners, svc.nlp,
                            dispatcher=_dispatcher)
 
 

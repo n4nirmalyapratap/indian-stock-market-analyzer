@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Globe, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { api, type GlobalIndex, type GlobalIndicesRegion } from "@/lib/api";
+import { fmtPct } from "@/lib/format";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -10,11 +11,6 @@ function fmtVal(v: number | null): string {
   return v.toFixed(2);
 }
 
-function fmtPct(p: number | null): string {
-  if (p == null) return "—";
-  const sign = p >= 0 ? "+" : "";
-  return `${sign}${p.toFixed(2)}%`;
-}
 
 const REGION_LABELS: Record<string, string> = {
   Americas:      "🌎 Americas",

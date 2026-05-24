@@ -8,6 +8,7 @@ import {
   Target, Activity, AlertTriangle, CheckCircle2, XCircle,
   Search, Play, Database
 } from "lucide-react";
+import { fmtSigned as fmt } from "@/lib/format";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 function hGet<T = any>(path: string) { return fetchApi<T>(path); }
@@ -21,11 +22,6 @@ type Tab = "supervisor" | "pairs" | "backtest" | "var" | "forecast";
 interface ChatMessage { role: "user" | "hydra"; text: string; data?: any; time: string; }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function fmt(n: any, dec = 2) {
-  if (n == null || isNaN(Number(n))) return "—";
-  const v = Number(n);
-  return (v >= 0 ? "+" : "") + v.toFixed(dec);
-}
 function fmtN(n: any, dec = 2) {
   if (n == null || isNaN(Number(n))) return "—";
   return Number(n).toFixed(dec);

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
+import { fmt } from "@/lib/format";
 import {
   PageHeader, Loading, EmptyState, ErrorState, PillTabs,
 } from "../_shared";
@@ -41,10 +42,6 @@ const STATUS_TABS = [
   { value: "Possible Exit",     label: "Exits" },
 ];
 
-function fmt(v: number | null | undefined, digits = 2): string {
-  if (v == null || !isFinite(v)) return "—";
-  return v.toFixed(digits);
-}
 function fmtDate(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso + "T00:00:00");
