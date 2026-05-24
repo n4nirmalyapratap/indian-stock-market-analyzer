@@ -196,14 +196,37 @@ async def _resolve_scrip_code(ticker: str) -> Optional[str]:
         return None
 
     rows = data if isinstance(data, list) else (data.get("Table") or [])
+
+    # Build a list of valid (bse_sym, scrip_id) pairs from the search results.
+    candidates: list[tuple[str, str]] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
         bse_sym = (row.get("symbol_short") or row.get("scrip_id") or "").strip().upper()
         scrip_id = str(row.get("scrip_cd") or row.get("scripcode") or "").strip()
-        if scrip_id and bse_sym and bse_sym == sym:
+        if scrip_id and bse_sym:
+            candidates.append((bse_sym, scrip_id))
+
+    if not candidates:
+        _scrip_lookup_cache[sym] = ""
+        return None
+
+    # Pass 1 — exact ticker match (most reliable).
+    for bse_sym, scrip_id in candidates:
+        if bse_sym == sym:
             _scrip_lookup_cache[sym] = scrip_id
             return scrip_id
+
+    # Pass 2 — prefix match for post-merger renames (e.g. NSE "LTIM" ↔ BSE
+    # "LTIMINDTECH"). Only trust this when BSE returned exactly one candidate;
+    # multiple candidates would make a prefix match ambiguous.
+    if len(candidates) == 1:
+        bse_sym, scrip_id = candidates[0]
+        if bse_sym.startswith(sym) or sym.startswith(bse_sym):
+            logger.debug("BSE scrip fuzzy-match %s → %s (%s)", sym, scrip_id, bse_sym)
+            _scrip_lookup_cache[sym] = scrip_id
+            return scrip_id
+
     _scrip_lookup_cache[sym] = ""
     return None
 

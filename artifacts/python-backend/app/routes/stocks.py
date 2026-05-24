@@ -18,6 +18,12 @@ _service = StocksService(_nse, _yahoo)
 VALID_PERIODS   = {"1d","5d","1mo","3mo","6mo","1y","2y","5y","10y","max"}
 VALID_INTERVALS = {"1m","2m","5m","15m","30m","60m","90m","1h","1d","5d","1wk","1mo"}
 
+# Fundamentals change quarterly — cache for 24 h so repeated visits to the
+# Financials tab don't re-issue multiple blocking yfinance calls every time.
+import time as _time
+_FINANCIALS_CACHE: dict[str, tuple[float, dict]] = {}
+_FINANCIALS_TTL = 24 * 3600
+
 
 def _provenance() -> dict:
     return {
@@ -177,6 +183,12 @@ async def get_stock_financials(symbol: str):
 
     symbol = symbol.upper()
 
+    # Financials are quarterly/annual — serve from 24-hour cache on repeat visits
+    # so the Financials tab doesn't re-issue multiple blocking yfinance calls.
+    _fin_cached = _FINANCIALS_CACHE.get(symbol)
+    if _fin_cached and (_time.time() - _fin_cached[0]) < _FINANCIALS_TTL:
+        return _fin_cached[1]
+
     def _safe(val):
         try:
             if val is None:
@@ -321,7 +333,7 @@ async def get_stock_financials(symbol: str):
         "weekChange52":    _pct(ov.get("52WeekChange")),
     }
 
-    return {
+    _result = {
         "symbol":      symbol,
         "companyName": info.get("longName") or info.get("shortName") or symbol,
         "currency":    info.get("currency", "INR"),
@@ -338,6 +350,8 @@ async def get_stock_financials(symbol: str):
             "note":        "Fundamentals are quarterly/annual — not affected by intraday market state.",
         },
     }
+    _FINANCIALS_CACHE[symbol] = (_time.time(), _result)
+    return _result
 
 
 @router.get("/{symbol}/dcf")

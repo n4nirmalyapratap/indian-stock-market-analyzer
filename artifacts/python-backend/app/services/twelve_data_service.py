@@ -124,6 +124,9 @@ async def get_quote(symbol: str) -> Optional[dict]:
         return cached[1]
 
     data = await _get("/quote", {"symbol": sym, "exchange": "NSE"})
+    # BSE fallback — covers stocks not on NSE or when NSE resolution fails.
+    if not isinstance(data, dict) or not data.get("close"):
+        data = await _get("/quote", {"symbol": sym, "exchange": "BSE"})
     if not isinstance(data, dict) or not data.get("close"):
         return None
 
@@ -169,14 +172,17 @@ async def get_historical(symbol: str, days: int = 90) -> list[dict]:
         return cached[1]
 
     # Twelve Data's `time_series` returns newest → oldest by default.
-    data = await _get("/time_series", {
+    _ts_params = {
         "symbol":     sym,
-        "exchange":   "NSE",
         "interval":   "1day",
         "outputsize": str(min(max(days, 1), 5000)),  # API caps at 5000
         "order":      "asc",                          # oldest first
         "timezone":   "Asia/Kolkata",
-    })
+    }
+    data = await _get("/time_series", {**_ts_params, "exchange": "NSE"})
+    # BSE fallback — covers BSE-only or post-merger-renamed stocks.
+    if not isinstance(data, dict) or not isinstance(data.get("values"), list) or not data.get("values"):
+        data = await _get("/time_series", {**_ts_params, "exchange": "BSE"})
     if not isinstance(data, dict):
         return []
     values = data.get("values")
