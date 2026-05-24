@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearch, useLocation, Link } from "wouter";
 import { api } from "@/lib/api";
-import { Search, TrendingUp, TrendingDown, AlertCircle, BarChart2, Activity, Users, ArrowLeft } from "lucide-react";
+import { Search, TrendingUp, TrendingDown, AlertCircle, BarChart2, Activity, Users, ArrowLeft, Newspaper } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
 import AIAnalystButton from "@/components/AIAnalystButton";
 import StockFinancials from "@/components/financials/StockFinancials";
@@ -20,7 +20,7 @@ export default function StockLookup() {
   const [, navigate] = useLocation();
   const [input, setInput] = useState("");
   const [symbol, setSymbol] = useState("");
-  const [view, setView] = useState<"technicals" | "financials">("technicals");
+  const [view, setView] = useState<"technicals" | "financials" | "news">("technicals");
   // True only when ChartButton explicitly set the flag — cleared immediately so
   // coming back from Investor Council (or any other back-nav) never re-shows it.
   const cameFromLink = useRef((() => {
@@ -164,21 +164,28 @@ export default function StockLookup() {
             </div>
           </div>
 
-          {/* View toggle: Technicals | Financials */}
-          <div className="flex gap-1 bg-gray-100 rounded-lg p-1 w-fit">
+          {/* View toggle: Technicals | Financials | News */}
+          <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1 w-fit">
             <button
               onClick={() => setView("technicals")}
               data-testid="technicals-tab-btn"
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "technicals" ? "bg-white text-indigo-700 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "technicals" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
             >
               <Activity className="w-3.5 h-3.5" /> Technicals
             </button>
             <button
               onClick={() => setView("financials")}
               data-testid="financials-tab-btn"
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "financials" ? "bg-white text-indigo-700 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "financials" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
             >
               <BarChart2 className="w-3.5 h-3.5" /> Financials
+            </button>
+            <button
+              onClick={() => setView("news")}
+              data-testid="news-tab-btn"
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "news" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+            >
+              <Newspaper className="w-3.5 h-3.5" /> News
             </button>
           </div>
 
@@ -192,8 +199,10 @@ export default function StockLookup() {
             <StockFinancials symbol={data.symbol} />
           )}
 
-          {/* Latest news for this ticker (RSS + Tavily top-up when thin) */}
-          <TickerNewsPanel symbol={data.symbol} limit={15} />
+          {/* News view — per-stock news from yfinance + RSS + Tavily */}
+          {view === "news" && (
+            <TickerNewsPanel symbol={data.symbol} limit={15} />
+          )}
         </div>
       )}
 
