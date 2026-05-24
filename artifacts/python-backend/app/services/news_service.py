@@ -772,15 +772,82 @@ async def get_news_feed(
     }
 
 
-async def get_ticker_news(symbol: str, limit: int = 20) -> dict:
-    """Return news matched to a single ticker, blending RSS + Tavily.
+def _yfinance_ticker_news(sym: str) -> list[dict]:
+    """Fetch per-stock news from yfinance and normalise to article dicts.
 
-    Strategy:
-      1. Pull the cached RSS feed (re-fills if stale, same as get_news_feed).
-      2. Filter articles whose `tickers` list contains the symbol OR whose
-         title contains the symbol (case-insensitive).
-      3. If the RSS match count is still below ``_TICKER_TAVILY_FLOOR``, top
-         up via Tavily with a 5-minute per-symbol cache.
+    yfinance ≥ 0.2.55 wraps each item as {"id": ..., "content": {...}}.
+    We extract the nested content and map it to our article schema so the
+    frontend can reuse the same card components.
+    """
+    try:
+        import yfinance as yf  # noqa: PLC0415
+        raw = yf.Ticker(f"{sym}.NS").news or []
+        articles: list[dict] = []
+        seen_urls: set[str] = set()
+        for item in raw:
+            # Support both old flat shape and new nested {"content": {...}} shape
+            c = item.get("content") if isinstance(item.get("content"), dict) else item
+            title = (c.get("title") or "").strip()
+            if not title:
+                continue
+            # URL: prefer canonicalUrl, fall back to clickThroughUrl / link
+            url = (
+                (c.get("canonicalUrl") or {}).get("url")
+                or (c.get("clickThroughUrl") or {}).get("url")
+                or c.get("link", "")
+            )
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            # Publisher
+            provider = c.get("provider") or {}
+            source = (
+                provider.get("displayName")
+                or c.get("publisher")
+                or "Yahoo Finance"
+            )
+            # Timestamp
+            pub_date = (
+                c.get("pubDate")
+                or c.get("displayTime")
+                or ""
+            )
+            if pub_date and not pub_date.endswith("Z") and "+" not in pub_date:
+                pub_date = pub_date + "Z"
+            # Image
+            thumb = c.get("thumbnail") or {}
+            image = thumb.get("originalUrl") or None
+            if not image:
+                resolutions = thumb.get("resolutions") or []
+                if resolutions:
+                    image = resolutions[0].get("url")
+            summary = (c.get("summary") or c.get("description") or "").strip()
+            articles.append({
+                "title":       title,
+                "summary":     summary[:400] if summary else "",
+                "url":         url,
+                "source":      source,
+                "published":   pub_date,
+                "category":    "market",
+                "tickers":     [sym],
+                "sentiment":   _sentiment(f"{title} {summary}"),
+                "image_url":   image,
+                "type":        "news",
+                "via":         "yfinance",
+            })
+        return articles
+    except Exception as exc:
+        logger.debug("yfinance news fetch failed for %s: %s", sym, exc)
+        return []
+
+
+async def get_ticker_news(symbol: str, limit: int = 20) -> dict:
+    """Return news for a single ticker.
+
+    Strategy (in priority order):
+      1. yfinance `.news` — stock-specific, reliable, cached 5 min per symbol.
+      2. RSS feed title-match — filters the general feed for the symbol name.
+      3. Tavily top-up — when combined count is still below the floor.
 
     Returns the same shape as ``get_news_feed`` so the frontend can reuse
     the existing article card components.
@@ -790,27 +857,46 @@ async def get_ticker_news(symbol: str, limit: int = 20) -> dict:
         return {"articles": [], "total": 0, "symbol": "",
                 "tavilyUsed": False, "source": NEWS_SOURCE_LABEL}
 
-    # Step 1: RSS pass
-    entry = _cache_get("feed")
-    if entry is None:
+    lim = max(1, min(50, int(limit)))
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Step 1: yfinance per-stock news (primary source, cached per symbol)
+    yf_cache_key = f"yf:{sym}"
+    yf_entry = _cache_get(yf_cache_key)
+    if yf_entry is not None:
+        yf_articles: list[dict] = yf_entry["data"]
+    else:
+        yf_articles = await asyncio.get_event_loop().run_in_executor(
+            None, _yfinance_ticker_news, sym
+        )
+        _cache_set(yf_cache_key, yf_articles)
+
+    matched: list[dict] = list(yf_articles)
+    seen_titles = {(a.get("title") or "").lower().strip() for a in matched}
+
+    # Step 2: RSS pass — supplement with any general-feed articles that
+    # mention this ticker in their title (keeps RSS articles alongside yf ones)
+    rss_entry = _cache_get("feed")
+    if rss_entry is None:
         payload = await _fetch_all_feeds()
         _cache_set("feed", payload)
-        entry = _CACHE["feed"]
+        rss_entry = _CACHE["feed"]
 
-    feed_articles = entry["data"]["articles"]
     sym_lc = sym.lower()
-    matched: list[dict] = []
-    for art in feed_articles:
-        tickers = [t.upper() for t in (art.get("tickers") or [])]
+    for art in rss_entry["data"]["articles"]:
+        tickers_up = [t.upper() for t in (art.get("tickers") or [])]
         title_lc = (art.get("title") or "").lower()
-        if sym in tickers or sym_lc in title_lc:
-            matched.append(art)
+        if sym in tickers_up or sym_lc in title_lc:
+            t = title_lc.strip()
+            if t and t not in seen_titles:
+                seen_titles.add(t)
+                matched.append(art)
 
-    # Step 2: Tavily top-up (cached per symbol)
+    # Step 3: Tavily top-up when still below floor
     tavily_used = False
     if len(matched) < _TICKER_TAVILY_FLOOR:
-        cache_key = f"ticker:{sym}"
-        cached_tav = _cache_get(cache_key)
+        tav_cache_key = f"ticker:{sym}"
+        cached_tav = _cache_get(tav_cache_key)
         if cached_tav:
             tav_articles = cached_tav["data"]
         else:
@@ -821,16 +907,15 @@ async def get_ticker_news(symbol: str, limit: int = 20) -> dict:
                 )
             except Exception:
                 tav_articles = []
-            _cache_set(cache_key, tav_articles)
+            _cache_set(tav_cache_key, tav_articles)
 
         if tav_articles:
             tavily_used = True
-            seen = {(a.get("title") or "").lower().strip() for a in matched}
             for art in tav_articles:
                 t = (art.get("title") or "").lower().strip()
-                if not t or t in seen:
+                if not t or t in seen_titles:
                     continue
-                seen.add(t)
+                seen_titles.add(t)
                 matched.append({
                     "title":     art.get("title"),
                     "summary":   art.get("summary") or "",
@@ -844,15 +929,20 @@ async def get_ticker_news(symbol: str, limit: int = 20) -> dict:
                     "via":       "tavily",
                 })
 
-    lim = max(1, min(50, int(limit)))
+    source_label = "Yahoo Finance"
+    if tavily_used:
+        source_label += " + Tavily"
+    elif any(a.get("via") != "yfinance" for a in matched):
+        source_label += " + " + NEWS_SOURCE_LABEL
+
     return {
-        "symbol":     sym,
-        "articles":   matched[:lim],
-        "total":      len(matched),
-        "source":     (NEWS_SOURCE_LABEL + " + Tavily") if tavily_used else NEWS_SOURCE_LABEL,
-        "tavilyUsed": tavily_used,
-        "fetchedAt":  datetime.now(timezone.utc).isoformat(),
-        "refreshedAt": _iso_from_ts(entry["ts"]),
+        "symbol":      sym,
+        "articles":    matched[:lim],
+        "total":       len(matched),
+        "source":      source_label,
+        "tavilyUsed":  tavily_used,
+        "fetchedAt":   now_iso,
+        "refreshedAt": now_iso,
     }
 
 
