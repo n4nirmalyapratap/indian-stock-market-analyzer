@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 
 from ..services import market_sentiment_engine as engine
 from ..services import market_cache_service as _disk
+from ..services import news_service as _news
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sentiment", tags=["sentiment"])
@@ -100,6 +101,9 @@ async def refresh_sentiment():
             }
         _last_refresh_at = now
         engine.clear_cache()
+        # Also wipe the news cache so the sentiment recompute pulls
+        # truly fresh headlines, not the 8-min-old cached snapshot.
+        await _news.invalidate_cache()
         data = await engine.get_market_sentiment(force_refresh=True)
         sectors = await engine.get_sector_sentiments(force_refresh=True)
         return {
