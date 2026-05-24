@@ -42,9 +42,7 @@ from ..services.options_chatbot import chat_reply, _AI_FALLBACK_REPLY
 from ..services import sebi_registry
 from ..services.risk_free_service import get_india_risk_free_rate
 from ..services import nse_bhavcopy_service as _bhav
-from ..services.nse_service import NseService
-
-_nse = NseService()
+from ..services import registry as svc
 
 router = APIRouter(prefix="/options", tags=["options"])
 logger = logging.getLogger("options_route")
@@ -262,14 +260,14 @@ async def get_options_chain(symbol: str, expiry: Optional[str] = None):
 
     try:
         # 1 — Try NSE native chain
-        nse_payload = await _nse.get_option_chain(upper, expiry_date=expiry, instrument=instrument)
+        nse_payload = await svc.nse.get_option_chain(upper, expiry_date=expiry, instrument=instrument)
         if nse_payload:
             expiry_dates, chain_data, underlying = _normalise_nse_chain(nse_payload)
             if chain_data:
                 spot_info = await _fetch_spot_and_hv(symbol)
                 spot      = spot_info.get("spot") or underlying or 0
                 # PCR for first expiry
-                pcr = _nse.calculate_pcr(nse_payload, 0)
+                pcr = svc.nse.calculate_pcr(nse_payload, 0)
                 return {
                     "symbol":   upper,
                     "spot":     spot,
@@ -310,7 +308,7 @@ async def get_expiry_list(symbol: str):
     _IDX  = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"}
     instrument = "OPTIDX" if any(idx in upper for idx in _IDX) else "OPTSTK"
     try:
-        dates = await _nse.get_expiry_list(upper, instrument=instrument)
+        dates = await svc.nse.get_expiry_list(upper, instrument=instrument)
         return {"symbol": upper, "expiries": dates, "instrument": instrument}
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -327,10 +325,10 @@ async def get_pcr(symbol: str, expiry_index: int = 0):
     _IDX  = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"}
     instrument = "OPTIDX" if any(idx in upper for idx in _IDX) else "OPTSTK"
     try:
-        payload = await _nse.get_option_chain(upper, instrument=instrument)
+        payload = await svc.nse.get_option_chain(upper, instrument=instrument)
         if not payload:
             raise HTTPException(status_code=503, detail="NSE option chain unavailable")
-        pcr = _nse.calculate_pcr(payload, expiry_index)
+        pcr = svc.nse.calculate_pcr(payload, expiry_index)
         return {"symbol": upper, "expiry_index": expiry_index, "pcr": pcr}
     except HTTPException:
         raise

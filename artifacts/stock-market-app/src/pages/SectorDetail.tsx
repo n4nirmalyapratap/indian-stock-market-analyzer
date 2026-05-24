@@ -15,38 +15,7 @@ import ChartButton from "@/components/ChartButton";
 import DataFreshness from "@/components/DataFreshness";
 import { marketDataQueryOptions, pickMeta } from "@/lib/marketData";
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function fmt(n: number | null | undefined, dec = 2, suffix = "") {
-  if (n == null) return "—";
-  return n.toFixed(dec) + suffix;
-}
-
-function fmtPct(n: number | null | undefined) {
-  if (n == null) return "—";
-  return (n >= 0 ? "+" : "") + n.toFixed(2) + "%";
-}
-
-function fmtCr(n: number | null | undefined) {
-  if (n == null) return "—";
-  if (n >= 1_00_000) return "₹" + (n / 1_00_000).toFixed(1) + "L Cr";
-  if (n >= 100) return "₹" + (n).toFixed(0) + " Cr";
-  return "₹" + n.toFixed(2);
-}
-
-function fmtMarketCap(cap: number | null | undefined) {
-  if (cap == null) return "—";
-  // cap is in ₹ Lakh Crore
-  return "₹" + cap.toFixed(1) + " L Cr";
-}
-
-function colorForPct(val: number | null) {
-  if (val == null) return "#6b7280";
-  if (val >= 2)  return "#16a34a";
-  if (val >= 0)  return "#4ade80";
-  if (val >= -2) return "#f87171";
-  return "#dc2626";
-}
+import { fmt, fmtPct, fmtCr, fmtMarketCap, colorForPct } from "@/lib/format";
 
 function TrendBadge({ val }: { val: number | null }) {
   if (val == null) return <span className="text-sm" style={{ color: "#9ca3af" }}>—</span>;

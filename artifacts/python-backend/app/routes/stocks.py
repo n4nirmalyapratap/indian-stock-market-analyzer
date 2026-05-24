@@ -1,19 +1,16 @@
 import asyncio
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
-from ..services.stocks_service import StocksService
-from ..services.nse_service import NseService
-from ..services.yahoo_service import YahooService
-from ..services.price_service import PriceService
+from ..services import registry as svc
 from ..services import market_cache_service as _disk
 from ..lib.symbol_map import SYMBOL_MAP, to_yahoo_ticker, yahoo_candidates  # noqa: F401  (re-export for callers)
 
 router = APIRouter(prefix="/stocks", tags=["stocks"])
 
-_nse = NseService()
-_yahoo = YahooService()
-_price = PriceService(_nse, _yahoo)
-_service = StocksService(_nse, _yahoo)
+
+
+
+
 
 VALID_PERIODS   = {"1d","5d","1mo","3mo","6mo","1y","2y","5y","10y","max"}
 VALID_INTERVALS = {"1m","2m","5m","15m","30m","60m","90m","1h","1d","5d","1wk","1mo"}
@@ -70,17 +67,17 @@ def _history_meta(chart: dict) -> dict:
 
 @router.get("/nifty100")
 async def get_nifty100():
-    return await _service.get_nifty100_stocks()
+    return await svc.stocks.get_nifty100_stocks()
 
 
 @router.get("/midcap")
 async def get_midcap():
-    return await _service.get_midcap_stocks()
+    return await svc.stocks.get_midcap_stocks()
 
 
 @router.get("/smallcap")
 async def get_smallcap():
-    return await _service.get_smallcap_stocks()
+    return await svc.stocks.get_smallcap_stocks()
 
 
 @router.get("/search")
@@ -139,7 +136,7 @@ async def get_stock_history(
 
     # Custom start/end range → PriceService (single source of truth)
     if use_range:
-        chart = await _price.get_range_history(symbol, start=start, end=end, interval=interval)
+        chart = await svc.price.get_range_history(symbol, start=start, end=end, interval=interval)
         if not chart.get("candles"):
             return JSONResponse(status_code=404, content={"error": f"No history data found for {symbol}"})
         return {
@@ -153,7 +150,7 @@ async def get_stock_history(
         }
 
     # Standard period+interval — go through PriceService
-    chart = await _price.get_intraday_history(symbol, period=period, interval=interval)
+    chart = await svc.price.get_intraday_history(symbol, period=period, interval=interval)
     if not chart.get("candles"):
         return JSONResponse(status_code=404, content={"error": f"No history data found for {symbol}"})
 
@@ -636,7 +633,7 @@ async def get_technical_summary(symbol: str, interval: str = "1d"):
     as_of = None
 
     if interval == "1d":
-        df = await _price.get_history_dataframe(symbol_upper, days=730)
+        df = await svc.price.get_history_dataframe(symbol_upper, days=730)
         meta = _disk.load_with_meta(symbol_upper, 730) or _disk.load_with_meta(symbol_upper, 300) or {}
         source     = meta.get("source") or "NSE"
         eod_sealed = bool(meta.get("eodSealed"))
@@ -645,7 +642,7 @@ async def get_technical_summary(symbol: str, interval: str = "1d"):
 
     if df is None or df.empty:
         # Sub-daily, or NSE empty → PriceService (Yahoo intraday under the hood)
-        chart = await _price.get_intraday_history(symbol_upper, period=period, interval=yf_interval)
+        chart = await svc.price.get_intraday_history(symbol_upper, period=period, interval=yf_interval)
         if not chart.get("candles"):
             return JSONResponse(
                 status_code=404,
@@ -687,7 +684,7 @@ async def get_technical_summary(symbol: str, interval: str = "1d"):
 
 @router.get("/{symbol}")
 async def get_stock(symbol: str):
-    data = await _service.get_stock_details(symbol)
+    data = await svc.stocks.get_stock_details(symbol)
     if data.get("error"):
         return JSONResponse(status_code=404, content={"error": data["error"]})
     return data

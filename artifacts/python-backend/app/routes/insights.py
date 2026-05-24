@@ -38,9 +38,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from ..services import market_cache_service as mcache
-from ..services.nse_service    import NseService
-from ..services.yahoo_service  import YahooService
-from ..services.price_service  import PriceService
+from ..services import registry as svc
 from ..services.macro_service  import MacroService
 from ..services.ipo_service    import IpoService
 
@@ -50,11 +48,8 @@ router = APIRouter(prefix="/insights", tags=["insights"])
 # ── Single PriceService instance shared by every insights endpoint ───────────
 # Insights MUST read prices through PriceService so heatmap / signals /
 # market-valuation use the SAME provider/timepoint as /stocks and /sectors.
-_nse   = NseService()
-_yahoo = YahooService()
-_price = PriceService(_nse, _yahoo)
-_macro = MacroService(_yahoo)
-_ipo   = IpoService(_nse)
+_macro = MacroService(svc.yahoo)
+_ipo   = IpoService(svc.nse)
 
 
 def _closes_from_history(rows: list[dict]) -> list[float]:
@@ -697,7 +692,7 @@ async def _fetch_one_quote_async(sym: str, period_yf: str, performance: str) -> 
     """
     days = _PERIOD_DAYS.get(period_yf, 7)
     try:
-        rows = await _price.get_historical_data(sym, days)
+        rows = await svc.price.get_historical_data(sym, days)
     except Exception as e:
         logger.debug("heatmap PriceService.get_historical_data %s failed: %s", sym, e)
         return None
@@ -739,7 +734,7 @@ async def _index_quote_async(ticker: str, performance: str = "1d") -> dict:
     # least ~25 calendar days for 1m and ~370 for 1y.
     days_needed = {"1d": 7, "1w": 14, "1m": 45, "1y": 380}.get(performance, 7)
     try:
-        rows = await _price.get_historical_data(ticker, days_needed)
+        rows = await svc.price.get_historical_data(ticker, days_needed)
     except Exception:
         rows = []
     closes = _closes_from_history(rows)
@@ -798,7 +793,7 @@ async def _compute_heatmap_fresh(code: str, performance: str, cache_key: str) ->
     # read disk. Guarantees the heatmap shows the same official close as
     # /stocks and /sectors (no stale-intraday-as-close).
     try:
-        await mcache.seal_eod_for_today_if_overdue(_price, symbols=list(symbols))
+        await mcache.seal_eod_for_today_if_overdue(svc.price, symbols=list(symbols))
     except Exception:
         pass
 
@@ -1116,7 +1111,7 @@ async def _fetch_bse_corporate(category: str, page: int) -> tuple[list[dict], in
 
 async def _fetch_nse_corporate() -> tuple[list[dict], str]:
     """Fetch NSE corporate announcements (latest ~20 across all equities)."""
-    data = await _nse.fetch_nse(
+    data = await svc.nse.fetch_nse(
         "/api/corporate-announcements?index=equities",
         cache_key="nse-corp-anno",
         ttl=600,
@@ -1128,7 +1123,7 @@ async def _fetch_nse_corporate() -> tuple[list[dict], str]:
 
 async def _fetch_nse_insider() -> tuple[list[dict], str]:
     """Fetch NSE PIT (insider) feed."""
-    data = await _nse.fetch_nse(
+    data = await svc.nse.fetch_nse(
         "/api/corporates-pit?index=equities",
         cache_key="nse-pit",
         ttl=600,
@@ -1213,7 +1208,7 @@ def _parse_nse_broadcast_date(s: str) -> str:
 
 async def _fetch_nse_shareholding() -> tuple[list[dict], str]:
     """Fetch NSE Shareholding Pattern master (latest filings across all equities)."""
-    data = await _nse.fetch_nse(
+    data = await svc.nse.fetch_nse(
         "/api/corporate-share-holdings-master?index=equities",
         cache_key="nse-shp-master",
         ttl=900,  # 15 min — quarterly data, low churn
@@ -2427,7 +2422,7 @@ async def _signals_async(symbols: list[str]) -> list[dict]:
     async def _one(sym: str):
         async with sem:
             try:
-                rows = await _price.get_historical_data(sym, days)
+                rows = await svc.price.get_historical_data(sym, days)
             except Exception:
                 return None
             closes = _closes_from_history(rows)
@@ -2451,7 +2446,7 @@ async def get_signals(
         symbols = INDEX_CONSTITUENTS.get(code, NIFTY50)[:50]
         # Force-seal intraday snapshots before reading disk for closes.
         try:
-            await mcache.seal_eod_for_today_if_overdue(_price, symbols=list(symbols))
+            await mcache.seal_eod_for_today_if_overdue(svc.price, symbols=list(symbols))
         except Exception:
             pass
         items = await _signals_async(symbols)
@@ -2556,7 +2551,7 @@ async def _fetch_index_history(code: str, period_days: int, period_yf: str) -> l
     """Try PriceService first (same daily OHLCV path used everywhere); fall
     back to yfinance only if PriceService returns nothing."""
     try:
-        ps_rows = await _price.get_historical_data(code, period_days)
+        ps_rows = await svc.price.get_historical_data(code, period_days)
         if ps_rows and len(ps_rows) >= 2:
             return ps_rows
     except Exception as e:
@@ -3091,8 +3086,7 @@ async def _fetch_nse_bhavdata() -> tuple[list[dict], str | None]:
 
     rows: list[dict] = []
     trade_date: str | None = None
-    from app.services.nse_service import NseService
-    svc = NseService()
+    _nse_svc = svc.nse
     today = datetime.now(IST_TZ) if "IST_TZ" in globals() else datetime.utcnow()
     for offset in range(0, 8):
         d = today - timedelta(days=offset)
@@ -3101,7 +3095,7 @@ async def _fetch_nse_bhavdata() -> tuple[list[dict], str | None]:
         ddmmyyyy = d.strftime("%d%m%Y")
         url = NSE_BHAVDATA_URL_TPL.format(ddmmyyyy=ddmmyyyy)
         try:
-            text = await svc.fetch_nse_archive_text(url, f"bhav-{ddmmyyyy}", ttl=86400)
+            text = await _nse_svc.fetch_nse_archive_text(url, f"bhav-{ddmmyyyy}", ttl=86400)
         except Exception as exc:
             logger.warning("bhavdata %s fetch failed: %s", ddmmyyyy, exc)
             text = None

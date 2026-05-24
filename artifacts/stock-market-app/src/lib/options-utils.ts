@@ -4,24 +4,8 @@
  * Extracted here so they can be unit-tested without rendering React components.
  */
 
-// ── INR formatter ─────────────────────────────────────────────────────────────
-export function fmtINR(n: number | null | undefined): string {
-  if (n == null) return "—";
-  const sign = n < 0 ? "-" : "";
-  const v = Math.abs(n);
-  if (v >= 1e7) return `${sign}₹${(v / 1e7).toFixed(2)}Cr`;
-  if (v >= 1e5) return `${sign}₹${(v / 1e5).toFixed(2)}L`;
-  return `${sign}₹${v.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
-}
-
-// ── Generic formatters ────────────────────────────────────────────────────────
-export function pct(n: number | null | undefined, d = 2): string {
-  return n == null ? "—" : `${Number(n).toFixed(d)}%`;
-}
-
-export function fmt(n: number | null | undefined, d = 2): string {
-  return n == null ? "—" : Number(n).toFixed(d);
-}
+// ── Re-exported from format.ts (single source of truth) ──────────────────────
+export { fmtINR, pct, fmt } from "@/lib/format";
 
 // ── Color helpers ─────────────────────────────────────────────────────────────
 export function clr(v: number): string {

@@ -22,9 +22,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from ..services import agents_service
-from ..services.stocks_service import StocksService
-from ..services.nse_service import NseService
-from ..services.yahoo_service import YahooService
+from ..services import registry as svc
 from ..lib.symbol_map import yahoo_candidates
 from ..lib.universe import NIFTY100, MIDCAP, SMALLCAP
 
@@ -32,9 +30,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
-_nse    = NseService()
-_yahoo  = YahooService()
-_stocks = StocksService(_nse, _yahoo)
 
 
 # Module-level info cache (24 h) — fundamentals don't move minute-by-minute.
@@ -82,7 +77,7 @@ async def _load_stock(symbol: str) -> tuple[dict | None, JSONResponse | None]:
         return None, JSONResponse(status_code=400, content={"error": "symbol is required"})
 
     try:
-        detail = await _stocks.get_stock_details(upper)
+        detail = await svc.stocks.get_stock_details(upper)
     except Exception as exc:
         logger.warning("agents._load_stock: stock_details failed for %s: %s", upper, exc)
         return None, JSONResponse(status_code=502,

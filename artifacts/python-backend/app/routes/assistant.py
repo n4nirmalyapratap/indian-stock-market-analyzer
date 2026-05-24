@@ -10,25 +10,9 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from typing import Any
 
-from ..services.nlp_service import NlpService
-from ..services.stocks_service import StocksService
-from ..services.sectors_service import SectorsService
-from ..services.patterns_service import PatternsService
-from ..services.scanners_service import ScannersService
-from ..services.nse_service import NseService
-from ..services.yahoo_service import YahooService
-from ..services.price_service import PriceService
+from ..services import registry as svc
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
-
-_nse      = NseService()
-_yahoo    = YahooService()
-_price    = PriceService(_nse, _yahoo)
-_nlp      = NlpService()
-_stocks   = StocksService(_nse, _yahoo)
-_sectors  = SectorsService(_nse, _yahoo)
-_patterns = PatternsService(_yahoo, _nse)
-_scanners = ScannersService(_price)
 
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
@@ -499,7 +483,7 @@ async def assistant_chat(body: dict[str, Any]):
 
     # 2. Parse intent + entities via NLP service
     try:
-        parsed = _nlp.parse(text)
+        parsed = svc.nlp.parse(text)
     except Exception as exc:
         return {
             "reply": (
@@ -522,17 +506,17 @@ async def assistant_chat(body: dict[str, Any]):
         # ── Stock analysis ─────────────────────────────────────────────────────
         if intent == "stock_analysis" and stocks:
             sym  = stocks[0]
-            data = await _stocks.get_stock_details(sym)
+            data = await svc.stocks.get_stock_details(sym)
             return {"reply": _format_stock(data, sym), "intent": "stock_analysis", "symbol": sym}
 
         # ── Sector query ───────────────────────────────────────────────────────
         if intent == "sector_query":
             if sectors:
                 sec  = sectors[0]
-                data = await _sectors.get_sector_detail(sec)
+                data = await svc.sectors.get_sector_detail(sec)
                 return {"reply": _format_sector(data, sec), "intent": "sector_query", "sector": sec}
             else:
-                all_s = await _sectors.get_all_sectors()
+                all_s = await svc.sectors.get_all_sectors()
                 if signal == "CALL":
                     filtered = [s for s in all_s if (s.get("pChange") or 0) > 0]
                     return {"reply": _format_all_sectors(filtered or all_s), "intent": "sector_query"}
@@ -543,17 +527,17 @@ async def assistant_chat(body: dict[str, Any]):
 
         # ── Sector rotation ────────────────────────────────────────────────────
         if intent == "rotation_query":
-            data = await _sectors.get_sector_rotation()
+            data = await svc.sectors.get_sector_rotation()
             return {"reply": _format_rotation(data), "intent": "rotation_query"}
 
         # ── Pattern scan ───────────────────────────────────────────────────────
         if intent == "pattern_scan":
-            data = await _patterns.get_patterns(signal=signal)
+            data = await svc.patterns.get_patterns(signal=signal)
             return {"reply": _format_patterns(data, signal), "intent": "pattern_scan"}
 
         # ── Scanner run ────────────────────────────────────────────────────────
         if intent == "scanner_run":
-            all_sc = _scanners.get_all_scanners()
+            all_sc = svc.scanners.get_all_scanners()
             lower  = text.lower()
             matched = None
             for sc in all_sc:
@@ -561,18 +545,18 @@ async def assistant_chat(body: dict[str, Any]):
                     matched = sc
                     break
             if matched:
-                result = await _scanners.run_scanner(matched["id"])
+                result = await svc.scanners.run_scanner(matched["id"])
                 return {"reply": _format_scanners(result, matched["name"]), "intent": "scanner_run"}
             return {"reply": _format_scanners(all_sc, None), "intent": "scanner_run"}
 
         # ── Analytics / fallback with a stock ────────────────────────────────
         if stocks:
             sym  = stocks[0]
-            data = await _stocks.get_stock_details(sym)
+            data = await svc.stocks.get_stock_details(sym)
             return {"reply": _format_stock(data, sym), "intent": "stock_analysis", "symbol": sym}
 
         # ── General fallback → sector rotation ────────────────────────────────
-        data = await _sectors.get_sector_rotation()
+        data = await svc.sectors.get_sector_rotation()
         return {"reply": _format_rotation(data), "intent": "rotation_query"}
 
     except Exception as e:

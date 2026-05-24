@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useElementSize } from "@/hooks/useElementSize";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { fetchApi } from "@/lib/api";
@@ -112,20 +113,6 @@ function squarify(items: HeatmapItem[], width: number, height: number, weightFor
   return rects;
 }
 
-function useElementSize<T extends HTMLElement>() {
-  const [size, setSize] = useState({ width: 0, height: 0 });
-  const [node, setNode] = useState<T | null>(null);
-  const setRef = useCallback((n: T | null) => setNode(n), []);
-  useEffect(() => {
-    if (!node) return;
-    const ro = new ResizeObserver(entries => {
-      for (const e of entries) setSize({ width: e.contentRect.width, height: e.contentRect.height });
-    });
-    ro.observe(node);
-    return () => ro.disconnect();
-  }, [node]);
-  return [setRef, size.width, size.height] as const;
-}
 
 export default function Heatmap() {
   const [, navigate] = useLocation();
