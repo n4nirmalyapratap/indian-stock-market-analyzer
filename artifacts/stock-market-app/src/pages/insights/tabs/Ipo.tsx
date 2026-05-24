@@ -34,6 +34,7 @@ interface IpoIssue {
   status:       "open" | "upcoming";
   subscription?: Subscription;
   gmp?:         Gmp | null;
+  fromGmpOnly?: boolean;   // true for BSE/SME IPOs not on NSE's feed
 }
 
 interface IpoResponse {
@@ -214,8 +215,8 @@ const OpenIssueCard = ({ issue }: { issue: IpoIssue }) => {
       {/* GMP */}
       {issue.gmp && <GmpBlock gmp={issue.gmp} />}
 
-      {/* Subscription */}
-      {sub && (
+      {/* Subscription — only for NSE-tracked issues; GMP-only SME rows have no NSE sub data */}
+      {sub && !issue.fromGmpOnly && (
         <div className="space-y-2 pt-2 border-t border-gray-100 dark:border-gray-700">
           <div className="flex items-center justify-between mb-1">
             <p className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Subscription</p>
@@ -231,6 +232,11 @@ const OpenIssueCard = ({ issue }: { issue: IpoIssue }) => {
           <SubBar label="NII"    value={sub.nii}/>
           <SubBar label="QIB"    value={sub.qib}/>
         </div>
+      )}
+      {issue.fromGmpOnly && (
+        <p className="text-[10px] text-gray-400 dark:text-gray-500 pt-1">
+          BSE/NSE SME — subscription data not available via public feed
+        </p>
       )}
     </Card>
   );
