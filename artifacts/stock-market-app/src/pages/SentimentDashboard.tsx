@@ -335,20 +335,23 @@ function ComponentBar({ comp, index = 0 }: { comp: Component; index?: number }) 
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function SentimentDashboard() {
-  const [refreshKey, setRefreshKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
 
-  const { data: sentiment, isLoading, error, refetch: refetchSentiment } = useQuery<Sentiment>(
+  // Stable query keys — never changed. We use refetch() to re-run the query
+  // so keepPreviousData keeps the old values visible while the new fetch is
+  // in flight. Changing the key (old refreshKey pattern) caused isLoading=true
+  // → all data vanished for a blink.
+  const { data: sentiment, isLoading, isFetching: sentimentFetching, error, refetch: refetchSentiment } = useQuery<Sentiment>(
     marketDataQueryOptions<Sentiment, { retry: number }>(
-      ["sentiment-market", refreshKey],
+      ["sentiment-market"],
       () => fetchApi<Sentiment>("/sentiment/market"),
       { retry: 1 },
     ),
   );
 
-  const { data: sectorsData, refetch: refetchSectors } = useQuery<SectorsResp>(
+  const { data: sectorsData, isFetching: sectorsFetching, refetch: refetchSectors } = useQuery<SectorsResp>(
     marketDataQueryOptions<SectorsResp, { retry: number }>(
-      ["sentiment-sectors", refreshKey],
+      ["sentiment-sectors"],
       () => fetchApi<SectorsResp>("/sentiment/sectors"),
       { retry: 1 },
     ),
@@ -357,12 +360,16 @@ export default function SentimentDashboard() {
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
+      // Tell the backend to bust its sentiment + news caches first,
+      // then re-fetch the updated data in the background.
+      // refetch() uses keepPreviousData so the existing cards stay
+      // visible — no flash to empty state.
       await fetchApi("/sentiment/refresh");
-      setRefreshKey(k => k + 1);
+      await Promise.all([refetchSentiment(), refetchSectors()]);
     } finally {
       setRefreshing(false);
     }
-  }, []);
+  }, [refetchSentiment, refetchSectors]);
 
   const score    = sentiment?.composite ?? null;
   const sectors  = sectorsData?.sectors ?? [];
