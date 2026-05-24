@@ -27,6 +27,12 @@ logger = logging.getLogger("ipo")
 OPEN_TTL_SEC     = 5 * 60      # subscription numbers refresh ~every 5 min
 UPCOMING_TTL_SEC = 30 * 60     # forthcoming list rarely changes intra-day
 
+# Top-level result cache so repeated page loads don't re-run the full
+# NSE + GMP + subscription pipeline.  5 min TTL matches OPEN_TTL_SEC.
+import time as _time  # noqa: E402
+_RESULT_CACHE: dict = {}
+_RESULT_CACHE_TTL = 5 * 60   # seconds
+
 
 def _to_int(v: Any) -> Optional[int]:
     try:
@@ -277,7 +283,16 @@ class IpoService:
         a thinner IpoIssue with whatever ipowatch gives us (name, gmp,
         priceBand, type=SME/Mainboard, status). The user gets a complete
         IPO calendar instead of the silently-truncated mainboard-only list.
+
+        Result is cached in-process for _RESULT_CACHE_TTL seconds so repeated
+        page loads skip the full NSE + GMP + subscription pipeline.
         """
+        now = _time.monotonic()
+        cached = _RESULT_CACHE.get("result")
+        if cached and now - cached[0] < _RESULT_CACHE_TTL:
+            logger.debug("ipo calendar: serving from cache")
+            return cached[1]
+
         # NSE mainboard + ipowatch.in scrape concurrently.
         raw_main, gmp_table = await asyncio.gather(
             self._nse.fetch_nse(
@@ -357,7 +372,7 @@ class IpoService:
         open_items.sort(key=lambda x: x.get("closeDate") or "9999")
         upcoming.sort(key=lambda x: x.get("openDate") or "9999")
 
-        return {
+        result = {
             "available": True,
             "open":      open_items,
             "upcoming":  upcoming,
@@ -367,6 +382,8 @@ class IpoService:
                 "fetchedAt": (gmp_table or {}).get("fetchedAt"),
             },
         }
+        _RESULT_CACHE["result"] = (_time.monotonic(), result)
+        return result
 
     async def _fetch_detail(self, symbol: str) -> Optional[dict]:
         from urllib.parse import quote

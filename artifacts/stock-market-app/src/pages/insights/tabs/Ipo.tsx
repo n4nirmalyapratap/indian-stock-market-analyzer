@@ -59,7 +59,8 @@ const fmtMoney = (cr: number | null) => {
 
 const fmtBand = (lo: number | null, hi: number | null) => {
   if (lo == null && hi == null) return "—";
-  if (lo === hi || hi == null) return `₹${lo}`;
+  if (lo == null) return `₹${hi}`;          // GMP-only rows: cap price only
+  if (hi == null || lo === hi) return `₹${lo}`;
   return `₹${lo} – ₹${hi}`;
 };
 

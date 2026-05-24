@@ -54,6 +54,15 @@ const TABS = [
     bg: "bg-violet-50 dark:bg-violet-500/10"
   },
   {
+    slug: "ipo",
+    label: "IPO Center",
+    description: "Upcoming and current Initial Public Offerings with key details.",
+    icon: Rocket,
+    Component: IpoTab,
+    color: "text-pink-500",
+    bg: "bg-pink-50 dark:bg-pink-500/10"
+  },
+  {
     slug: "company-filings",
     label: "Company Filings",
     description: "Stay updated with the latest corporate announcements and BSE filings.",
@@ -106,15 +115,6 @@ const TABS = [
     Component: MarketValuationTab,
     color: "text-violet-500",
     bg: "bg-violet-50 dark:bg-violet-500/10"
-  },
-  {
-    slug: "ipo",
-    label: "IPO Center",
-    description: "Upcoming and current Initial Public Offerings with key details.",
-    icon: Rocket,
-    Component: IpoTab,
-    color: "text-pink-500",
-    bg: "bg-pink-50 dark:bg-pink-500/10"
   },
 ] as const;
 
