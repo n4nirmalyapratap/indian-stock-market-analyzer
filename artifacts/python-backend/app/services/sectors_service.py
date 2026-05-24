@@ -470,7 +470,43 @@ class SectorsService:
                     "advances":    0,    "declines": 0,
                     "source":      "YAHOO", "servedFrom": "UNAVAILABLE",
                     "asOf":        as_of,  "marketState": state,
+                    "_needs_constituent_pchange": True,
                 })
+
+        # Second pass: for sectors with no Yahoo index quote, derive pChange
+        # from the equal-weighted average of constituent stock quotes.
+        # (Covers ^CNXOILGAS / ^CNXHEALTH which Yahoo Finance doesn't resolve.)
+        fallback_sectors = [s for s in sectors if s.pop("_needs_constituent_pchange", False)]
+        if fallback_sectors:
+            constituent_tasks = []
+            task_map: list[tuple[dict, list[str]]] = []
+            for sec in fallback_sectors:
+                stocks = SECTOR_KEY_STOCKS.get(sec["symbol"], [])
+                tickers = [t + ".NS" for t in stocks[:5]]
+                constituent_tasks.extend([self.yahoo.get_quote(t) for t in tickers])
+                task_map.append((sec, tickers))
+
+            all_quotes = await asyncio.gather(*constituent_tasks, return_exceptions=True)
+
+            offset = 0
+            for sec, tickers in task_map:
+                n = len(tickers)
+                quotes = all_quotes[offset:offset + n]
+                offset += n
+                pchanges = [
+                    q.get("pChange")
+                    for q in quotes
+                    if not isinstance(q, Exception) and q and q.get("pChange") is not None
+                ]
+                if pchanges:
+                    avg_pchange = round(sum(pchanges) / len(pchanges), 2)
+                    sec["pChange"] = avg_pchange
+                    sec["servedFrom"] = "CONSTITUENT_AVERAGE"
+                    logger.debug(
+                        "Sector %s pChange=%.2f%% from %d constituents",
+                        sec["symbol"], avg_pchange, len(pchanges),
+                    )
+
         return sorted(sectors, key=lambda s: (s["pChange"] is None, -(s["pChange"] or 0)))
 
     async def get_sector_rotation(self) -> dict:
@@ -864,6 +900,59 @@ class SectorsService:
             logger.warning("History fetch failed for %s: %s", yahoo_ticker, e)
             return empty
 
+    async def _fetch_synthetic_index_history(self, symbol: str) -> dict:
+        """Fallback for sectors whose Yahoo index ticker has no history
+        (e.g. NIFTY OIL AND GAS, NIFTY HEALTHCARE INDEX).
+
+        Fetches 6-month history for up to 5 constituent stocks, normalises
+        each series to 100 at the first shared date, then equal-weights them
+        into a synthetic index series. ROC/vol_trend are computed from that
+        synthetic series — good enough for momentum ranking.
+        """
+        empty = {"roc_6m": None, "roc_3m": None, "vol_trend": None, "closes": [], "data_ok": False}
+        constituents = SECTOR_KEY_STOCKS.get(symbol, [])
+        if not constituents:
+            return empty
+
+        hists = await asyncio.gather(
+            *[self.yahoo.get_historical_data(s, days=180) for s in constituents[:5]],
+            return_exceptions=True,
+        )
+
+        # Build date-aligned normalised series
+        from collections import defaultdict
+        date_sums: dict[str, list[float]] = defaultdict(list)
+        for hist in hists:
+            if isinstance(hist, Exception) or not hist or len(hist) < 10:
+                continue
+            closes = [(h["date"], h["close"]) for h in hist if h.get("close") and h.get("date")]
+            if len(closes) < 10 or closes[0][1] <= 0:
+                continue
+            base = closes[0][1]
+            for date_s, close in closes:
+                date_sums[date_s].append(close / base * 100.0)
+
+        if not date_sums:
+            return empty
+
+        synthetic = sorted(
+            [(d, sum(v) / len(v)) for d, v in date_sums.items() if len(v) >= 2],
+            key=lambda x: x[0],
+        )
+        if len(synthetic) < 10:
+            return empty
+
+        closes_s = [v for _, v in synthetic]
+
+        roc_6m = ((closes_s[-1] - closes_s[0]) / closes_s[0]) * 100
+        mid = max(1, len(closes_s) // 2)
+        roc_3m = ((closes_s[-1] - closes_s[mid]) / closes_s[mid]) * 100 if closes_s[mid] > 0 else roc_6m / 2
+
+        return {
+            "roc_6m": roc_6m, "roc_3m": roc_3m, "vol_trend": 1.0,
+            "closes": closes_s, "data_ok": True, "synthetic": True,
+        }
+
     async def _fetch_stock_breadth(self, symbol: str) -> dict:
         """
         Calculate % of key sector stocks above their 50-day and 200-day SMAs.
@@ -948,16 +1037,24 @@ class SectorsService:
         if not benchmark_ok:
             logger.warning("Nifty benchmark history unavailable — RS component dropped")
 
-        # Collect raw indicator values per sector — EXCLUDING sectors with
-        # no usable index history (no ghost-rank fabrication).
+        # First pass: collect sectors with usable index history.
+        # Sectors whose Yahoo index ticker fails (e.g. ^CNXOILGAS, ^CNXHEALTH)
+        # are queued for a synthetic-history second pass instead of being
+        # immediately excluded — which previously left them stuck at UNKNOWN tier.
         raw: list[dict] = []
         excluded: list[str] = []
+        needs_synthetic: list[tuple] = []   # (original_index, sector, breadth)
+
         for i, sector in enumerate(score_sectors):
             idx = all_index[i] if not isinstance(all_index[i], Exception) else None
             brd = all_breadth[i] if not isinstance(all_breadth[i], Exception) else {}
 
             if not idx or not idx.get("data_ok"):
-                excluded.append(sector["symbol"])
+                # Queue for constituent-stock synthetic history if we have key stocks
+                if SECTOR_KEY_STOCKS.get(sector["symbol"]):
+                    needs_synthetic.append((i, sector, brd))
+                else:
+                    excluded.append(sector["symbol"])
                 continue
 
             rs     = idx["roc_3m"] - nifty_3m              # outperformance vs benchmark
@@ -974,6 +1071,33 @@ class SectorsService:
                 "breadth_sample":  brd.get("sample_size_50", brd.get("sample_size", 0)),
                 "breadth_sample_200": brd.get("sample_size_200", 0),
             })
+
+        # Second pass: synthetic history from constituent stocks for sectors
+        # whose Yahoo index ticker returned no data.
+        if needs_synthetic:
+            synth_results = await asyncio.gather(
+                *[self._fetch_synthetic_index_history(sec["symbol"]) for _, sec, _ in needs_synthetic],
+                return_exceptions=True,
+            )
+            for (_, sector, brd), synth_idx in zip(needs_synthetic, synth_results):
+                if isinstance(synth_idx, Exception) or not synth_idx or not synth_idx.get("data_ok"):
+                    excluded.append(sector["symbol"])
+                    logger.info("Sector %s excluded: both index and synthetic history failed", sector["symbol"])
+                    continue
+                rs     = synth_idx["roc_3m"] - nifty_3m
+                roc_6m = synth_idx["roc_6m"]
+                vol    = min(synth_idx.get("vol_trend", 1.0), 3.0)
+                logger.debug("Sector %s using synthetic constituent history (roc_6m=%.2f)", sector["symbol"], roc_6m)
+                raw.append({
+                    "symbol":          sector["symbol"],
+                    "rs":              rs,
+                    "roc_6m":          roc_6m,
+                    "vol_trend":       vol,
+                    "pct_above_200":   brd.get("pct_above_200"),
+                    "pct_above_50":    brd.get("pct_above_50"),
+                    "breadth_sample":  brd.get("sample_size_50", brd.get("sample_size", 0)),
+                    "breadth_sample_200": brd.get("sample_size_200", 0),
+                })
 
         if not raw:
             return {}, excluded, nifty_hist
