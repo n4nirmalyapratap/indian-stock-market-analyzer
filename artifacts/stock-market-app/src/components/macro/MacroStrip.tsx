@@ -4,11 +4,10 @@ import { TrendingUp, TrendingDown, Minus, Loader2, AlertTriangle } from "lucide-
 import { api } from "@/lib/api";
 
 /* ──────────────────────────────────────────────────────────────────────────
- * MacroStrip — eight tiles pinned across the top of the dashboard.
- * Design constraints:
- *   • Each tile has a fixed minimum width so values never get clipped.
- *   • Values are formatted compactly (3 sig-figs max) so they fit.
- *   • Delta row is always on its own line — no horizontal space-fight.
+ * MacroStrip — India macro indicators pinned above the dashboard.
+ *
+ * Layout: 4-col grid (mobile) → 8-col grid (lg). Tiles stretch to fill
+ * the container — no horizontal scroll, no clipping.
  * ────────────────────────────────────────────────────────────────────── */
 
 interface MacroTile {
@@ -24,16 +23,11 @@ interface MacroTile {
   staleDays?:  number | null;
 }
 
-/** Format a value compactly so it never overflows the tile.
- *  Examples: 84.2345 → "84.23", 6500 → "6,500", 0.065 → "0.07" */
 function fmtValue(v: number | null | undefined, unit: string): string {
   if (v == null || isNaN(v)) return "—";
   const prefix = unit === "₹" ? "₹" : unit === "$" ? "$" : "";
   const suffix = unit !== "₹" && unit !== "$" ? unit : "";
-  // Choose decimal places based on magnitude
-  let decimals = 2;
-  if (Math.abs(v) >= 10000) decimals = 0;
-  else if (Math.abs(v) >= 100) decimals = 1;
+  const decimals = Math.abs(v) >= 10000 ? 0 : Math.abs(v) >= 100 ? 1 : 2;
   const num = v.toLocaleString("en-IN", {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
@@ -42,18 +36,18 @@ function fmtValue(v: number | null | undefined, unit: string): string {
 }
 
 function fmtDelta(d: number | null | undefined, unit: string): string {
-  if (d == null || isNaN(d)) return "";
+  if (d == null || isNaN(d) || d === 0) return "";
   const sign = d > 0 ? "+" : "";
-  const decimals = Math.abs(d) < 1 ? 2 : Math.abs(d) < 10 ? 2 : 1;
+  const decimals = Math.abs(d) < 10 ? 2 : 1;
   return `${sign}${d.toFixed(decimals)}${unit}`;
 }
 
-function Tile({ tile }: { tile: MacroTile }) {
-  const up   = (tile.delta ?? 0) > 0;
-  const down = (tile.delta ?? 0) < 0;
-  const flat = tile.delta == null || tile.delta === 0;
+function Tile({ tile, isLast }: { tile: MacroTile; isLast: boolean }) {
+  const up    = (tile.delta ?? 0) > 0;
+  const down  = (tile.delta ?? 0) < 0;
   const stale = tile.isStale === true;
   const deltaStr = fmtDelta(tile.delta, tile.deltaUnit);
+  const hasValue = tile.value != null && !isNaN(tile.value);
 
   return (
     <Link
@@ -64,40 +58,45 @@ function Tile({ tile }: { tile: MacroTile }) {
           : tile.asOf ? `As of ${tile.asOf.slice(0, 10)}` : undefined
       }
       className={`
-        flex-shrink-0 w-[108px]
-        group rounded-lg border px-2.5 py-2
-        hover:shadow-sm transition-all cursor-pointer
-        ${stale
-          ? "bg-amber-50 dark:bg-amber-900/10 border-amber-300 dark:border-amber-600/50 hover:border-amber-400"
-          : "bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-600"
-        }
+        group relative flex flex-col justify-between gap-0.5 px-3 py-2 cursor-pointer
+        hover:bg-white dark:hover:bg-gray-800/80 rounded-lg transition-colors
+        ${stale ? "hover:bg-amber-50 dark:hover:bg-amber-900/10" : ""}
+        ${!isLast ? "border-r border-gray-200 dark:border-gray-700" : ""}
       `}
     >
-      {/* Label row */}
+      {/* Label */}
       <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 dark:text-gray-500 flex items-center gap-0.5 leading-none">
         {tile.label}
         {stale && <AlertTriangle className="w-2 h-2 text-amber-500 flex-shrink-0" />}
       </p>
 
       {/* Value */}
-      <p className="mt-1 text-[15px] font-bold leading-tight text-gray-900 dark:text-white whitespace-nowrap">
-        {tile.value != null ? fmtValue(tile.value, tile.unit) : <span className="text-gray-300 dark:text-gray-600">—</span>}
+      <p className={`text-sm font-bold leading-snug whitespace-nowrap ${
+        hasValue ? "text-gray-900 dark:text-white" : "text-gray-300 dark:text-gray-600"
+      }`}>
+        {hasValue ? fmtValue(tile.value, tile.unit) : "—"}
       </p>
 
       {/* Delta */}
       {deltaStr ? (
-        <p className={`mt-0.5 text-[10px] font-semibold flex items-center gap-0.5 leading-none whitespace-nowrap
+        <p className={`text-[10px] font-semibold flex items-center gap-0.5 leading-none whitespace-nowrap
           ${up   ? "text-emerald-600 dark:text-emerald-400" : ""}
-          ${down ? "text-red-500 dark:text-red-400" : ""}
-          ${flat ? "text-gray-400 dark:text-gray-500" : ""}`}
+          ${down ? "text-red-500    dark:text-red-400"      : ""}`}
         >
           {up   && <TrendingUp   className="w-2.5 h-2.5 flex-shrink-0" />}
           {down && <TrendingDown className="w-2.5 h-2.5 flex-shrink-0" />}
-          {flat && <Minus        className="w-2.5 h-2.5 flex-shrink-0" />}
           {deltaStr}
         </p>
       ) : (
-        <p className="mt-0.5 text-[10px] text-gray-300 dark:text-gray-600 leading-none">—</p>
+        <p className="text-[10px] text-gray-300 dark:text-gray-600 flex items-center gap-0.5 leading-none">
+          <Minus className="w-2.5 h-2.5" />
+          <span>—</span>
+        </p>
+      )}
+
+      {/* Stale accent bar */}
+      {stale && (
+        <span className="absolute bottom-0 left-2 right-2 h-[2px] rounded-full bg-amber-400 dark:bg-amber-500 opacity-60" />
       )}
     </Link>
   );
@@ -116,9 +115,9 @@ export default function MacroStrip() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center gap-2 bg-gray-50 dark:bg-gray-900/50 rounded-xl border border-gray-100 dark:border-gray-800 px-3 py-2">
-        <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-500 flex-shrink-0" />
-        <span className="text-xs text-gray-400 dark:text-gray-500">Loading macro pulse…</span>
+      <div className="flex items-center gap-2 rounded-xl border border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/40 px-4 py-2.5">
+        <Loader2 className="w-3 h-3 animate-spin text-indigo-500 flex-shrink-0" />
+        <span className="text-xs text-gray-400">Loading macro indicators…</span>
       </div>
     );
   }
@@ -127,20 +126,19 @@ export default function MacroStrip() {
   if (tiles.length === 0) return null;
 
   return (
-    <div className="bg-gray-50 dark:bg-gray-900/40 rounded-xl border border-gray-100 dark:border-gray-800 px-2 py-1.5">
-      <div className="flex items-stretch gap-1.5 overflow-x-auto scrollbar-none">
-        {/* Strip label */}
-        <div className="flex flex-col justify-center px-1 flex-shrink-0">
-          <span className="text-[9px] font-black uppercase tracking-[0.2em] text-gray-400 dark:text-gray-500 [writing-mode:vertical-rl] rotate-180 select-none">
-            Macro
-          </span>
-        </div>
+    <div className="rounded-xl border border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/40 overflow-hidden">
+      {/* Header label */}
+      <div className="px-3 pt-2 pb-1 border-b border-gray-100 dark:border-gray-800">
+        <span className="text-[9px] font-black uppercase tracking-[0.25em] text-gray-400 dark:text-gray-500">
+          Macro Pulse — India
+        </span>
+      </div>
 
-        {/* Divider */}
-        <div className="w-px bg-gray-200 dark:bg-gray-700 flex-shrink-0 my-0.5" />
-
-        {/* Tiles */}
-        {tiles.map(t => <Tile key={t.id} tile={t} />)}
+      {/* Tile grid: 4 cols on mobile, 8 on large screens */}
+      <div className="grid grid-cols-4 lg:grid-cols-8">
+        {tiles.map((t, i) => (
+          <Tile key={t.id} tile={t} isLast={i === tiles.length - 1} />
+        ))}
       </div>
     </div>
   );
