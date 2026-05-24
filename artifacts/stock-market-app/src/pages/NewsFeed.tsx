@@ -680,6 +680,23 @@ export default function NewsFeed() {
     return Object.entries(s).map(([k, v]) => ({ name: k, count: v as number })).sort((a, b) => b.count - a.count);
   }, [stats]);
 
+  // Live sentiment counts derived from the currently-loaded articles.
+  // These grow as the user scrolls and more pages are appended.
+  const liveSentiments = useMemo(() => {
+    const counts = { bullish: 0, bearish: 0, neutral: 0 };
+    for (const a of allArticles) {
+      const s = (a.sentiment ?? "neutral") as keyof typeof counts;
+      if (s in counts) counts[s]++; else counts.neutral++;
+    }
+    const total = allArticles.length;
+    const margin = Math.abs(counts.bullish - counts.bearish);
+    const mood: "bullish" | "bearish" | "neutral" =
+      total >= 5 && margin / total >= 0.10
+        ? counts.bullish > counts.bearish ? "bullish" : "bearish"
+        : "neutral";
+    return { ...counts, total, mood };
+  }, [allArticles]);
+
   return (
     <div className="space-y-4 min-h-screen" style={{ background: bg }}>
       <style>{`
@@ -729,26 +746,29 @@ export default function NewsFeed() {
       {articles.length > 0 && <TickerBanner articles={articles} isDark={isDark} />}
 
       {/* ── Stats row ───────────────────────────────────────────────── */}
-      {stats && (
+      {(feedLoading || liveSentiments.total > 0 || stats) && (
         <div className="relative grid grid-cols-2 md:grid-cols-4 gap-3">
           <SectionLoader active={statsFetching} />
 
-          {/* Total */}
+          {/* Total — grows with each page loaded */}
           <div className="rounded-2xl p-4" style={{ background: cardBg, borderTop: "3px solid #6366f1", borderRight: `1px solid ${borderCol}`, borderBottom: `1px solid ${borderCol}`, borderLeft: `1px solid ${borderCol}` }}>
             <div className="text-xs font-medium mb-1" style={{ color: muTxt }}>Total Articles</div>
-            <div className="text-2xl font-black" style={{ color: isDark ? "#c7d2fe" : "#4f46e5" }}>{stats.totalArticles}</div>
+            <div className="text-2xl font-black" style={{ color: isDark ? "#c7d2fe" : "#4f46e5" }}>
+              {liveSentiments.total}
+              {hasMore && <span className="text-sm font-normal ml-1 opacity-50">+</span>}
+            </div>
           </div>
 
           {/* Bullish */}
           <div className="rounded-2xl p-4" style={{ background: isDark ? "rgba(34,197,94,0.05)" : "#f0fdf4", borderTop: "3px solid #22c55e", borderRight: `1px solid ${isDark ? "rgba(34,197,94,0.15)" : "#bbf7d0"}`, borderBottom: `1px solid ${isDark ? "rgba(34,197,94,0.15)" : "#bbf7d0"}`, borderLeft: `1px solid ${isDark ? "rgba(34,197,94,0.15)" : "#bbf7d0"}` }}>
             <div className="text-xs font-medium mb-1" style={{ color: muTxt }}>Bullish Signals</div>
-            <div className="text-2xl font-black text-green-500">{stats.sentiments.bullish}</div>
+            <div className="text-2xl font-black text-green-500">{liveSentiments.bullish}</div>
           </div>
 
           {/* Bearish */}
           <div className="rounded-2xl p-4" style={{ background: isDark ? "rgba(239,68,68,0.05)" : "#fef2f2", borderTop: "3px solid #ef4444", borderRight: `1px solid ${isDark ? "rgba(239,68,68,0.15)" : "#fecaca"}`, borderBottom: `1px solid ${isDark ? "rgba(239,68,68,0.15)" : "#fecaca"}`, borderLeft: `1px solid ${isDark ? "rgba(239,68,68,0.15)" : "#fecaca"}` }}>
             <div className="text-xs font-medium mb-1" style={{ color: muTxt }}>Bearish Signals</div>
-            <div className="text-2xl font-black text-red-500">{stats.sentiments.bearish}</div>
+            <div className="text-2xl font-black text-red-500">{liveSentiments.bearish}</div>
           </div>
 
           {/* Sources */}
@@ -766,15 +786,15 @@ export default function NewsFeed() {
         </div>
       )}
 
-      {/* ── Mood bar ────────────────────────────────────────────────── */}
-      {stats && (
+      {/* ── Mood bar ─ also driven by live counts ───────────────────── */}
+      {liveSentiments.total > 0 && (
         <div className="relative">
           <SectionLoader active={statsFetching} />
           <MoodBar
-            bullish={stats.sentiments.bullish}
-            bearish={stats.sentiments.bearish}
-            neutral={stats.sentiments.neutral}
-            mood={stats.marketMood}
+            bullish={liveSentiments.bullish}
+            bearish={liveSentiments.bearish}
+            neutral={liveSentiments.neutral}
+            mood={liveSentiments.mood}
             isDark={isDark}
           />
         </div>
