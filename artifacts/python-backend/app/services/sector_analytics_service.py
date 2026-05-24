@@ -491,7 +491,12 @@ class SectorAnalyticsService:
             })
 
         result.sort(key=lambda s: s["marketCap"], reverse=True)
-        _cache_set(cache_key_hm, result, 5 * 60)
+        # When market is closed the data is static until the next trading day —
+        # use a long TTL so cold starts after a server restart don't re-fetch
+        # 1-year yfinance history for every sector index on every request.
+        from . import market_cache_service as _mcs
+        hm_ttl = (5 * 60) if _mcs.is_market_open() else (4 * 3600)
+        _cache_set(cache_key_hm, result, hm_ttl)
         return result
 
     # ── Top movers ────────────────────────────────────────────────────────────

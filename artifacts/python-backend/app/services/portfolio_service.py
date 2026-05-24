@@ -538,13 +538,19 @@ async def value_portfolio(user_id: str, portfolio_id: str,
                 or quotes.get(h["symbol"], {}).get("marketCap"))
     ]
     if needs_enrich:
+        async def _enrich_with_timeout(sym: str) -> dict:
+            try:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(_yf_info_enrich, sym),
+                    timeout=5.0,
+                )
+            except (asyncio.TimeoutError, Exception):
+                return {}
+
         enriched = dict(
             zip(
                 needs_enrich,
-                await asyncio.gather(*[
-                    asyncio.to_thread(_yf_info_enrich, sym)
-                    for sym in needs_enrich
-                ]),
+                await asyncio.gather(*[_enrich_with_timeout(sym) for sym in needs_enrich]),
             )
         )
         for sym, extra in enriched.items():
