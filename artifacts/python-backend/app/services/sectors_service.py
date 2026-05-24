@@ -211,6 +211,15 @@ _OVERLAY_CACHE: dict = {}
 _OVERLAY_TTL_OPEN_SEC   = 30
 _OVERLAY_TTL_CLOSED_SEC = 5 * 60
 
+# ── get_all_sectors() result cache ────────────────────────────────────────────
+# Caches the full sectors list so _ensure_sector_index_snapshots()
+# (which does ~20 disk reads + a possible NSE HTTP call) only runs once
+# per TTL window rather than on every heatmap/top-movers request.
+# TTL: 30 s while open (same as overlay), 5 min while closed (data is static).
+_SECTORS_LIST_CACHE: dict = {}  # key "sectors" → {data, expiry}
+_SECTORS_LIST_TTL_OPEN_SEC   = 30
+_SECTORS_LIST_TTL_CLOSED_SEC = 60 * 60  # 1 hour — data is static when market is closed
+
 
 def _flush_if_state_changed() -> None:
     """Drop the rotation cache whenever the market state transitions."""
@@ -271,6 +280,12 @@ class SectorsService:
     # ── Public endpoints ──────────────────────────────────────────────────────
 
     async def get_all_sectors(self) -> list[dict]:
+        import time as _time
+        # ── Fast-path: serve from cache ───────────────────────────────────────
+        _cached = _SECTORS_LIST_CACHE.get("sectors")
+        if _cached and _time.time() < _cached["expiry"]:
+            return _cached["data"]
+
         as_of  = _disk._now_ist().isoformat()
         state  = _disk.current_market_state()
         market_closed = not _disk.is_market_open()
@@ -278,36 +293,37 @@ class SectorsService:
         sectors: list[dict] = []
         disk_by_symbol: dict[str, dict] = {}
 
-        # When the market is closed prefer sealed disk snapshots for the
-        # sector indices so we don't re-hit NSE on every page refresh —
-        # if NSE is briefly unreachable the sector cards still show the
-        # official close, identical to the per-stock and history pages.
+        # When the market is closed prefer sealed disk snapshots.
+        # IMPORTANT: _ensure_sector_index_snapshots() contacts NSE which is
+        # blocked in this environment — awaiting it blocks the entire request
+        # for up to 40 s.  We fire it as a background task so the seal
+        # attempt runs asynchronously and the response path is never delayed.
         if market_closed:
-            sealed_now = 0
-            try:
-                sealed_now = await self._ensure_sector_index_snapshots()
-            except Exception as e:
-                logger.debug("Sector index seal-on-read failed: %s", e)
             disk_by_symbol = self._build_sectors_from_disk()
-            # Ops visibility: surface how many sector indices ended up
-            # served from sealed disk vs needed live fallback.
             logger.info(
-                "Sector index seal/disk status: sealed_now=%d disk_ready=%d/%d (state=%s)",
-                sealed_now, len(disk_by_symbol), len(SECTOR_INDICES), state,
+                "Sector index disk status: disk_ready=%d/%d (state=%s)",
+                len(disk_by_symbol), len(SECTOR_INDICES), state,
             )
             if len(disk_by_symbol) == len(SECTOR_INDICES):
+                # All sectors available from sealed disk — serve immediately.
                 sectors = sorted(
                     disk_by_symbol.values(),
                     key=lambda x: (x["pChange"] is None, -(x["pChange"] or 0)),
                 )
+            else:
+                # Disk incomplete — schedule NSE seal in the background so it
+                # can populate the cache for next time without blocking now.
+                asyncio.ensure_future(self._ensure_sector_index_snapshots())
 
-        # Live path — open market, or some disk snapshots are missing.
-        # Partial-disk merge below replaces any sector that DOES have a
-        # sealed disk version with the disk version, so a single missing
-        # index doesn't force every sector to re-hit NSE.
-        if not sectors:
+        # Live path — open market, or disk snapshots were missing.
+        # When the market is closed we skip the NSE attempt entirely (NSE is
+        # blocked in this Replit environment) and go straight to Yahoo so the
+        # user response is as fast as possible.
+        if not sectors and not market_closed:
             try:
-                nse_data = await self.nse.get_sector_indices()
+                nse_data = await asyncio.wait_for(
+                    self.nse.get_sector_indices(), timeout=5.0
+                )
                 if nse_data and nse_data.get("data"):
                     parsed = self._parse_nse_sectors(nse_data["data"])
                     if parsed:
@@ -315,8 +331,14 @@ class SectorsService:
             except Exception:
                 pass
         if not sectors:
-            # NSE unavailable — fall back to Yahoo Finance for live prices
-            sectors = await self._get_sectors_from_yahoo()
+            # NSE unavailable or market closed — fall back to Yahoo Finance.
+            # When closed, bypass the full NSE→BSE→Yahoo fallback chain in
+            # get_quote_with_meta() (which serially blocks on the NSE cookie
+            # lock) and call Yahoo directly — all 15 sectors in parallel.
+            if market_closed:
+                sectors = await self._get_sectors_direct_yahoo()
+            else:
+                sectors = await self._get_sectors_from_yahoo()
 
         # Partial-disk overlay: prefer the sealed NSE close for any sector
         # we already have on disk, even if the rest came from live.
@@ -342,6 +364,10 @@ class SectorsService:
             s.setdefault("marketState", state)
             s.setdefault("source", "NSE")
             s.setdefault("servedFrom", "PRICE_SERVICE")
+
+        # ── Store in cache ─────────────────────────────────────────────────────
+        _ttl = _SECTORS_LIST_TTL_CLOSED_SEC if market_closed else _SECTORS_LIST_TTL_OPEN_SEC
+        _SECTORS_LIST_CACHE["sectors"] = {"data": sectors, "expiry": _time.time() + _ttl}
         return sectors
 
     async def _get_sectors_from_yahoo(self) -> list[dict]:
@@ -390,6 +416,60 @@ class SectorsService:
                     "advances": 0, "declines": 0,
                     "source": "NSE", "servedFrom": "UNAVAILABLE",
                     "yahooTicker": sector["yahooTicker"],
+                })
+        return sorted(sectors, key=lambda s: (s["pChange"] is None, -(s["pChange"] or 0)))
+
+    async def _get_sectors_direct_yahoo(self) -> list[dict]:
+        """Call yahoo.get_quote() in parallel for all sector indices without
+        going through the full NSE→BSE→Yahoo fallback chain in
+        get_quote_with_meta().  Used exclusively when the market is closed so
+        we avoid the NSE asyncio.Lock serialisation cost (~30 extra seconds).
+        Data quality is identical — same Yahoo chart API, same fields.
+        """
+        from app.services import market_cache_service as _mcs
+        state = _mcs.current_market_state()
+        as_of = _mcs._now_ist().isoformat()
+
+        results = await asyncio.gather(
+            *[self.yahoo.get_quote(s["yahooTicker"]) for s in SECTOR_INDICES],
+            return_exceptions=True,
+        )
+        sectors = []
+        for i, sector in enumerate(SECTOR_INDICES):
+            quote = results[i] if not isinstance(results[i], Exception) else None
+            if quote and quote.get("lastPrice"):
+                sectors.append({
+                    "name":          sector["name"],
+                    "symbol":        sector["symbol"],
+                    "category":      sector["category"],
+                    "yahooTicker":   sector["yahooTicker"],
+                    "lastPrice":     quote.get("lastPrice"),
+                    "change":        quote.get("change", 0),
+                    "pChange":       quote.get("pChange", 0),
+                    "open":          quote.get("open"),
+                    "high":          quote.get("dayHigh"),
+                    "low":           quote.get("dayLow"),
+                    "previousClose": quote.get("previousClose"),
+                    "yearHigh":      quote.get("fiftyTwoWeekHigh"),
+                    "yearLow":       quote.get("fiftyTwoWeekLow"),
+                    "advances":      0,
+                    "declines":      0,
+                    "source":        "YAHOO",
+                    "servedFrom":    "PRICE_SERVICE",
+                    "asOf":          as_of,
+                    "marketState":   state,
+                    "eodSealed":     False,
+                })
+            else:
+                sectors.append({
+                    "name":        sector["name"],
+                    "symbol":      sector["symbol"],
+                    "category":    sector["category"],
+                    "yahooTicker": sector["yahooTicker"],
+                    "lastPrice":   None, "change": None, "pChange": None,
+                    "advances":    0,    "declines": 0,
+                    "source":      "YAHOO", "servedFrom": "UNAVAILABLE",
+                    "asOf":        as_of,  "marketState": state,
                 })
         return sorted(sectors, key=lambda s: (s["pChange"] is None, -(s["pChange"] or 0)))
 
@@ -609,7 +689,9 @@ class SectorsService:
             return 0
 
         try:
-            nse_payload = await self.nse.get_sector_indices()
+            nse_payload = await asyncio.wait_for(
+                self.nse.get_sector_indices(), timeout=5.0
+            )
         except Exception as e:
             logger.debug("Sector index seal: NSE all-indices fetch failed: %s", e)
             return 0
