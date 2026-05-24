@@ -409,6 +409,105 @@ def _fetch_scanx_sitemap() -> tuple[list[dict], Optional[str]]:
     return articles, None
 
 
+# ── yfinance market-feed basket ───────────────────────────────────────────────
+
+# Major Nifty 50 stocks used to populate the general news feed via yfinance.
+# Kept to 20 symbols — enough breadth to cover Indian market news without
+# making too many parallel network calls on each 8-minute cache refresh.
+_YF_FEED_BASKET = [
+    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
+    "HINDUNILVR", "ITC", "SBIN", "BHARTIARTL", "KOTAKBANK",
+    "BAJFINANCE", "AXISBANK", "MARUTI", "HCLTECH", "WIPRO",
+    "TITAN", "SUNPHARMA", "TATAMOTORS", "LT", "ADANIPORTS",
+]
+
+# Keep articles from within this many days (avoids stale quarterly-report
+# pieces from clogging the general feed).
+_YF_FEED_MAX_AGE_DAYS = 7
+
+
+def _fetch_yfinance_feed_articles() -> tuple[list[dict], Optional[str]]:
+    """Fetch news for the basket of major Nifty stocks from yfinance.
+
+    Runs in a thread-pool executor so it doesn't block the event loop.
+    Returns (articles, error_string_or_None).
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=_YF_FEED_MAX_AGE_DAYS)
+    articles: list[dict] = []
+    seen_urls: set[str] = set()
+
+    try:
+        import yfinance as yf  # noqa: PLC0415
+        for sym in _YF_FEED_BASKET:
+            try:
+                raw = yf.Ticker(f"{sym}.NS").news or []
+            except Exception:
+                continue
+            for item in raw:
+                c = item.get("content") if isinstance(item.get("content"), dict) else item
+                title = (c.get("title") or "").strip()
+                if not title:
+                    continue
+                url = (
+                    (c.get("canonicalUrl") or {}).get("url")
+                    or (c.get("clickThroughUrl") or {}).get("url")
+                    or c.get("link", "")
+                )
+                if not url or url in seen_urls:
+                    continue
+                # Age filter — skip old articles
+                pub_raw = c.get("pubDate") or c.get("displayTime") or ""
+                pub_dt: Optional[datetime] = None
+                if pub_raw:
+                    try:
+                        pub_dt = datetime.fromisoformat(
+                            pub_raw.replace("Z", "+00:00")
+                        )
+                        if pub_dt < cutoff:
+                            continue
+                    except Exception:
+                        pass
+                seen_urls.add(url)
+                provider = c.get("provider") or {}
+                source = (
+                    provider.get("displayName")
+                    or c.get("publisher")
+                    or "Yahoo Finance"
+                )
+                pub_iso = pub_dt.isoformat() if pub_dt else (
+                    datetime.now(timezone.utc).isoformat()
+                )
+                thumb = c.get("thumbnail") or {}
+                image = thumb.get("originalUrl") or None
+                if not image:
+                    resolutions = thumb.get("resolutions") or []
+                    if resolutions:
+                        image = resolutions[0].get("url")
+                summary = (c.get("summary") or c.get("description") or "").strip()
+                articles.append({
+                    "id":          f"YF_{hash(url) & 0xFFFFFF:06x}",
+                    "title":       title,
+                    "summary":     summary[:400] if summary else "",
+                    "url":         url,
+                    "source":      source,
+                    "sourceShort": "YF",
+                    "sourceColor": "#6366f1",
+                    "category":    "market",
+                    "published":   pub_iso,
+                    "undated":     pub_dt is None,
+                    "sentiment":   _sentiment(f"{title} {summary}"),
+                    "tickers":     [sym],
+                    "image_url":   image,
+                    "type":        "news",
+                    "via":         "yfinance",
+                })
+    except Exception as exc:
+        logger.warning("yfinance feed batch failed: %s", exc)
+        return [], str(exc)
+
+    return articles, None
+
+
 # ── Combined fetch with per-source health ─────────────────────────────────────
 
 async def _fetch_all_feeds() -> dict:
@@ -419,10 +518,15 @@ async def _fetch_all_feeds() -> dict:
     rss_tasks = [
         loop.run_in_executor(None, _fetch_one_feed, src) for src in RSS_SOURCES
     ]
-    scanx_task = loop.run_in_executor(None, _fetch_scanx_sitemap)
+    scanx_task  = loop.run_in_executor(None, _fetch_scanx_sitemap)
+    yf_task     = loop.run_in_executor(None, _fetch_yfinance_feed_articles)
 
-    rss_results = await asyncio.gather(*rss_tasks, return_exceptions=True)
-    scanx_result = await scanx_task
+    rss_results, scanx_result, yf_result = await asyncio.gather(
+        asyncio.gather(*rss_tasks, return_exceptions=True),
+        scanx_task,
+        yf_task,
+        return_exceptions=False,
+    )
 
     sources_health: list[dict] = []
     articles: list[dict] = []
@@ -484,6 +588,17 @@ async def _fetch_all_feeds() -> dict:
         "ok":    sx_err is None and len(sx_items) > 0,
         "count": sx_added,
         "error": sx_err,
+    })
+
+    # Yahoo Finance (yfinance basket of major Nifty stocks)
+    yf_items, yf_err = yf_result
+    yf_added = _add_articles(yf_items)
+    sources_health.append({
+        "name":  "Yahoo Finance",
+        "short": "YF",
+        "ok":    yf_err is None and len(yf_items) > 0,
+        "count": yf_added,
+        "error": yf_err,
     })
 
     # Sort: dated entries first (newest first), undated entries last.
