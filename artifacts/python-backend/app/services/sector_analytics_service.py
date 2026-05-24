@@ -336,6 +336,7 @@ async def _constituent_pct_changes(constituents: list[str]) -> dict[str, Optiona
         return round(sum(valid) / len(valid), 2) if valid else None
 
     return {
+        "change1d":  _avg(1),
         "change1w":  _avg(5),
         "change1m":  _avg(21),
         "change1y":  _avg(252),
@@ -473,12 +474,16 @@ class SectorAnalyticsService:
             # so the UI renders "—" instead of fabricating a flat 0.0%.
             live_last = live.get("lastPrice")
             live_pchg = live.get("pChange")
+            # For sectors whose Yahoo index ticker returns no live quote
+            # (e.g. NIFTY OIL AND GAS, NIFTY HEALTHCARE INDEX), fall back to
+            # the equal-weighted constituent average so the tile is never "—".
+            change1d = round(live_pchg, 2) if live_pchg is not None else fb.get("change1d")
             result.append({
                 "symbol":    nse_sym,
                 "name":      live.get("name", nse_sym),
                 "category":  live.get("category", ""),
                 "lastPrice": live_last if live_last is not None else None,
-                "change1d":  round(live_pchg, 2) if live_pchg is not None else None,
+                "change1d":  change1d,
                 "change1w":  _pref(_pct_change_from_history(hist, 5),   fb.get("change1w")),
                 "change1m":  _pref(_pct_change_from_history(hist, 21),  fb.get("change1m")),
                 "change3m":  _pct_change_from_history(hist, 63),
