@@ -200,7 +200,7 @@ class PatternsService:
                 try:
                     # Single-source: PriceService (NSE-first daily, EOD-aware
                     # disk overlay when market is closed).
-                    h = await self.price.get_historical_data(sym, 90)
+                    h = await self.price.get_historical_data(sym, 180)
                     if len(h) < 30:
                         errors.append({"symbol": sym, "universe": u, "error": f"insufficient history ({len(h)} bars)"})
                         scanned += 1
@@ -483,13 +483,15 @@ class PatternsService:
         #   Inverse C&H, Symmetrical/Ascending/Descending Triangle, Rising/
         #   Falling Wedge, Rectangle, Bull/Bear Flag, Bull/Bear Pennant.
 
-        LOOK = min(n, 60)
+        # 90 trading days ≈ 180 calendar days (scan now requests 180 cal-days).
+        # Use last 90 bars for reversal patterns, last 40 for trendline patterns.
+        LOOK = min(n, 90)
         _sh = highs[-LOOK:]
         _sl = lows[-LOOK:]
-        _sc = closes[-LOOK:]
 
-        def _pivots(h_arr, l_arr, order=5):
-            """Return (peaks, troughs) as list of (index, price) tuples."""
+        def _pivots(h_arr, l_arr, order=3):
+            """Return (peaks, troughs) as list of (index, price) tuples.
+            order=3 gives ~1 pivot per 7 bars — practical minimum for daily charts."""
             pks, trs = [], []
             ln = len(h_arr)
             for i in range(order, ln - order):
@@ -511,7 +513,7 @@ class PatternsService:
             den = sum((x - mx) ** 2 for x in xs)
             return num / den if abs(den) > 1e-9 else 0.0
 
-        peaks60, troughs60 = _pivots(_sh, _sl, order=5)
+        peaks60, troughs60 = _pivots(_sh, _sl, order=3)
 
         # ── Double Bottom (W) ─────────────────────────────────────────────────
         if len(troughs60) >= 2:
@@ -641,11 +643,13 @@ class PatternsService:
                         tgt=price - cup_ht,
                         sl=hdl_max + atr * 0.5))
 
-        # ── Triangles, Wedges, Rectangle (30-bar trendline analysis) ─────────
-        TLINE = min(n, 30)
+        # ── Triangles, Wedges, Rectangle (40-bar trendline analysis) ─────────
+        # order=2 gives ~1 pivot per 5 bars — more sensitive than order=3,
+        # needed because 40 bars only yields ~4-6 pivots at order=3.
+        TLINE = min(n, 40)
         _th = highs[-TLINE:]
         _tl = lows[-TLINE:]
-        peaks30, troughs30 = _pivots(_th, _tl, order=3)
+        peaks30, troughs30 = _pivots(_th, _tl, order=2)
 
         if len(peaks30) >= 2 and len(troughs30) >= 2:
             res_slope = _slope(peaks30[-3:] if len(peaks30) >= 3 else peaks30)
