@@ -35,8 +35,40 @@ from typing import Any, Optional
 
 from psycopg.rows import dict_row
 
+import yfinance as yf
+
 from app.lib.auth_store import ensure_primary_schema, get_conn
 from app.lib.sector_utils import classify_sector, classify_market_cap
+
+# ── yfinance .info enrichment cache ──────────────────────────────────────────
+# Stores (fetched_at_epoch, {sector, industry, marketCap}) per symbol.
+# TTL: 6 h — sector rarely changes, we just need it once per session.
+_INFO_CACHE: dict[str, tuple[float, dict]] = {}
+_INFO_TTL   = 6 * 3600
+
+
+def _yf_info_enrich(symbol: str) -> dict:
+    """Fetch sector/industry/marketCap from yfinance .info (synchronous).
+    Results are cached for 6 hours.  Never raises — returns {} on any error.
+    """
+    import time as _time
+    now = _time.time()
+    cached = _INFO_CACHE.get(symbol)
+    if cached and (now - cached[0]) < _INFO_TTL:
+        return cached[1]
+    try:
+        suffix = ".NS" if not symbol.endswith((".NS", ".BO")) else ""
+        info = yf.Ticker(symbol + suffix).info or {}
+        data = {
+            "sector":    info.get("sector")    or info.get("sectorDisp"),
+            "industry":  info.get("industry")  or info.get("industryDisp"),
+            "marketCap": info.get("marketCap") or info.get("nonDilutedMarketCap"),
+        }
+        _INFO_CACHE[symbol] = (now, data)
+        return data
+    except Exception:
+        _INFO_CACHE[symbol] = (now, {})
+        return {}
 
 logger = logging.getLogger(__name__)
 
@@ -495,6 +527,34 @@ async def value_portfolio(user_id: str, portfolio_id: str,
             return sym, {}
 
     quotes = dict(await asyncio.gather(*[_q(h["symbol"]) for h in open_holdings]))
+
+    # Enrich quotes that have no sector/industry/marketCap from the fast chart
+    # endpoint (common for micro-caps).  yfinance .info has this; we fetch it
+    # concurrently and cache for 6 h so repeat requests are instant.
+    needs_enrich = [
+        h["symbol"] for h in open_holdings
+        if not (quotes.get(h["symbol"], {}).get("sector")
+                or quotes.get(h["symbol"], {}).get("industry")
+                or quotes.get(h["symbol"], {}).get("marketCap"))
+    ]
+    if needs_enrich:
+        enriched = dict(
+            zip(
+                needs_enrich,
+                await asyncio.gather(*[
+                    asyncio.to_thread(_yf_info_enrich, sym)
+                    for sym in needs_enrich
+                ]),
+            )
+        )
+        for sym, extra in enriched.items():
+            if extra:
+                q = quotes.get(sym, {})
+                q.setdefault("sector",    extra.get("sector"))
+                q.setdefault("industry",  extra.get("industry"))
+                if not q.get("marketCap") and extra.get("marketCap"):
+                    q["marketCap"] = extra["marketCap"]
+                quotes[sym] = q
 
     valued = []
     total_mv     = 0.0
