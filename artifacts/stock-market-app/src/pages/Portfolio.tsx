@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useCustomAuth } from "@/context/CustomAuthContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   api,
