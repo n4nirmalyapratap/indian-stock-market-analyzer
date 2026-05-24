@@ -426,86 +426,101 @@ _YF_FEED_BASKET = [
 _YF_FEED_MAX_AGE_DAYS = 7
 
 
+def _fetch_one_yf_stock(sym: str, cutoff: "datetime") -> list[dict]:
+    """Fetch and normalise yfinance news for a single NSE symbol.
+    Called concurrently from _fetch_yfinance_feed_articles."""
+    try:
+        import yfinance as yf  # noqa: PLC0415
+        raw = yf.Ticker(f"{sym}.NS").news or []
+    except Exception:
+        return []
+
+    articles: list[dict] = []
+    for item in raw:
+        c = item.get("content") if isinstance(item.get("content"), dict) else item
+        title = (c.get("title") or "").strip()
+        if not title:
+            continue
+        url = (
+            (c.get("canonicalUrl") or {}).get("url")
+            or (c.get("clickThroughUrl") or {}).get("url")
+            or c.get("link", "")
+        )
+        if not url:
+            continue
+        pub_raw = c.get("pubDate") or c.get("displayTime") or ""
+        pub_dt: Optional[datetime] = None
+        if pub_raw:
+            try:
+                pub_dt = datetime.fromisoformat(pub_raw.replace("Z", "+00:00"))
+                if pub_dt < cutoff:
+                    continue
+            except Exception:
+                pass
+        provider = c.get("provider") or {}
+        source = (
+            provider.get("displayName")
+            or c.get("publisher")
+            or "Yahoo Finance"
+        )
+        pub_iso = pub_dt.isoformat() if pub_dt else datetime.now(timezone.utc).isoformat()
+        thumb = c.get("thumbnail") or {}
+        image = thumb.get("originalUrl") or None
+        if not image:
+            resolutions = thumb.get("resolutions") or []
+            if resolutions:
+                image = resolutions[0].get("url")
+        summary = (c.get("summary") or c.get("description") or "").strip()
+        articles.append({
+            "id":          f"YF_{hash(url) & 0xFFFFFF:06x}",
+            "title":       title,
+            "summary":     summary[:400] if summary else "",
+            "url":         url,
+            "source":      source,
+            "sourceShort": "YF",
+            "sourceColor": "#6366f1",
+            "category":    "market",
+            "published":   pub_iso,
+            "undated":     pub_dt is None,
+            "sentiment":   _sentiment(f"{title} {summary}"),
+            "tickers":     [sym],
+            "image_url":   image,
+            "type":        "news",
+            "via":         "yfinance",
+        })
+    return articles
+
+
 def _fetch_yfinance_feed_articles() -> tuple[list[dict], Optional[str]]:
     """Fetch news for the basket of major Nifty stocks from yfinance.
 
+    All symbols are fetched in parallel (up to 10 workers) so the total
+    wall-clock time is ~3-5 s instead of the sequential ~40 s.
     Runs in a thread-pool executor so it doesn't block the event loop.
     Returns (articles, error_string_or_None).
     """
+    import concurrent.futures  # noqa: PLC0415
     cutoff = datetime.now(timezone.utc) - timedelta(days=_YF_FEED_MAX_AGE_DAYS)
-    articles: list[dict] = []
+    all_articles: list[dict] = []
     seen_urls: set[str] = set()
 
     try:
-        import yfinance as yf  # noqa: PLC0415
-        for sym in _YF_FEED_BASKET:
-            try:
-                raw = yf.Ticker(f"{sym}.NS").news or []
-            except Exception:
-                continue
-            for item in raw:
-                c = item.get("content") if isinstance(item.get("content"), dict) else item
-                title = (c.get("title") or "").strip()
-                if not title:
-                    continue
-                url = (
-                    (c.get("canonicalUrl") or {}).get("url")
-                    or (c.get("clickThroughUrl") or {}).get("url")
-                    or c.get("link", "")
-                )
-                if not url or url in seen_urls:
-                    continue
-                # Age filter — skip old articles
-                pub_raw = c.get("pubDate") or c.get("displayTime") or ""
-                pub_dt: Optional[datetime] = None
-                if pub_raw:
-                    try:
-                        pub_dt = datetime.fromisoformat(
-                            pub_raw.replace("Z", "+00:00")
-                        )
-                        if pub_dt < cutoff:
-                            continue
-                    except Exception:
-                        pass
-                seen_urls.add(url)
-                provider = c.get("provider") or {}
-                source = (
-                    provider.get("displayName")
-                    or c.get("publisher")
-                    or "Yahoo Finance"
-                )
-                pub_iso = pub_dt.isoformat() if pub_dt else (
-                    datetime.now(timezone.utc).isoformat()
-                )
-                thumb = c.get("thumbnail") or {}
-                image = thumb.get("originalUrl") or None
-                if not image:
-                    resolutions = thumb.get("resolutions") or []
-                    if resolutions:
-                        image = resolutions[0].get("url")
-                summary = (c.get("summary") or c.get("description") or "").strip()
-                articles.append({
-                    "id":          f"YF_{hash(url) & 0xFFFFFF:06x}",
-                    "title":       title,
-                    "summary":     summary[:400] if summary else "",
-                    "url":         url,
-                    "source":      source,
-                    "sourceShort": "YF",
-                    "sourceColor": "#6366f1",
-                    "category":    "market",
-                    "published":   pub_iso,
-                    "undated":     pub_dt is None,
-                    "sentiment":   _sentiment(f"{title} {summary}"),
-                    "tickers":     [sym],
-                    "image_url":   image,
-                    "type":        "news",
-                    "via":         "yfinance",
-                })
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+            futures = {pool.submit(_fetch_one_yf_stock, sym, cutoff): sym
+                       for sym in _YF_FEED_BASKET}
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    for art in future.result():
+                        if art["url"] not in seen_urls:
+                            seen_urls.add(art["url"])
+                            all_articles.append(art)
+                except Exception:
+                    pass
     except Exception as exc:
         logger.warning("yfinance feed batch failed: %s", exc)
         return [], str(exc)
 
-    return articles, None
+    return all_articles, None
 
 
 # ── Combined fetch with per-source health ─────────────────────────────────────
