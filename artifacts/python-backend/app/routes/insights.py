@@ -213,60 +213,16 @@ _NIFTY500_FULL = list(dict.fromkeys(_LARGECAP_100 + _MIDCAP_150 + _SMALLCAP_250)
 _NIFTY200_FULL = list(dict.fromkeys(_LARGECAP_100 + _MIDCAP_150[:100]))
 
 
-# ── Comprehensive stock → sector reverse lookup ───────────────────────────────
-# Built at import time from universe.py SECTOR_SYMBOLS (which itself merges
-# the live universe_cache sectoral data at import). Used as a fallback when
-# scanx.trade doesn't have sector info for a symbol (very common for smallcaps).
-_SECTOR_NAME_CLEAN: dict[str, str] = {
-    "NIFTY IT":                 "Information Technology",
-    "NIFTY BANK":               "Banking",
-    "NIFTY PSU BANK":           "PSU Banks",
-    "NIFTY AUTO":               "Automobiles",
-    "NIFTY PHARMA":             "Pharmaceuticals",
-    "NIFTY FMCG":               "FMCG",
-    "NIFTY METAL":              "Metals & Mining",
-    "NIFTY REALTY":             "Real Estate",
-    "NIFTY ENERGY":             "Energy",
-    "NIFTY MEDIA":              "Media & Entertainment",
-    "NIFTY FINANCIAL SERVICES": "Financial Services",
-    "NIFTY CONSUMER DURABLES":  "Consumer Durables",
-    "NIFTY OIL AND GAS":        "Oil & Gas",
-    "NIFTY OIL & GAS":          "Oil & Gas",
-    "NIFTY HEALTHCARE INDEX":   "Healthcare",
-    "NIFTY HEALTHCARE":         "Healthcare",
-    "NIFTY INFRASTRUCTURE":     "Infrastructure",
-    "NIFTY CHEMICALS":          "Chemicals",
-    "NIFTY CEMENT":             "Cement",
-    "NIFTY DEFENCE":            "Defence",
-}
-# Broad market / cap-tier indices — NOT sector labels, skip them
-_SECTOR_SKIP = {
-    "NIFTY 50", "NIFTY 100", "NIFTY 200", "NIFTY 500",
-    "NIFTY MIDCAP 50", "NIFTY MIDCAP 100", "NIFTY MIDCAP 150", "NIFTY MIDCAP SELECT",
-    "NIFTY SMALLCAP 50", "NIFTY SMALLCAP 100", "NIFTY SMALLCAP 250",
-    "NIFTY MICROCAP 250", "NIFTY LARGEMIDCAP 250",
-}
+# ── Sector classification — centralised in sector_utils ──────────────────────
+# All sector name normalisation, fuzzy matching, and the symbol→sector map
+# live in one place.  Import the helpers and the pre-built map from there so
+# this file stays thin and every surface uses the same logic.
+from ..lib.sector_utils import classify_sector as _classify_sector, _stock_sector_map as _sector_map_fn
 
-def _build_stock_sector_map() -> dict[str, str]:
-    """Return {bare_symbol: display_sector} for every stock we can classify."""
-    try:
-        from ..lib.universe import SECTOR_SYMBOLS as _SS
-    except Exception:
-        return {}
-    out: dict[str, str] = {}
-    for index_name, syms in _SS.items():
-        if index_name in _SECTOR_SKIP:
-            continue
-        sector = _SECTOR_NAME_CLEAN.get(index_name)
-        if not sector:
-            continue
-        for sym in syms:
-            bare = sym.replace(".NS", "").replace(".BO", "")
-            if bare not in out:  # first-assigned wins
-                out[bare] = sector
-    return out
+def _get_stock_sector_map() -> dict[str, str]:
+    return _sector_map_fn()
 
-_STOCK_SECTOR_MAP: dict[str, str] = _build_stock_sector_map()
+_STOCK_SECTOR_MAP: dict[str, str] = _get_stock_sector_map()
 logger.info("sector map: %d stocks classified across sectors", len(_STOCK_SECTOR_MAP))
 
 # ── World indices ─────────────────────────────────────────────────────────────

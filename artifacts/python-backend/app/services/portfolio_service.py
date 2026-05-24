@@ -36,6 +36,7 @@ from typing import Any, Optional
 from psycopg.rows import dict_row
 
 from app.lib.auth_store import ensure_primary_schema, get_conn
+from app.lib.sector_utils import classify_sector, classify_market_cap
 
 logger = logging.getLogger(__name__)
 
@@ -501,7 +502,7 @@ async def value_portfolio(user_id: str, portfolio_id: str,
     total_day    = 0.0
     total_unreal = 0.0
     sector_buckets: dict[str, float] = {}
-    cap_buckets:    dict[str, float] = {"Large Cap": 0, "Mid Cap": 0, "Small Cap": 0, "Unknown": 0}
+    cap_buckets:    dict[str, float] = {}
 
     for h in open_holdings:
         q = quotes.get(h["symbol"], {})
@@ -516,16 +517,14 @@ async def value_portfolio(user_id: str, portfolio_id: str,
         day_pnl      = (last_price - prev_close) * h["qty"]
         day_pnl_pct  = ((last_price / prev_close) - 1) * 100 if prev_close > 0 else 0.0
 
-        sector = str(q.get("sector") or q.get("industry") or "Unknown") or "Unknown"
+        sector = classify_sector(
+            q.get("sector") or q.get("industry"),
+            symbol=h["symbol"],
+        )
         sector_buckets[sector] = sector_buckets.get(sector, 0) + market_value
 
-        cap_label = (
-            "Large Cap" if market_cap >= 50_000 * 1e7 else      # ≥ ₹50,000 cr
-            "Mid Cap"   if market_cap >= 10_000 * 1e7 else      # ≥ ₹10,000 cr
-            "Small Cap" if market_cap > 0 else
-            "Unknown"
-        )
-        cap_buckets[cap_label] += market_value
+        cap_label = classify_market_cap(market_cap)
+        cap_buckets[cap_label] = cap_buckets.get(cap_label, 0) + market_value
 
         total_mv     += market_value
         total_inv    += invested
