@@ -163,6 +163,7 @@ def _parse_row(headers: list[str], row: list[str]) -> Optional[dict]:
         "estGainPct":  est_pct,                                # %
         "type":        (cells.get("Type") or "").strip(),      # Mainboard / NSE SME / BSE SME
         "status":      (cells.get("Status") or "").strip(),    # Open / Upcoming / Closed
+        "date":        (cells.get("Date") or "").strip(),      # e.g. "21-25 May"
         "lastUpdated": (cells.get("Last Updated") or "").strip(),
     }
 
