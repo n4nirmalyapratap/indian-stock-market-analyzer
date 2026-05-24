@@ -1,104 +1,124 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { TrendingUp, TrendingDown, Loader2, Minus, AlertTriangle } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, Loader2, AlertTriangle } from "lucide-react";
 import { api } from "@/lib/api";
 
 /* ──────────────────────────────────────────────────────────────────────────
- * MacroStrip — six tiles pinned across the top of the dashboard:
- *   Repo · CPI · IIP · USD/INR · India 10Y · Brent
- * Each tile shows value, unit, delta arrow, and links to /insights/macro.
+ * MacroStrip — eight tiles pinned across the top of the dashboard.
+ * Design constraints:
+ *   • Each tile has a fixed minimum width so values never get clipped.
+ *   • Values are formatted compactly (3 sig-figs max) so they fit.
+ *   • Delta row is always on its own line — no horizontal space-fight.
  * ────────────────────────────────────────────────────────────────────── */
 
+interface MacroTile {
+  id:          string;
+  label:       string;
+  unit:        string;
+  value:       number | null;
+  delta:       number | null;
+  deltaUnit:   string;
+  asOf:        string | null;
+  servedFrom?: string;
+  isStale?:    boolean;
+  staleDays?:  number | null;
+}
+
+/** Format a value compactly so it never overflows the tile.
+ *  Examples: 84.2345 → "84.23", 6500 → "6,500", 0.065 → "0.07" */
 function fmtValue(v: number | null | undefined, unit: string): string {
   if (v == null || isNaN(v)) return "—";
-  if (unit === "₹") return `₹${v.toFixed(2)}`;
-  if (unit === "$") return `$${v.toFixed(2)}`;
-  return `${v.toFixed(2)}${unit}`;
+  const prefix = unit === "₹" ? "₹" : unit === "$" ? "$" : "";
+  const suffix = unit !== "₹" && unit !== "$" ? unit : "";
+  // Choose decimal places based on magnitude
+  let decimals = 2;
+  if (Math.abs(v) >= 10000) decimals = 0;
+  else if (Math.abs(v) >= 100) decimals = 1;
+  const num = v.toLocaleString("en-IN", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+  return `${prefix}${num}${suffix}`;
 }
 
 function fmtDelta(d: number | null | undefined, unit: string): string {
-  if (d == null || isNaN(d)) return "—";
-  const sign = d >= 0 ? "+" : "";
-  return `${sign}${d.toFixed(2)}${unit}`;
+  if (d == null || isNaN(d)) return "";
+  const sign = d > 0 ? "+" : "";
+  const decimals = Math.abs(d) < 1 ? 2 : Math.abs(d) < 10 ? 2 : 1;
+  return `${sign}${d.toFixed(decimals)}${unit}`;
 }
 
 function Tile({ tile }: { tile: MacroTile }) {
   const up   = (tile.delta ?? 0) > 0;
   const down = (tile.delta ?? 0) < 0;
   const flat = tile.delta == null || tile.delta === 0;
-  // Honest data-freshness signal — FRED's OECD-mirrored India series often
-  // lag by 12–40 months, which silently misleads users who treat the tile
-  // as a live policy/CPI reading. The badge + tooltip make the lag visible.
   const stale = tile.isStale === true;
-  const staleTip = stale && tile.staleDays != null
-    ? `Data is ${tile.staleDays} days old — source: ${tile.servedFrom ?? "FRED"}`
-    : "";
+  const deltaStr = fmtDelta(tile.delta, tile.deltaUnit);
 
   return (
     <Link
       href="/insights/macro"
-      title={staleTip || undefined}
-      className={`flex-1 min-w-0 group bg-white dark:bg-gray-800 rounded-lg border px-3 py-2 hover:shadow-sm transition cursor-pointer
+      title={
+        stale && tile.staleDays != null
+          ? `Data is ${tile.staleDays} days old — source: ${tile.servedFrom ?? "FRED"}`
+          : tile.asOf ? `As of ${tile.asOf.slice(0, 10)}` : undefined
+      }
+      className={`
+        flex-shrink-0 w-[108px]
+        group rounded-lg border px-2.5 py-2
+        hover:shadow-sm transition-all cursor-pointer
         ${stale
-          ? "border-amber-300 dark:border-amber-600/60 hover:border-amber-400 dark:hover:border-amber-500"
-          : "border-gray-100 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-600"}`}
+          ? "bg-amber-50 dark:bg-amber-900/10 border-amber-300 dark:border-amber-600/50 hover:border-amber-400"
+          : "bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-600"
+        }
+      `}
     >
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 truncate flex items-center gap-1">
+      {/* Label row */}
+      <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 dark:text-gray-500 flex items-center gap-0.5 leading-none">
         {tile.label}
-        {stale && <AlertTriangle className="w-2.5 h-2.5 text-amber-500" />}
+        {stale && <AlertTriangle className="w-2 h-2 text-amber-500 flex-shrink-0" />}
       </p>
-      <div className="flex items-baseline justify-between gap-1 mt-0.5">
-        <span className="text-sm font-bold text-gray-900 dark:text-white truncate">
-          {fmtValue(tile.value, tile.unit)}
-        </span>
-        <span
-          className={`text-[11px] font-semibold flex items-center gap-0.5 flex-shrink-0
-            ${up ? "text-green-600 dark:text-green-400" : ""}
-            ${down ? "text-red-500 dark:text-red-400" : ""}
-            ${flat ? "text-gray-400 dark:text-gray-500" : ""}`}
+
+      {/* Value */}
+      <p className="mt-1 text-[15px] font-bold leading-tight text-gray-900 dark:text-white whitespace-nowrap">
+        {tile.value != null ? fmtValue(tile.value, tile.unit) : <span className="text-gray-300 dark:text-gray-600">—</span>}
+      </p>
+
+      {/* Delta */}
+      {deltaStr ? (
+        <p className={`mt-0.5 text-[10px] font-semibold flex items-center gap-0.5 leading-none whitespace-nowrap
+          ${up   ? "text-emerald-600 dark:text-emerald-400" : ""}
+          ${down ? "text-red-500 dark:text-red-400" : ""}
+          ${flat ? "text-gray-400 dark:text-gray-500" : ""}`}
         >
-          {up && <TrendingUp className="w-3 h-3" />}
-          {down && <TrendingDown className="w-3 h-3" />}
-          {flat && <Minus className="w-3 h-3" />}
-          {fmtDelta(tile.delta, tile.deltaUnit)}
-        </span>
-      </div>
+          {up   && <TrendingUp   className="w-2.5 h-2.5 flex-shrink-0" />}
+          {down && <TrendingDown className="w-2.5 h-2.5 flex-shrink-0" />}
+          {flat && <Minus        className="w-2.5 h-2.5 flex-shrink-0" />}
+          {deltaStr}
+        </p>
+      ) : (
+        <p className="mt-0.5 text-[10px] text-gray-300 dark:text-gray-600 leading-none">—</p>
+      )}
     </Link>
   );
-}
-
-interface MacroTile {
-  id: string;
-  label: string;
-  unit: string;
-  value: number | null;
-  delta: number | null;
-  deltaUnit: string;
-  asOf: string | null;
-  // Optional provenance/staleness fields surfaced by the backend so the UI
-  // can warn when a tile is months/years old (common with FRED's OECD
-  // mirrors of Indian data).
-  servedFrom?: string;
-  isStale?:    boolean;
-  staleDays?:  number | null;
 }
 
 export default function MacroStrip() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["macro-strip"],
     queryFn:  api.macroStrip,
-    staleTime: 60 * 60 * 1000,         // 1 h frontend stale
+    staleTime: 60 * 60 * 1000,
     refetchInterval: false,
     refetchOnWindowFocus: false,
   });
 
-  if (error) return null; // Macro strip is supplementary — fail silently.
+  if (error) return null;
 
   if (isLoading) {
     return (
       <div className="flex items-center gap-2 bg-gray-50 dark:bg-gray-900/50 rounded-xl border border-gray-100 dark:border-gray-800 px-3 py-2">
-        <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-500" />
-        <span className="text-xs text-gray-500 dark:text-gray-400">Loading macro pulse…</span>
+        <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-500 flex-shrink-0" />
+        <span className="text-xs text-gray-400 dark:text-gray-500">Loading macro pulse…</span>
       </div>
     );
   }
@@ -107,11 +127,19 @@ export default function MacroStrip() {
   if (tiles.length === 0) return null;
 
   return (
-    <div className="bg-gray-50 dark:bg-gray-900/40 rounded-xl border border-gray-100 dark:border-gray-800 p-1.5">
-      <div className="flex items-center gap-1.5 overflow-x-auto">
-        <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 px-2 py-1 flex-shrink-0">
-          Macro Pulse
-        </span>
+    <div className="bg-gray-50 dark:bg-gray-900/40 rounded-xl border border-gray-100 dark:border-gray-800 px-2 py-1.5">
+      <div className="flex items-stretch gap-1.5 overflow-x-auto scrollbar-none">
+        {/* Strip label */}
+        <div className="flex flex-col justify-center px-1 flex-shrink-0">
+          <span className="text-[9px] font-black uppercase tracking-[0.2em] text-gray-400 dark:text-gray-500 [writing-mode:vertical-rl] rotate-180 select-none">
+            Macro
+          </span>
+        </div>
+
+        {/* Divider */}
+        <div className="w-px bg-gray-200 dark:bg-gray-700 flex-shrink-0 my-0.5" />
+
+        {/* Tiles */}
         {tiles.map(t => <Tile key={t.id} tile={t} />)}
       </div>
     </div>
