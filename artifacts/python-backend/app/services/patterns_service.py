@@ -477,6 +477,289 @@ class PatternsService:
                 "Three consecutive strong red candles — relentless selling, strong bearish trend",
                 "Three-Candle", body_w=1.3, vol_w=1.2, target_r=2.5, stop_r=2.0))
 
+        # ── Structure patterns (60-bar lookback) ─────────────────────────────
+        # All 20 structural patterns from the reference chart:
+        #   Double/Triple Bottom & Top, H&S & Inverse H&S, Cup & Handle &
+        #   Inverse C&H, Symmetrical/Ascending/Descending Triangle, Rising/
+        #   Falling Wedge, Rectangle, Bull/Bear Flag, Bull/Bear Pennant.
+
+        LOOK = min(n, 60)
+        _sh = highs[-LOOK:]
+        _sl = lows[-LOOK:]
+        _sc = closes[-LOOK:]
+
+        def _pivots(h_arr, l_arr, order=5):
+            """Return (peaks, troughs) as list of (index, price) tuples."""
+            pks, trs = [], []
+            ln = len(h_arr)
+            for i in range(order, ln - order):
+                lo_i = max(0, i - order); hi_i = min(ln, i + order + 1)
+                if h_arr[i] == max(h_arr[lo_i:hi_i]):
+                    pks.append((i, h_arr[i]))
+                if l_arr[i] == min(l_arr[lo_i:hi_i]):
+                    trs.append((i, l_arr[i]))
+            return pks, trs
+
+        def _slope(pts):
+            """Slope of least-squares line through (index, price) points."""
+            if len(pts) < 2:
+                return 0.0
+            xs = [float(p[0]) for p in pts]
+            ys = [float(p[1]) for p in pts]
+            mx = sum(xs) / len(xs); my = sum(ys) / len(ys)
+            num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+            den = sum((x - mx) ** 2 for x in xs)
+            return num / den if abs(den) > 1e-9 else 0.0
+
+        peaks60, troughs60 = _pivots(_sh, _sl, order=5)
+
+        # ── Double Bottom (W) ─────────────────────────────────────────────────
+        if len(troughs60) >= 2:
+            t1, t2 = troughs60[-2], troughs60[-1]
+            if abs(t1[1] - t2[1]) / max(t1[1], 1e-9) < 0.04 and t2[0] > t1[0]:
+                mid_high = max(_sh[t1[0]: t2[0] + 1])
+                pullback = (mid_high - t1[1]) / max(t1[1], 1e-9)
+                if pullback > 0.04 and price > mid_high * 0.99:
+                    conf = 70 if lr < 55 else 63
+                    add(mk("Double Bottom", "BULLISH", "CALL", conf,
+                        f"W-shaped reversal — two lows near ₹{t1[1]:.0f}. Neckline ₹{mid_high:.0f} broken.",
+                        "Structure", vol_w=1.2, body_w=0.3,
+                        tgt=price + (mid_high - t1[1]),
+                        sl=min(t1[1], t2[1]) - atr * 0.5))
+
+        # ── Double Top (M) ────────────────────────────────────────────────────
+        if len(peaks60) >= 2:
+            p1, p2 = peaks60[-2], peaks60[-1]
+            if abs(p1[1] - p2[1]) / max(p1[1], 1e-9) < 0.04 and p2[0] > p1[0]:
+                mid_low = min(_sl[p1[0]: p2[0] + 1])
+                pullback = (p1[1] - mid_low) / max(p1[1], 1e-9)
+                if pullback > 0.04 and price < mid_low * 1.01:
+                    conf = 70 if lr > 55 else 63
+                    add(mk("Double Top", "BEARISH", "PUT", conf,
+                        f"M-shaped reversal — two highs near ₹{p1[1]:.0f}. Neckline ₹{mid_low:.0f} broken.",
+                        "Structure", vol_w=1.2, body_w=0.3,
+                        tgt=price - (p1[1] - mid_low),
+                        sl=max(p1[1], p2[1]) + atr * 0.5))
+
+        # ── Triple Bottom ─────────────────────────────────────────────────────
+        if len(troughs60) >= 3:
+            t1, t2, t3 = troughs60[-3], troughs60[-2], troughs60[-1]
+            avg_low = (t1[1] + t2[1] + t3[1]) / 3
+            spread = max(t1[1], t2[1], t3[1]) - min(t1[1], t2[1], t3[1])
+            if spread / max(avg_low, 1e-9) < 0.05 and t3[0] > t1[0]:
+                neck = max(_sh[t1[0]: t3[0] + 1])
+                if price > neck * 0.99:
+                    add(mk("Triple Bottom", "BULLISH", "CALL", 73,
+                        f"Three lows near ₹{avg_low:.0f} — very strong support. Breakout above ₹{neck:.0f}.",
+                        "Structure", vol_w=1.2, body_w=0.3,
+                        tgt=price + (neck - avg_low),
+                        sl=avg_low - atr * 0.5))
+
+        # ── Triple Top ────────────────────────────────────────────────────────
+        if len(peaks60) >= 3:
+            p1, p2, p3 = peaks60[-3], peaks60[-2], peaks60[-1]
+            avg_high = (p1[1] + p2[1] + p3[1]) / 3
+            spread = max(p1[1], p2[1], p3[1]) - min(p1[1], p2[1], p3[1])
+            if spread / max(avg_high, 1e-9) < 0.05 and p3[0] > p1[0]:
+                neck = min(_sl[p1[0]: p3[0] + 1])
+                if price < neck * 1.01:
+                    add(mk("Triple Top", "BEARISH", "PUT", 73,
+                        f"Three highs near ₹{avg_high:.0f} — very strong resistance. Breakdown below ₹{neck:.0f}.",
+                        "Structure", vol_w=1.2, body_w=0.3,
+                        tgt=price - (avg_high - neck),
+                        sl=avg_high + atr * 0.5))
+
+        # ── Head and Shoulders ────────────────────────────────────────────────
+        if len(peaks60) >= 3 and len(troughs60) >= 2:
+            ls_pk, hd_pk, rs_pk = peaks60[-3], peaks60[-2], peaks60[-1]
+            if hd_pk[1] > ls_pk[1] and hd_pk[1] > rs_pk[1]:
+                sh_diff = abs(ls_pk[1] - rs_pk[1]) / max(ls_pk[1], 1e-9)
+                if sh_diff < 0.07:
+                    t_left  = next((t for t in reversed(troughs60) if ls_pk[0] < t[0] < hd_pk[0]), None)
+                    t_right = next((t for t in reversed(troughs60) if hd_pk[0] < t[0] < rs_pk[0]), None)
+                    if t_left and t_right:
+                        neck = (t_left[1] + t_right[1]) / 2
+                        if price < neck * 1.02:
+                            add(mk("Head & Shoulders", "BEARISH", "PUT", 75,
+                                f"Classic H&S — head ₹{hd_pk[1]:.0f}, neckline ₹{neck:.0f}. Measured target below.",
+                                "Structure", vol_w=1.1, body_w=0.3,
+                                tgt=neck - (hd_pk[1] - neck),
+                                sl=rs_pk[1] + atr * 0.5))
+
+        # ── Inverse Head and Shoulders ────────────────────────────────────────
+        if len(troughs60) >= 3 and len(peaks60) >= 2:
+            ls_t, hd_t, rs_t = troughs60[-3], troughs60[-2], troughs60[-1]
+            if hd_t[1] < ls_t[1] and hd_t[1] < rs_t[1]:
+                sh_diff = abs(ls_t[1] - rs_t[1]) / max(ls_t[1], 1e-9)
+                if sh_diff < 0.07:
+                    p_left  = next((p for p in reversed(peaks60) if ls_t[0] < p[0] < hd_t[0]), None)
+                    p_right = next((p for p in reversed(peaks60) if hd_t[0] < p[0] < rs_t[0]), None)
+                    if p_left and p_right:
+                        neck = (p_left[1] + p_right[1]) / 2
+                        if price > neck * 0.98:
+                            add(mk("Inverse Head & Shoulders", "BULLISH", "CALL", 75,
+                                f"Inverse H&S — head ₹{hd_t[1]:.0f}, neckline ₹{neck:.0f}. Measured target above.",
+                                "Structure", vol_w=1.1, body_w=0.3,
+                                tgt=neck + (neck - hd_t[1]),
+                                sl=rs_t[1] - atr * 0.5))
+
+        # ── Cup and Handle ────────────────────────────────────────────────────
+        if n >= 40:
+            cup_c  = closes[-40:-10]
+            hdl_c  = closes[-10:]
+            hdl_l  = lows[-10:]
+            cup_l  = cup_c[0]; cup_r = cup_c[-1]
+            cup_bot = min(cup_c)
+            cup_depth = min(cup_l, cup_r) - cup_bot
+            if (abs(cup_l - cup_r) / max(cup_l, 1e-9) < 0.06
+                    and cup_depth / max(cup_l, 1e-9) > 0.07):
+                hdl_min = min(hdl_l)
+                retr = (cup_r - hdl_min) / max(cup_depth, 1e-9)
+                if 0.1 < retr < 0.55 and price > cup_r * 0.99:
+                    add(mk("Cup & Handle", "BULLISH", "CALL", 72,
+                        f"U-shaped base + shallow handle — accumulation complete. Breakout above ₹{cup_r:.0f}.",
+                        "Structure", vol_w=1.2, body_w=0.3,
+                        tgt=price + cup_depth,
+                        sl=hdl_min - atr * 0.5))
+
+        # ── Inverse Cup and Handle ────────────────────────────────────────────
+        if n >= 40:
+            cup_c   = closes[-40:-10]
+            hdl_c   = closes[-10:]
+            hdl_h   = highs[-10:]
+            cup_l   = cup_c[0]; cup_r = cup_c[-1]
+            cup_top  = max(cup_c)
+            cup_ht   = cup_top - max(cup_l, cup_r)
+            if (abs(cup_l - cup_r) / max(cup_l, 1e-9) < 0.06
+                    and cup_ht / max(cup_top, 1e-9) > 0.07):
+                hdl_max = max(hdl_h)
+                retr = (hdl_max - cup_r) / max(cup_ht, 1e-9)
+                if 0.1 < retr < 0.55 and price < cup_r * 1.01:
+                    add(mk("Inverse Cup & Handle", "BEARISH", "PUT", 72,
+                        f"Inverted U + small bounce handle — distribution. Breakdown below ₹{cup_r:.0f}.",
+                        "Structure", vol_w=1.2, body_w=0.3,
+                        tgt=price - cup_ht,
+                        sl=hdl_max + atr * 0.5))
+
+        # ── Triangles, Wedges, Rectangle (30-bar trendline analysis) ─────────
+        TLINE = min(n, 30)
+        _th = highs[-TLINE:]
+        _tl = lows[-TLINE:]
+        peaks30, troughs30 = _pivots(_th, _tl, order=3)
+
+        if len(peaks30) >= 2 and len(troughs30) >= 2:
+            res_slope = _slope(peaks30[-3:] if len(peaks30) >= 3 else peaks30)
+            sup_slope = _slope(troughs30[-3:] if len(troughs30) >= 3 else troughs30)
+            avg_res = sum(p[1] for p in peaks30[-2:]) / 2
+            avg_sup = sum(t[1] for t in troughs30[-2:]) / 2
+            spread_pct = (avg_res - avg_sup) / max(avg_res, 1e-9)
+            # Minimum slope unit = 0.1% of price per bar (anything smaller = flat)
+            su = price * 0.001
+
+            # ── Symmetrical Triangle ──────────────────────────────────────────
+            if res_slope < -su and sup_slope > su and spread_pct < 0.12:
+                sig = "CALL" if (lr < 55 and le20 > le50) else "PUT" if (lr > 55 and le20 < le50) else "WAIT"
+                pt  = "BULLISH" if sig == "CALL" else "BEARISH" if sig == "PUT" else "NEUTRAL"
+                add(mk("Symmetrical Triangle", pt, sig, 65,
+                    "Converging highs and lows — energy coiling. Breakout follows the prevailing trend.",
+                    "Structure", body_w=0.2, vol_w=0.8,
+                    target_r=3.0, stop_r=1.5))
+
+            # ── Ascending Triangle ────────────────────────────────────────────
+            elif abs(res_slope) < su * 0.6 and sup_slope > su and spread_pct < 0.10:
+                add(mk("Ascending Triangle", "BULLISH", "CALL", 68,
+                    f"Flat resistance ₹{avg_res:.0f} + rising support — buyers absorbing every dip. Bullish breakout likely.",
+                    "Structure", body_w=0.2, vol_w=1.0,
+                    tgt=avg_res + (avg_res - avg_sup),
+                    sl=avg_sup - atr * 0.5))
+
+            # ── Descending Triangle ───────────────────────────────────────────
+            elif res_slope < -su and abs(sup_slope) < su * 0.6 and spread_pct < 0.10:
+                add(mk("Descending Triangle", "BEARISH", "PUT", 68,
+                    f"Falling resistance + flat support ₹{avg_sup:.0f} — sellers capping every rally. Bearish breakdown likely.",
+                    "Structure", body_w=0.2, vol_w=1.0,
+                    tgt=avg_sup - (avg_res - avg_sup),
+                    sl=avg_res + atr * 0.5))
+
+            # ── Rising Wedge (bearish) ────────────────────────────────────────
+            elif res_slope > su and sup_slope > res_slope + su and spread_pct < 0.10:
+                add(mk("Rising Wedge", "BEARISH", "PUT", 66,
+                    "Both highs and lows rising but converging upward — momentum fading, reversal ahead.",
+                    "Structure", body_w=0.2, vol_w=0.8,
+                    target_r=2.5, stop_r=1.5))
+
+            # ── Falling Wedge (bullish) ───────────────────────────────────────
+            elif res_slope < -su and sup_slope > res_slope + su and sup_slope < 0 and spread_pct < 0.10:
+                add(mk("Falling Wedge", "BULLISH", "CALL", 66,
+                    "Both highs and lows falling but converging — sellers losing steam, bullish reversal ahead.",
+                    "Structure", body_w=0.2, vol_w=0.8,
+                    target_r=2.5, stop_r=1.5))
+
+            # ── Rectangle ─────────────────────────────────────────────────────
+            elif abs(res_slope) < su * 0.6 and abs(sup_slope) < su * 0.6 and spread_pct < 0.12:
+                sig = "CALL" if le20 > le50 else "PUT"
+                pt  = "BULLISH" if sig == "CALL" else "BEARISH"
+                add(mk("Rectangle", pt, sig, 62,
+                    f"Price ranging ₹{avg_sup:.0f}–₹{avg_res:.0f} — consolidation. Breakout follows the trend.",
+                    "Structure", body_w=0.2, vol_w=0.8,
+                    tgt=(avg_res + (avg_res - avg_sup)) if sig == "CALL" else (avg_sup - (avg_res - avg_sup)),
+                    sl=(avg_sup - atr * 0.5) if sig == "CALL" else (avg_res + atr * 0.5)))
+
+        # ── Flag and Pennant (pole + consolidation) ───────────────────────────
+        POLE = 10; CONS = 8
+        if n >= POLE + CONS:
+            pole_start = closes[-(POLE + CONS)]
+            pole_end   = closes[-CONS]
+            pole_move  = pole_end - pole_start
+            abs_pole   = abs(pole_move)
+            cons_h = highs[-CONS:]; cons_l = lows[-CONS:]; cons_c = closes[-CONS:]
+            cons_range = max(cons_h) - min(cons_l)
+            pole_pct = abs_pole / max(abs(pole_start), 1e-9)
+
+            if pole_pct > 0.05 and cons_range < abs_pole * 0.5:
+                cpks, ctrs = _pivots(cons_h, cons_l, order=2)
+                c_res_slope = _slope(cpks[-2:]) if len(cpks) >= 2 else 0.0
+                c_sup_slope = _slope(ctrs[-2:]) if len(ctrs) >= 2 else 0.0
+                su2 = price * 0.0005
+
+                if pole_move > 0:   # bullish pole
+                    is_pennant = c_res_slope < -su2 and c_sup_slope > su2
+                    is_flag    = c_res_slope < -su2 and c_sup_slope < 0          # both drifting down
+                    if is_pennant:
+                        add(mk("Bullish Pennant", "BULLISH", "CALL", 70,
+                            "Strong up-move + contracting triangle consolidation — continuation, breakout expected.",
+                            "Structure", vol_w=1.1, body_w=0.3,
+                            tgt=price + abs_pole, sl=min(cons_l) - atr * 0.5))
+                    elif is_flag:
+                        add(mk("Bull Flag", "BULLISH", "CALL", 68,
+                            "Sharp rally + shallow parallel pullback — continuation pattern, upside expected.",
+                            "Structure", vol_w=1.1, body_w=0.3,
+                            tgt=price + abs_pole, sl=min(cons_l) - atr * 0.5))
+                    elif sum(volumes[-CONS:]) / CONS < avg_vol * 0.8 and cons_c[-1] < cons_c[0]:
+                        add(mk("Bull Flag", "BULLISH", "CALL", 65,
+                            "Sharp rally then low-volume drift lower — textbook bull flag.",
+                            "Structure", vol_w=0.8, body_w=0.3,
+                            tgt=price + abs_pole, sl=min(cons_l) - atr * 0.5))
+
+                else:               # bearish pole
+                    is_pennant = c_res_slope < -su2 and c_sup_slope > su2
+                    is_flag    = c_res_slope > su2 and c_sup_slope > 0           # both drifting up
+                    if is_pennant:
+                        add(mk("Bearish Pennant", "BEARISH", "PUT", 70,
+                            "Sharp down-move + contracting triangle consolidation — continuation, breakdown expected.",
+                            "Structure", vol_w=1.1, body_w=0.3,
+                            tgt=price - abs_pole, sl=max(cons_h) + atr * 0.5))
+                    elif is_flag:
+                        add(mk("Bear Flag", "BEARISH", "PUT", 68,
+                            "Sharp drop + shallow parallel bounce — continuation pattern, downside expected.",
+                            "Structure", vol_w=1.1, body_w=0.3,
+                            tgt=price - abs_pole, sl=max(cons_h) + atr * 0.5))
+                    elif sum(volumes[-CONS:]) / CONS < avg_vol * 0.8 and cons_c[-1] > cons_c[0]:
+                        add(mk("Bear Flag", "BEARISH", "PUT", 65,
+                            "Sharp drop then low-volume bounce — textbook bear flag.",
+                            "Structure", vol_w=0.8, body_w=0.3,
+                            tgt=price - abs_pole, sl=max(cons_h) + atr * 0.5))
+
         # ── Indicator patterns ────────────────────────────────────────────────
         if lr < 35 and price > le50:
             # Confidence scales with how oversold RSI is. Body weight reduced
