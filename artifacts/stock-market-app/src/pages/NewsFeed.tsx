@@ -348,7 +348,12 @@ function preloadImages(urls: string[]) {
   });
 }
 
-function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: () => void }) {
+function ReelsView({ articles, onClose, onLoadMore, loadingMore }: {
+  articles: NewsArticle[];
+  onClose: () => void;
+  onLoadMore?: () => void;
+  loadingMore?: boolean;
+}) {
   const [current, setCurrent] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -357,7 +362,11 @@ function ReelsView({ articles, onClose }: { articles: NewsArticle[]; onClose: ()
     const clamped = Math.max(0, Math.min(idx, articles.length - 1));
     setCurrent(clamped);
     cardRefs.current[clamped]?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [articles.length]);
+    // Trigger load-more when within 3 reels of the end
+    if (idx >= articles.length - 3 && onLoadMore && !loadingMore) {
+      onLoadMore();
+    }
+  }, [articles.length, onLoadMore, loadingMore]);
 
   useEffect(() => {
     const urls = articles.slice(current, current + 5).map(a => a.image_url || getFallbackImageUrl(a));
@@ -551,6 +560,15 @@ export default function NewsFeed() {
   const [countdown, setCountdown] = useState(8 * 60);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ── Infinite scroll state ─────────────────────────────────────────────────
+  const PAGE_SIZE = 25;
+  const [allArticles, setAllArticles] = useState<import("@/lib/api").NewsArticle[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  // Track which feed context the accumulated list belongs to (tab+search)
+  const feedContextRef = useRef("");
+
   // Light-mode palette (dark mode uses the same rich values defined inline)
   const bg          = isDark ? "#04091a" : "#f1f5f9";
   const cardBg      = isDark ? "#0a1020" : "#ffffff";
@@ -562,10 +580,58 @@ export default function NewsFeed() {
   const { data: feed, isLoading: feedLoading, isFetching: feedFetching } = useQuery(
     marketDataQueryOptions(
       ["newsFeed", activeTab, debouncedSearch],
-      () => api.newsFeed({ category: activeTab, search: debouncedSearch, limit: 60 }),
+      () => api.newsFeed({ category: activeTab, search: debouncedSearch, limit: PAGE_SIZE, offset: 0 }),
       { placeholderData: keepPreviousData },
     ),
   );
+
+  // Reset accumulated list whenever the first page of a new tab/search arrives
+  useEffect(() => {
+    if (!feed) return;
+    const ctx = `${activeTab}:${debouncedSearch}`;
+    feedContextRef.current = ctx;
+    setAllArticles(feed.articles ?? []);
+    setHasMore((feed.articles?.length ?? 0) >= PAGE_SIZE);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [feed]);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const ctx = feedContextRef.current;
+      const res = await api.newsFeed({
+        category: activeTab,
+        search: debouncedSearch,
+        limit: PAGE_SIZE,
+        offset: allArticles.length,
+      });
+      // Discard results if the user switched tab/search mid-flight
+      if (feedContextRef.current !== ctx) return;
+      const next = res.articles ?? [];
+      setAllArticles(prev => {
+        const seen = new Set(prev.map(a => a.id));
+        return [...prev, ...next.filter(a => !seen.has(a.id))];
+      });
+      setHasMore(next.length >= PAGE_SIZE);
+    } catch {
+      setHasMore(false);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore, hasMore, allArticles.length, activeTab, debouncedSearch]);
+
+  // IntersectionObserver — fires loadMore when sentinel scrolls into view
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      entries => { if (entries[0].isIntersecting) loadMore(); },
+      { threshold: 0.1 },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [loadMore]);
 
   const { data: stats, isFetching: statsFetching } = useQuery({
     queryKey: ["newsStats"],
@@ -606,7 +672,7 @@ export default function NewsFeed() {
     return () => clearTimeout(debounceRef.current ?? undefined);
   }, [search]);
 
-  const articles = feed?.articles ?? [];
+  const articles = allArticles;
   const feedMeta = pickMeta(feed);
 
   const sourceStats = useMemo(() => {
@@ -650,7 +716,7 @@ export default function NewsFeed() {
             </span>
           </h1>
           <p className="text-sm mt-1 ml-10" style={{ color: muTxt }}>
-            Live headlines from ET, Livemint, Moneycontrol + NSE data
+            Live headlines from ET · Livemint · Moneycontrol · Yahoo Finance · ScanX
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -692,7 +758,7 @@ export default function NewsFeed() {
               {sourceStats.map(s => (
                 <span key={s.name} className="text-xs px-2 py-0.5 rounded-lg font-mono font-semibold"
                   style={{ background: isDark ? "rgba(99,102,241,0.12)" : "#eef2ff", color: isDark ? "#818cf8" : "#4f46e5", border: isDark ? "1px solid rgba(99,102,241,0.2)" : "1px solid #c7d2fe" }}>
-                  {s.name} {s.count}
+                  {s.name === "YF" ? "Yahoo Finance" : s.name} {s.count}
                 </span>
               ))}
             </div>
@@ -778,7 +844,12 @@ export default function NewsFeed() {
 
       {/* ── Content ─────────────────────────────────────────────────── */}
       {reelsMode && articles.length > 0 ? (
-        <ReelsView articles={articles} onClose={() => setReelsMode(false)} />
+        <ReelsView
+          articles={articles}
+          onClose={() => setReelsMode(false)}
+          onLoadMore={hasMore ? loadMore : undefined}
+          loadingMore={loadingMore}
+        />
       ) : reelsMode && feedLoading ? (
         <div className="flex flex-col items-center justify-center py-24 gap-3" style={{ color: muTxt }}>
           <Film className="w-10 h-10 opacity-30" />
@@ -800,9 +871,17 @@ export default function NewsFeed() {
               <NewsCard article={article} index={i} isDark={isDark} />
             </div>
           ))}
-          <p className="text-center text-xs py-4" style={{ color: muTxt }}>
-            Showing {articles.length} of {feed?.total ?? articles.length} articles · Auto-refreshes every 8 minutes
-          </p>
+          {/* Infinite scroll sentinel — becomes visible when near the bottom */}
+          {hasMore && !loadingMore && (
+            <div ref={sentinelRef} style={{ height: 1 }} />
+          )}
+          {/* Skeleton cards while the next page loads */}
+          {loadingMore && <LoadingCards isDark={isDark} />}
+          {!hasMore && articles.length > 0 && (
+            <p className="text-center text-xs py-4" style={{ color: muTxt }}>
+              {articles.length} articles loaded · Auto-refreshes every 8 minutes
+            </p>
+          )}
         </div>
       )}
     </div>
