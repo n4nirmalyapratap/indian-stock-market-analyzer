@@ -544,3 +544,90 @@ def monte_carlo_var(legs: list[dict],
         "percentiles":      ptiles,
         "histogram":        histogram,
     }
+
+
+# ── Interactive Simulator ──────────────────────────────────────────────────────
+
+def simulate_strategy_over_time(
+    legs: list[dict],
+    S: float,
+    T_current: float,
+    sigma: float,
+    r: float = 0.07,
+    iv_shift: float = 0.0,
+    time_steps: int = 40,
+    spot_range_pct: float = 0.22,
+) -> dict:
+    """
+    Generate payoff curves at multiple DTE snapshots for the interactive
+    Options Simulator panel.  Returns spots + list of slices (dte, T, payoffs)
+    stepping from T_current → 0.
+
+    iv_shift: additive fractional IV adjustment applied to all legs
+              (e.g. 0.05 = add +5 vol-points, -0.20 = crush by 20%).
+    """
+    n_spots = 100
+
+    # Expand spot range to always cover all strikes
+    all_strikes = [float(leg["strike"]) for leg in legs] or [S]
+    base_min   = S * (1.0 - spot_range_pct)
+    base_max   = S * (1.0 + spot_range_pct)
+    spot_min   = min(base_min, min(all_strikes) * 0.94)
+    spot_max   = max(base_max, max(all_strikes) * 1.06)
+    spots      = list(np.linspace(spot_min, spot_max, n_spots))
+
+    # Pre-compute adjusted IVs and entry premiums
+    T_entry = max(T_current, 1.0 / 365)
+    adj_legs: list[dict] = []
+    for leg in legs:
+        l = dict(leg)
+        base_iv           = float(l.get("iv") or sigma or 0.20)
+        l["_iv_adj"]      = max(0.01, base_iv + iv_shift)
+        raw_prem          = l.get("premium") or 0.0
+        if float(raw_prem) <= 0:
+            l["_entry_prem"] = bs_price(S, float(l["strike"]), T_entry, r, base_iv, l["option_type"])
+        else:
+            l["_entry_prem"] = float(raw_prem)
+        adj_legs.append(l)
+
+    # Build DTE slices: T_current → 0
+    T_values = np.linspace(T_current, 0.0, time_steps + 1)
+    slices: list[dict] = []
+    for T_slice in T_values:
+        Tf    = float(T_slice)
+        dte   = max(0, round(Tf * 365))
+        payoffs: list[float] = []
+        for spot in spots:
+            pnl = 0.0
+            for leg in adj_legs:
+                iv         = leg["_iv_adj"]
+                entry_prem = leg["_entry_prem"]
+                if Tf > 0.5 / 365:
+                    cur = bs_price(spot, float(leg["strike"]), Tf, r, iv, leg["option_type"])
+                else:
+                    cur = (max(0.0, spot - float(leg["strike"])) if leg["option_type"] == "call"
+                           else max(0.0, float(leg["strike"]) - spot))
+                mult = float(leg.get("lots", 1)) * float(leg.get("lot_size", 75))
+                pnl += (cur - entry_prem) * mult if leg["action"] == "buy" else (entry_prem - cur) * mult
+            payoffs.append(round(pnl, 2))
+        slices.append({"dte": dte, "T": round(Tf, 6), "payoffs": payoffs})
+
+    # Compute expiry breakevens from the last (T=0) slice
+    exp_pays = slices[-1]["payoffs"]
+    breakevens: list[float] = []
+    for i in range(len(exp_pays) - 1):
+        if (exp_pays[i] >= 0) != (exp_pays[i + 1] >= 0):
+            p1, p2 = exp_pays[i], exp_pays[i + 1]
+            s1, s2 = spots[i], spots[i + 1]
+            denom  = p2 - p1
+            if denom:
+                breakevens.append(round(s1 + (-p1) * (s2 - s1) / denom, 2))
+
+    return {
+        "spots":     [round(s, 2) for s in spots],
+        "slices":    slices,
+        "breakevens": breakevens,
+        "S":          S,
+        "T_current":  T_current,
+        "iv_shift":   iv_shift,
+    }

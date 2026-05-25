@@ -33,6 +33,7 @@ from ..services.options_service import (
     strategy_greeks_aggregate,
     scenario_analysis,
     monte_carlo_var,
+    simulate_strategy_over_time,
     get_lot_size,
     atm_strike,
     RISK_FREE_RATE,
@@ -948,3 +949,236 @@ def _build_synthetic_legs(strategy: str, spot: float, symbol: str,
     if s in ("long_put", "longput"):
         return [{"action": "buy", "type": "put",  "strike": atm, "premium": p_atm, "lots": lots}]
     return []
+
+
+# ── F&O Stock Universe ────────────────────────────────────────────────────────
+# Curated list of NSE F&O eligible stocks (equity derivatives universe, 2025)
+_FO_STOCKS: list[tuple[str, str, str, int]] = [
+    # (symbol, display_name, sector, lot_size)
+    # Banks
+    ("HDFCBANK",   "HDFC Bank",               "Banks",       550),
+    ("ICICIBANK",  "ICICI Bank",               "Banks",       700),
+    ("SBIN",       "State Bank of India",       "Banks",      1500),
+    ("AXISBANK",   "Axis Bank",                "Banks",      1200),
+    ("KOTAKBANK",  "Kotak Mahindra Bank",       "Banks",       400),
+    ("INDUSINDBK", "IndusInd Bank",             "Banks",       300),
+    ("PNB",        "Punjab National Bank",      "Banks",      8000),
+    ("BANKBARODA", "Bank of Baroda",            "Banks",      2700),
+    ("FEDERALBNK", "Federal Bank",              "Banks",     10000),
+    ("IDFCFIRSTB", "IDFC First Bank",           "Banks",     10000),
+    ("BANDHANBNK", "Bandhan Bank",              "Banks",      5000),
+    ("AUBANK",     "AU Small Finance Bank",     "Banks",       500),
+    ("RBLBANK",    "RBL Bank",                  "Banks",      6250),
+    ("YESBANK",    "Yes Bank",                  "Banks",     40000),
+    ("CANBK",      "Canara Bank",               "Banks",      3200),
+    ("UNIONBANK",  "Union Bank of India",       "Banks",      4500),
+    # IT
+    ("TCS",        "Tata Consultancy Services", "IT",           175),
+    ("INFY",       "Infosys",                   "IT",           400),
+    ("WIPRO",      "Wipro",                     "IT",          1500),
+    ("HCLTECH",    "HCL Technologies",          "IT",           350),
+    ("TECHM",      "Tech Mahindra",             "IT",           500),
+    ("LTIM",       "LTIMindtree",               "IT",           150),
+    ("MPHASIS",    "Mphasis",                   "IT",           250),
+    ("COFORGE",    "Coforge",                   "IT",           125),
+    ("PERSISTENT", "Persistent Systems",        "IT",           125),
+    ("KPIT",       "KPIT Technologies",         "IT",           250),
+    ("BIRLASOFT",  "Birlasoft",                 "IT",          1000),
+    ("CYIENT",     "Cyient",                    "IT",           250),
+    ("SONATSOFTW", "Sonata Software",           "IT",           700),
+    # FMCG
+    ("HINDUNILVR", "Hindustan Unilever",        "FMCG",        300),
+    ("ITC",        "ITC",                       "FMCG",       3200),
+    ("NESTLEIND",  "Nestle India",              "FMCG",         50),
+    ("BRITANNIA",  "Britannia Industries",      "FMCG",        200),
+    ("DABUR",      "Dabur India",               "FMCG",       1250),
+    ("MARICO",     "Marico",                    "FMCG",       1500),
+    ("GODREJCP",   "Godrej Consumer Products",  "FMCG",        500),
+    ("TATACONSUM", "Tata Consumer Products",    "FMCG",       1000),
+    ("COLPAL",     "Colgate-Palmolive India",   "FMCG",        450),
+    ("UBL",        "United Breweries",          "FMCG",        400),
+    # Auto
+    ("MARUTI",     "Maruti Suzuki India",       "Auto",         100),
+    ("TATAMOTORS", "Tata Motors",               "Auto",        2800),
+    ("M&M",        "Mahindra & Mahindra",       "Auto",         350),
+    ("BAJAJ-AUTO", "Bajaj Auto",               "Auto",         250),
+    ("HEROMOTOCO", "Hero MotoCorp",             "Auto",         300),
+    ("TVSMOTOR",   "TVS Motor Company",         "Auto",         350),
+    ("EICHERMOT",  "Eicher Motors",             "Auto",         175),
+    ("ASHOKLEY",   "Ashok Leyland",             "Auto",        4000),
+    ("ESCORTS",    "Escorts Kubota",            "Auto",         200),
+    ("TIINDIA",    "Tube Investments of India", "Auto",         300),
+    # Pharma
+    ("SUNPHARMA",  "Sun Pharmaceutical",        "Pharma",       350),
+    ("DRREDDY",    "Dr. Reddy's Laboratories",  "Pharma",       125),
+    ("CIPLA",      "Cipla",                     "Pharma",       650),
+    ("DIVISLAB",   "Divi's Laboratories",       "Pharma",       200),
+    ("AUROPHARMA", "Aurobindo Pharma",          "Pharma",       650),
+    ("TORNTPHARM", "Torrent Pharmaceuticals",   "Pharma",       250),
+    ("GLENMARK",   "Glenmark Pharmaceuticals",  "Pharma",       500),
+    ("ALKEM",      "Alkem Laboratories",        "Pharma",       125),
+    ("BIOCON",     "Biocon",                    "Pharma",      1800),
+    ("MANKIND",    "Mankind Pharma",            "Pharma",       250),
+    ("ZYDUSLIFE",  "Zydus Lifesciences",        "Pharma",       600),
+    ("IPCALAB",    "IPCA Laboratories",         "Pharma",       350),
+    ("LAURUS",     "Laurus Labs",               "Pharma",       600),
+    # Energy & Oil
+    ("RELIANCE",   "Reliance Industries",       "Energy",       250),
+    ("ONGC",       "ONGC",                      "Energy",      3850),
+    ("BPCL",       "BPCL",                      "Energy",      4750),
+    ("IOC",        "Indian Oil Corporation",    "Energy",      7500),
+    ("HINDPETRO",  "HPCL",                      "Energy",      4250),
+    ("PETRONET",   "Petronet LNG",              "Energy",      3000),
+    ("GAIL",       "GAIL India",                "Energy",      5850),
+    ("MRPL",       "MRPL",                      "Energy",      7600),
+    # Power & Utilities
+    ("NTPC",       "NTPC",                      "Power",       3750),
+    ("POWERGRID",  "Power Grid Corporation",    "Power",       3450),
+    ("TATAPOWER",  "Tata Power",                "Power",       1500),
+    ("ADANIGREEN", "Adani Green Energy",        "Power",        500),
+    ("CESC",       "CESC",                      "Power",       2500),
+    ("TORNTPOWER", "Torrent Power",             "Power",        500),
+    ("NHPC",       "NHPC",                      "Power",      10000),
+    ("SJVN",       "SJVN",                      "Power",      10000),
+    # Metals & Mining
+    ("TATASTEEL",  "Tata Steel",                "Metals",     11350),
+    ("JSWSTEEL",   "JSW Steel",                 "Metals",      1350),
+    ("HINDALCO",   "Hindalco Industries",       "Metals",      1350),
+    ("VEDL",       "Vedanta",                   "Metals",      2600),
+    ("SAIL",       "SAIL",                      "Metals",      8550),
+    ("COALINDIA",  "Coal India",                "Metals",      4200),
+    ("NMDC",       "NMDC",                      "Metals",      6750),
+    ("HINDCOPPER", "Hindustan Copper",          "Metals",      4700),
+    # Infrastructure
+    ("LT",         "Larsen & Toubro",           "Infra",        175),
+    ("ADANIPORTS", "Adani Ports & SEZ",         "Infra",       1250),
+    ("GMRINFRA",   "GMR Airports Infrastructure","Infra",     22750),
+    ("IRB",        "IRB Infrastructure",        "Infra",       9375),
+    ("CONCOR",     "Container Corp of India",   "Infra",       1000),
+    ("BHEL",       "Bharat Heavy Electricals",  "Defence",     5425),
+    ("HAL",        "Hindustan Aeronautics",     "Defence",      175),
+    ("BEL",        "Bharat Electronics",        "Defence",     2900),
+    # Finance & NBFC
+    ("BAJFINANCE", "Bajaj Finance",             "Finance",      125),
+    ("BAJAJFINSV", "Bajaj Finserv",             "Finance",      500),
+    ("CHOLAFIN",   "Cholamandalam Finance",     "Finance",      500),
+    ("MUTHOOTFIN", "Muthoot Finance",           "Finance",      500),
+    ("LICHSGFIN",  "LIC Housing Finance",       "Finance",     1500),
+    ("PFC",        "Power Finance Corporation", "Finance",     2500),
+    ("RECLTD",     "REC Limited",               "Finance",     2500),
+    ("M&MFIN",     "Mahindra Finance",          "Finance",     2000),
+    # Insurance
+    ("HDFCLIFE",   "HDFC Life Insurance",       "Insurance",   1100),
+    ("SBILIFE",    "SBI Life Insurance",        "Insurance",    750),
+    ("ICICIPRULI", "ICICI Prudential Life",     "Insurance",    700),
+    ("LICI",       "LIC of India",              "Insurance",    700),
+    # Consumer & Retail
+    ("TITAN",      "Titan Company",             "Consumer",     375),
+    ("DMART",      "Avenue Supermarts",         "Consumer",      75),
+    ("TRENT",      "Trent",                     "Consumer",     350),
+    ("BATAINDIA",  "Bata India",                "Consumer",     500),
+    ("PAGEIND",    "Page Industries",           "Consumer",      30),
+    ("ABFRL",      "Aditya Birla Fashion",      "Consumer",    3500),
+    ("MANYAVAR",   "Vedant Fashions",           "Consumer",     700),
+    # Paints & Chemicals
+    ("ASIANPAINT", "Asian Paints",              "Chemicals",    350),
+    ("BERGEPAINT", "Berger Paints",             "Chemicals",   1000),
+    ("PIDILITIND", "Pidilite Industries",       "Chemicals",    350),
+    ("ATUL",       "Atul",                      "Chemicals",     75),
+    # Cement
+    ("ULTRACEMCO", "UltraTech Cement",          "Cement",        70),
+    ("SHREECEM",   "Shree Cement",              "Cement",        25),
+    ("AMBUJACEM",  "Ambuja Cements",            "Cement",      2500),
+    ("ACCLTD",     "ACC",                       "Cement",       500),
+    ("RAMCOCEM",   "Ramco Cements",             "Cement",       500),
+    # Industrials & Capital Goods
+    ("HAVELLS",    "Havells India",             "Industrials",  500),
+    ("SIEMENS",    "Siemens India",             "Industrials",  125),
+    ("ABB",        "ABB India",                 "Industrials",  200),
+    ("BOSCHLTD",   "Bosch India",               "Industrials",   25),
+    ("CUMMINSIND", "Cummins India",             "Industrials",  400),
+    ("THERMAX",    "Thermax",                   "Industrials",  225),
+    # New Age / Tech
+    ("ZOMATO",     "Zomato",                    "New Age",     5625),
+    ("IRCTC",      "IRCTC",                     "New Age",     2000),
+    ("NAUKRI",     "Info Edge (Naukri)",        "New Age",      175),
+    ("INDIAMART",  "IndiaMart InterMESH",       "New Age",       75),
+    # Healthcare
+    ("APOLLOHOSP", "Apollo Hospitals",          "Healthcare",   250),
+    ("FORTIS",     "Fortis Healthcare",         "Healthcare",  3250),
+    ("MAXHEALTH",  "Max Healthcare",            "Healthcare",  1000),
+    ("METROPOLIS", "Metropolis Healthcare",     "Healthcare",   250),
+    # Realty
+    ("DLF",        "DLF",                       "Realty",      1650),
+    ("GODREJPROP", "Godrej Properties",         "Realty",       300),
+    ("OBEROIRLTY", "Oberoi Realty",             "Realty",       400),
+    ("PRESTIGE",   "Prestige Estates",          "Realty",       500),
+    # Diversified / Conglomerate
+    ("GRASIM",     "Grasim Industries",         "Diversified",  475),
+    ("ADANIENT",   "Adani Enterprises",         "Diversified",  250),
+    ("LTTS",       "L&T Technology Services",   "Diversified",  125),
+]
+
+
+@router.get("/fo-stocks")
+async def get_fo_stocks():
+    """
+    Return the curated list of NSE F&O-eligible equity stocks.
+    Used by the frontend asset selector for the F&O Stocks panel.
+    """
+    return {
+        "stocks": [
+            {"sym": sym, "name": name, "sector": sector, "lot": lot}
+            for sym, name, sector, lot in _FO_STOCKS
+        ],
+        "total": len(_FO_STOCKS),
+    }
+
+
+# ── Simulator ─────────────────────────────────────────────────────────────────
+
+class SimulateLegModel(BaseModel):
+    action:       str   = Field(..., description="'buy' or 'sell'")
+    option_type:  str   = Field(..., description="'call' or 'put'")
+    strike:       float = Field(..., gt=0)
+    premium:      float = Field(0.0)
+    lots:         int   = Field(1, ge=1)
+    lot_size:     int   = Field(75, ge=1)
+    iv:           float = Field(0.20, ge=0)
+
+    @validator("action")
+    def va(cls, v): return v.lower()
+
+    @validator("option_type")
+    def vt(cls, v): return v.lower()
+
+
+class SimulateReq(BaseModel):
+    legs:           List[SimulateLegModel]
+    S:              float = Field(..., gt=0)
+    T_current:      float = Field(..., ge=0, description="Current DTE in years")
+    sigma:          float = Field(0.20, ge=0)
+    r:              float = Field(RISK_FREE_RATE)
+    iv_shift:       float = Field(0.0, description="Additive IV shift, e.g. 0.05 = +5%")
+    time_steps:     int   = Field(40, ge=5, le=100)
+    spot_range_pct: float = Field(0.22, ge=0.05, le=0.50)
+
+
+@router.post("/simulate")
+async def simulate_strategy(req: SimulateReq):
+    """
+    Generate multiple payoff curves (DTE slices from T_current → 0) for
+    the interactive Options Simulator panel.  All slices are returned in
+    a single response to minimise round-trips during animation.
+    """
+    try:
+        legs = [leg.dict() for leg in req.legs]
+        result = await asyncio.to_thread(
+            simulate_strategy_over_time,
+            legs, req.S, req.T_current, req.sigma,
+            req.r, req.iv_shift, req.time_steps, req.spot_range_pct,
+        )
+        return result
+    except Exception as exc:
+        logger.exception("simulate_strategy failed")
+        raise HTTPException(status_code=400, detail=str(exc))
