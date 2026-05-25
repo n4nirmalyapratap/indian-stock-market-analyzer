@@ -362,27 +362,47 @@ class NseService:
         instrument: str = "OPTIDX",
     ) -> Optional[dict]:
         """
-        Fetch the live NSE option chain via the new NextApi.
-        Both equity (OPTSTK) and index (OPTIDX) instruments are supported.
+        Fetch the live NSE option chain via the v3 endpoint (current, active
+        replacement for the legacy /api/option-chain-indices path which was
+        retired in 2024 and now returns 404).
 
-        expiry_date format expected by NSE: "DD-Mon-YYYY" e.g. "26-Jun-2025"
-        When omitted the nearest expiry is returned.
+        Endpoint: /api/option-chain-v3?type=<Indices|Equity>&symbol=<SYM>&expiry=<DD-Mon-YYYY>
+        Returns:  Brotli-compressed JSON shaped as
+                  { "records": { "underlyingValue": float, "expiryDates": [...], "data": [...] } }
 
-        Payload normalisation handles both:
-          • New format  → payload["data"] list of strike records
-          • Legacy format → payload["records"]["data"]
+        v3 requires an `expiry` query param. When omitted we probe for the
+        expiry list, then fetch the nearest expiry's chain.
+
+        instrument: "OPTIDX" for indices, "OPTSTK" for equity stocks.
         """
+        import datetime as _dt
         encoded = _purify(symbol)
-        expiry_suffix = f"&params=expiryDate={expiry_date}" if expiry_date else ""
-        cache_key = f"option-chain-{symbol}-{expiry_date or 'nearest'}"
+        type_q  = "Indices" if instrument == "OPTIDX" else "Equity"
+
+        # If no expiry supplied, look up the nearest one first
+        if not expiry_date:
+            expiries = await self.get_expiry_list(symbol, instrument)
+            if not expiries:
+                logger.debug("No expiries found for %s; cannot fetch chain", symbol)
+                return None
+            expiry_date = expiries[0]
+
+        # Strictly validate expiry_date format (DD-Mon-YYYY) — protects against
+        # query-string injection and silent NSE 200/empty responses.
+        try:
+            _dt.datetime.strptime(expiry_date, "%d-%b-%Y")
+        except (ValueError, TypeError):
+            logger.warning("Invalid expiry_date %r for %s; expected DD-Mon-YYYY", expiry_date, symbol)
+            return None
+
+        cache_key = f"option-chain-v3-{type_q}-{symbol}-{expiry_date}"
         cached = _get_cache(cache_key)
         if cached is not None:
             return cached
 
-        # Try new NextApi first
         path = (
-            f"/api/NextApi/apiClient/GetQuoteApi"
-            f"?functionName=getOptionChainData&symbol={encoded}{expiry_suffix}"
+            f"/api/option-chain-v3?type={type_q}"
+            f"&symbol={encoded}&expiry={_url_quote(expiry_date, safe='-')}"
         )
         data = await self.fetch_nse(
             path,
@@ -390,20 +410,6 @@ class NseService:
             ttl=_ttl_for(60),
             referer=f"{NSE_BASE}/option-chain",
         )
-
-        # Fall back to classic endpoints (still valid for most expiries)
-        if not data:
-            if instrument == "OPTIDX":
-                classic_path = f"/api/option-chain-indices?symbol={encoded}"
-            else:
-                classic_path = f"/api/option-chain-equities?symbol={encoded}"
-            data = await self.fetch_nse(
-                classic_path,
-                f"{cache_key}-classic",
-                ttl=_ttl_for(60),
-                referer=f"{NSE_BASE}/option-chain",
-            )
-
         return data
 
     # ── New NextApi — expiry list ─────────────────────────────────────────────
@@ -415,23 +421,27 @@ class NseService:
     ) -> list[str]:
         """
         Return a sorted list of expiry date strings (format: "DD-Mon-YYYY")
-        for the given symbol using NSE's NextApi.
+        via the v3 option-chain endpoint. A probe call with a far-future
+        placeholder expiry returns the full expiryDates array with no chain
+        payload, which is the cheapest way to enumerate available expiries.
 
         instrument: "OPTIDX" for indices, "OPTSTK" for stocks.
         """
         encoded = _purify(symbol)
-        cache_key = f"expiry-list-{symbol}-{instrument}"
+        type_q  = "Indices" if instrument == "OPTIDX" else "Equity"
+        cache_key = f"expiry-list-v3-{symbol}-{instrument}"
         cached = _get_cache(cache_key)
         if cached is not None:
             return cached
 
-        path = (
-            f"/api/NextApi/apiClient/GetQuoteApi"
-            f"?functionName=getExpiryList&instrument={instrument}&symbol={encoded}"
+        # Probe v3 with a placeholder expiry to harvest the expiryDates list
+        probe_path = (
+            f"/api/option-chain-v3?type={type_q}"
+            f"&symbol={encoded}&expiry=01-Jan-2099"
         )
         data = await self.fetch_nse(
-            path,
-            cache_key,
+            probe_path,
+            f"{cache_key}-probe",
             ttl=_ttl_for(300),
             referer=f"{NSE_BASE}/option-chain",
         )
@@ -439,16 +449,13 @@ class NseService:
         if not data:
             return []
 
-        # The response may carry dates in various keys
         dates: list[str] = []
-        if isinstance(data, list):
+        if isinstance(data, dict):
+            # v3 shape: { "records": { "expiryDates": [...] } }
+            records = data.get("records") or {}
+            dates = records.get("expiryDates") or data.get("expiryDates") or []
+        elif isinstance(data, list):
             dates = data
-        elif isinstance(data, dict):
-            dates = (
-                data.get("expiryDates")
-                or data.get("data", {}).get("expiryDates")
-                or []
-            )
 
         # Normalise & sort ascending by actual date
         import datetime
