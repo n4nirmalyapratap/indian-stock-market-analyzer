@@ -256,12 +256,13 @@ async def lifespan(app: FastAPI):
     digest_sched_task  = asyncio.create_task(_email_digest_scheduler())
     digest_worker_task = asyncio.create_task(_email_digest_worker())
     fii_dii_task    = asyncio.create_task(_fii_dii_scheduler())
+    dhan_task       = asyncio.create_task(_dhan_scrip_master_preload())
     try:
         yield
     finally:
         for t in (poll_task, universe_task, warmup_task, transition_task,
                   fixer_task, rfr_task, bhav_task, alerts_task, backtest_task,
-                  digest_sched_task, digest_worker_task, fii_dii_task):
+                  digest_sched_task, digest_worker_task, fii_dii_task, dhan_task):
             t.cancel()
             try:
                 await t
@@ -565,6 +566,27 @@ async def _universe_scheduler() -> None:
         except Exception as e:
             logger.warning("Universe scheduler error: %s — retrying tomorrow", e)
             await asyncio.sleep(3600)   # back-off 1 h on unexpected error
+
+
+async def _dhan_scrip_master_preload() -> None:
+    """Download the Dhan F&O scrip master once per calendar day at startup.
+
+    Priority order in the service:
+      1. Hot in-memory cache (noop if already populated).
+      2. Today's on-disk CSV in market_cache/ (survives process restarts).
+      3. Live download from Dhan CDN (only when today's file is absent/stale).
+
+    This means the HTTP call to Dhan is made at most once per day regardless
+    of how many times the server restarts — minimising outbound calls.
+    """
+    await asyncio.sleep(8)   # let other startup tasks log first
+    try:
+        from app.services.dhan_scrip_master_service import preload as _preload
+        await _preload()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("Dhan scrip master preload failed: %s", exc)
 
 
 app = FastAPI(
