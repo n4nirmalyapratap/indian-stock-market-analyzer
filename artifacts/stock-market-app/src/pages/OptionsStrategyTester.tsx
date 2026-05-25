@@ -1916,7 +1916,7 @@ export default function OptionsStrategyTester() {
               </div>
             </div>
 
-            {/* Legs table */}
+            {/* Legs — compact flex rows, no table header needed */}
             {legs.length === 0 ? (
               <div className={`flex flex-col items-center justify-center py-6 ${isDark ? "text-slate-500" : "text-gray-300"}`}>
                 <Plus className="w-6 h-6 mb-2 opacity-40" />
@@ -1925,68 +1925,77 @@ export default function OptionsStrategyTester() {
                 </p>
               </div>
             ) : (
-              <table className="w-full text-xs">
-                <thead className={`text-[10px] uppercase tracking-wide sticky top-[38px] z-10 ${isDark ? "bg-slate-800 text-slate-500" : "bg-gray-50 text-gray-400"}`}>
-                  <tr>
-                    <th className="px-3 py-1.5 text-left">Action</th>
-                    <th className="px-3 py-1.5 text-left">Type</th>
-                    <th className="px-3 py-1.5 text-left">Strike</th>
-                    <th className="px-3 py-1.5 text-left">IV%</th>
-                    <th className="px-3 py-1.5 text-left">Lots</th>
-                    <th className="px-3 py-1.5 text-left">Sz</th>
-                    <th className="px-3 py-1.5 text-left">Prem</th>
-                    <th className="px-3 py-1.5" />
-                  </tr>
-                </thead>
-                <tbody className={`divide-y ${isDark ? "divide-slate-700/60" : "divide-gray-50"}`}>
-                  {legs.map(leg => (
-                    <tr key={leg.id} className={isDark ? "hover:bg-slate-700/40" : "hover:bg-gray-50/70"}>
-                      <td className="px-3 py-1">
-                        <select value={leg.action} onChange={e => updateLeg(leg.id, "action", e.target.value)}
-                          className={`rounded px-1.5 py-0.5 text-[10px] font-bold border-0 cursor-pointer ${leg.action === "buy" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`}>
-                          <option value="buy">BUY</option>
-                          <option value="sell">SELL</option>
-                        </select>
-                      </td>
-                      <td className="px-3 py-1">
-                        <select value={leg.option_type} onChange={e => updateLeg(leg.id, "option_type", e.target.value)}
-                          className={`border rounded px-1.5 py-0.5 text-[10px] ${isDark ? "bg-slate-700 border-slate-600 text-slate-200" : "border-gray-200"}`}>
-                          <option value="call">CE</option>
-                          <option value="put">PE</option>
-                        </select>
-                      </td>
-                      <td className="px-3 py-1">
-                        <input type="number" step={50} min={0} value={leg.strike}
-                          onChange={e => updateLeg(leg.id, "strike", Number(e.target.value))}
-                          className={`border rounded px-1.5 py-0.5 text-xs w-20 font-mono ${isDark ? "bg-slate-700 border-slate-600 text-slate-200" : "border-gray-200"}`} />
-                      </td>
-                      <td className="px-3 py-1">
-                        <input type="number" step={0.5} min={1} max={300} value={parseFloat((leg.iv * 100).toFixed(1))}
-                          onChange={e => updateLeg(leg.id, "iv", Number(e.target.value) / 100)}
-                          className={`border rounded px-1.5 py-0.5 text-xs w-14 font-mono ${isDark ? "bg-slate-700 border-slate-600 text-slate-200" : "border-gray-200"}`} />
-                      </td>
-                      <td className="px-3 py-1">
-                        <input type="number" min={1} max={50} value={leg.lots}
-                          onChange={e => updateLeg(leg.id, "lots", Number(e.target.value))}
-                          className={`border rounded px-1.5 py-0.5 text-xs w-12 ${isDark ? "bg-slate-700 border-slate-600 text-slate-200" : "border-gray-200"}`} />
-                      </td>
-                      <td className="px-3 py-1">
-                        <input type="number" min={1} value={leg.lot_size}
-                          onChange={e => updateLeg(leg.id, "lot_size", Number(e.target.value))}
-                          className={`border rounded px-1.5 py-0.5 text-xs w-14 ${isDark ? "bg-slate-700 border-slate-600 text-slate-200" : "border-gray-200"}`} />
-                      </td>
-                      <td className={`px-3 py-1 font-mono ${isDark ? "text-slate-400" : "text-gray-400"}`}>
-                        {leg.premium > 0 ? `₹${leg.premium.toFixed(1)}` : "—"}
-                      </td>
-                      <td className="px-3 py-1">
-                        <button onClick={() => removeLeg(leg.id)} className="text-red-300 hover:text-red-500 transition">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className={`divide-y ${isDark ? "divide-slate-700/50" : "divide-gray-100"}`}>
+                {legs.map((leg, idx) => (
+                  <div key={leg.id}
+                    className={`flex items-center gap-1.5 px-3 py-[5px] ${isDark ? "hover:bg-slate-700/30" : "hover:bg-gray-50/60"}`}>
+
+                    {/* Leg number */}
+                    <span className={`text-[9px] font-bold w-3.5 shrink-0 text-center tabular-nums ${isDark ? "text-slate-600" : "text-gray-300"}`}>
+                      {idx + 1}
+                    </span>
+
+                    {/* BUY / SELL toggle — click to flip */}
+                    <button
+                      onClick={() => updateLeg(leg.id, "action", leg.action === "buy" ? "sell" : "buy")}
+                      className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold w-9 transition-colors ${
+                        leg.action === "buy"
+                          ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
+                          : "bg-red-100 text-red-800 hover:bg-red-200"
+                      }`}>
+                      {leg.action === "buy" ? "BUY" : "SELL"}
+                    </button>
+
+                    {/* CE / PE toggle — click to flip */}
+                    <button
+                      onClick={() => updateLeg(leg.id, "option_type", leg.option_type === "call" ? "put" : "call")}
+                      className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold w-7 transition-colors ${
+                        leg.option_type === "call"
+                          ? isDark ? "bg-sky-900/50 text-sky-300 hover:bg-sky-900/80" : "bg-sky-100 text-sky-700 hover:bg-sky-200"
+                          : isDark ? "bg-amber-900/50 text-amber-300 hover:bg-amber-900/80" : "bg-amber-100 text-amber-700 hover:bg-amber-200"
+                      }`}>
+                      {leg.option_type === "call" ? "CE" : "PE"}
+                    </button>
+
+                    {/* Strike */}
+                    <input type="number" step={50} min={0} value={leg.strike}
+                      onChange={e => updateLeg(leg.id, "strike", Number(e.target.value))}
+                      className={`border rounded px-1.5 py-0.5 text-[11px] font-mono w-[78px] shrink-0 ${isDark ? "bg-slate-700 border-slate-600 text-slate-200" : "border-gray-200 bg-white text-gray-800"}`} />
+
+                    {/* IV% */}
+                    <div className="flex items-center shrink-0">
+                      <span className={`text-[9px] mr-0.5 ${isDark ? "text-slate-500" : "text-gray-400"}`}>IV</span>
+                      <input type="number" step={0.5} min={1} max={300}
+                        value={parseFloat((leg.iv * 100).toFixed(1))}
+                        onChange={e => updateLeg(leg.id, "iv", Number(e.target.value) / 100)}
+                        className={`border rounded px-1 py-0.5 text-[11px] font-mono w-12 ${isDark ? "bg-slate-700 border-slate-600 text-slate-200" : "border-gray-200 bg-white text-gray-800"}`} />
+                    </div>
+
+                    {/* Lots */}
+                    <div className="flex items-center shrink-0">
+                      <span className={`text-[9px] mr-0.5 ${isDark ? "text-slate-500" : "text-gray-400"}`}>×</span>
+                      <input type="number" min={1} max={50} value={leg.lots}
+                        onChange={e => updateLeg(leg.id, "lots", Number(e.target.value))}
+                        className={`border rounded px-1 py-0.5 text-[11px] w-10 ${isDark ? "bg-slate-700 border-slate-600 text-slate-200" : "border-gray-200 bg-white text-gray-800"}`} />
+                    </div>
+
+                    {/* Premium — only shown after analyse */}
+                    <span className={`text-[10px] font-mono ml-auto shrink-0 ${
+                      leg.premium > 0
+                        ? isDark ? "text-indigo-400" : "text-indigo-600"
+                        : isDark ? "text-slate-600" : "text-gray-300"
+                    }`}>
+                      {leg.premium > 0 ? `₹${leg.premium.toFixed(1)}` : "—"}
+                    </span>
+
+                    {/* Delete */}
+                    <button onClick={() => removeLeg(leg.id)}
+                      className={`shrink-0 transition ${isDark ? "text-slate-600 hover:text-red-400" : "text-gray-300 hover:text-red-400"}`}>
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
             )}
 
             {/* Run Analysis footer — sticky at bottom of legs scroll */}
