@@ -1641,7 +1641,7 @@ export default function OptionsStrategyTester() {
 
                 {/* Floating sector-grouped dropdown */}
                 {stockListOpen && (
-                  <div className={`absolute top-full left-0 right-0 z-50 max-h-64 overflow-y-auto shadow-2xl border-x border-b rounded-b-xl
+                  <div className={`absolute top-full left-0 right-0 z-50 max-h-96 overflow-y-auto shadow-2xl border-x border-b rounded-b-xl
                     ${isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200"}`}>
                     {(() => {
                       const q = stockSearch.trim().toUpperCase();
