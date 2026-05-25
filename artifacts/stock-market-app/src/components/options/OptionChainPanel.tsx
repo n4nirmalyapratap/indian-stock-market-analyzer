@@ -392,19 +392,28 @@ export default function OptionChainPanel({
       {/* ── Scrollable chain content ─────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto">
 
-        {/* Synthetic notice */}
+        {/* Synthetic notice — teal for Dhan+BS (real strikes, theoretical prices),
+             amber for fully offline Black-Scholes (no external data at all) */}
         {isSynthetic && (
-          <div className={`flex items-start gap-2 text-[10px] px-3 py-2 border-b
-            ${isDark ? "bg-amber-950/20 border-amber-800/30 text-amber-400" : "bg-amber-50 border-amber-100 text-amber-700"}`}>
-            <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
-            <span>
-              <strong>Theoretical chain</strong> —{" "}
-              {source.includes("Dhan")
-                ? "Actual market strikes & expiries from Dhan. Prices via Black-Scholes."
-                : "Live data unavailable. Prices via Black-Scholes (spot + HV30)."}
-              {" "}B/S buttons work normally.
-            </span>
-          </div>
+          source.includes("Dhan") ? (
+            <div className={`flex items-start gap-2 text-[10px] px-3 py-2 border-b
+              ${isDark ? "bg-teal-950/20 border-teal-800/30 text-teal-400" : "bg-teal-50 border-teal-100 text-teal-700"}`}>
+              <Activity className="w-3 h-3 shrink-0 mt-0.5" />
+              <span>
+                <strong>Theoretical prices</strong> — Real market strikes &amp; expiries from Dhan.
+                {" "}Prices via Black-Scholes (live {symbol} options unavailable from this host). B/S buttons work normally.
+              </span>
+            </div>
+          ) : (
+            <div className={`flex items-start gap-2 text-[10px] px-3 py-2 border-b
+              ${isDark ? "bg-amber-950/20 border-amber-800/30 text-amber-400" : "bg-amber-50 border-amber-100 text-amber-700"}`}>
+              <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+              <span>
+                <strong>Theoretical chain</strong> — Live data unavailable.
+                {" "}Prices via Black-Scholes (spot + HV30). B/S buttons work normally.
+              </span>
+            </div>
+          )
         )}
 
         {/* Error */}

@@ -32,19 +32,25 @@ import csv
 import io
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, date
+from pathlib import Path
 from typing import Optional
 
 import httpx
 
 logger = logging.getLogger("dhan_scrip_master")
 
-_URL       = "https://images.dhan.co/api-data/api-scrip-master.csv"
-_CACHE_TTL = 24 * 3600   # refresh once per day
+_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
+
+# Disk cache — stored in market_cache/ so it survives process restarts.
+# One file per calendar day; if the file's date is today we never hit Dhan again
+# regardless of how many times the server is restarted.
+_HERE            = Path(__file__).resolve().parent.parent.parent  # …/python-backend
+_DISK_CACHE_PATH = _HERE / "market_cache" / "dhan_scrip_master.csv"
 
 _cache_rows: list[dict] = []
 _cache_ts:   float      = 0.0
-_fetch_lock = asyncio.Lock()
+_fetch_lock  = asyncio.Lock()
 
 _MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
 
@@ -95,30 +101,111 @@ def _expiry_to_ymd(nse_fmt: str) -> Optional[str]:
         return None
 
 
-# ── CSV download & cache ──────────────────────────────────────────────────────
+# ── Disk cache helpers ────────────────────────────────────────────────────────
+
+def _disk_is_fresh() -> bool:
+    """Return True if the on-disk CSV was written today (IST calendar day).
+
+    The scrip master changes at most once per trading day (new contracts are
+    added for upcoming expiries). If we already have today's file, there is
+    nothing new to download — even across process restarts.
+    """
+    try:
+        if not _DISK_CACHE_PATH.exists():
+            return False
+        from datetime import timezone, timedelta
+        ist = timezone(timedelta(hours=5, minutes=30))
+        mtime_ist = datetime.fromtimestamp(_DISK_CACHE_PATH.stat().st_mtime, tz=ist).date()
+        today_ist = datetime.now(tz=ist).date()
+        return mtime_ist >= today_ist
+    except Exception:
+        return False
+
+
+def _load_from_disk() -> list[dict]:
+    """Read the on-disk CSV into a list of dicts.  Returns [] on any error."""
+    try:
+        with open(_DISK_CACHE_PATH, encoding="utf-8", newline="") as fh:
+            return list(csv.DictReader(fh))
+    except Exception as exc:
+        logger.debug("Dhan disk cache read failed: %s", exc)
+        return []
+
+
+def _save_to_disk(text: str) -> None:
+    """Persist CSV text to disk (creates market_cache/ if needed)."""
+    try:
+        _DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _DISK_CACHE_PATH.write_text(text, encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Dhan disk cache write failed: %s", exc)
+
+
+# ── CSV fetch / in-memory cache ───────────────────────────────────────────────
 
 async def _get_rows() -> list[dict]:
-    """Return cached rows, refreshing if stale."""
+    """Return the scrip-master rows, using this priority:
+
+    1. In-memory cache (fastest — set after first successful load each run).
+    2. Today's on-disk CSV (fast — avoids the HTTP round-trip on restart).
+    3. Live download from Dhan CDN (at most once per calendar day).
+
+    The live download is therefore called at most once per day total —
+    on the first request after the previous day's file becomes stale.
+    """
     global _cache_rows, _cache_ts
-    if _cache_rows and (time.time() - _cache_ts) < _CACHE_TTL:
+
+    # 1 — hot in-memory cache
+    if _cache_rows:
         return _cache_rows
+
     async with _fetch_lock:
-        if _cache_rows and (time.time() - _cache_ts) < _CACHE_TTL:
+        if _cache_rows:          # re-check inside lock
             return _cache_rows
+
+        # 2 — today's disk file (survives restarts without another HTTP call)
+        if _disk_is_fresh():
+            rows = _load_from_disk()
+            if rows:
+                _cache_rows = rows
+                _cache_ts   = time.time()
+                logger.info("Dhan scrip master loaded from disk: %d rows", len(rows))
+                return rows
+
+        # 3 — download from Dhan (once per calendar day)
         try:
-            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
                 resp = await client.get(_URL)
             if resp.status_code != 200:
-                logger.warning("Dhan scrip master HTTP %s", resp.status_code)
+                logger.warning("Dhan scrip master HTTP %s — using stale cache", resp.status_code)
+                # fall back to whatever is on disk (even if stale)
+                stale = _load_from_disk()
+                if stale:
+                    _cache_rows = stale
                 return _cache_rows
+            _save_to_disk(resp.text)
             rows = list(csv.DictReader(io.StringIO(resp.text)))
             _cache_rows = rows
             _cache_ts   = time.time()
-            logger.info("Dhan scrip master loaded: %d rows", len(rows))
+            logger.info("Dhan scrip master downloaded and cached: %d rows", len(rows))
             return rows
         except Exception as exc:
-            logger.warning("Dhan scrip master fetch error: %s", exc)
+            logger.warning("Dhan scrip master download failed: %s — using stale cache", exc)
+            stale = _load_from_disk()
+            if stale:
+                _cache_rows = stale
             return _cache_rows
+
+
+async def preload() -> None:
+    """Eagerly populate the scrip-master cache at startup.
+
+    Called from the FastAPI lifespan so the first user request never has to
+    wait for the CSV download.  Safe to call multiple times — the lock
+    prevents duplicate downloads.
+    """
+    rows = await _get_rows()
+    logger.info("Dhan scrip master pre-warm complete: %d rows", len(rows))
 
 
 def _filter_rows(rows: list[dict], symbol: str) -> list[dict]:
