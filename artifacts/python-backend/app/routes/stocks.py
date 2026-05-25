@@ -682,6 +682,178 @@ async def get_technical_summary(symbol: str, interval: str = "1d"):
     }
 
 
+@router.get("/{symbol}/tri-factor")
+async def get_tri_factor_score(symbol: str):
+    """
+    Tri-Factor Composite Scoring Model.
+    Returns scores in [-1, +1] for Technical, Fundamental, and Sentiment factors.
+    """
+    import math
+    import pandas as pd
+    import yfinance as yf
+    from ..services import news_service
+
+    sym = symbol.upper()
+
+    # ── Sector P/E benchmarks (NSE-calibrated) ───────────────────────────
+    SECTOR_PE: dict[str, float] = {
+        "Technology":              26.0,
+        "Financial Services":      18.0,
+        "Consumer Cyclical":       35.0,
+        "Consumer Defensive":      48.0,
+        "Healthcare":              28.0,
+        "Energy":                  12.0,
+        "Basic Materials":         14.0,
+        "Industrials":             28.0,
+        "Communication Services":  20.0,
+        "Real Estate":             32.0,
+        "Utilities":               18.0,
+    }
+    DEFAULT_SECTOR_PE = 22.0
+
+    def _sf(v):
+        try:
+            f = float(v)
+            return None if (math.isnan(f) or math.isinf(f)) else f
+        except Exception:
+            return None
+
+    # ── 1. FUNDAMENTAL SCORE ─────────────────────────────────────────────
+    def _fetch_info():
+        for tick_sym in yahoo_candidates(sym):
+            try:
+                t = yf.Ticker(tick_sym)
+                info = t.info or {}
+                if info.get("regularMarketPrice") or info.get("currentPrice") or info.get("marketCap"):
+                    return info
+            except Exception:
+                continue
+        return None
+
+    info = await asyncio.to_thread(_fetch_info)
+
+    pe: float | None = None
+    sector_pe: float = DEFAULT_SECTOR_PE
+    sector_name: str | None = None
+    eps_growth_pct: float | None = None
+    debt_to_equity: float | None = None
+
+    if info:
+        pe = _sf(info.get("trailingPE") or info.get("forwardPE"))
+        sector_name = info.get("sector") or info.get("industry")
+        sector_pe = SECTOR_PE.get(sector_name or "", DEFAULT_SECTOR_PE)
+
+        eg = _sf(info.get("earningsGrowth") or info.get("revenueGrowth"))
+        if eg is not None:
+            eps_growth_pct = round(eg * 100, 1)
+
+        de_raw = _sf(info.get("debtToEquity"))
+        if de_raw is not None:
+            debt_to_equity = round(de_raw / 100.0, 3)   # yfinance gives percent
+
+    valuation_score = (0.5 if (pe is not None and pe < sector_pe)
+                       else -0.5 if (pe is not None and pe > sector_pe)
+                       else 0.0)
+
+    if eps_growth_pct is not None or debt_to_equity is not None:
+        eg_v = eps_growth_pct if eps_growth_pct is not None else 0.0
+        de_v = debt_to_equity if debt_to_equity is not None else 0.5
+        health_score = (0.5  if (eg_v > 10  and de_v < 1.0)
+                        else -0.5 if (eg_v < 0   or  de_v > 2.0)
+                        else 0.0)
+    else:
+        health_score = 0.0
+
+    s_f = round(max(-1.0, min(1.0, valuation_score + health_score)), 2)
+
+    # ── 2. TECHNICAL SCORE ───────────────────────────────────────────────
+    def _compute_tech(df: pd.DataFrame) -> dict:
+        from ta.momentum import RSIIndicator
+        from ta.trend import EMAIndicator
+
+        close = df["Close"]
+        price = _sf(close.iloc[-1]) if len(close) > 0 else None
+
+        ema50_s  = EMAIndicator(close, window=50).ema_indicator().dropna()
+        ema200_s = EMAIndicator(close, window=200).ema_indicator().dropna()
+        rsi_s    = RSIIndicator(close, window=14).rsi().dropna()
+
+        ema50  = _sf(ema50_s.iloc[-1])  if not ema50_s.empty  else None
+        ema200 = _sf(ema200_s.iloc[-1]) if not ema200_s.empty else None
+        rsi14  = _sf(rsi_s.iloc[-1])    if not rsi_s.empty    else None
+
+        trend = (0.5  if (price and ema50 and ema200 and price > ema50 > ema200)
+                 else -0.5 if (price and ema50 and ema200 and price < ema50 < ema200)
+                 else 0.0)
+
+        momentum = (0.5  if (rsi14 is not None and rsi14 < 30)
+                    else -0.5 if (rsi14 is not None and rsi14 > 70)
+                    else 0.0)
+
+        return {
+            "price":          round(price,  2) if price  else None,
+            "ema50":          round(ema50,  2) if ema50  else None,
+            "ema200":         round(ema200, 2) if ema200 else None,
+            "rsi14":          round(rsi14,  2) if rsi14  else None,
+            "trend_score":    trend,
+            "momentum_score": momentum,
+            "score":          round(max(-1.0, min(1.0, trend + momentum)), 2),
+        }
+
+    df = await svc.price.get_history_dataframe(sym, days=400)
+    if df is not None and not df.empty and len(df) >= 50:
+        tech = await asyncio.to_thread(_compute_tech, df)
+    else:
+        tech = {"price": None, "ema50": None, "ema200": None, "rsi14": None,
+                "trend_score": 0.0, "momentum_score": 0.0, "score": 0.0}
+    s_t = tech["score"]
+
+    # ── 3. SENTIMENT SCORE ───────────────────────────────────────────────
+    news_data = await news_service.get_ticker_news(sym, limit=30)
+    articles  = news_data.get("articles", [])
+
+    pos   = sum(1 for a in articles if a.get("sentiment") == "bullish")
+    neg   = sum(1 for a in articles if a.get("sentiment") == "bearish")
+    neu   = sum(1 for a in articles if a.get("sentiment") == "neutral")
+    total = pos + neg + neu
+
+    s_s = round(max(-1.0, min(1.0, (pos - neg) / total)), 3) if total > 0 else 0.0
+
+    headlines = [
+        {"title": a.get("title", ""), "sentiment": a.get("sentiment", "neutral")}
+        for a in articles[:8]
+        if a.get("title")
+    ]
+
+    return {
+        "symbol": sym,
+        "scores": {
+            "technical":   s_t,
+            "fundamental": s_f,
+            "sentiment":   s_s,
+        },
+        "factors": {
+            "technical": tech,
+            "fundamental": {
+                "pe":              round(pe,  1) if pe  else None,
+                "sector_pe":       sector_pe,
+                "sector":          sector_name,
+                "eps_growth_pct":  eps_growth_pct,
+                "debt_to_equity":  debt_to_equity,
+                "valuation_score": valuation_score,
+                "health_score":    health_score,
+            },
+            "sentiment": {
+                "bullish":   pos,
+                "bearish":   neg,
+                "neutral":   neu,
+                "total":     total,
+                "headlines": headlines,
+            },
+        },
+    }
+
+
 @router.get("/{symbol}")
 async def get_stock(symbol: str):
     data = await svc.stocks.get_stock_details(symbol)
