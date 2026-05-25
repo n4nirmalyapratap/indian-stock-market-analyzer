@@ -46,6 +46,61 @@ function bsGreeks(S: number, K: number, T: number, r: number, sigma: number, typ
   return { delta, gamma, theta, vega };
 }
 
+function bsPrice(S: number, K: number, T: number, r: number, sigma: number, type: "call" | "put"): number {
+  if (T <= 0) return Math.max(0, type === "call" ? S - K : K - S);
+  const sqrtT = Math.sqrt(T);
+  const d1 = (Math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrtT);
+  const d2 = d1 - sigma * sqrtT;
+  if (type === "call") return S * ncdf(d1) - K * Math.exp(-r * T) * ncdf(d2);
+  return K * Math.exp(-r * T) * ncdf(-d2) - S * ncdf(-d1);
+}
+
+function strikeStep(spot: number): number {
+  if (spot <    500) return 5;
+  if (spot <   2000) return 10;
+  if (spot <   5000) return 25;
+  if (spot <  15000) return 50;
+  if (spot <  50000) return 100;
+  return 500;
+}
+
+function nextThursdays(count = 4): string[] {
+  const result: string[] = [];
+  const d = new Date();
+  const daysUntilThu = ((4 - d.getDay()) + 7) % 7 || 7;
+  d.setDate(d.getDate() + daysUntilThu);
+  const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  for (let i = 0; i < count; i++) {
+    result.push(`${String(d.getDate()).padStart(2,"0")}-${MON[d.getMonth()]}-${d.getFullYear()}`);
+    d.setDate(d.getDate() + 7);
+  }
+  return result;
+}
+
+function generateSyntheticChain(
+  spot: number, hv: number, T_years: number, halfDepth = 22
+): { calls: ChainRow[]; puts: ChainRow[] } {
+  const step  = strikeStep(spot);
+  const atm   = Math.round(spot / step) * step;
+  const r     = 0.07;
+  const rnd   = (v: number) => Math.round(v * 20) / 20;
+  const calls: ChainRow[] = [];
+  const puts:  ChainRow[] = [];
+  for (let i = -halfDepth; i <= halfDepth; i++) {
+    const K    = atm + i * step;
+    if (K <= 0) continue;
+    const mono = Math.abs(K - atm) / spot;
+    const iv   = Math.max(0.05, hv + (K < atm ? 1.5 : 0.8) * mono * 0.9);
+    const cp   = bsPrice(spot, K, T_years, r, iv, "call");
+    const pp   = bsPrice(spot, K, T_years, r, iv, "put");
+    const sp   = (v: number) => Math.max(0.05, v * 0.004);
+    const oi   = Math.max(0, Math.round(900_000 * Math.exp(-5 * mono)));
+    calls.push({ strike: K, lastPrice: rnd(cp), bid: rnd(cp - sp(cp)), ask: rnd(cp + sp(cp)), iv, oi, volume: Math.round(oi * 0.12), inTheMoney: K < spot });
+    puts.push({  strike: K, lastPrice: rnd(pp), bid: rnd(pp - sp(pp)), ask: rnd(pp + sp(pp)), iv, oi, volume: Math.round(oi * 0.12), inTheMoney: K > spot });
+  }
+  return { calls, puts };
+}
+
 // ── Add-leg button ────────────────────────────────────────────────────────────
 type LegAction = "buy" | "sell";
 type OptionType = "call" | "put";
@@ -119,11 +174,13 @@ export default function OptionChainPanel({
   const [error, setError]           = useState("");
   const [source, setSource]         = useState("");
   const [depth, setDepth]           = useState(12);
+  const [isSynthetic, setIsSynthetic] = useState(false);
 
   const fetchChain = useCallback(async (sym: string, exp: string) => {
     if (!sym) return;
     setLoading(true);
     setError("");
+    setIsSynthetic(false);
     try {
       const url = exp
         ? `/options/chain/${sym}?expiry=${encodeURIComponent(exp)}`
@@ -140,25 +197,58 @@ export default function OptionChainPanel({
       const entry = chainData[firstKey] || { calls: [], puts: [] };
       setCalls(entry.calls || []);
       setPuts(entry.puts || []);
-    } catch (e: any) {
-      setError(e?.message || "Failed to load option chain");
+    } catch (_e: any) {
+      // Live chain unavailable (NSE blocked, Yahoo fallback failed).
+      // Fall back to a theoretical Black-Scholes chain if spot data is present.
+      if (spotInfo && spotInfo.spot > 0) {
+        setIsSynthetic(true);
+        setError("");
+        const T_y = Math.max(T, 1) / 365;
+        const synExp = nextThursdays(4);
+        setExpiries(synExp);
+        if (!exp) setSelExpiry(synExp[0]);
+        const { calls: sc, puts: sp } = generateSyntheticChain(spotInfo.spot, spotInfo.hv30, T_y);
+        setCalls(sc);
+        setPuts(sp);
+        setSource("Synthetic · BS");
+      } else {
+        setError("Live option chain unavailable — select a symbol first to generate a theoretical chain");
+      }
     } finally {
       setLoading(false);
     }
-  }, []); // eslint-disable-line
+  }, [spotInfo, T]); // eslint-disable-line
 
   useEffect(() => {
     if (symbol) {
       setCalls([]); setPuts([]);
       setSelExpiry("");
+      setIsSynthetic(false);
       fetchChain(symbol, "");
     }
   }, [symbol]); // eslint-disable-line
 
-  // Re-fetch on expiry change
+  // Re-fetch on expiry change (for live chain); for synthetic, just regenerate locally
   useEffect(() => {
-    if (selExpiry && symbol) fetchChain(symbol, selExpiry);
+    if (selExpiry && symbol) {
+      if (isSynthetic && spotInfo) {
+        const T_y = Math.max(T, 1) / 365;
+        const { calls: sc, puts: sp } = generateSyntheticChain(spotInfo.spot, spotInfo.hv30, T_y);
+        setCalls(sc); setPuts(sp);
+      } else {
+        fetchChain(symbol, selExpiry);
+      }
+    }
   }, [selExpiry]); // eslint-disable-line
+
+  // When spotInfo arrives late (symbol switched before spot loaded), regenerate
+  useEffect(() => {
+    if (spotInfo && isSynthetic) {
+      const T_y = Math.max(T, 1) / 365;
+      const { calls: sc, puts: sp } = generateSyntheticChain(spotInfo.spot, spotInfo.hv30, T_y);
+      setCalls(sc); setPuts(sp);
+    }
+  }, [spotInfo?.spot]); // eslint-disable-line
 
   // Strike grid
   const atm = spotInfo?.atm ?? 0;
@@ -216,8 +306,12 @@ export default function OptionChainPanel({
 
         <div className="ml-auto flex items-center gap-2">
           {source && (
-            <span className={`text-[10px] ${muted} px-2 py-0.5 rounded-full border ${isDark ? "border-slate-700" : "border-gray-200"}`}>
-              via {source}
+            <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${
+              isSynthetic
+                ? isDark ? "border-amber-700/50 text-amber-400 bg-amber-900/20" : "border-amber-300 text-amber-700 bg-amber-50"
+                : `${muted} ${isDark ? "border-slate-700" : "border-gray-200"}`
+            }`}>
+              {isSynthetic ? "⚡ " : "via "}{source}
             </span>
           )}
           <button
@@ -235,6 +329,18 @@ export default function OptionChainPanel({
         <div className={`flex items-center gap-2 text-sm rounded-xl px-4 py-3 border
           ${isDark ? "bg-rose-950/30 border-rose-800 text-rose-300" : "bg-red-50 border-red-200 text-red-700"}`}>
           <AlertTriangle className="w-4 h-4 shrink-0" /> {error}
+        </div>
+      )}
+
+      {isSynthetic && (
+        <div className={`flex items-start gap-2 text-xs rounded-xl px-4 py-2.5 border
+          ${isDark ? "bg-amber-950/30 border-amber-800/50 text-amber-400" : "bg-amber-50 border-amber-200 text-amber-700"}`}>
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span>
+            <strong>Theoretical chain</strong> — Live NSE data is unavailable from this server.
+            Prices, IV, and OI are computed via Black-Scholes using the current spot &amp; HV30.
+            B/S buttons work normally to add legs to your strategy basket.
+          </span>
         </div>
       )}
 
