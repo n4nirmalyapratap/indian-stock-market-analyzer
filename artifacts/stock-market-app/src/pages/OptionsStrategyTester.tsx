@@ -1781,37 +1781,16 @@ export default function OptionsStrategyTester() {
       })()}
 
       {/* ── Main Workspace ─────────────────────────────────────────────────── */}
-      {/* Flex row: [pull-tab strip | main area] — tab never overlaps content */}
-      <div className="flex gap-0" style={{ height: 610 }}>
+      {/* Single relative container — chain is a z-20 overlay, takes zero layout space */}
+      <div className="relative rounded-xl overflow-hidden" style={{ height: 610 }}>
 
-        {/* ── Pull-tab strip (always 28 px, collapses to 0 when chain open) ── */}
-        <div
-          className={`relative flex-none flex flex-col items-center justify-center transition-all duration-300 ${chainCollapsed ? "w-7" : "w-0 overflow-hidden"}`}
-        >
-          {chainCollapsed && (
-            <button
-              onClick={() => setChainCollapsed(false)}
-              title="Open Option Chain"
-              className={`flex flex-col items-center gap-1.5 py-5 px-1 h-36 rounded-r-xl border-y border-r shadow
-                ${isDark ? "bg-slate-700 border-slate-600 text-indigo-400 hover:bg-indigo-900/70 hover:border-indigo-700" : "bg-white border-gray-200 text-indigo-500 hover:bg-indigo-50 hover:border-indigo-300"}`}
-            >
-              <ChevronRight className="w-3 h-3 shrink-0" />
-              <span className="text-[7px] font-black tracking-[0.2em] uppercase shrink-0"
-                style={{ writingMode: "vertical-rl" }}>Chain</span>
-            </button>
-          )}
-        </div>
-
-        {/* ── Main area: chain drawer + strategy builder stacked in same space ─ */}
-        <div className="relative flex-1 overflow-hidden rounded-xl">
-
-          {/* Chain overlay drawer (slides in from left) */}
+          {/* Chain overlay drawer (slides in from left, no layout impact) */}
           <div
             className={`absolute left-0 top-0 bottom-0 z-20 flex flex-col border-r shadow-2xl overflow-hidden
               transition-transform duration-300 ease-in-out
-              ${isDark ? "border-slate-600 bg-slate-800" : "border-gray-300 bg-white"}
+              ${isDark ? "border-slate-600 bg-slate-900" : "border-gray-300 bg-white"}
               ${chainCollapsed ? "-translate-x-full" : "translate-x-0"}`}
-            style={{ width: 400 }}
+            style={{ width: 420 }}
           >
             <div className={`shrink-0 px-3 py-2 border-b flex items-center justify-between ${isDark ? "border-slate-700 bg-slate-900/50" : "border-gray-100 bg-gray-50"}`}>
               <div className="flex items-center gap-1.5">
@@ -1925,6 +1904,17 @@ export default function OptionsStrategyTester() {
                 )}
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => setChainCollapsed(p => !p)}
+                  title={chainCollapsed ? "Open Option Chain" : "Close Option Chain"}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded-md border text-[10px] font-semibold transition shrink-0
+                    ${chainCollapsed
+                      ? isDark ? "border-indigo-700 bg-indigo-900/40 text-indigo-400 hover:bg-indigo-900/70" : "border-indigo-200 bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+                      : isDark ? "border-slate-600 bg-slate-700 text-slate-300 hover:bg-slate-600" : "border-gray-300 bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                >
+                  <Layers className="w-2.5 h-2.5" />
+                  {chainCollapsed ? "Chain" : "Hide"}
+                </button>
                 <label className={`text-[10px] font-medium uppercase tracking-wide ${isDark ? "text-slate-500" : "text-gray-400"}`}>Expiry</label>
                 <select value={expiryDate} onChange={e => setExpiryDate(e.target.value)}
                   className={`border rounded px-2 py-0.5 text-[11px] font-medium ${isDark ? "bg-slate-700 border-slate-600 text-slate-200" : "border-gray-200 bg-white text-gray-700"}`}>
@@ -2092,18 +2082,14 @@ export default function OptionsStrategyTester() {
 
             {/* ── Payoff tab ── */}
             {rightTab === "payoff" && (
-              <div className="flex-1 overflow-y-auto p-3">
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                 {loadingAnalysis && !analysis ? (
-                  <div className="flex flex-col gap-2 animate-pulse">
-                    <div className="grid grid-cols-3 gap-2">
-                      {[1,2,3].map(i => <div key={i} className="h-14 rounded-lg bg-gray-100" />)}
-                    </div>
-                    <div className="h-52 rounded-xl bg-gray-100 flex items-center justify-center mt-2">
-                      <RefreshCw className="w-6 h-6 text-indigo-300 animate-spin" />
-                    </div>
+                  <div className="flex-1 flex flex-col items-center justify-center gap-3 animate-pulse">
+                    <RefreshCw className="w-6 h-6 text-indigo-400 animate-spin" />
+                    <p className={`text-xs ${isDark ? "text-slate-500" : "text-gray-400"}`}>Analysing…</p>
                   </div>
                 ) : !analysis ? (
-                  <div className={`flex flex-col items-center justify-center h-full min-h-[240px] ${isDark ? "text-slate-500" : "text-gray-300"}`}>
+                  <div className={`flex-1 flex flex-col items-center justify-center ${isDark ? "text-slate-500" : "text-gray-300"}`}>
                     <div className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-3 ${isDark ? "bg-slate-700" : "bg-gradient-to-br from-indigo-50 to-violet-100"}`}>
                       <BarChart2 className="w-7 h-7 text-indigo-300" />
                     </div>
@@ -2115,27 +2101,30 @@ export default function OptionsStrategyTester() {
                     </p>
                   </div>
                 ) : (
-                  <div className="flex flex-col gap-3">
-                    <div>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <div className="flex items-center gap-2">
-                          <p className={`text-xs font-semibold ${isDark ? "text-slate-300" : "text-gray-600"}`}>
-                            P&L at Expiry{strategyName ? ` — ${strategyName}` : ""}
-                          </p>
-                          {loadingAnalysis && <RefreshCw className="w-3 h-3 text-indigo-400 animate-spin" />}
-                        </div>
-                        <button onClick={() => setAnalysis(null)}
-                          className={`text-[10px] flex items-center gap-0.5 transition ${isDark ? "text-slate-500 hover:text-red-400" : "text-gray-300 hover:text-red-400"}`}>
-                          <X className="w-2.5 h-2.5" />Clear
-                        </button>
+                  <>
+                    {/* Chart label row */}
+                    <div className={`shrink-0 flex items-center justify-between px-3 pt-2 pb-1`}>
+                      <div className="flex items-center gap-2">
+                        <p className={`text-[11px] font-semibold ${isDark ? "text-slate-300" : "text-gray-600"}`}>
+                          P&L at Expiry{strategyName ? ` — ${strategyName}` : ""}
+                        </p>
+                        {loadingAnalysis && <RefreshCw className="w-3 h-3 text-indigo-400 animate-spin" />}
                       </div>
-                      <ResponsiveContainer width="100%" height={210}>
-                        <LineChart data={analysis.payoff.spots.map((s: number, i: number) => ({ spot: s, pnl: analysis.payoff.payoffs[i] }))}>
+                      <button onClick={() => setAnalysis(null)}
+                        className={`text-[10px] flex items-center gap-0.5 transition ${isDark ? "text-slate-500 hover:text-red-400" : "text-gray-300 hover:text-red-400"}`}>
+                        <X className="w-2.5 h-2.5" />Clear
+                      </button>
+                    </div>
+                    {/* Chart — fills remaining height */}
+                    <div className="flex-1 min-h-0 px-1">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={analysis.payoff.spots.map((s: number, i: number) => ({ spot: s, pnl: analysis.payoff.payoffs[i] }))}
+                          margin={{ top: 4, right: 16, left: 4, bottom: 4 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke={chartGrid} />
                           <XAxis dataKey="spot" tickFormatter={(v: number) => `₹${(v/1000).toFixed(0)}k`} tick={chartTick} />
                           <YAxis tickFormatter={(v: number) => v >= 1e5 ? `${(v/1e5).toFixed(1)}L` : v.toLocaleString("en-IN")} tick={chartTick} width={50} />
                           <Tooltip formatter={(v: number) => [fmtINR(v), "P&L"]} labelFormatter={(l: number) => `Spot: ₹${Number(l).toLocaleString("en-IN")}`} contentStyle={tooltipStyle} />
-                          <ReferenceLine y={0} stroke="#d1d5db" strokeWidth={1} />
+                          <ReferenceLine y={0} stroke={isDark ? "#475569" : "#d1d5db"} strokeWidth={1.5} />
                           {spotInfo && <ReferenceLine x={spotInfo.spot} stroke="#f97316" strokeDasharray="4 2" label={{ value: "Spot", fill: "#f97316", fontSize: 9 }} />}
                           {analysis.payoff.breakevens?.map((be: number, i: number) => (
                             <ReferenceLine key={i} x={be} stroke="#10b981" strokeDasharray="3 3" label={{ value: "BE", fill: "#059669", fontSize: 9 }} />
@@ -2143,10 +2132,12 @@ export default function OptionsStrategyTester() {
                           <Line type="monotone" dataKey="pnl" stroke="#6366f1" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
                         </LineChart>
                       </ResponsiveContainer>
+                    </div>
+                    {/* Heatmap — compact fixed strip */}
+                    <div className="shrink-0 px-3 pb-2">
                       <PnlHeatmap spots={analysis.payoff.spots} payoffs={analysis.payoff.payoffs} currentSpot={spotInfo?.spot} />
                     </div>
-                    <StrategyInsightCard legs={legs} payoff={analysis.payoff} greeks={analysis.greeks} spotInfo={spotInfo} />
-                  </div>
+                  </>
                 )}
               </div>
             )}
@@ -2159,9 +2150,8 @@ export default function OptionsStrategyTester() {
             )}
           </div>
 
-        </div>
-        </div>
-      </div>
+        </div>{/* end strategy builder */}
+      </div>{/* end workspace */}
 
       {/* ── Advanced Tools ────────────────────────────────────────────────────── */}
       <div className={`rounded-xl border overflow-hidden ${isDark ? "border-slate-700 bg-slate-800" : "border-gray-200 bg-white shadow-sm"}`}>
