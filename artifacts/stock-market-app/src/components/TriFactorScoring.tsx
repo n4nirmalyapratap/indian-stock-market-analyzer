@@ -129,17 +129,21 @@ function ScoreBar({ score, showLabel = true }: { score: number; showLabel?: bool
   );
 }
 
-function SubScore({ label, score }: { label: string; score: number }) {
+function SubScore({ label, score }: { label: string; score: number | null | undefined }) {
+  const s = score ?? 0;
   const color =
-    score > 0 ? "text-emerald-600 dark:text-emerald-400"
-    : score < 0 ? "text-red-500"
+    s > 0 ? "text-emerald-600 dark:text-emerald-400"
+    : s < 0 ? "text-red-500"
     : "text-gray-400";
   return (
     <div className="flex items-center justify-between text-[11px]">
       <span className="text-gray-500 dark:text-slate-400">{label}</span>
-      <span className={`font-mono font-semibold ${color}`}>
-        {score > 0 ? "+" : ""}{score.toFixed(1)}
-      </span>
+      {score == null
+        ? <span className="font-mono text-gray-300 dark:text-slate-600">—</span>
+        : <span className={`font-mono font-semibold ${color}`}>
+            {s > 0 ? "+" : ""}{s.toFixed(1)}
+          </span>
+      }
     </div>
   );
 }
@@ -337,14 +341,22 @@ export default function TriFactorScoring({ symbol }: Props) {
         defaultOpen
       >
         <div className="space-y-2">
-          <SubScore label="Trend sub-score" score={tech.trend_score} />
-          <SubScore label="Momentum sub-score" score={tech.momentum_score} />
+          {/* Data-completeness warning */}
+          {tech.data_note && (
+            <div className="flex items-start gap-1.5 text-[10px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2.5 py-1.5">
+              <span className="mt-px shrink-0">⚠</span>
+              <span>{tech.data_note}</span>
+            </div>
+          )}
+          <SubScore label="Trend sub-score" score={tech.trend_score ?? null} />
+          <SubScore label="Momentum sub-score" score={tech.momentum_score ?? null} />
           <div className="border-t border-gray-100 dark:border-slate-700 pt-2 mt-1 grid grid-cols-2 gap-x-6 gap-y-1.5">
             {[
               ["Current Price", tech.price != null ? `₹${tech.price.toLocaleString("en-IN")}` : "—"],
-              ["EMA 50", tech.ema50 != null ? `₹${tech.ema50.toLocaleString("en-IN")}` : "—"],
-              ["EMA 200", tech.ema200 != null ? `₹${tech.ema200.toLocaleString("en-IN")}` : "—"],
-              ["RSI (14)", tech.rsi14 != null ? tech.rsi14.toFixed(1) : "—"],
+              ["EMA 50",        tech.ema50  != null ? `₹${tech.ema50.toLocaleString("en-IN")}` : "—"],
+              ["EMA 200",       tech.ema200 != null ? `₹${tech.ema200.toLocaleString("en-IN")}` : "—"],
+              ["RSI (14)",      tech.rsi14  != null ? (tech.rsi14 as number).toFixed(1) : "—"],
+              ...(tech.bars != null ? [["Price bars", String(tech.bars)]] : []),
             ].map(([k, v]) => (
               <div key={k as string} className="flex justify-between text-[11px]">
                 <span className="text-gray-400 dark:text-slate-500">{k}</span>
