@@ -64,11 +64,14 @@ function strikeStep(spot: number): number {
   return 500;
 }
 
-function nextThursdays(count = 4): string[] {
+// BANKNIFTY → Wednesday (3), FINNIFTY → Tuesday (2), everything else → Thursday (4)
+function nextExpiries(symbol: string, count = 4): string[] {
+  const sym = symbol.toUpperCase();
+  const targetDay = sym === "BANKNIFTY" ? 3 : sym === "FINNIFTY" ? 2 : 4;
   const result: string[] = [];
   const d = new Date();
-  const daysUntilThu = ((4 - d.getDay()) + 7) % 7 || 7;
-  d.setDate(d.getDate() + daysUntilThu);
+  const daysUntil = ((targetDay - d.getDay()) + 7) % 7 || 7;
+  d.setDate(d.getDate() + daysUntil);
   const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   for (let i = 0; i < count; i++) {
     result.push(`${String(d.getDate()).padStart(2,"0")}-${MON[d.getMonth()]}-${d.getFullYear()}`);
@@ -204,7 +207,7 @@ export default function OptionChainPanel({
         setIsSynthetic(true);
         setError("");
         const T_y = Math.max(T, 1) / 365;
-        const synExp = nextThursdays(4);
+        const synExp = nextExpiries(sym, 4);
         setExpiries(synExp);
         if (!exp) setSelExpiry(synExp[0]);
         const { calls: sc, puts: sp } = generateSyntheticChain(spotInfo.spot, spotInfo.hv30, T_y);
@@ -212,7 +215,9 @@ export default function OptionChainPanel({
         setPuts(sp);
         setSource("Synthetic · BS");
       } else {
-        setError("Live option chain unavailable — select a symbol first to generate a theoretical chain");
+        // spotInfo not yet available — show a brief notice; the useEffect below will
+        // regenerate once spotInfo arrives
+        setError("Waiting for spot data — theoretical chain will appear shortly");
       }
     } finally {
       setLoading(false);
@@ -253,9 +258,19 @@ export default function OptionChainPanel({
       // Had no data (live chain failed before spot arrived) — generate synthetic now
       setError("");
       setIsSynthetic(true);
-      const synExp = nextThursdays(4);
+      const synExp = nextExpiries(symbol, 4);
       setExpiries(synExp);
       setSelExpiry(synExp[0]);
+      const { calls: sc, puts: sp } = generateSyntheticChain(spotInfo.spot, spotInfo.hv30, T_y);
+      setCalls(sc); setPuts(sp);
+      setSource("Synthetic · BS");
+    } else if (error) {
+      // spotInfo arrived after an error — generate synthetic and clear error
+      setError("");
+      setIsSynthetic(true);
+      const synExp = nextExpiries(symbol, 4);
+      setExpiries(synExp);
+      if (!selExpiry) setSelExpiry(synExp[0]);
       const { calls: sc, puts: sp } = generateSyntheticChain(spotInfo.spot, spotInfo.hv30, T_y);
       setCalls(sc); setPuts(sp);
       setSource("Synthetic · BS");
@@ -371,22 +386,22 @@ export default function OptionChainPanel({
               </div>
             )}
 
-            {/* Column headers */}
+            {/* 7-column headers: [BS] LTP IV | STRIKE | IV LTP [BS] */}
             <div className={`grid text-[8px] font-bold uppercase tracking-wide px-2 py-1 sticky ${atm > 0 ? "top-[26px]" : "top-0"} z-10 ${head}`}
-              style={{ gridTemplateColumns: "1fr 60px 50px 38px 34px 34px 72px 34px 34px 38px 50px 60px 1fr" }}>
-              <div className="text-right pr-1">Actions</div>
-              <div className="text-right pr-1">LTP</div>
-              <div className="text-right pr-1">OI</div>
-              <div className="text-right pr-1">IV%</div>
-              <div className="text-right pr-1">Δ</div>
-              <div className="text-right pr-1">Θ</div>
-              <div className={`text-center text-[8px] font-black ${isDark ? "text-indigo-400" : "text-indigo-500"}`}>CALL ↔ STRIKE ↔ PUT</div>
-              <div className="text-left pl-1">Δ</div>
-              <div className="text-left pl-1">Θ</div>
-              <div className="text-left pl-1">IV%</div>
-              <div className="text-left pl-1">OI</div>
+              style={{ gridTemplateColumns: "56px 52px 36px 1fr 36px 52px 56px" }}>
+              <div className={`text-center text-[8px] font-black col-span-3 ${isDark ? "text-blue-400" : "text-blue-600"}`}>── CALL ──</div>
+              <div className={`text-center font-black ${isDark ? "text-indigo-400" : "text-indigo-600"}`}>STRIKE</div>
+              <div className={`text-center text-[8px] font-black col-span-3 ${isDark ? "text-rose-400" : "text-rose-500"}`}>── PUT ──</div>
+            </div>
+            <div className={`grid text-[8px] font-bold uppercase tracking-wide px-2 pb-1 sticky ${atm > 0 ? "top-[38px]" : "top-[14px]"} z-10 ${head}`}
+              style={{ gridTemplateColumns: "56px 52px 36px 1fr 36px 52px 56px" }}>
+              <div className="text-center">B / S</div>
+              <div className="text-right">LTP</div>
+              <div className="text-right">IV%</div>
+              <div />
+              <div className="text-left">IV%</div>
               <div className="text-left pl-1">LTP</div>
-              <div className="text-left pl-1">Actions</div>
+              <div className="text-center">B / S</div>
             </div>
 
             {/* Strike rows */}
@@ -395,11 +410,6 @@ export default function OptionChainPanel({
                 const call = callMap[strike];
                 const put  = putMap[strike];
                 const isAtm = strike === allStrikes[atmIdx];
-                const S = spotInfo?.spot ?? 0;
-                const hv = spotInfo?.hv30 ?? 0.20;
-                const cG = call && S > 0 ? bsGreeks(S, strike, T_years, r, call.iv || hv, "call") : null;
-                const pG = put  && S > 0 ? bsGreeks(S, strike, T_years, r, put.iv  || hv, "put")  : null;
-
                 const rowBg = isAtm
                   ? atmRowBg
                   : call?.inTheMoney
@@ -408,63 +418,43 @@ export default function OptionChainPanel({
 
                 return (
                   <div key={strike}
-                    style={{ gridTemplateColumns: "1fr 60px 50px 38px 34px 34px 72px 34px 34px 38px 50px 60px 1fr" }}
-                    className={`grid px-2 py-0.5 text-xs items-center ${rowBg}`}>
+                    style={{ gridTemplateColumns: "56px 52px 36px 1fr 36px 52px 56px" }}
+                    className={`grid px-2 py-[3px] items-center ${rowBg}`}>
 
-                    {/* CALL: Actions */}
-                    <div className="flex items-center justify-end gap-0.5 pr-1">
+                    {/* CALL: B/S */}
+                    <div className="flex items-center justify-center gap-0.5">
                       {call ? (
                         <><AddBtn action="sell" type="call" row={call} spotInfo={spotInfo} onAddLeg={onAddLeg} />
                           <AddBtn action="buy"  type="call" row={call} spotInfo={spotInfo} onAddLeg={onAddLeg} /></>
-                      ) : <span className={muted}>—</span>}
+                      ) : <span className={`text-[9px] ${muted}`}>—</span>}
                     </div>
                     {/* CALL: LTP */}
-                    <div className={`text-right pr-1 font-mono font-semibold text-[10px] ${isDark ? "text-slate-200" : "text-gray-800"}`}>
-                      {call ? fmtPx(call.lastPrice) : "—"}
+                    <div className={`text-right font-mono font-semibold text-[11px] ${isDark ? "text-slate-200" : "text-gray-800"}`}>
+                      {call ? fmtPx(call.lastPrice) : <span className={muted}>—</span>}
                     </div>
-                    {/* CALL: OI */}
-                    <div className={`text-right pr-1 font-mono text-[9px] ${muted}`}>{call ? fmtOI(call.oi) : "—"}</div>
-                    {/* CALL: IV */}
-                    <div className={`text-right pr-1 font-mono text-[9px] ${call?.iv ? isDark ? "text-amber-400" : "text-amber-600" : muted}`}>
-                      {call?.iv ? `${(call.iv * 100).toFixed(1)}` : "—"}
+                    {/* CALL: IV% */}
+                    <div className={`text-right font-mono text-[10px] ${call?.iv ? isDark ? "text-amber-400" : "text-amber-600" : muted}`}>
+                      {call?.iv ? `${(call.iv * 100).toFixed(0)}` : "—"}
                     </div>
-                    {/* CALL: Delta */}
-                    <div className={`text-right pr-1 font-mono text-[9px] ${cG && cG.delta > 0.5 ? "text-indigo-500" : muted}`}>
-                      {cG ? cG.delta.toFixed(2) : "—"}
-                    </div>
-                    {/* CALL: Theta */}
-                    <div className={`text-right pr-1 font-mono text-[9px] ${muted}`}>
-                      {cG ? cG.theta.toFixed(1) : "—"}
-                    </div>
-                    {/* STRIKE */}
-                    <div className={`text-center font-bold py-0.5 rounded text-[11px]
-                      ${isAtm ? "bg-indigo-600 text-white" : isDark ? "text-slate-200" : "text-gray-700"}`}>
+                    {/* STRIKE (centre) */}
+                    <div className={`text-center mx-1 font-bold rounded text-[11px] py-0.5
+                      ${isAtm ? "bg-indigo-600 text-white" : isDark ? "text-slate-300" : "text-gray-700"}`}>
                       {strike.toLocaleString("en-IN")}
                     </div>
-                    {/* PUT: Delta */}
-                    <div className={`text-left pl-1 font-mono text-[9px] ${pG && Math.abs(pG.delta) > 0.5 ? "text-rose-500" : muted}`}>
-                      {pG ? pG.delta.toFixed(2) : "—"}
+                    {/* PUT: IV% */}
+                    <div className={`text-left font-mono text-[10px] ${put?.iv ? isDark ? "text-amber-400" : "text-amber-600" : muted}`}>
+                      {put?.iv ? `${(put.iv * 100).toFixed(0)}` : "—"}
                     </div>
-                    {/* PUT: Theta */}
-                    <div className={`text-left pl-1 font-mono text-[9px] ${muted}`}>
-                      {pG ? pG.theta.toFixed(1) : "—"}
-                    </div>
-                    {/* PUT: IV */}
-                    <div className={`text-left pl-1 font-mono text-[9px] ${put?.iv ? isDark ? "text-amber-400" : "text-amber-600" : muted}`}>
-                      {put?.iv ? `${(put.iv * 100).toFixed(1)}` : "—"}
-                    </div>
-                    {/* PUT: OI */}
-                    <div className={`text-left pl-1 font-mono text-[9px] ${muted}`}>{put ? fmtOI(put.oi) : "—"}</div>
                     {/* PUT: LTP */}
-                    <div className={`text-left pl-1 font-mono font-semibold text-[10px] ${isDark ? "text-slate-200" : "text-gray-800"}`}>
-                      {put ? fmtPx(put.lastPrice) : "—"}
+                    <div className={`text-left pl-1 font-mono font-semibold text-[11px] ${isDark ? "text-slate-200" : "text-gray-800"}`}>
+                      {put ? fmtPx(put.lastPrice) : <span className={muted}>—</span>}
                     </div>
-                    {/* PUT: Actions */}
-                    <div className="flex items-center gap-0.5 pl-1">
+                    {/* PUT: B/S */}
+                    <div className="flex items-center justify-center gap-0.5">
                       {put ? (
                         <><AddBtn action="buy"  type="put" row={put} spotInfo={spotInfo} onAddLeg={onAddLeg} />
                           <AddBtn action="sell" type="put" row={put} spotInfo={spotInfo} onAddLeg={onAddLeg} /></>
-                      ) : <span className={muted}>—</span>}
+                      ) : <span className={`text-[9px] ${muted}`}>—</span>}
                     </div>
                   </div>
                 );
