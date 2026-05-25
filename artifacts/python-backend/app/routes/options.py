@@ -94,6 +94,41 @@ def _fetch_spot_and_hv_sync(symbol: str) -> dict:
     hv30     = float(log_rets.rolling(30).std().iloc[-1]) * math.sqrt(252)
     hv30     = max(0.05, min(hv30, 3.0))
 
+    # ── MIDCPNIFTY special case ───────────────────────────────────────────────
+    # The NIFTY MIDCAP SELECT index (which MIDCPNIFTY F&O tracks) has no
+    # Yahoo Finance ticker. The closest working ticker is ^NSEMDCP50 (NIFTY
+    # MIDCAP 50), whose HV30 is a reasonable volatility proxy but whose spot
+    # level (~17,650) is wrong. Override spot from Dhan's scrip-master disk
+    # cache: the median listed strike for the nearest expiry = approximate ATM.
+    if upper == "MIDCPNIFTY":
+        try:
+            import csv as _csv
+            from pathlib import Path as _P
+            _dhan_csv = (
+                _P(__file__).resolve().parent.parent.parent
+                / "market_cache" / "dhan_scrip_master.csv"
+            )
+            if _dhan_csv.exists():
+                with open(_dhan_csv, encoding="utf-8", newline="") as _fh:
+                    _dhan_rows = list(_csv.DictReader(_fh))
+                _mc_strikes = sorted(
+                    float(r["SEM_STRIKE_PRICE"])
+                    for r in _dhan_rows
+                    if r.get("SEM_EXM_EXCH_ID", "").strip() == "NSE"
+                    and r.get("SEM_TRADING_SYMBOL", "").startswith("MIDCPNIFTY-")
+                    and float(r.get("SEM_STRIKE_PRICE", 0) or 0) > 1000
+                )
+                if _mc_strikes:
+                    _dhan_spot = _mc_strikes[len(_mc_strikes) // 2]
+                    logger.info(
+                        "MIDCPNIFTY: overriding yfinance spot %.2f → Dhan "
+                        "median strike %.2f (NIFTY MIDCAP SELECT has no yf ticker)",
+                        spot, _dhan_spot,
+                    )
+                    spot = _dhan_spot
+        except Exception as _exc:
+            logger.debug("MIDCPNIFTY Dhan spot override failed: %s", _exc)
+
     lot = get_lot_size(upper)
     atm = atm_strike(spot)
 
@@ -337,6 +372,22 @@ async def _dhan_bs_chain(upper: str, expiry: Optional[str]) -> Optional[dict]:
 
     spot = spot_info.get("spot", 0) or 0
     hv30 = spot_info.get("hv30", 0.20)
+
+    # Safety net: if the yfinance spot has zero overlap with Dhan's listed
+    # strikes (e.g. a wrong ticker maps to a completely different index), derive
+    # the ATM from Dhan's median strike instead.  This covers MIDCPNIFTY today
+    # and any future symbol whose Yahoo ticker mismaps.
+    valid_strikes = sorted(k for k in strikes_all if k > 0)
+    if spot > 0 and valid_strikes:
+        wide_match = [k for k in valid_strikes if abs(k - spot) / spot <= 0.40]
+        if len(wide_match) < 5:
+            inferred = valid_strikes[len(valid_strikes) // 2]
+            logger.warning(
+                "%s: yfinance spot %.2f has no overlap with Dhan strikes "
+                "(%.0f–%.0f); using median strike %.0f as ATM proxy",
+                upper, spot, min(valid_strikes), max(valid_strikes), inferred,
+            )
+            spot = inferred
 
     # Filter strikes to ±15 % of spot so the chain stays manageable
     if spot > 0:
