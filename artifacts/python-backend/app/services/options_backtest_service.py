@@ -144,7 +144,10 @@ def _to_yf_sym(symbol: str) -> str:
         "NIFTY50":    "^NSEI",
         "BANKNIFTY":  "^NSEBANK",
         "FINNIFTY":   "^CNXFIN",
-        "MIDCPNIFTY": "^NSMIDCP",
+        # NIFTY MIDCAP SELECT (MIDCPNIFTY) has no Yahoo Finance ticker.
+        # ^NSEMDCP50 (NIFTY MIDCAP 50) is the closest available proxy for HV30.
+        # Spot will be overridden from Dhan disk cache in _fetch_spot_and_hv_sync.
+        "MIDCPNIFTY": "^NSEMDCP50",
         "SENSEX":     "^BSESN",
         "BANKEX":     "BANKEX.BO",   # BSE BANKEX — try .BO format
         # Zomato rebranded to Eternal Ltd in 2025; NSE symbol → ETERNAL
@@ -167,6 +170,10 @@ def _to_yf_sym_candidates(symbol: str) -> list[str]:
         # FINNIFTY: ^CNXFIN returns only 1 bar in recent yfinance versions;
         #           NIFTY_FIN_SERVICE.NS is the reliable fallback.
         "FINNIFTY": ["^CNXFIN", "NIFTY_FIN_SERVICE.NS"],
+        # MIDCPNIFTY: NIFTY MIDCAP SELECT has no Yahoo Finance ticker.
+        # ^NSEMDCP50 (NIFTY MIDCAP 50) provides a reasonable HV30 proxy.
+        # The spot level will be derived from Dhan's scrip-master disk cache.
+        "MIDCPNIFTY": ["^NSEMDCP50"],
     }
     if upper in _FALLBACKS:
         return _FALLBACKS[upper]
