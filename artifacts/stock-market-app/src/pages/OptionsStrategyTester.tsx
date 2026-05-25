@@ -5,12 +5,14 @@ import { useTheme } from "@/context/ThemeContext";
 import {
   TrendingUp, TrendingDown, Plus, Trash2, Play, BarChart2,
   AlertTriangle, RefreshCw, ChevronDown, Target, Activity,
-  Shield, Zap, Info, X, Sparkles, BookOpen
+  Shield, Zap, Info, X, Sparkles, BookOpen, Search, Layers
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ResponsiveContainer, BarChart, Bar, Cell
 } from "recharts";
+import OptionsSimulatorPanel from "@/components/options/OptionsSimulatorPanel";
+import OptionChainPanel from "@/components/options/OptionChainPanel";
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 const J = { "Content-Type": "application/json" };
@@ -858,7 +860,7 @@ function dteFromDate(dateStr: string): number {
 }
 
 // ── TABS ──────────────────────────────────────────────────────────────────────
-type Tab = "strategy" | "backtest" | "risk" | "smart";
+type Tab = "strategy" | "backtest" | "risk" | "smart" | "simulator" | "chain";
 
 // ── Smart Builder ─────────────────────────────────────────────────────────────
 interface SuggestedLeg { action: "buy"|"sell"; option_type: "call"|"put"; strike: number; lots: number; residual_dte?: number; }
@@ -1275,6 +1277,19 @@ export default function OptionsStrategyTester() {
   const [varSims, setVarSims]           = useState(10000);
   const [varConf, setVarConf]           = useState(0.95);
 
+  // Asset selector state
+  const [assetMode, setAssetMode]         = useState<"indices" | "stocks">("indices");
+  const [stockSearch, setStockSearch]     = useState("");
+  const [foStocks, setFoStocks]           = useState<Array<{sym: string; name: string; sector: string; lot: number}>>([]);
+  const [showStockDrop, setShowStockDrop] = useState(false);
+
+  // Fetch F&O stocks list on mount
+  useEffect(() => {
+    get<{stocks: Array<{sym: string; name: string; sector: string; lot: number}>}>("/options/fo-stocks")
+      .then(d => setFoStocks(d.stocks ?? []))
+      .catch(() => {});
+  }, []);
+
   // ── Fetch spot ──────────────────────────────────────────────────────────────
   // Returns the SpotInfo so callers (e.g. quick-add) can use it immediately
   const doFetchSpot = useCallback(async (): Promise<SpotInfo | null> => {
@@ -1469,26 +1484,26 @@ export default function OptionsStrategyTester() {
         </div>
       </div>
 
-      {/* Symbol bar */}
+      {/* Asset Selector ──────────────────────────────────────────────────── */}
       {(() => {
         const INDICES = [
-          { sym: "NIFTY",      label: "NIFTY 50",     lot: 65, exch: "NSE" },
-          { sym: "BANKNIFTY",  label: "BANK NIFTY",   lot: 30, exch: "NSE" },
+          { sym: "NIFTY",      label: "NIFTY 50",     lot: 65,  exch: "NSE" },
+          { sym: "BANKNIFTY",  label: "BANK NIFTY",   lot: 30,  exch: "NSE" },
           { sym: "FINNIFTY",   label: "FIN NIFTY",    lot: 65,  exch: "NSE" },
           { sym: "MIDCPNIFTY", label: "MIDCAP NIFTY", lot: 120, exch: "NSE" },
-          { sym: "SENSEX",     label: "SENSEX",        lot: 10, exch: "BSE" },
-          { sym: "BANKEX",     label: "BANKEX",        lot: 15, exch: "BSE" },
+          { sym: "SENSEX",     label: "SENSEX",        lot: 10,  exch: "BSE" },
+          { sym: "BANKEX",     label: "BANKEX",        lot: 15,  exch: "BSE" },
         ];
-        const switchIndex = async (sym: string) => {
+        const switchAsset = async (sym: string) => {
           if (sym === symbol && spotInfo) return;
-          setSymbol(sym);
+          setSymbol(sym.toUpperCase());
           setSpotInfo(null);
           setLegs([]);
           setAnalysis(null);
           setLoadingSpot(true);
           setSpotErr("");
           try {
-            const info = await get<SpotInfo>(`/options/spot/${sym}`);
+            const info = await get<SpotInfo>(`/options/spot/${sym.toUpperCase()}`);
             setSpotInfo(info);
           } catch (e: any) {
             setSpotErr(e?.message || `Failed to fetch ${sym}`);
@@ -1496,68 +1511,188 @@ export default function OptionsStrategyTester() {
             setLoadingSpot(false);
           }
         };
+        const isIndex = INDICES.some(i => i.sym === symbol);
+        const filteredStocks = foStocks.filter(s =>
+          stockSearch.length < 1
+            || s.sym.toUpperCase().includes(stockSearch.toUpperCase())
+            || s.name.toLowerCase().includes(stockSearch.toLowerCase())
+        ).slice(0, 45);
         return (
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-            {/* Segmented control */}
-            <div className="bg-gray-50 border-b border-gray-100 p-2">
-              <div className="bg-gray-100 rounded-xl p-1 flex gap-0.5">
-                {INDICES.map(({ sym, label, lot: staticLot, exch }) => {
-                  const active = symbol === sym;
-                  const fetching = active && loadingSpot;
-                  const lot = active && spotInfo ? spotInfo.lot_size : staticLot;
-                  return (
-                    <button
-                      key={sym}
-                      onClick={() => switchIndex(sym)}
-                      disabled={loadingSpot}
-                      className={`flex-1 flex flex-col items-center py-2 px-1 rounded-lg transition-all duration-150 disabled:opacity-60
-                        ${active
-                          ? "bg-white shadow-sm text-gray-900"
-                          : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
-                        }`}
-                    >
-                      <span className="text-xs font-bold tracking-tight leading-tight whitespace-nowrap">
-                        {fetching
-                          ? <span className="flex items-center gap-1"><RefreshCw className="w-3 h-3 animate-spin" />{label}</span>
-                          : label}
-                      </span>
-                      <span className={`text-[10px] leading-tight mt-0.5 font-medium
-                        ${active ? "text-indigo-500" : "text-gray-400"}`}>
-                        {exch} · {lot}
-                      </span>
-                    </button>
-                  );
-                })}
+          <div className={`rounded-xl border shadow-sm overflow-hidden ${isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200"}`}>
+
+            {/* ── Mode toggle ─────────────────────────────────────────────── */}
+            <div className={`flex items-center gap-3 border-b px-3 py-2 ${isDark ? "bg-slate-900/50 border-slate-700" : "bg-gray-50 border-gray-100"}`}>
+              <div className={`flex items-center p-1 rounded-xl gap-0.5 ${isDark ? "bg-slate-800" : "bg-gray-200/70"}`}>
+                <button
+                  onClick={() => setAssetMode("indices")}
+                  className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    assetMode === "indices"
+                      ? "bg-indigo-600 text-white shadow-sm"
+                      : isDark ? "text-slate-400 hover:text-slate-200" : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  Indices
+                </button>
+                <button
+                  onClick={() => setAssetMode("stocks")}
+                  className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    assetMode === "stocks"
+                      ? "bg-indigo-600 text-white shadow-sm"
+                      : isDark ? "text-slate-400 hover:text-slate-200" : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  <Search className="w-3 h-3" />
+                  F&amp;O Stocks
+                  {foStocks.length > 0 && (
+                    <span className={`text-[9px] font-semibold ml-0.5 ${assetMode === "stocks" ? "opacity-70" : isDark ? "text-slate-500" : "text-gray-400"}`}>
+                      {foStocks.length}
+                    </span>
+                  )}
+                </button>
               </div>
+              {!isIndex && symbol && (
+                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${isDark ? "bg-indigo-900/60 text-indigo-300 border border-indigo-800/50" : "bg-indigo-50 text-indigo-700 border border-indigo-100"}`}>
+                  {symbol}
+                </span>
+              )}
             </div>
 
-            {/* Live market data strip */}
+            {/* ── Indices panel ────────────────────────────────────────────── */}
+            {assetMode === "indices" && (
+              <div className={`border-b p-2 ${isDark ? "border-slate-700" : "border-gray-100"}`}>
+                <div className={`p-1 flex gap-0.5 rounded-xl ${isDark ? "bg-slate-900/50" : "bg-gray-100"}`}>
+                  {INDICES.map(({ sym, label, lot: staticLot, exch }) => {
+                    const active   = symbol === sym;
+                    const fetching = active && loadingSpot;
+                    const lot      = active && spotInfo ? spotInfo.lot_size : staticLot;
+                    return (
+                      <button
+                        key={sym}
+                        onClick={() => switchAsset(sym)}
+                        disabled={loadingSpot}
+                        className={`flex-1 flex flex-col items-center py-2 px-1 rounded-lg transition-all duration-150 disabled:opacity-60
+                          ${active
+                            ? isDark ? "bg-slate-700 shadow-sm text-slate-100" : "bg-white shadow-sm text-gray-900"
+                            : isDark ? "text-slate-400 hover:text-slate-200 hover:bg-slate-700/40" : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                          }`}
+                      >
+                        <span className="text-xs font-bold tracking-tight leading-tight whitespace-nowrap">
+                          {fetching
+                            ? <span className="flex items-center gap-1"><RefreshCw className="w-3 h-3 animate-spin" />{label}</span>
+                            : label}
+                        </span>
+                        <span className={`text-[10px] leading-tight mt-0.5 font-medium
+                          ${active ? "text-indigo-400" : isDark ? "text-slate-500" : "text-gray-400"}`}>
+                          {exch} · {lot}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* ── F&O Stocks search panel ──────────────────────────────────── */}
+            {assetMode === "stocks" && (
+              <div className={`border-b p-3 ${isDark ? "border-slate-700" : "border-gray-100"}`}>
+                <div className="relative">
+                  <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition
+                    ${isDark ? "bg-slate-900/50 border-slate-600 focus-within:border-indigo-500" : "bg-white border-gray-200 focus-within:border-indigo-400"}`}>
+                    <Search className={`w-4 h-4 shrink-0 ${isDark ? "text-slate-400" : "text-gray-400"}`} />
+                    <input
+                      type="text"
+                      value={stockSearch}
+                      onChange={e => { setStockSearch(e.target.value); setShowStockDrop(true); }}
+                      onFocus={() => setShowStockDrop(true)}
+                      onBlur={() => setTimeout(() => setShowStockDrop(false), 150)}
+                      placeholder="Search 130+ F&O stocks — RELIANCE, HDFCBANK, TCS…"
+                      className={`flex-1 bg-transparent text-sm outline-none placeholder:text-gray-400
+                        ${isDark ? "text-slate-200 placeholder:text-slate-500" : "text-gray-800"}`}
+                    />
+                    {stockSearch && (
+                      <button onClick={() => { setStockSearch(""); setShowStockDrop(false); }}
+                        className={`text-gray-400 hover:text-gray-600 transition`}>
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  {showStockDrop && filteredStocks.length > 0 && (
+                    <div className={`absolute z-50 top-full left-0 right-0 mt-1 rounded-xl border shadow-2xl overflow-hidden max-h-72 overflow-y-auto
+                      ${isDark ? "bg-slate-800 border-slate-600" : "bg-white border-gray-200"}`}>
+                      {filteredStocks.map(s => (
+                        <button
+                          key={s.sym}
+                          onMouseDown={() => {
+                            setShowStockDrop(false);
+                            setStockSearch("");
+                            switchAsset(s.sym);
+                          }}
+                          className={`w-full flex items-center justify-between px-4 py-2.5 text-sm transition text-left
+                            ${symbol === s.sym
+                              ? isDark ? "bg-indigo-900/50 text-indigo-300" : "bg-indigo-50 text-indigo-700"
+                              : isDark ? "text-slate-300 hover:bg-slate-700" : "text-gray-700 hover:bg-gray-50"}`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className="font-bold font-mono text-xs w-24 shrink-0">{s.sym}</span>
+                            <span className="opacity-70 text-xs truncate max-w-[180px]">{s.name}</span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded ${isDark ? "bg-slate-700 text-slate-400" : "bg-gray-100 text-gray-500"}`}>
+                              {s.sector}
+                            </span>
+                            <span className={`text-[9px] font-mono ${isDark ? "text-slate-500" : "text-gray-400"}`}>
+                              lot {s.lot}
+                            </span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {!isIndex && symbol && (
+                  <div className={`mt-2 flex items-center gap-2 text-xs ${isDark ? "text-slate-400" : "text-gray-500"}`}>
+                    <span>Active:</span>
+                    <span className="font-bold">{symbol}</span>
+                    {foStocks.find(s => s.sym === symbol) && (
+                      <span className="opacity-60">— {foStocks.find(s => s.sym === symbol)?.name}</span>
+                    )}
+                  </div>
+                )}
+                {loadingSpot && (
+                  <div className={`mt-2 flex items-center gap-1.5 text-xs ${isDark ? "text-slate-400" : "text-gray-500"}`}>
+                    <RefreshCw className="w-3 h-3 animate-spin" /> Fetching {symbol} market data…
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Live market data strip (shared) ─────────────────────────── */}
             {spotInfo && (
-              <div className="flex items-center divide-x divide-gray-100 dark:divide-slate-800/80 px-1">
+              <div className={`flex items-center divide-x ${isDark ? "divide-slate-700" : "divide-gray-100"} px-1`}>
                 <div className="flex items-baseline gap-1.5 px-4 py-3">
-                  <span className="text-xl font-bold text-gray-900">
+                  <span className={`text-xl font-bold ${isDark ? "text-slate-100" : "text-gray-900"}`}>
                     ₹{spotInfo.spot.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
-                  <span className="text-xs text-gray-400 font-medium">SPOT</span>
+                  <span className={`text-xs font-medium ${isDark ? "text-slate-400" : "text-gray-400"}`}>SPOT</span>
                 </div>
                 <div className="flex items-center gap-5 px-5 py-3 flex-1">
                   <div className="text-center">
-                    <p className="text-xs text-gray-400 font-medium mb-0.5">ATM Strike</p>
-                    <p className="text-sm font-bold text-gray-800">₹{spotInfo.atm.toLocaleString("en-IN")}</p>
+                    <p className={`text-xs font-medium mb-0.5 ${isDark ? "text-slate-400" : "text-gray-400"}`}>ATM Strike</p>
+                    <p className={`text-sm font-bold ${isDark ? "text-slate-200" : "text-gray-800"}`}>₹{spotInfo.atm.toLocaleString("en-IN")}</p>
                   </div>
                   <div className="text-center">
-                    <p className="text-xs text-gray-400 font-medium mb-0.5">HV 30d</p>
+                    <p className={`text-xs font-medium mb-0.5 ${isDark ? "text-slate-400" : "text-gray-400"}`}>HV 30d</p>
                     <p className="text-sm font-bold text-orange-600">{pct(spotInfo.hv30_pct)}</p>
                   </div>
                   <div className="text-center">
-                    <p className="text-xs text-gray-400 font-medium mb-0.5">Lot Size</p>
-                    <p className="text-sm font-bold text-gray-800">{spotInfo.lot_size} units</p>
+                    <p className={`text-xs font-medium mb-0.5 ${isDark ? "text-slate-400" : "text-gray-400"}`}>Lot Size</p>
+                    <p className={`text-sm font-bold ${isDark ? "text-slate-200" : "text-gray-800"}`}>{spotInfo.lot_size} units</p>
                   </div>
                 </div>
                 <button
                   onClick={fetchSpot}
                   disabled={loadingSpot}
-                  className="px-4 py-3 text-gray-400 hover:text-indigo-600 transition disabled:opacity-40"
+                  className={`px-4 py-3 transition disabled:opacity-40 ${isDark ? "text-slate-400 hover:text-indigo-400" : "text-gray-400 hover:text-indigo-600"}`}
                   title="Refresh"
                 >
                   <RefreshCw className={`w-4 h-4 ${loadingSpot ? "animate-spin" : ""}`} />
@@ -1566,14 +1701,14 @@ export default function OptionsStrategyTester() {
             )}
 
             {!spotInfo && !loadingSpot && !spotErr && (
-              <div className="px-4 py-3 text-sm text-gray-400 flex items-center gap-2">
+              <div className={`px-4 py-3 text-sm flex items-center gap-2 ${isDark ? "text-slate-400" : "text-gray-400"}`}>
                 <Zap className="w-4 h-4 text-indigo-300" />
-                Select an index above to load live market data
+                {assetMode === "indices" ? "Select an index above to load live market data" : "Search and select an F&O stock above"}
               </div>
             )}
 
             {loadingSpot && !spotInfo && (
-              <div className="px-4 py-3 text-sm text-gray-400 flex items-center gap-2">
+              <div className={`px-4 py-3 text-sm flex items-center gap-2 ${isDark ? "text-slate-400" : "text-gray-400"}`}>
                 <RefreshCw className="w-4 h-4 animate-spin text-indigo-400" />
                 Fetching {symbol} live data…
               </div>
@@ -1608,6 +1743,18 @@ export default function OptionsStrategyTester() {
             <span className="flex items-center gap-1.5">
               <Zap className="w-3.5 h-3.5" />
               Smart Builder
+            </span>
+          </button>
+          <button className={tabCls("simulator")} onClick={() => setTab("simulator")}>
+            <span className="flex items-center gap-1.5">
+              <Activity className="w-3.5 h-3.5" />
+              Simulator
+            </span>
+          </button>
+          <button className={tabCls("chain")} onClick={() => setTab("chain")}>
+            <span className="flex items-center gap-1.5">
+              <Layers className="w-3.5 h-3.5" />
+              Option Chain
             </span>
           </button>
         </nav>
@@ -2536,6 +2683,38 @@ export default function OptionsStrategyTester() {
           isDark={isDark}
           doFetchSpot={doFetchSpot}
           onAnalyse={analyseStrategy}
+        />
+      )}
+
+      {/* ── TAB: Options Simulator ──────────────────────────────────────────── */}
+      {tab === "simulator" && (
+        <OptionsSimulatorPanel
+          legs={legs}
+          spotInfo={spotInfo}
+          T={T}
+          sigma={spotInfo?.hv30 ?? 0.20}
+        />
+      )}
+
+      {/* ── TAB: Option Chain ───────────────────────────────────────────────── */}
+      {tab === "chain" && (
+        <OptionChainPanel
+          symbol={symbol}
+          spotInfo={spotInfo}
+          T={T}
+          onAddLeg={(l) => {
+            setLegs(prev => [...prev, {
+              id:          crypto.randomUUID(),
+              action:      l.action,
+              option_type: l.option_type,
+              strike:      l.strike,
+              premium:     l.premium,
+              lots:        l.lots,
+              lot_size:    l.lot_size,
+              iv:          l.iv,
+            }]);
+            setTab("strategy");
+          }}
         />
       )}
 

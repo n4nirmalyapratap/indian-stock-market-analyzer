@@ -1,0 +1,37 @@
+Part 1: Market Research & Feature Blueprint
+To compete with platforms like Sensibull and StockMock, your simulator needs to shift from static backtesting to dynamic, highly visual "what-if" scenarios.
+
+1. Modern UI: Indices vs. F&O Stocks
+Cramming 180+ F&O stocks into a dropdown next to Nifty and BankNifty is bad UX.
+
+The Redesign: Implement a sleek Segmented Toggle or Tabbed Interface at the top of the dashboard: [ Indices ] | [ F&O Equities ].
+
+Indices Tab: Displays clean, visually distinct cards for the high-liquidity players (NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY).
+
+Equities Tab: A search bar with a dropdown grid. Only list F&O approved stocks, ideally sorting them by current liquidity/volume to keep the UI relevant.
+
+2. The Option Chain (The Control Center)
+The option chain is where the strategy is born. You cannot build a simulator without a robust chain UI.
+
+Layout: Standard central strike price column. Calls on the left, Puts on the right.
+
+Required Data Points: LTP (Last Traded Price), OI (Open Interest), Volume, IV (Implied Volatility).
+
+Advanced Data (The Greeks): Delta, Theta, Gamma, Vega. (Since your backend relies on SQL, you will need a robust math library in your Node.js layer to calculate these on the fly if your data provider doesn't supply them).
+
+Interactivity: Users should be able to click a button directly on the chain (e.g., "B" for Buy, "S" for Sell) which instantly adds that leg to the "Strategy Builder" basket pinned to the bottom or side of the screen.
+
+3. The Premium Option Simulator (The Core Engine)
+This is where the premium value lies. Users want to visualize how their strategy behaves under different market conditions before expiry.
+
+Interactive Payoff Graph: A standard line chart is not enough. You need an interactive graph (using a library like Recharts, Chart.js, or D3) showing:
+
+The Expiry Line (sharp angles showing max profit/loss).
+
+The T+0 Line (curved line showing P&L today based on current Greeks).
+
+Target Date/Time Scrubbing: A slider that lets users move forward in time (Day by Day, or even intraday Hour by Hour) to see how Theta decay eats into the premium. Note: While your Bhavcopy handles end-of-day data perfectly, intraday scrubbing will require 1-minute or 5-minute historical tick data.
+
+IV Slider: A slider to simulate a sudden spike or crush in Implied Volatility (e.g., "What happens to my Iron Condor if IV drops by 15%?").
+
+Payoff Matrix/Summary: Real-time calculation of Max Profit, Max Loss, Breakeven points, Risk/Reward Ratio, and Probability of Profit (POP).
