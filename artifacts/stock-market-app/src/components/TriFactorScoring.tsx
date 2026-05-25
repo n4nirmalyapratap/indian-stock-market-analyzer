@@ -1,0 +1,437 @@
+import { useState, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import { useTheme } from "@/context/ThemeContext";
+import {
+  Activity, BarChart2, Newspaper, TrendingUp, TrendingDown,
+  Minus, RefreshCw, AlertCircle, ChevronDown, ChevronRight, Info,
+} from "lucide-react";
+
+interface TriFactorData {
+  symbol: string;
+  scores: { technical: number; fundamental: number; sentiment: number };
+  factors: {
+    technical: {
+      price: number | null; ema50: number | null; ema200: number | null;
+      rsi14: number | null; trend_score: number; momentum_score: number; score: number;
+    };
+    fundamental: {
+      pe: number | null; sector_pe: number; sector: string | null;
+      eps_growth_pct: number | null; debt_to_equity: number | null;
+      valuation_score: number; health_score: number;
+    };
+    sentiment: {
+      bullish: number; bearish: number; neutral: number;
+      total: number; headlines: Array<{ title: string; sentiment: string }>;
+    };
+  };
+}
+
+const CX = 110, CY = 100, R = 80;
+
+function scoreToDeg(s: number) {
+  return 180 - ((s + 1) / 2) * 180;
+}
+
+function degToXY(deg: number) {
+  const rad = deg * (Math.PI / 180);
+  return { x: CX + R * Math.cos(rad), y: CY - R * Math.sin(rad) };
+}
+
+function ScoreGauge({ score, color }: { score: number; color: string }) {
+  const TOTAL_LEN = Math.PI * R;
+  const fillLen = ((score + 1) / 2) * TOTAL_LEN;
+  const needle = degToXY(scoreToDeg(score));
+
+  const signal = score >= 0.35 ? "BUY" : score <= -0.35 ? "SELL" : "HOLD";
+  const sigColor =
+    score >= 0.35 ? "#10b981" : score <= -0.35 ? "#ef4444" : "#6b7280";
+
+  return (
+    <div className="flex flex-col items-center select-none">
+      <svg width={CX * 2} height={CY + 14} viewBox={`0 0 ${CX * 2} ${CY + 14}`}>
+        <path
+          d={`M ${CX - R} ${CY} A ${R} ${R} 0 0 0 ${CX + R} ${CY}`}
+          fill="none" stroke="currentColor" strokeWidth="12" strokeLinecap="round"
+          className="text-gray-100 dark:text-slate-700"
+        />
+        <path
+          d={`M ${CX - R} ${CY} A ${R} ${R} 0 0 0 ${CX + R} ${CY}`}
+          fill="none" stroke={color} strokeWidth="12" strokeLinecap="round"
+          strokeDasharray={`${fillLen} ${TOTAL_LEN}`}
+          strokeDashoffset="0"
+        />
+        <line
+          x1={CX} y1={CY}
+          x2={needle.x} y2={needle.y}
+          stroke={color} strokeWidth="2.5" strokeLinecap="round"
+        />
+        <circle cx={CX} cy={CY} r="4" fill={color} />
+        <text
+          x={CX} y={CY - 22}
+          textAnchor="middle" fontSize="20" fontWeight="bold"
+          fill={sigColor} fontFamily="monospace"
+        >
+          {signal}
+        </text>
+        <text
+          x={CX} y={CY - 6}
+          textAnchor="middle" fontSize="12"
+          fill={sigColor} fontFamily="monospace"
+        >
+          {score >= 0 ? "+" : ""}{score.toFixed(3)}
+        </text>
+        <text x={CX - R + 2} y={CY + 13} fontSize="9" fill="#9ca3af">-1</text>
+        <text x={CX + R - 8} y={CY + 13} fontSize="9" fill="#9ca3af">+1</text>
+      </svg>
+    </div>
+  );
+}
+
+function ScoreBar({ score, showLabel = true }: { score: number; showLabel?: boolean }) {
+  const pct = Math.round(((score + 1) / 2) * 100);
+  const color =
+    score >= 0.35 ? "bg-emerald-500" : score <= -0.35 ? "bg-red-500" : "bg-gray-400";
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex-1 h-1.5 rounded-full bg-gray-100 dark:bg-slate-700 overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${color}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      {showLabel && (
+        <span className="text-[10px] font-mono w-12 text-right text-gray-500 dark:text-slate-400 shrink-0">
+          {score >= 0 ? "+" : ""}{score.toFixed(2)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function SubScore({ label, score }: { label: string; score: number }) {
+  const color =
+    score > 0 ? "text-emerald-600 dark:text-emerald-400"
+    : score < 0 ? "text-red-500"
+    : "text-gray-400";
+  return (
+    <div className="flex items-center justify-between text-[11px]">
+      <span className="text-gray-500 dark:text-slate-400">{label}</span>
+      <span className={`font-mono font-semibold ${color}`}>
+        {score > 0 ? "+" : ""}{score.toFixed(1)}
+      </span>
+    </div>
+  );
+}
+
+function FactorCard({
+  icon: Icon, label, score, color, children, defaultOpen = false,
+}: {
+  icon: React.FC<any>; label: string; score: number;
+  color: string; children: React.ReactNode; defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const sigText = score >= 0.35 ? "Bullish" : score <= -0.35 ? "Bearish" : "Neutral";
+  const sigColor =
+    score >= 0.35 ? "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20"
+    : score <= -0.35 ? "text-red-500 bg-red-50 dark:bg-red-900/20"
+    : "text-gray-500 bg-gray-50 dark:bg-slate-700";
+
+  return (
+    <div className="rounded-xl border border-gray-100 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden">
+      <button
+        onClick={() => setOpen(p => !p)}
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-slate-700/40 transition text-left"
+      >
+        <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${color}`}>
+          <Icon className="w-3.5 h-3.5" />
+        </div>
+        <span className="flex-1 text-sm font-semibold text-gray-800 dark:text-slate-200">{label}</span>
+        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${sigColor}`}>
+          {sigText}
+        </span>
+        <span className="font-mono text-xs font-bold text-gray-600 dark:text-slate-300 shrink-0 w-10 text-right">
+          {score >= 0 ? "+" : ""}{score.toFixed(2)}
+        </span>
+        {open ? <ChevronDown className="w-3.5 h-3.5 text-gray-400 shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400 shrink-0" />}
+      </button>
+      <div className="px-4 pb-1">
+        <ScoreBar score={score} showLabel={false} />
+      </div>
+      {open && <div className="px-4 pt-2 pb-3 border-t border-gray-50 dark:border-slate-700 mt-1">{children}</div>}
+    </div>
+  );
+}
+
+function WeightSlider({
+  label, icon: Icon, value, onChange, color,
+}: {
+  label: string; icon: React.FC<any>; value: number;
+  onChange: (v: number) => void; color: string;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ${color}`}>
+        <Icon className="w-3 h-3" />
+      </div>
+      <span className="text-xs text-gray-600 dark:text-slate-400 w-24 shrink-0">{label}</span>
+      <input
+        type="range" min={0} max={100} value={Math.round(value * 100)}
+        onChange={e => onChange(Number(e.target.value) / 100)}
+        className="flex-1 accent-indigo-500 h-1.5"
+      />
+      <span className="text-xs font-mono w-9 text-right text-gray-700 dark:text-slate-300 shrink-0">
+        {Math.round(value * 100)}%
+      </span>
+    </div>
+  );
+}
+
+function SentimentIcon({ s }: { s: string }) {
+  if (s === "bullish") return <TrendingUp className="w-3 h-3 text-emerald-500 shrink-0" />;
+  if (s === "bearish") return <TrendingDown className="w-3 h-3 text-red-500 shrink-0" />;
+  return <Minus className="w-3 h-3 text-gray-400 shrink-0" />;
+}
+
+interface Props { symbol: string }
+
+export default function TriFactorScoring({ symbol }: Props) {
+  const { isDark } = useTheme();
+
+  const { data, isLoading, error, refetch, isFetching } = useQuery<TriFactorData>({
+    queryKey: ["tri-factor", symbol],
+    queryFn: () => api.stockTriFactor(symbol),
+    staleTime: 5 * 60 * 1000,
+    enabled: !!symbol,
+  });
+
+  const [weights, setWeights] = useState({ t: 1 / 3, f: 1 / 3, s: 1 / 3 });
+
+  function handleWeight(key: "t" | "f" | "s", val: number) {
+    const clamped = Math.max(0, Math.min(1, val));
+    const others = (["t", "f", "s"] as const).filter(k => k !== key);
+    const rem = 1 - clamped;
+    const sum = weights[others[0]] + weights[others[1]];
+    const newWeights = { ...weights, [key]: clamped };
+    if (sum > 0) {
+      newWeights[others[0]] = (weights[others[0]] / sum) * rem;
+      newWeights[others[1]] = (weights[others[1]] / sum) * rem;
+    } else {
+      newWeights[others[0]] = rem / 2;
+      newWeights[others[1]] = rem / 2;
+    }
+    setWeights(newWeights);
+  }
+
+  const composite = useMemo(() => {
+    if (!data) return 0;
+    const { technical, fundamental, sentiment } = data.scores;
+    return Math.max(-1, Math.min(1,
+      technical * weights.t + fundamental * weights.f + sentiment * weights.s
+    ));
+  }, [data, weights]);
+
+  const gaugeColor =
+    composite >= 0.35 ? "#10b981" : composite <= -0.35 ? "#ef4444" : "#6b7280";
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        {[...Array(4)].map((_, i) => (
+          <div key={i} className="h-16 bg-gray-100 dark:bg-slate-800 animate-pulse rounded-xl" />
+        ))}
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div className="flex items-center gap-2 p-4 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-sm text-red-600 dark:text-red-400">
+        <AlertCircle className="w-4 h-4 shrink-0" />
+        <span>{(error as Error)?.message || "Failed to load scoring data"}</span>
+        <button onClick={() => refetch()} className="ml-auto text-xs underline">Retry</button>
+      </div>
+    );
+  }
+
+  const { factors } = data;
+  const tech = factors.technical;
+  const fund = factors.fundamental;
+  const sent = factors.sentiment;
+
+  return (
+    <div className="space-y-4">
+      {/* Top row: Gauge + Weights */}
+      <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-100 dark:border-slate-700 p-5">
+        <div className="flex items-start justify-between mb-1">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-800 dark:text-slate-200">
+              Tri-Factor Composite Score
+            </h3>
+            <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-0.5">
+              Technical × Fundamental × Sentiment — adjust weights below
+            </p>
+          </div>
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            title="Refresh"
+            className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin text-indigo-500" : ""}`} />
+          </button>
+        </div>
+
+        <div className="flex flex-col sm:flex-row gap-6 items-center mt-2">
+          <div className="shrink-0">
+            <ScoreGauge score={composite} color={gaugeColor} />
+          </div>
+          <div className="flex-1 w-full space-y-3">
+            <WeightSlider
+              label="Technical" icon={Activity} value={weights.t}
+              onChange={v => handleWeight("t", v)}
+              color="bg-sky-100 text-sky-600 dark:bg-sky-900/40 dark:text-sky-400"
+            />
+            <WeightSlider
+              label="Fundamental" icon={BarChart2} value={weights.f}
+              onChange={v => handleWeight("f", v)}
+              color="bg-violet-100 text-violet-600 dark:bg-violet-900/40 dark:text-violet-400"
+            />
+            <WeightSlider
+              label="Sentiment" icon={Newspaper} value={weights.s}
+              onChange={v => handleWeight("s", v)}
+              color="bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400"
+            />
+            <div className="text-[10px] text-gray-400 dark:text-slate-600 flex items-center gap-1">
+              <Info className="w-2.5 h-2.5" />
+              Sliders auto-balance to 100%
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Score breakdown cards */}
+      <FactorCard
+        icon={Activity} label="Technical Analysis" score={data.scores.technical}
+        color="bg-sky-100 text-sky-600 dark:bg-sky-900/40 dark:text-sky-400"
+        defaultOpen
+      >
+        <div className="space-y-2">
+          <SubScore label="Trend sub-score" score={tech.trend_score} />
+          <SubScore label="Momentum sub-score" score={tech.momentum_score} />
+          <div className="border-t border-gray-100 dark:border-slate-700 pt-2 mt-1 grid grid-cols-2 gap-x-6 gap-y-1.5">
+            {[
+              ["Current Price", tech.price != null ? `₹${tech.price.toLocaleString("en-IN")}` : "—"],
+              ["EMA 50", tech.ema50 != null ? `₹${tech.ema50.toLocaleString("en-IN")}` : "—"],
+              ["EMA 200", tech.ema200 != null ? `₹${tech.ema200.toLocaleString("en-IN")}` : "—"],
+              ["RSI (14)", tech.rsi14 != null ? tech.rsi14.toFixed(1) : "—"],
+            ].map(([k, v]) => (
+              <div key={k as string} className="flex justify-between text-[11px]">
+                <span className="text-gray-400 dark:text-slate-500">{k}</span>
+                <span className="font-mono text-gray-700 dark:text-slate-300">{v}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-[10px] text-gray-400 dark:text-slate-600 mt-1">
+            Trend: price vs EMA50 vs EMA200 &nbsp;·&nbsp; Momentum: RSI &lt;30 / &gt;70
+          </p>
+        </div>
+      </FactorCard>
+
+      <FactorCard
+        icon={BarChart2} label="Fundamental Analysis" score={data.scores.fundamental}
+        color="bg-violet-100 text-violet-600 dark:bg-violet-900/40 dark:text-violet-400"
+      >
+        <div className="space-y-2">
+          <SubScore label="Valuation sub-score" score={fund.valuation_score} />
+          <SubScore label="Health sub-score" score={fund.health_score} />
+          <div className="border-t border-gray-100 dark:border-slate-700 pt-2 mt-1 grid grid-cols-2 gap-x-6 gap-y-1.5">
+            {[
+              ["Trailing P/E", fund.pe != null ? fund.pe.toFixed(1) : "—"],
+              [`${fund.sector || "Sector"} P/E`, fund.sector_pe.toFixed(1)],
+              ["EPS Growth (TTM)", fund.eps_growth_pct != null ? `${fund.eps_growth_pct >= 0 ? "+" : ""}${fund.eps_growth_pct}%` : "—"],
+              ["Debt / Equity", fund.debt_to_equity != null ? fund.debt_to_equity.toFixed(2) : "—"],
+            ].map(([k, v]) => (
+              <div key={k as string} className="flex justify-between text-[11px]">
+                <span className="text-gray-400 dark:text-slate-500 truncate mr-1">{k}</span>
+                <span className="font-mono text-gray-700 dark:text-slate-300 shrink-0">{v}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-[10px] text-gray-400 dark:text-slate-600 mt-1">
+            Valuation: P/E vs sector &nbsp;·&nbsp; Health: EPS growth &amp; D/E
+          </p>
+        </div>
+      </FactorCard>
+
+      <FactorCard
+        icon={Newspaper} label="News Sentiment" score={data.scores.sentiment}
+        color="bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400"
+      >
+        <div className="space-y-2">
+          {sent.total > 0 ? (
+            <>
+              <div className="flex gap-4 text-[11px]">
+                {[
+                  { label: "Bullish", val: sent.bullish, cls: "text-emerald-600 dark:text-emerald-400" },
+                  { label: "Bearish", val: sent.bearish, cls: "text-red-500" },
+                  { label: "Neutral", val: sent.neutral, cls: "text-gray-400" },
+                ].map(({ label, val, cls }) => (
+                  <div key={label} className="flex flex-col items-center">
+                    <span className={`text-base font-bold ${cls}`}>{val}</span>
+                    <span className="text-gray-400 dark:text-slate-500">{label}</span>
+                  </div>
+                ))}
+                <div className="flex flex-col items-center ml-auto">
+                  <span className="text-base font-bold text-gray-600 dark:text-slate-300">{sent.total}</span>
+                  <span className="text-gray-400 dark:text-slate-500">Articles</span>
+                </div>
+              </div>
+
+              {/* Mini bar */}
+              <div className="flex h-1.5 rounded-full overflow-hidden gap-px">
+                {sent.bullish > 0 && (
+                  <div className="bg-emerald-400" style={{ flex: sent.bullish }} />
+                )}
+                {sent.neutral > 0 && (
+                  <div className="bg-gray-300 dark:bg-slate-600" style={{ flex: sent.neutral }} />
+                )}
+                {sent.bearish > 0 && (
+                  <div className="bg-red-400" style={{ flex: sent.bearish }} />
+                )}
+              </div>
+
+              {sent.headlines.length > 0 && (
+                <div className="mt-2 space-y-1.5">
+                  {sent.headlines.map((h, i) => (
+                    <div key={i} className="flex items-start gap-1.5">
+                      <SentimentIcon s={h.sentiment} />
+                      <p className="text-[11px] text-gray-600 dark:text-slate-400 leading-snug line-clamp-2">
+                        {h.title}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <p className="text-[11px] text-gray-400 dark:text-slate-500 italic">
+              No recent news available for sentiment analysis.
+            </p>
+          )}
+          <p className="text-[10px] text-gray-400 dark:text-slate-600 mt-1">
+            Score = (Bullish − Bearish) ÷ Total — powered by VADER NLP
+          </p>
+        </div>
+      </FactorCard>
+
+      {/* Signal legend */}
+      <div className="flex flex-wrap items-center gap-3 text-[10px] text-gray-400 dark:text-slate-500 px-1">
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> BUY ≥ +0.35</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-400 inline-block" /> HOLD −0.35 to +0.35</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" /> SELL ≤ −0.35</span>
+        <span className="ml-auto italic">For educational use only — not investment advice</span>
+      </div>
+    </div>
+  );
+}

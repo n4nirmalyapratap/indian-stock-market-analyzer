@@ -662,6 +662,9 @@ export const api = {
   stockTechnicalSummary: (symbol: string, interval = "1d") =>
     fetchApi<TechnicalSummary>(`/stocks/${encodeURIComponent(symbol)}/technical-summary?interval=${interval}`),
 
+  stockTriFactor: (symbol: string) =>
+    fetchApi<any>(`/stocks/${encodeURIComponent(symbol)}/tri-factor`),
+
   // ── Famous-Investor AI Council ──
   agentsList: () =>
     fetchApi<AgentsListResponse>("/agents"),
