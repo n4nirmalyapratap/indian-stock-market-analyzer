@@ -27,9 +27,14 @@ interface TriFactorData {
   };
 }
 
-const CX = 110, CY = 100, R = 80;
+const CX = 110, CY = 95, R = 78;
+// BUY/SELL thresholds — with 1/3 equal weights and each factor capped at ±1,
+// two factors strongly aligned yields ~0.33; use ±0.25 so the model signals
+const BUY_THRESH  =  0.25;
+const SELL_THRESH = -0.25;
 
 function scoreToDeg(s: number) {
+  // score -1 → 180°, 0 → 90°, +1 → 0°
   return 180 - ((s + 1) / 2) * 180;
 }
 
@@ -40,49 +45,64 @@ function degToXY(deg: number) {
 
 function ScoreGauge({ score, color }: { score: number; color: string }) {
   const TOTAL_LEN = Math.PI * R;
-  const fillLen = ((score + 1) / 2) * TOTAL_LEN;
-  const needle = degToXY(scoreToDeg(score));
+  // fillLen goes from 0 (score=-1) to TOTAL_LEN (score=+1)
+  const fillLen = Math.max(0, Math.min(TOTAL_LEN, ((score + 1) / 2) * TOTAL_LEN));
+  const needle  = degToXY(scoreToDeg(score));
 
-  const signal = score >= 0.35 ? "BUY" : score <= -0.35 ? "SELL" : "HOLD";
-  const sigColor =
-    score >= 0.35 ? "#10b981" : score <= -0.35 ? "#ef4444" : "#6b7280";
+  const signal   = score >= BUY_THRESH ? "BUY" : score <= SELL_THRESH ? "SELL" : "HOLD";
+  const sigColor = score >= BUY_THRESH ? "#10b981" : score <= SELL_THRESH ? "#ef4444" : "#94a3b8";
+
+  // Threshold tick positions
+  const buyTick  = degToXY(scoreToDeg(BUY_THRESH));
+  const sellTick = degToXY(scoreToDeg(SELL_THRESH));
+
+  const W = CX * 2;   // 220
+  const H = CY + 20;  // 115
 
   return (
     <div className="flex flex-col items-center select-none">
-      <svg width={CX * 2} height={CY + 14} viewBox={`0 0 ${CX * 2} ${CY + 14}`}>
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}>
+        {/* ── Background track ──────────────────────────────── */}
+        {/* sweep-flag=1 = clockwise in SVG = goes UPWARD through top ✓ */}
         <path
-          d={`M ${CX - R} ${CY} A ${R} ${R} 0 0 0 ${CX + R} ${CY}`}
-          fill="none" stroke="currentColor" strokeWidth="12" strokeLinecap="round"
-          className="text-gray-100 dark:text-slate-700"
+          d={`M ${CX - R} ${CY} A ${R} ${R} 0 0 1 ${CX + R} ${CY}`}
+          fill="none" stroke="currentColor" strokeWidth="10" strokeLinecap="round"
+          className="text-gray-200 dark:text-slate-700"
         />
-        <path
-          d={`M ${CX - R} ${CY} A ${R} ${R} 0 0 0 ${CX + R} ${CY}`}
-          fill="none" stroke={color} strokeWidth="12" strokeLinecap="round"
-          strokeDasharray={`${fillLen} ${TOTAL_LEN}`}
-          strokeDashoffset="0"
-        />
+
+        {/* ── Colored fill (left → needle, clockwise through top) ─ */}
+        {fillLen > 0.5 && (
+          <path
+            d={`M ${CX - R} ${CY} A ${R} ${R} 0 0 1 ${CX + R} ${CY}`}
+            fill="none" stroke={color} strokeWidth="10" strokeLinecap="round"
+            strokeDasharray={`${fillLen} ${TOTAL_LEN + 1}`}
+          />
+        )}
+
+        {/* ── BUY/SELL threshold ticks ─────────────────────── */}
+        <circle cx={buyTick.x}  cy={buyTick.y}  r="3" fill="#10b981" opacity="0.7" />
+        <circle cx={sellTick.x} cy={sellTick.y} r="3" fill="#ef4444" opacity="0.7" />
+
+        {/* ── Needle ───────────────────────────────────────── */}
         <line
           x1={CX} y1={CY}
           x2={needle.x} y2={needle.y}
           stroke={color} strokeWidth="2.5" strokeLinecap="round"
         />
-        <circle cx={CX} cy={CY} r="4" fill={color} />
-        <text
-          x={CX} y={CY - 22}
-          textAnchor="middle" fontSize="20" fontWeight="bold"
-          fill={sigColor} fontFamily="monospace"
-        >
+        <circle cx={CX} cy={CY} r="5" fill={color} />
+
+        {/* ── Signal label (inside the arc) ────────────────── */}
+        <text x={CX} y={CY - 30} textAnchor="middle" fontSize="19" fontWeight="bold" fill={sigColor}>
           {signal}
         </text>
-        <text
-          x={CX} y={CY - 6}
-          textAnchor="middle" fontSize="12"
-          fill={sigColor} fontFamily="monospace"
-        >
+        <text x={CX} y={CY - 12} textAnchor="middle" fontSize="11" fill={sigColor} fontFamily="monospace">
           {score >= 0 ? "+" : ""}{score.toFixed(3)}
         </text>
-        <text x={CX - R + 2} y={CY + 13} fontSize="9" fill="#9ca3af">-1</text>
-        <text x={CX + R - 8} y={CY + 13} fontSize="9" fill="#9ca3af">+1</text>
+
+        {/* ── Scale labels ─────────────────────────────────── */}
+        <text x={CX - R - 4} y={CY + 16} textAnchor="middle" fontSize="9" fill="#94a3b8">−1</text>
+        <text x={CX + R + 4} y={CY + 16} textAnchor="middle" fontSize="9" fill="#94a3b8">+1</text>
+        <text x={CX}         y={CY - R - 8} textAnchor="middle" fontSize="8" fill="#94a3b8">0</text>
       </svg>
     </div>
   );
@@ -91,7 +111,7 @@ function ScoreGauge({ score, color }: { score: number; color: string }) {
 function ScoreBar({ score, showLabel = true }: { score: number; showLabel?: boolean }) {
   const pct = Math.round(((score + 1) / 2) * 100);
   const color =
-    score >= 0.35 ? "bg-emerald-500" : score <= -0.35 ? "bg-red-500" : "bg-gray-400";
+    score >= BUY_THRESH ? "bg-emerald-500" : score <= SELL_THRESH ? "bg-red-500" : "bg-gray-400";
   return (
     <div className="flex items-center gap-2">
       <div className="flex-1 h-1.5 rounded-full bg-gray-100 dark:bg-slate-700 overflow-hidden">
@@ -131,10 +151,10 @@ function FactorCard({
   color: string; children: React.ReactNode; defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const sigText = score >= 0.35 ? "Bullish" : score <= -0.35 ? "Bearish" : "Neutral";
+  const sigText = score >= BUY_THRESH ? "Bullish" : score <= SELL_THRESH ? "Bearish" : "Neutral";
   const sigColor =
-    score >= 0.35 ? "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20"
-    : score <= -0.35 ? "text-red-500 bg-red-50 dark:bg-red-900/20"
+    score >= BUY_THRESH ? "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20"
+    : score <= SELL_THRESH ? "text-red-500 bg-red-50 dark:bg-red-900/20"
     : "text-gray-500 bg-gray-50 dark:bg-slate-700";
 
   return (
@@ -232,7 +252,7 @@ export default function TriFactorScoring({ symbol }: Props) {
   }, [data, weights]);
 
   const gaugeColor =
-    composite >= 0.35 ? "#10b981" : composite <= -0.35 ? "#ef4444" : "#6b7280";
+    composite >= BUY_THRESH ? "#10b981" : composite <= SELL_THRESH ? "#ef4444" : "#6b7280";
 
   if (isLoading) {
     return (
@@ -427,9 +447,9 @@ export default function TriFactorScoring({ symbol }: Props) {
 
       {/* Signal legend */}
       <div className="flex flex-wrap items-center gap-3 text-[10px] text-gray-400 dark:text-slate-500 px-1">
-        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> BUY ≥ +0.35</span>
-        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-400 inline-block" /> HOLD −0.35 to +0.35</span>
-        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" /> SELL ≤ −0.35</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> BUY ≥ +{BUY_THRESH}</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-400 inline-block" /> HOLD {SELL_THRESH} to +{BUY_THRESH}</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" /> SELL ≤ {SELL_THRESH}</span>
         <span className="ml-auto italic">For educational use only — not investment advice</span>
       </div>
     </div>

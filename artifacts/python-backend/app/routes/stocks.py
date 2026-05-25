@@ -755,12 +755,31 @@ async def get_tri_factor_score(symbol: str):
                        else -0.5 if (pe is not None and pe > sector_pe)
                        else 0.0)
 
+    # Return-on-equity fallback: use ROE ≥ 15% as proxy for "healthy" when
+    # earningsGrowth is unavailable (common for Indian small/mid-caps on yfinance)
+    roe: float | None = None
+    if info:
+        roe_raw = _sf(info.get("returnOnEquity"))
+        if roe_raw is not None:
+            roe = round(roe_raw * 100, 1)   # fraction → percent
+
     if eps_growth_pct is not None or debt_to_equity is not None:
-        eg_v = eps_growth_pct if eps_growth_pct is not None else 0.0
+        # Use reported EPS growth if available, else fall back to ROE proxy
+        if eps_growth_pct is not None:
+            eg_v = eps_growth_pct
+        elif roe is not None:
+            # Map ROE > 15% → +10% proxy growth; ROE < 0 → -10% proxy
+            eg_v = 15.0 if roe > 15 else (-5.0 if roe < 0 else 5.0)
+        else:
+            eg_v = 0.0
+
         de_v = debt_to_equity if debt_to_equity is not None else 0.5
         health_score = (0.5  if (eg_v > 10  and de_v < 1.0)
                         else -0.5 if (eg_v < 0   or  de_v > 2.0)
                         else 0.0)
+    elif roe is not None:
+        # Only ROE available — use it alone as health proxy
+        health_score = 0.5 if roe > 15 else (-0.5 if roe < 0 else 0.0)
     else:
         health_score = 0.0
 
