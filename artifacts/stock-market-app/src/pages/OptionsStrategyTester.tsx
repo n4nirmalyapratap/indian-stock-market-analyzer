@@ -1507,7 +1507,7 @@ export default function OptionsStrategyTester() {
             || s.name.toLowerCase().includes(stockSearch.toLowerCase())
         ).slice(0, 45);
         return (
-          <div className={`rounded-xl border shadow-sm overflow-hidden ${isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200"}`}>
+          <div className={`rounded-xl border shadow-sm ${isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200"}`}>
 
             {/* ── Mode toggle ─────────────────────────────────────────────── */}
             <div className={`flex items-center gap-3 border-b px-3 py-2 ${isDark ? "bg-slate-900/50 border-slate-700" : "bg-gray-50 border-gray-100"}`}>
