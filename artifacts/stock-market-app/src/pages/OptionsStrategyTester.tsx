@@ -1847,8 +1847,7 @@ export default function OptionsStrategyTester() {
                 };
               });
               setLegs(newLegs);
-              setStrategyName(qs.label);
-              setAnalysisDirty(true);
+              analyseStrategy(newLegs, qs.label);
             };
             return (
               <div className={`shrink-0 border-b px-3 py-2 flex flex-wrap items-center gap-x-1.5 gap-y-1.5 ${isDark ? "border-slate-700 bg-slate-900/30" : "border-gray-100 bg-gray-50/80"}`}>
