@@ -365,7 +365,7 @@ export default function TriFactorScoring({ symbol }: Props) {
             ))}
           </div>
           <p className="text-[10px] text-gray-400 dark:text-slate-600 mt-1">
-            Trend: price vs EMA50 vs EMA200 &nbsp;·&nbsp; Momentum: RSI &lt;30 / &gt;70
+            Trend: ±0.5 (price&gt;EMA50&gt;EMA200) or ±0.25 (EMA50 only) &nbsp;·&nbsp; Momentum: RSI linear ±0.5 around 50
           </p>
         </div>
       </FactorCard>

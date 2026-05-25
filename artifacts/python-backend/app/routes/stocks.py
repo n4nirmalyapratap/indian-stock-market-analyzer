@@ -820,15 +820,27 @@ async def get_tri_factor_score(symbol: str):
                 notes.append("RSI unavailable (insufficient bars)")
             data_note = "; ".join(notes) if notes else None
 
-            # Guard against price=0.0 with explicit None checks (not truthiness)
-            trend_ok = price is not None and ema50 is not None and ema200 is not None
-            trend = (0.5  if (trend_ok and price > ema50 > ema200)
-                     else -0.5 if (trend_ok and price < ema50 < ema200)
-                     else 0.0)
+            # Trend: use both EMAs when available for full ±0.5 signal;
+            # fall back to price vs EMA50 alone for a partial ±0.25 signal.
+            if price is not None and ema50 is not None and ema200 is not None:
+                if price > ema50 > ema200:
+                    trend = 0.5
+                elif price < ema50 < ema200:
+                    trend = -0.5
+                else:
+                    trend = 0.0
+            elif price is not None and ema50 is not None:
+                # EMA200 absent — partial signal off EMA50 alone
+                trend = 0.25 if price > ema50 else (-0.25 if price < ema50 else 0.0)
+            else:
+                trend = 0.0
 
-            momentum = (0.5  if (rsi14 is not None and rsi14 < 30)
-                        else -0.5 if (rsi14 is not None and rsi14 > 70)
-                        else 0.0)
+            # Momentum: proportional RSI — linear from 0 at RSI=50 to ±0.5 at 30/70
+            # RSI 66.9 → -0.5 × (66.9-50)/20 ≈ -0.42 instead of 0.0 at the hard cliff
+            if rsi14 is not None:
+                momentum = round(max(-0.5, min(0.5, -0.5 * (rsi14 - 50) / 20)), 3)
+            else:
+                momentum = 0.0
 
             def _r2(v: float | None) -> float | None:
                 return round(v, 2) if v is not None else None
@@ -847,7 +859,7 @@ async def get_tri_factor_score(symbol: str):
         except Exception as exc:
             return {**_TECH_NULL, "data_note": f"Computation error: {exc}"}
 
-    df = await svc.price.get_history_dataframe(sym, days=400)
+    df = await svc.price.get_history_dataframe(sym, days=600)
     if df is not None and not df.empty and len(df) >= 15:
         # Accept as few as 15 bars so RSI still computes; EMA200 will be None
         # if fewer than 200 bars, which is handled gracefully inside _compute_tech.
