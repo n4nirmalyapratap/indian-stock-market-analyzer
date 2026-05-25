@@ -1875,7 +1875,7 @@ export default function OptionsStrategyTester() {
                     ))}
                   </span>
                 ))}
-                <button onClick={() => addLeg()}
+                <button onClick={() => setChainCollapsed(false)}
                   className={`ml-auto flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-md border border-dashed transition shrink-0 ${isDark ? "border-slate-600 text-slate-400 hover:bg-slate-700" : "border-gray-200 text-gray-400 hover:bg-gray-50"}`}>
                   <Plus className="w-2.5 h-2.5" /> Custom
                 </button>
