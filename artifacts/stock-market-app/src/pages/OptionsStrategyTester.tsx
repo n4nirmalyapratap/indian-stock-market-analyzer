@@ -1781,71 +1781,79 @@ export default function OptionsStrategyTester() {
       })()}
 
       {/* ── Main Workspace ─────────────────────────────────────────────────── */}
-      <div className="relative" style={{ height: 610 }}>
+      {/* Flex row: [pull-tab strip | main area] — tab never overlaps content */}
+      <div className="flex gap-0" style={{ height: 610 }}>
 
-        {/* ─── Chain overlay drawer (slides in from left over the main panel) ── */}
+        {/* ── Pull-tab strip (always 28 px, collapses to 0 when chain open) ── */}
         <div
-          className={`absolute left-0 top-0 bottom-0 z-20 flex flex-col rounded-xl border shadow-2xl overflow-hidden
-            transition-transform duration-300 ease-in-out
-            ${isDark ? "border-slate-600 bg-slate-800" : "border-gray-300 bg-white"}
-            ${chainCollapsed ? "-translate-x-full" : "translate-x-0"}`}
-          style={{ width: 400 }}
+          className={`relative flex-none flex flex-col items-center justify-center transition-all duration-300 ${chainCollapsed ? "w-7" : "w-0 overflow-hidden"}`}
         >
-          <div className={`shrink-0 px-3 py-2 border-b flex items-center justify-between ${isDark ? "border-slate-700 bg-slate-900/50" : "border-gray-100 bg-gray-50"}`}>
-            <div className="flex items-center gap-1.5">
-              <Layers className="w-3.5 h-3.5 text-indigo-400" />
-              <span className={`text-xs font-bold ${isDark ? "text-slate-200" : "text-gray-700"}`}>Option Chain</span>
-              {spotInfo && (
-                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${isDark ? "bg-emerald-900/40 text-emerald-400" : "bg-emerald-50 text-emerald-600"}`}>
-                  ₹{spotInfo.atm.toLocaleString("en-IN")} ATM
-                </span>
-              )}
-            </div>
-            <button onClick={() => setChainCollapsed(true)}
-              className={`text-[10px] px-2.5 py-0.5 rounded-lg border transition font-medium
-                ${isDark ? "border-slate-600 text-slate-400 hover:bg-slate-700" : "border-gray-200 text-gray-400 hover:bg-gray-100"}`}>
-              ✕ Close
+          {chainCollapsed && (
+            <button
+              onClick={() => setChainCollapsed(false)}
+              title="Open Option Chain"
+              className={`flex flex-col items-center gap-1.5 py-5 px-1 h-36 rounded-r-xl border-y border-r shadow
+                ${isDark ? "bg-slate-700 border-slate-600 text-indigo-400 hover:bg-indigo-900/70 hover:border-indigo-700" : "bg-white border-gray-200 text-indigo-500 hover:bg-indigo-50 hover:border-indigo-300"}`}
+            >
+              <ChevronRight className="w-3 h-3 shrink-0" />
+              <span className="text-[7px] font-black tracking-[0.2em] uppercase shrink-0"
+                style={{ writingMode: "vertical-rl" }}>Chain</span>
             </button>
-          </div>
-          <div className="flex-1 overflow-hidden">
-            <OptionChainPanel
-              symbol={symbol}
-              spotInfo={spotInfo}
-              T={T}
-              onAddLeg={(l) => {
-                setLegs(prev => [...prev, {
-                  id:          crypto.randomUUID(),
-                  action:      l.action,
-                  option_type: l.option_type,
-                  strike:      l.strike,
-                  premium:     l.premium,
-                  lots:        l.lots,
-                  lot_size:    l.lot_size,
-                  iv:          l.iv,
-                }]);
-                setAnalysisDirty(true);
-              }}
-            />
-          </div>
+          )}
         </div>
 
-        {/* Pull-tab — appears on left edge when chain is hidden */}
-        <button
-          onClick={() => setChainCollapsed(false)}
-          title="Open Option Chain"
-          className={`absolute left-0 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center gap-1.5
-            py-5 px-1.5 rounded-r-xl shadow-lg border-y border-r transition-all duration-300
-            ${isDark ? "bg-indigo-900/80 border-indigo-700 text-indigo-300 hover:bg-indigo-800" : "bg-indigo-600 border-indigo-500 text-white hover:bg-indigo-700"}
-            ${chainCollapsed ? "opacity-100 translate-x-0" : "opacity-0 pointer-events-none -translate-x-4"}`}
-        >
-          <ChevronRight className="w-3 h-3" />
-          <span className="text-[8px] font-black tracking-[0.18em] uppercase"
-            style={{ writingMode: "vertical-rl" }}>Chain</span>
-        </button>
+        {/* ── Main area: chain drawer + strategy builder stacked in same space ─ */}
+        <div className="relative flex-1 overflow-hidden rounded-xl">
 
-        {/* ─── Strategy Builder + Payoff — fills full area ──────────────────── */}
-        <div className={`absolute inset-0 flex flex-col rounded-xl border overflow-hidden
-          ${isDark ? "border-slate-700 bg-slate-800" : "border-gray-200 bg-white shadow-sm"}`}>
+          {/* Chain overlay drawer (slides in from left) */}
+          <div
+            className={`absolute left-0 top-0 bottom-0 z-20 flex flex-col border-r shadow-2xl overflow-hidden
+              transition-transform duration-300 ease-in-out
+              ${isDark ? "border-slate-600 bg-slate-800" : "border-gray-300 bg-white"}
+              ${chainCollapsed ? "-translate-x-full" : "translate-x-0"}`}
+            style={{ width: 400 }}
+          >
+            <div className={`shrink-0 px-3 py-2 border-b flex items-center justify-between ${isDark ? "border-slate-700 bg-slate-900/50" : "border-gray-100 bg-gray-50"}`}>
+              <div className="flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5 text-indigo-400" />
+                <span className={`text-xs font-bold ${isDark ? "text-slate-200" : "text-gray-700"}`}>Option Chain</span>
+                {spotInfo && (
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${isDark ? "bg-emerald-900/40 text-emerald-400" : "bg-emerald-50 text-emerald-600"}`}>
+                    ₹{spotInfo.atm.toLocaleString("en-IN")} ATM
+                  </span>
+                )}
+              </div>
+              <button onClick={() => setChainCollapsed(true)}
+                className={`text-[10px] px-2.5 py-0.5 rounded-lg border transition font-medium
+                  ${isDark ? "border-slate-600 text-slate-400 hover:bg-slate-700" : "border-gray-200 text-gray-400 hover:bg-gray-100"}`}>
+                ✕ Close
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <OptionChainPanel
+                symbol={symbol}
+                spotInfo={spotInfo}
+                T={T}
+                onAddLeg={(l) => {
+                  setLegs(prev => [...prev, {
+                    id:          crypto.randomUUID(),
+                    action:      l.action,
+                    option_type: l.option_type,
+                    strike:      l.strike,
+                    premium:     l.premium,
+                    lots:        l.lots,
+                    lot_size:    l.lot_size,
+                    iv:          l.iv,
+                  }]);
+                  setAnalysisDirty(true);
+                }}
+              />
+            </div>
+          </div>
+
+          {/* ─── Strategy Builder + Payoff — fills full area ─────────────────── */}
+          <div className={`absolute inset-0 flex flex-col border overflow-hidden
+            ${isDark ? "border-slate-700 bg-slate-800" : "border-gray-200 bg-white shadow-sm"}`}>
 
           {/* Preset strategy chips */}
           {(() => {
@@ -2151,6 +2159,7 @@ export default function OptionsStrategyTester() {
             )}
           </div>
 
+        </div>
         </div>
       </div>
 
