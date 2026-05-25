@@ -147,6 +147,9 @@ def _to_yf_sym(symbol: str) -> str:
         "MIDCPNIFTY": "^NSMIDCP",
         "SENSEX":     "^BSESN",
         "BANKEX":     "BANKEX.BO",   # BSE BANKEX — try .BO format
+        # Zomato rebranded to Eternal Ltd in 2025; NSE symbol → ETERNAL
+        "ZOMATO":     "ETERNAL.NS",
+        "ETERNAL":    "ETERNAL.NS",
     }
     if upper in _MAP:
         return _MAP[upper]

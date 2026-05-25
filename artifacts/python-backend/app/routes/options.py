@@ -1099,7 +1099,7 @@ _FO_STOCKS: list[tuple[str, str, str, int]] = [
     ("CUMMINSIND", "Cummins India",             "Industrials",  400),
     ("THERMAX",    "Thermax",                   "Industrials",  225),
     # New Age / Tech
-    ("ZOMATO",     "Zomato",                    "New Age",     5625),
+    ("ETERNAL",    "Eternal Ltd (Zomato)",      "New Age",     5625),
     ("IRCTC",      "IRCTC",                     "New Age",     2000),
     ("NAUKRI",     "Info Edge (Naukri)",        "New Age",      175),
     ("INDIAMART",  "IndiaMart InterMESH",       "New Age",       75),
