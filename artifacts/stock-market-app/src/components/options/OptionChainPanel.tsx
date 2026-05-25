@@ -241,12 +241,24 @@ export default function OptionChainPanel({
     }
   }, [selExpiry]); // eslint-disable-line
 
-  // When spotInfo arrives late (symbol switched before spot loaded), regenerate
+  // When spotInfo arrives late (symbol switched before spot loaded), regenerate or create synthetic
   useEffect(() => {
-    if (spotInfo && isSynthetic) {
-      const T_y = Math.max(T, 1) / 365;
+    if (!spotInfo || spotInfo.spot <= 0) return;
+    const T_y = Math.max(T, 1) / 365;
+    if (isSynthetic) {
+      // Already synthetic — just update prices for new spot
       const { calls: sc, puts: sp } = generateSyntheticChain(spotInfo.spot, spotInfo.hv30, T_y);
       setCalls(sc); setPuts(sp);
+    } else if (!calls.length && !puts.length) {
+      // Had no data (live chain failed before spot arrived) — generate synthetic now
+      setError("");
+      setIsSynthetic(true);
+      const synExp = nextThursdays(4);
+      setExpiries(synExp);
+      setSelExpiry(synExp[0]);
+      const { calls: sc, puts: sp } = generateSyntheticChain(spotInfo.spot, spotInfo.hv30, T_y);
+      setCalls(sc); setPuts(sp);
+      setSource("Synthetic · BS");
     }
   }, [spotInfo?.spot]); // eslint-disable-line
 
@@ -274,28 +286,27 @@ export default function OptionChainPanel({
   const atmRowBg  = isDark ? "bg-indigo-900/25" : "bg-indigo-50";
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col h-full">
 
-      {/* ── Toolbar ──────────────────────────────────────────────────────────── */}
-      <div className={`rounded-xl border ${card} px-4 py-3 flex flex-wrap items-center gap-3`}>
-        <div className="flex items-center gap-2">
-          <span className={`text-xs font-semibold ${muted} uppercase tracking-wide`}>Expiry</span>
-          <select
-            value={selExpiry}
-            onChange={e => setSelExpiry(e.target.value)}
-            className={`border rounded-lg px-3 py-1.5 text-sm font-medium transition
-              ${isDark ? "bg-slate-700 border-slate-600 text-slate-200" : "border-gray-200 text-gray-700 bg-white"}`}
-          >
+      {/* ── Compact toolbar (pinned) ─────────────────────────────────────────── */}
+      <div className={`shrink-0 px-3 py-2 border-b flex flex-wrap items-center gap-2
+        ${isDark ? "border-slate-700 bg-slate-900/30" : "border-gray-100 bg-gray-50/70"}`}>
+
+        <div className="flex items-center gap-1.5">
+          <span className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>Expiry</span>
+          <select value={selExpiry} onChange={e => setSelExpiry(e.target.value)}
+            className={`border rounded px-2 py-1 text-[11px] font-medium
+              ${isDark ? "bg-slate-700 border-slate-600 text-slate-200" : "border-gray-200 text-gray-700 bg-white"}`}>
             {expiries.map(e => <option key={e} value={e}>{e}</option>)}
             {!expiries.length && <option value="">Loading…</option>}
           </select>
         </div>
 
-        <div className="flex items-center gap-1.5">
-          <span className={`text-xs font-semibold ${muted} uppercase tracking-wide`}>Depth</span>
+        <div className="flex items-center gap-1">
+          <span className={`text-[10px] font-bold uppercase tracking-widest ${muted}`}>Depth</span>
           {[8, 12, 16, 20].map(n => (
             <button key={n} onClick={() => setDepth(n)}
-              className={`text-xs px-2 py-1 rounded border font-semibold transition
+              className={`text-[10px] px-1.5 py-0.5 rounded border font-bold transition
                 ${depth === n
                   ? "bg-indigo-600 text-white border-indigo-600"
                   : isDark ? "border-slate-600 text-slate-400 hover:border-indigo-400" : "border-gray-200 text-gray-500 hover:border-indigo-300"}`}>
@@ -304,194 +315,173 @@ export default function OptionChainPanel({
           ))}
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-1.5">
           {source && (
-            <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${
+            <span className={`text-[9px] px-1.5 py-0.5 rounded border font-medium ${
               isSynthetic
-                ? isDark ? "border-amber-700/50 text-amber-400 bg-amber-900/20" : "border-amber-300 text-amber-700 bg-amber-50"
+                ? isDark ? "border-amber-700/40 text-amber-400 bg-amber-900/20" : "border-amber-300 text-amber-700 bg-amber-50"
                 : `${muted} ${isDark ? "border-slate-700" : "border-gray-200"}`
             }`}>
-              {isSynthetic ? "⚡ " : "via "}{source}
+              {isSynthetic ? "⚡ " : ""}{source}
             </span>
           )}
-          <button
-            onClick={() => fetchChain(symbol, selExpiry)}
-            disabled={loading}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition
-              ${isDark ? "bg-slate-700 text-slate-300 hover:bg-slate-600" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
-          >
-            <RefreshCw className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} /> Refresh
+          <button onClick={() => fetchChain(symbol, selExpiry)} disabled={loading}
+            className={`flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded border transition
+              ${isDark ? "bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600" : "bg-white border-gray-200 text-gray-500 hover:bg-gray-100"}`}>
+            <RefreshCw className={`w-2.5 h-2.5 ${loading ? "animate-spin" : ""}`} /> Refresh
           </button>
         </div>
       </div>
 
-      {error && (
-        <div className={`flex items-center gap-2 text-sm rounded-xl px-4 py-3 border
-          ${isDark ? "bg-rose-950/30 border-rose-800 text-rose-300" : "bg-red-50 border-red-200 text-red-700"}`}>
-          <AlertTriangle className="w-4 h-4 shrink-0" /> {error}
-        </div>
-      )}
+      {/* ── Scrollable chain content ─────────────────────────────────────────── */}
+      <div className="flex-1 overflow-y-auto">
 
-      {isSynthetic && (
-        <div className={`flex items-start gap-2 text-xs rounded-xl px-4 py-2.5 border
-          ${isDark ? "bg-amber-950/30 border-amber-800/50 text-amber-400" : "bg-amber-50 border-amber-200 text-amber-700"}`}>
-          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-          <span>
-            <strong>Theoretical chain</strong> — Live NSE data is unavailable from this server.
-            Prices, IV, and OI are computed via Black-Scholes using the current spot &amp; HV30.
-            B/S buttons work normally to add legs to your strategy basket.
-          </span>
-        </div>
-      )}
+        {/* Synthetic notice */}
+        {isSynthetic && (
+          <div className={`flex items-start gap-2 text-[10px] px-3 py-2 border-b
+            ${isDark ? "bg-amber-950/20 border-amber-800/30 text-amber-400" : "bg-amber-50 border-amber-100 text-amber-700"}`}>
+            <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+            <span><strong>Theoretical chain</strong> — NSE data unavailable. Prices via Black-Scholes (spot + HV30). B/S buttons work normally.</span>
+          </div>
+        )}
 
-      {loading && !calls.length ? (
-        <div className={`flex items-center justify-center h-48 gap-2 ${muted}`}>
-          <RefreshCw className="w-5 h-5 animate-spin" />
-          <span className="text-sm">Loading option chain…</span>
-        </div>
-      ) : (
-        <div className={`rounded-2xl border overflow-hidden ${isDark ? "border-slate-700" : "border-gray-200"}`}>
+        {/* Error */}
+        {error && (
+          <div className={`flex items-center gap-2 text-xs px-3 py-2 border-b
+            ${isDark ? "bg-rose-950/20 border-rose-800/30 text-rose-300" : "bg-red-50 border-red-100 text-red-700"}`}>
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {error}
+          </div>
+        )}
 
-          {/* ATM banner */}
-          {atm > 0 && (
-            <div className={`px-4 py-1.5 text-xs font-semibold flex items-center gap-3
-              ${isDark ? "bg-indigo-900/40 text-indigo-300 border-b border-indigo-800/40" : "bg-indigo-50 text-indigo-700 border-b border-indigo-100"}`}>
-              <span className="w-2 h-2 rounded-full bg-indigo-500 shrink-0" />
-              ATM ₹{atm.toLocaleString("en-IN")}
-              {spotInfo && <span className="opacity-60">· Spot ₹{spotInfo.spot.toLocaleString("en-IN")} · DTE {T}d</span>}
+        {/* Loading skeleton */}
+        {loading && !calls.length ? (
+          <div className={`flex items-center justify-center h-40 gap-2 ${muted}`}>
+            <RefreshCw className="w-4 h-4 animate-spin" />
+            <span className="text-xs">Loading chain…</span>
+          </div>
+        ) : calls.length > 0 || puts.length > 0 ? (
+          <>
+            {/* ATM banner */}
+            {atm > 0 && (
+              <div className={`px-3 py-1 text-[10px] font-semibold flex items-center gap-2 sticky top-0 z-10
+                ${isDark ? "bg-indigo-900/40 text-indigo-300 border-b border-indigo-800/40" : "bg-indigo-50 text-indigo-600 border-b border-indigo-100"}`}>
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" />
+                ATM ₹{atm.toLocaleString("en-IN")}
+                {spotInfo && <span className="opacity-60">· Spot ₹{spotInfo.spot.toLocaleString("en-IN")} · DTE {T}d</span>}
+              </div>
+            )}
+
+            {/* Column headers */}
+            <div className={`grid text-[8px] font-bold uppercase tracking-wide px-2 py-1 sticky ${atm > 0 ? "top-[26px]" : "top-0"} z-10 ${head}`}
+              style={{ gridTemplateColumns: "1fr 60px 50px 38px 34px 34px 72px 34px 34px 38px 50px 60px 1fr" }}>
+              <div className="text-right pr-1">Actions</div>
+              <div className="text-right pr-1">LTP</div>
+              <div className="text-right pr-1">OI</div>
+              <div className="text-right pr-1">IV%</div>
+              <div className="text-right pr-1">Δ</div>
+              <div className="text-right pr-1">Θ</div>
+              <div className={`text-center text-[8px] font-black ${isDark ? "text-indigo-400" : "text-indigo-500"}`}>CALL ↔ STRIKE ↔ PUT</div>
+              <div className="text-left pl-1">Δ</div>
+              <div className="text-left pl-1">Θ</div>
+              <div className="text-left pl-1">IV%</div>
+              <div className="text-left pl-1">OI</div>
+              <div className="text-left pl-1">LTP</div>
+              <div className="text-left pl-1">Actions</div>
             </div>
-          )}
 
-          {/* Column headers */}
-          <div className={`grid text-[9px] font-bold uppercase tracking-wide px-2 py-1.5 ${head}`}
-            style={{ gridTemplateColumns: "1fr 68px 58px 42px 38px 38px 80px 38px 38px 42px 58px 68px 1fr" }}>
-            <div className="text-right pr-1">Actions</div>
-            <div className="text-right pr-1">LTP</div>
-            <div className="text-right pr-1">OI</div>
-            <div className="text-right pr-1">IV%</div>
-            <div className="text-right pr-1">Δ</div>
-            <div className="text-right pr-1">Θ</div>
-            <div className="text-center text-indigo-500">CALL ↔ STRIKE ↔ PUT</div>
-            <div className="text-left pl-1">Δ</div>
-            <div className="text-left pl-1">Θ</div>
-            <div className="text-left pl-1">IV%</div>
-            <div className="text-left pl-1">OI</div>
-            <div className="text-left pl-1">LTP</div>
-            <div className="text-left pl-1">Actions</div>
+            {/* Strike rows */}
+            <div className={`divide-y ${divBorder}`}>
+              {visStrikes.map(strike => {
+                const call = callMap[strike];
+                const put  = putMap[strike];
+                const isAtm = strike === allStrikes[atmIdx];
+                const S = spotInfo?.spot ?? 0;
+                const hv = spotInfo?.hv30 ?? 0.20;
+                const cG = call && S > 0 ? bsGreeks(S, strike, T_years, r, call.iv || hv, "call") : null;
+                const pG = put  && S > 0 ? bsGreeks(S, strike, T_years, r, put.iv  || hv, "put")  : null;
+
+                const rowBg = isAtm
+                  ? atmRowBg
+                  : call?.inTheMoney
+                    ? isDark ? "bg-slate-800/40" : "bg-blue-50/30"
+                    : "";
+
+                return (
+                  <div key={strike}
+                    style={{ gridTemplateColumns: "1fr 60px 50px 38px 34px 34px 72px 34px 34px 38px 50px 60px 1fr" }}
+                    className={`grid px-2 py-0.5 text-xs items-center ${rowBg}`}>
+
+                    {/* CALL: Actions */}
+                    <div className="flex items-center justify-end gap-0.5 pr-1">
+                      {call ? (
+                        <><AddBtn action="sell" type="call" row={call} spotInfo={spotInfo} onAddLeg={onAddLeg} />
+                          <AddBtn action="buy"  type="call" row={call} spotInfo={spotInfo} onAddLeg={onAddLeg} /></>
+                      ) : <span className={muted}>—</span>}
+                    </div>
+                    {/* CALL: LTP */}
+                    <div className={`text-right pr-1 font-mono font-semibold text-[10px] ${isDark ? "text-slate-200" : "text-gray-800"}`}>
+                      {call ? fmtPx(call.lastPrice) : "—"}
+                    </div>
+                    {/* CALL: OI */}
+                    <div className={`text-right pr-1 font-mono text-[9px] ${muted}`}>{call ? fmtOI(call.oi) : "—"}</div>
+                    {/* CALL: IV */}
+                    <div className={`text-right pr-1 font-mono text-[9px] ${call?.iv ? isDark ? "text-amber-400" : "text-amber-600" : muted}`}>
+                      {call?.iv ? `${(call.iv * 100).toFixed(1)}` : "—"}
+                    </div>
+                    {/* CALL: Delta */}
+                    <div className={`text-right pr-1 font-mono text-[9px] ${cG && cG.delta > 0.5 ? "text-indigo-500" : muted}`}>
+                      {cG ? cG.delta.toFixed(2) : "—"}
+                    </div>
+                    {/* CALL: Theta */}
+                    <div className={`text-right pr-1 font-mono text-[9px] ${muted}`}>
+                      {cG ? cG.theta.toFixed(1) : "—"}
+                    </div>
+                    {/* STRIKE */}
+                    <div className={`text-center font-bold py-0.5 rounded text-[11px]
+                      ${isAtm ? "bg-indigo-600 text-white" : isDark ? "text-slate-200" : "text-gray-700"}`}>
+                      {strike.toLocaleString("en-IN")}
+                    </div>
+                    {/* PUT: Delta */}
+                    <div className={`text-left pl-1 font-mono text-[9px] ${pG && Math.abs(pG.delta) > 0.5 ? "text-rose-500" : muted}`}>
+                      {pG ? pG.delta.toFixed(2) : "—"}
+                    </div>
+                    {/* PUT: Theta */}
+                    <div className={`text-left pl-1 font-mono text-[9px] ${muted}`}>
+                      {pG ? pG.theta.toFixed(1) : "—"}
+                    </div>
+                    {/* PUT: IV */}
+                    <div className={`text-left pl-1 font-mono text-[9px] ${put?.iv ? isDark ? "text-amber-400" : "text-amber-600" : muted}`}>
+                      {put?.iv ? `${(put.iv * 100).toFixed(1)}` : "—"}
+                    </div>
+                    {/* PUT: OI */}
+                    <div className={`text-left pl-1 font-mono text-[9px] ${muted}`}>{put ? fmtOI(put.oi) : "—"}</div>
+                    {/* PUT: LTP */}
+                    <div className={`text-left pl-1 font-mono font-semibold text-[10px] ${isDark ? "text-slate-200" : "text-gray-800"}`}>
+                      {put ? fmtPx(put.lastPrice) : "—"}
+                    </div>
+                    {/* PUT: Actions */}
+                    <div className="flex items-center gap-0.5 pl-1">
+                      {put ? (
+                        <><AddBtn action="buy"  type="put" row={put} spotInfo={spotInfo} onAddLeg={onAddLeg} />
+                          <AddBtn action="sell" type="put" row={put} spotInfo={spotInfo} onAddLeg={onAddLeg} /></>
+                      ) : <span className={muted}>—</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        ) : !loading && !error ? (
+          <div className={`flex flex-col items-center justify-center h-32 gap-2 ${muted}`}>
+            <Activity className="w-7 h-7 opacity-20" />
+            <p className="text-xs">No chain data for {symbol}</p>
           </div>
+        ) : null}
 
-          {/* Strike rows */}
-          <div className={`divide-y ${divBorder}`}>
-            {visStrikes.map(strike => {
-              const call = callMap[strike];
-              const put  = putMap[strike];
-              const isAtm = strike === allStrikes[atmIdx];
-              const S = spotInfo?.spot ?? 0;
-              const hv = spotInfo?.hv30 ?? 0.20;
-              const cG = call && S > 0 ? bsGreeks(S, strike, T_years, r, call.iv || hv, "call") : null;
-              const pG = put  && S > 0 ? bsGreeks(S, strike, T_years, r, put.iv  || hv, "put")  : null;
-
-              const rowBg = isAtm
-                ? atmRowBg
-                : call?.inTheMoney
-                  ? isDark ? "bg-slate-800/60" : "bg-blue-50/20"
-                  : "";
-
-              return (
-                <div
-                  key={strike}
-                  style={{ gridTemplateColumns: "1fr 68px 58px 42px 38px 38px 80px 38px 38px 42px 58px 68px 1fr" }}
-                  className={`grid px-2 py-1 text-xs items-center ${rowBg}`}
-                >
-                  {/* CALL: Actions (B/S) */}
-                  <div className="flex items-center justify-end gap-1 pr-1">
-                    {call ? (
-                      <>
-                        <AddBtn action="sell" type="call" row={call} spotInfo={spotInfo} onAddLeg={onAddLeg} />
-                        <AddBtn action="buy"  type="call" row={call} spotInfo={spotInfo} onAddLeg={onAddLeg} />
-                      </>
-                    ) : <span className={muted}>—</span>}
-                  </div>
-
-                  {/* CALL: LTP */}
-                  <div className={`text-right pr-1 font-mono font-semibold text-[11px] ${isDark ? "text-slate-200" : "text-gray-800"}`}>
-                    {call ? fmtPx(call.lastPrice) : "—"}
-                  </div>
-
-                  {/* CALL: OI */}
-                  <div className={`text-right pr-1 font-mono text-[10px] ${muted}`}>{call ? fmtOI(call.oi) : "—"}</div>
-
-                  {/* CALL: IV */}
-                  <div className={`text-right pr-1 font-mono text-[10px] ${call?.iv ? "text-amber-600 dark:text-amber-400" : muted}`}>
-                    {call?.iv ? `${(call.iv * 100).toFixed(1)}` : "—"}
-                  </div>
-
-                  {/* CALL: Delta */}
-                  <div className={`text-right pr-1 font-mono text-[10px] ${cG && cG.delta > 0.5 ? "text-indigo-500" : muted}`}>
-                    {cG ? cG.delta.toFixed(2) : "—"}
-                  </div>
-
-                  {/* CALL: Theta */}
-                  <div className={`text-right pr-1 font-mono text-[10px] ${muted}`}>
-                    {cG ? cG.theta.toFixed(1) : "—"}
-                  </div>
-
-                  {/* STRIKE (centre) */}
-                  <div className={`text-center font-bold py-0.5 px-1 rounded text-xs
-                    ${isAtm ? "bg-indigo-600 text-white" : isDark ? "text-slate-200" : "text-gray-700"}`}>
-                    {strike.toLocaleString("en-IN")}
-                  </div>
-
-                  {/* PUT: Delta */}
-                  <div className={`text-left pl-1 font-mono text-[10px] ${pG && Math.abs(pG.delta) > 0.5 ? "text-rose-500" : muted}`}>
-                    {pG ? pG.delta.toFixed(2) : "—"}
-                  </div>
-
-                  {/* PUT: Theta */}
-                  <div className={`text-left pl-1 font-mono text-[10px] ${muted}`}>
-                    {pG ? pG.theta.toFixed(1) : "—"}
-                  </div>
-
-                  {/* PUT: IV */}
-                  <div className={`text-left pl-1 font-mono text-[10px] ${put?.iv ? "text-amber-600 dark:text-amber-400" : muted}`}>
-                    {put?.iv ? `${(put.iv * 100).toFixed(1)}` : "—"}
-                  </div>
-
-                  {/* PUT: OI */}
-                  <div className={`text-left pl-1 font-mono text-[10px] ${muted}`}>{put ? fmtOI(put.oi) : "—"}</div>
-
-                  {/* PUT: LTP */}
-                  <div className={`text-left pl-1 font-mono font-semibold text-[11px] ${isDark ? "text-slate-200" : "text-gray-800"}`}>
-                    {put ? fmtPx(put.lastPrice) : "—"}
-                  </div>
-
-                  {/* PUT: Actions (B/S) */}
-                  <div className="flex items-center gap-1 pl-1">
-                    {put ? (
-                      <>
-                        <AddBtn action="buy"  type="put" row={put} spotInfo={spotInfo} onAddLeg={onAddLeg} />
-                        <AddBtn action="sell" type="put" row={put} spotInfo={spotInfo} onAddLeg={onAddLeg} />
-                      </>
-                    ) : <span className={muted}>—</span>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-        </div>
-      )}
-
-      {!loading && !calls.length && !puts.length && !error && (
-        <div className={`flex flex-col items-center justify-center h-32 gap-2 ${muted}`}>
-          <Activity className="w-8 h-8 opacity-20" />
-          <p className="text-sm">No option chain data available for {symbol}</p>
-        </div>
-      )}
-
-      <p className={`text-[10px] ${muted} text-center`}>
-        B = Buy · S = Sell · Click any button to add leg to strategy basket · Δ = Delta · Θ = Theta/day
-      </p>
+        <p className={`text-[9px] ${muted} text-center py-2 px-2`}>
+          B = Buy · S = Sell · Δ = Delta · Θ = Theta/day
+        </p>
+      </div>
     </div>
   );
 }
