@@ -812,10 +812,13 @@ async def get_tri_factor_score(symbol: str):
             ema200 = _sf(ema200_s.iloc[-1]) if not ema200_s.empty else None
             rsi14  = _sf(rsi_s.iloc[-1])    if not rsi_s.empty    else None
 
-            # Adaptive long EMA: use the longest stable window computable
-            # from the available bars (capped at 200).  Needs at least 10
-            # extra bars beyond the window so the EMA has settled.
-            long_window = min(200, max(50, n - 10))
+            # Adaptive long EMA: use Option-A ratio rule (2.5× warm-up requirement).
+            # An EMA of window W needs ~2.5×W bars to be well-settled;
+            # using n−10 would give EMA146 from 156 bars — only 10 recursive
+            # steps past the SMA seed, meaning the "EMA" is 87% SMA and 13%
+            # exponential.  floor(n/2.5) guarantees ≥1.5W settling bars.
+            # Cap at 200 (canonical long anchor); floor at 50 (EMA50 minimum).
+            long_window = min(200, max(50, int(n / 2.5)))
             ema_long_s = EMAIndicator(close, window=long_window).ema_indicator().dropna()
             ema_long   = _sf(ema_long_s.iloc[-1]) if not ema_long_s.empty else None
             # Keep ema200 as the "canonical" slot; overwrite with adaptive value
