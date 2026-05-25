@@ -4,7 +4,7 @@ import { fmtINR, pct, fmt, clr, bg, computeHeatBars, QUICK_STRATEGIES } from "@/
 import { useTheme } from "@/context/ThemeContext";
 import {
   TrendingUp, TrendingDown, Plus, Trash2, Play, BarChart2,
-  AlertTriangle, RefreshCw, ChevronDown, Target, Activity,
+  AlertTriangle, RefreshCw, ChevronDown, ChevronRight, Target, Activity,
   Shield, Zap, Info, X, Sparkles, BookOpen, Search, Layers
 } from "lucide-react";
 import {
@@ -1312,6 +1312,7 @@ export default function OptionsStrategyTester() {
     setLegs(prev => [...prev, newLeg]);
     setStrategyName(null);   // custom leg = no named strategy
     setAnalysisDirty(true);
+    setChainCollapsed(false); // open chain so user can pick strikes
   }
 
   function removeLeg(id: string) {
@@ -1780,74 +1781,71 @@ export default function OptionsStrategyTester() {
       })()}
 
       {/* ── Main Workspace ─────────────────────────────────────────────────── */}
-      <div className="grid gap-3" style={{ gridTemplateColumns: chainCollapsed ? "44px 1fr" : "420px 1fr" }}>
+      <div className="relative" style={{ height: 610 }}>
 
-        {/* ─── LEFT: Option Chain (collapsible) ─────────────────────────────── */}
-        <div className={`flex flex-col rounded-xl border overflow-hidden transition-all ${isDark ? "border-slate-700 bg-slate-800" : "border-gray-200 bg-white shadow-sm"}`}
-          style={{ height: 610 }}>
-          {/* Panel header + collapse toggle */}
-          <div className={`shrink-0 px-3 py-2 border-b flex items-center justify-between ${isDark ? "border-slate-700 bg-slate-900/40" : "border-gray-100 bg-gray-50"}`}>
-            {chainCollapsed ? (
-              <button onClick={() => setChainCollapsed(false)}
-                className="flex flex-col items-center gap-1 w-full py-1"
-                title="Expand Option Chain">
-                <Layers className="w-4 h-4 text-indigo-400" />
-                <span className="text-[8px] font-bold text-indigo-400 uppercase tracking-widest"
-                  style={{ writingMode: "vertical-rl", transform: "rotate(180deg)", letterSpacing: "0.1em" }}>
-                  Chain
+        {/* ─── Chain overlay drawer (slides in from left over the main panel) ── */}
+        <div
+          className={`absolute left-0 top-0 bottom-0 z-20 flex flex-col rounded-xl border shadow-2xl overflow-hidden
+            transition-transform duration-300 ease-in-out
+            ${isDark ? "border-slate-600 bg-slate-800" : "border-gray-300 bg-white"}
+            ${chainCollapsed ? "-translate-x-full" : "translate-x-0"}`}
+          style={{ width: 400 }}
+        >
+          <div className={`shrink-0 px-3 py-2 border-b flex items-center justify-between ${isDark ? "border-slate-700 bg-slate-900/50" : "border-gray-100 bg-gray-50"}`}>
+            <div className="flex items-center gap-1.5">
+              <Layers className="w-3.5 h-3.5 text-indigo-400" />
+              <span className={`text-xs font-bold ${isDark ? "text-slate-200" : "text-gray-700"}`}>Option Chain</span>
+              {spotInfo && (
+                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${isDark ? "bg-emerald-900/40 text-emerald-400" : "bg-emerald-50 text-emerald-600"}`}>
+                  ₹{spotInfo.atm.toLocaleString("en-IN")} ATM
                 </span>
-              </button>
-            ) : (
-              <>
-                <div className="flex items-center gap-1.5">
-                  <Layers className="w-3.5 h-3.5 text-indigo-400" />
-                  <span className={`text-xs font-bold ${isDark ? "text-slate-300" : "text-gray-600"}`}>Option Chain</span>
-                  {spotInfo && (
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${isDark ? "bg-emerald-900/40 text-emerald-400" : "bg-emerald-50 text-emerald-600"}`}>
-                      ₹{spotInfo.atm.toLocaleString("en-IN")} ATM
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  {!spotInfo && (
-                    <span className={`text-[9px] ${isDark ? "text-slate-600" : "text-gray-300"}`}>Select asset first</span>
-                  )}
-                  <button onClick={() => setChainCollapsed(true)}
-                    title="Collapse chain panel"
-                    className={`flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded transition ${isDark ? "text-slate-500 hover:text-slate-300 hover:bg-slate-700" : "text-gray-300 hover:text-gray-500 hover:bg-gray-100"}`}>
-                    ◀ Hide
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-          {/* Chain panel body — hidden when collapsed */}
-          {!chainCollapsed && (
-            <div className="flex-1 overflow-hidden">
-              <OptionChainPanel
-                symbol={symbol}
-                spotInfo={spotInfo}
-                T={T}
-                onAddLeg={(l) => {
-                  setLegs(prev => [...prev, {
-                    id:          crypto.randomUUID(),
-                    action:      l.action,
-                    option_type: l.option_type,
-                    strike:      l.strike,
-                    premium:     l.premium,
-                    lots:        l.lots,
-                    lot_size:    l.lot_size,
-                    iv:          l.iv,
-                  }]);
-                  setAnalysisDirty(true);
-                }}
-              />
+              )}
             </div>
-          )}
+            <button onClick={() => setChainCollapsed(true)}
+              className={`text-[10px] px-2.5 py-0.5 rounded-lg border transition font-medium
+                ${isDark ? "border-slate-600 text-slate-400 hover:bg-slate-700" : "border-gray-200 text-gray-400 hover:bg-gray-100"}`}>
+              ✕ Close
+            </button>
+          </div>
+          <div className="flex-1 overflow-hidden">
+            <OptionChainPanel
+              symbol={symbol}
+              spotInfo={spotInfo}
+              T={T}
+              onAddLeg={(l) => {
+                setLegs(prev => [...prev, {
+                  id:          crypto.randomUUID(),
+                  action:      l.action,
+                  option_type: l.option_type,
+                  strike:      l.strike,
+                  premium:     l.premium,
+                  lots:        l.lots,
+                  lot_size:    l.lot_size,
+                  iv:          l.iv,
+                }]);
+                setAnalysisDirty(true);
+              }}
+            />
+          </div>
         </div>
 
-        {/* ─── RIGHT: Strategy Builder + Payoff ─────────────────────────────── */}
-        <div className={`flex flex-col rounded-xl border overflow-hidden ${isDark ? "border-slate-700 bg-slate-800" : "border-gray-200 bg-white shadow-sm"}`} style={{ height: 610 }}>
+        {/* Pull-tab — appears on left edge when chain is hidden */}
+        <button
+          onClick={() => setChainCollapsed(false)}
+          title="Open Option Chain"
+          className={`absolute left-0 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center gap-1.5
+            py-5 px-1.5 rounded-r-xl shadow-lg border-y border-r transition-all duration-300
+            ${isDark ? "bg-indigo-900/80 border-indigo-700 text-indigo-300 hover:bg-indigo-800" : "bg-indigo-600 border-indigo-500 text-white hover:bg-indigo-700"}
+            ${chainCollapsed ? "opacity-100 translate-x-0" : "opacity-0 pointer-events-none -translate-x-4"}`}
+        >
+          <ChevronRight className="w-3 h-3" />
+          <span className="text-[8px] font-black tracking-[0.18em] uppercase"
+            style={{ writingMode: "vertical-rl" }}>Chain</span>
+        </button>
+
+        {/* ─── Strategy Builder + Payoff — fills full area ──────────────────── */}
+        <div className={`absolute inset-0 flex flex-col rounded-xl border overflow-hidden
+          ${isDark ? "border-slate-700 bg-slate-800" : "border-gray-200 bg-white shadow-sm"}`}>
 
           {/* Preset strategy chips */}
           {(() => {
@@ -2003,38 +2001,7 @@ export default function OptionsStrategyTester() {
               </table>
             )}
 
-            {/* Analysis summary cards + Greeks */}
-            {analysis && (
-              <div className={`border-t px-3 py-2 ${isDark ? "border-slate-700 bg-slate-900/20" : "border-gray-100 bg-gray-50/40"}`}>
-                <div className="grid grid-cols-3 gap-2 mb-2">
-                  {(() => {
-                    const np = analysis.payoff?.net_premium ?? 0;
-                    const isCredit = np >= 0;
-                    return (
-                      <div className={`rounded-lg border p-2 ${isCredit ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}>
-                        <p className="text-[9px] font-semibold text-gray-500 uppercase mb-0.5">Net Premium</p>
-                        <p className={`text-sm font-bold flex items-center gap-1 ${isCredit ? "text-green-700" : "text-red-600"}`}>
-                          {fmtINR(Math.abs(np))}
-                          <span className={`text-[8px] font-bold px-1 py-0.5 rounded ${isCredit ? "bg-green-200 text-green-800" : "bg-red-200 text-red-700"}`}>{isCredit ? "CR" : "DB"}</span>
-                        </p>
-                      </div>
-                    );
-                  })()}
-                  <div className={`rounded-lg border p-2 ${isDark ? "bg-slate-700/40 border-slate-600" : "bg-gray-50 border-gray-100"}`}>
-                    <p className={`text-[9px] uppercase mb-0.5 ${isDark ? "text-slate-400" : "text-gray-400"}`}>Max Profit</p>
-                    <p className="text-sm font-bold text-green-500">{analysis.payoff?.max_profit != null ? fmtINR(analysis.payoff.max_profit) : "∞"}</p>
-                  </div>
-                  <div className={`rounded-lg border p-2 ${isDark ? "bg-slate-700/40 border-slate-600" : "bg-gray-50 border-gray-100"}`}>
-                    <p className={`text-[9px] uppercase mb-0.5 ${isDark ? "text-slate-400" : "text-gray-400"}`}>Max Loss</p>
-                    <p className="text-sm font-bold text-red-500">{analysis.payoff?.max_loss != null ? fmtINR(analysis.payoff.max_loss) : "∞"}</p>
-                  </div>
-                </div>
-                <p className={`text-[9px] font-bold uppercase tracking-widest mb-1.5 ${isDark ? "text-slate-500" : "text-gray-400"}`}>Greeks</p>
-                <GreeksBar g={analysis.greeks} />
-              </div>
-            )}
-
-            {/* Run Analysis footer */}
+            {/* Run Analysis footer — sticky at bottom of legs scroll */}
             {legs.length > 0 && (
               <div className={`px-3 py-2 border-t flex items-center justify-between gap-2 sticky bottom-0 ${isDark ? "border-slate-700 bg-slate-800/95" : "border-gray-100 bg-white/95"}`}>
                 <div className={`text-[11px] flex items-center gap-1.5 ${isDark ? "text-slate-400" : "text-gray-400"}`}>
@@ -2054,6 +2021,51 @@ export default function OptionsStrategyTester() {
               </div>
             )}
           </div>
+
+          {/* ── P&L Summary strip — always visible below legs table ─────────── */}
+          {analysis && (
+            <div className={`shrink-0 border-b px-3 py-2 ${isDark ? "border-slate-700 bg-slate-900/20" : "border-gray-100 bg-gray-50/60"}`}>
+              <div className="flex items-stretch gap-2">
+                {/* Net Premium */}
+                {(() => {
+                  const np = analysis.payoff?.net_premium ?? 0;
+                  const isCredit = np >= 0;
+                  return (
+                    <div className={`flex-1 rounded-lg border px-2.5 py-1.5 ${isCredit
+                      ? isDark ? "bg-emerald-900/25 border-emerald-700/40" : "bg-green-50 border-green-200"
+                      : isDark ? "bg-rose-900/25 border-rose-700/40" : "bg-red-50 border-red-200"}`}>
+                      <p className={`text-[8px] font-bold uppercase tracking-widest mb-0.5 ${isDark ? "text-slate-500" : "text-gray-400"}`}>Net Premium</p>
+                      <p className={`text-sm font-bold leading-none flex items-center gap-1 ${isCredit ? isDark ? "text-emerald-300" : "text-green-700" : isDark ? "text-rose-300" : "text-red-600"}`}>
+                        {fmtINR(Math.abs(np))}
+                        <span className={`text-[8px] font-black px-1 rounded ${isCredit
+                          ? isDark ? "bg-emerald-800 text-emerald-300" : "bg-green-200 text-green-800"
+                          : isDark ? "bg-rose-800 text-rose-300" : "bg-red-200 text-red-700"}`}>{isCredit ? "CR" : "DB"}</span>
+                      </p>
+                    </div>
+                  );
+                })()}
+                {/* Max Profit */}
+                <div className={`flex-1 rounded-lg border px-2.5 py-1.5 ${isDark ? "bg-emerald-900/20 border-emerald-800/30" : "bg-green-50 border-green-100"}`}>
+                  <p className={`text-[8px] font-bold uppercase tracking-widest mb-0.5 ${isDark ? "text-slate-500" : "text-gray-400"}`}>Max Profit</p>
+                  <p className={`text-sm font-bold leading-none ${isDark ? "text-emerald-400" : "text-green-600"}`}>
+                    {analysis.payoff?.max_profit != null ? fmtINR(analysis.payoff.max_profit) : "∞"}
+                  </p>
+                </div>
+                {/* Max Loss */}
+                <div className={`flex-1 rounded-lg border px-2.5 py-1.5 ${isDark ? "bg-rose-900/20 border-rose-800/30" : "bg-red-50 border-red-100"}`}>
+                  <p className={`text-[8px] font-bold uppercase tracking-widest mb-0.5 ${isDark ? "text-slate-500" : "text-gray-400"}`}>Max Loss</p>
+                  <p className={`text-sm font-bold leading-none ${isDark ? "text-rose-400" : "text-red-600"}`}>
+                    {analysis.payoff?.max_loss != null ? fmtINR(analysis.payoff.max_loss) : "∞"}
+                  </p>
+                </div>
+                {/* Greeks inline */}
+                <div className={`flex-[2] rounded-lg border px-2.5 py-1.5 ${isDark ? "bg-slate-700/30 border-slate-600/50" : "bg-gray-50 border-gray-100"}`}>
+                  <p className={`text-[8px] font-bold uppercase tracking-widest mb-1 ${isDark ? "text-slate-500" : "text-gray-400"}`}>Greeks</p>
+                  <GreeksBar g={analysis.greeks} />
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Payoff / Simulator — fills remaining height */}
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
