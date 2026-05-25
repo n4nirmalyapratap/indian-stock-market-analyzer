@@ -887,10 +887,11 @@ async def get_tri_factor_score(symbol: str):
 
     df = await svc.price.get_history_dataframe(sym, days=600)
 
-    # BSE's StockReachGraph endpoint returns a fixed short window (~60 bars)
-    # regardless of the `days` argument.  When that happens, fall back to
-    # yfinance directly so EMA200 has enough data.
-    if df is None or df.empty or len(df) < 200:
+    # The service chain (NSE blocked → BSE ~60–500 bars → Yahoo) often
+    # returns fewer bars than a settled EMA200 requires.
+    # By the 2.5× warm-up rule, EMA200 needs 200×2.5 = 500 bars.
+    # If the chain returns < 500 bars, fall back to yfinance 3y directly.
+    if df is None or df.empty or len(df) < 500:
         def _yf_fetch(ticker: str) -> "pd.DataFrame":
             import yfinance as _yf
             import pandas as pd
