@@ -86,6 +86,7 @@ function generateSyntheticChain(
   const step  = strikeStep(spot);
   const atm   = Math.round(spot / step) * step;
   const r     = 0.07;
+  // Round to nearest ₹0.05 tick (NSE convention)
   const rnd   = (v: number) => Math.round(v * 20) / 20;
   const calls: ChainRow[] = [];
   const puts:  ChainRow[] = [];
@@ -93,13 +94,16 @@ function generateSyntheticChain(
     const K    = atm + i * step;
     if (K <= 0) continue;
     const mono = Math.abs(K - atm) / spot;
-    const iv   = Math.max(0.05, hv + (K < atm ? 1.5 : 0.8) * mono * 0.9);
-    const cp   = bsPrice(spot, K, T_years, r, iv, "call");
-    const pp   = bsPrice(spot, K, T_years, r, iv, "put");
+    // Indian market skew: OTM calls retain more value than OTM puts (reverse of US markets).
+    // We apply a mild positive skew to calls and a flat/minimal skew to puts.
+    const iv_c = Math.max(0.05, hv + 0.60 * mono);   // OTM calls: slight IV lift
+    const iv_p = Math.max(0.05, hv + 0.15 * mono);   // OTM puts:  near-flat IV
+    const cp   = bsPrice(spot, K, T_years, r, iv_c, "call");
+    const pp   = bsPrice(spot, K, T_years, r, iv_p, "put");
     const sp   = (v: number) => Math.max(0.05, v * 0.004);
     const oi   = Math.max(0, Math.round(900_000 * Math.exp(-5 * mono)));
-    calls.push({ strike: K, lastPrice: rnd(cp), bid: rnd(cp - sp(cp)), ask: rnd(cp + sp(cp)), iv, oi, volume: Math.round(oi * 0.12), inTheMoney: K < spot });
-    puts.push({  strike: K, lastPrice: rnd(pp), bid: rnd(pp - sp(pp)), ask: rnd(pp + sp(pp)), iv, oi, volume: Math.round(oi * 0.12), inTheMoney: K > spot });
+    calls.push({ strike: K, lastPrice: rnd(cp), bid: rnd(cp - sp(cp)), ask: rnd(cp + sp(cp)), iv: iv_c, oi, volume: Math.round(oi * 0.12), inTheMoney: K < spot });
+    puts.push({  strike: K, lastPrice: rnd(pp), bid: rnd(pp - sp(pp)), ask: rnd(pp + sp(pp)), iv: iv_p, oi, volume: Math.round(oi * 0.12), inTheMoney: K > spot });
   }
   return { calls, puts };
 }
