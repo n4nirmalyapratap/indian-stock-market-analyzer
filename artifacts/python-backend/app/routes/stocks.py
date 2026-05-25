@@ -860,9 +860,25 @@ async def get_tri_factor_score(symbol: str):
             return {**_TECH_NULL, "data_note": f"Computation error: {exc}"}
 
     df = await svc.price.get_history_dataframe(sym, days=600)
+
+    # BSE's StockReachGraph endpoint returns a fixed short window (~60 bars)
+    # regardless of the `days` argument.  When that happens, fall back to
+    # yfinance directly so EMA200 has enough data.
+    if df is None or df.empty or len(df) < 200:
+        def _yf_fetch(ticker: str) -> "pd.DataFrame":
+            import yfinance as _yf
+            import pandas as pd
+            yf_sym = ticker if "." in ticker else f"{ticker}.NS"
+            hist = _yf.Ticker(yf_sym).history(period="3y", interval="1d", auto_adjust=True)
+            if hist.empty and yf_sym.endswith(".NS"):
+                hist = _yf.Ticker(ticker).history(period="3y", interval="1d", auto_adjust=True)
+            return hist[["Open", "High", "Low", "Close", "Volume"]] if not hist.empty else pd.DataFrame()
+
+        df_yf = await asyncio.to_thread(_yf_fetch, sym)
+        if not df_yf.empty and len(df_yf) > (len(df) if df is not None else 0):
+            df = df_yf
+
     if df is not None and not df.empty and len(df) >= 15:
-        # Accept as few as 15 bars so RSI still computes; EMA200 will be None
-        # if fewer than 200 bars, which is handled gracefully inside _compute_tech.
         tech = await asyncio.to_thread(_compute_tech, df)
     else:
         bars = len(df) if df is not None else 0
