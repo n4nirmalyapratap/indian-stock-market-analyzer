@@ -341,10 +341,10 @@ export default function TriFactorScoring({ symbol }: Props) {
         defaultOpen
       >
         <div className="space-y-2">
-          {/* Data-completeness warning */}
+          {/* Adaptive EMA note — info tone, not a warning */}
           {tech.data_note && (
-            <div className="flex items-start gap-1.5 text-[10px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-2.5 py-1.5">
-              <span className="mt-px shrink-0">⚠</span>
+            <div className="flex items-start gap-1.5 text-[10px] text-sky-600 dark:text-sky-400 bg-sky-50 dark:bg-sky-900/20 rounded-lg px-2.5 py-1.5">
+              <span className="mt-px shrink-0">ℹ</span>
               <span>{tech.data_note}</span>
             </div>
           )}
@@ -354,7 +354,9 @@ export default function TriFactorScoring({ symbol }: Props) {
             {[
               ["Current Price", tech.price != null ? `₹${tech.price.toLocaleString("en-IN")}` : "—"],
               ["EMA 50",        tech.ema50  != null ? `₹${tech.ema50.toLocaleString("en-IN")}` : "—"],
-              ["EMA 200",       tech.ema200 != null ? `₹${tech.ema200.toLocaleString("en-IN")}` : "—"],
+              // Label dynamically: "EMA 200" for full history, "EMA N" for adaptive
+              [`EMA ${tech.ema_long_window ?? 200}`,
+                                tech.ema200 != null ? `₹${tech.ema200.toLocaleString("en-IN")}` : "—"],
               ["RSI (14)",      tech.rsi14  != null ? (tech.rsi14 as number).toFixed(1) : "—"],
               ...(tech.bars != null ? [["Price bars", String(tech.bars)]] : []),
             ].map(([k, v]) => (
@@ -365,7 +367,7 @@ export default function TriFactorScoring({ symbol }: Props) {
             ))}
           </div>
           <p className="text-[10px] text-gray-400 dark:text-slate-600 mt-1">
-            Trend: ±0.5 (price&gt;EMA50&gt;EMA200) or ±0.25 (EMA50 only) &nbsp;·&nbsp; Momentum: RSI linear ±0.5 around 50
+            Trend: ±0.5 (price&gt;EMA50&gt;EMA<em>{tech.ema_long_window ?? 200}</em>) or ±0.25 (EMA50 only &lt;100 bars) &nbsp;·&nbsp; Momentum: RSI linear ±0.5 around 50
           </p>
         </div>
       </FactorCard>

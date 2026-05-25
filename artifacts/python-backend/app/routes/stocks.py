@@ -812,25 +812,47 @@ async def get_tri_factor_score(symbol: str):
             ema200 = _sf(ema200_s.iloc[-1]) if not ema200_s.empty else None
             rsi14  = _sf(rsi_s.iloc[-1])    if not rsi_s.empty    else None
 
+            # Adaptive long EMA: use the longest stable window computable
+            # from the available bars (capped at 200).  Needs at least 10
+            # extra bars beyond the window so the EMA has settled.
+            long_window = min(200, max(50, n - 10))
+            ema_long_s = EMAIndicator(close, window=long_window).ema_indicator().dropna()
+            ema_long   = _sf(ema_long_s.iloc[-1]) if not ema_long_s.empty else None
+            # Keep ema200 as the "canonical" slot; overwrite with adaptive value
+            # when the true 200-bar EMA is unavailable.
+            if ema200 is None and ema_long is not None:
+                ema200 = ema_long          # used in the return dict below
+
             # Build a human-readable note about data completeness
             notes = []
-            if ema200 is None:
-                notes.append(f"EMA 200 unavailable (only {n} bars, need 200+)")
+            if long_window < 200:
+                notes.append(
+                    f"EMA {long_window} used as long-term anchor "
+                    f"({n} bars available; EMA 200 needs 200+)"
+                )
             if rsi14 is None:
                 notes.append("RSI unavailable (insufficient bars)")
             data_note = "; ".join(notes) if notes else None
 
-            # Trend: use both EMAs when available for full ±0.5 signal;
-            # fall back to price vs EMA50 alone for a partial ±0.25 signal.
-            if price is not None and ema50 is not None and ema200 is not None:
-                if price > ema50 > ema200:
+            # Trend: full ±0.5 when long EMA (≥100 days) + EMA50 both confirm;
+            # partial ±0.25 when only EMA50 is available (< 100 bars total).
+            use_full_signal = (
+                price is not None and ema50 is not None
+                and ema_long is not None and long_window >= 100
+            )
+            use_partial_signal = (
+                not use_full_signal
+                and price is not None and ema50 is not None
+            )
+
+            if use_full_signal:
+                if price > ema50 > ema_long:
                     trend = 0.5
-                elif price < ema50 < ema200:
+                elif price < ema50 < ema_long:
                     trend = -0.5
                 else:
                     trend = 0.0
-            elif price is not None and ema50 is not None:
-                # EMA200 absent — partial signal off EMA50 alone
+            elif use_partial_signal:
                 trend = 0.25 if price > ema50 else (-0.25 if price < ema50 else 0.0)
             else:
                 trend = 0.0
@@ -848,7 +870,8 @@ async def get_tri_factor_score(symbol: str):
             return {
                 "price":          _r2(price),
                 "ema50":          _r2(ema50),
-                "ema200":         _r2(ema200),
+                "ema200":         _r2(ema200),   # adaptive: may be EMA<200
+                "ema_long_window": long_window,  # actual window used (50–200)
                 "rsi14":          _r2(rsi14),
                 "trend_score":    trend,
                 "momentum_score": momentum,
