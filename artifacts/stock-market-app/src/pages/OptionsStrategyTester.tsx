@@ -1773,7 +1773,7 @@ export default function OptionsStrategyTester() {
 
       {/* ── Main Workspace ─────────────────────────────────────────────────── */}
       {/* Single relative container — chain is a z-20 overlay, takes zero layout space */}
-      <div className="relative rounded-xl overflow-hidden" style={{ height: workspaceReady ? 740 : 120 }}>
+      <div className="relative rounded-xl overflow-hidden" style={{ height: 740 }}>
 
           {/* Chain overlay drawer (slides in from left, no layout impact) */}
           <div
