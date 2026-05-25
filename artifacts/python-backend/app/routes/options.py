@@ -175,7 +175,7 @@ def _normalise_nse_chain(payload: dict) -> tuple[list[str], dict]:
         if data_list:
             underlying = data_list[0].get("underlyingValue", 0) or 0
     else:
-        return [], {}
+        return [], {}, 0
 
     # Build per-expiry calls/puts
     chain: dict = {}
@@ -214,31 +214,87 @@ def _normalise_nse_chain(payload: dict) -> tuple[list[str], dict]:
     return expiry_dates, chain, underlying
 
 
-def _yahoo_chain_fallback(upper: str) -> tuple[list, dict]:
-    """Yahoo Finance fallback — returns (expiries, chain_dict)."""
+_YF_MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+
+def _yf_to_nse_date(yf_exp: str) -> str:
+    """Convert Yahoo YYYY-MM-DD → DD-Mon-YYYY (NSE standard)."""
+    import datetime as _dt
+    try:
+        d = _dt.datetime.strptime(yf_exp, "%Y-%m-%d")
+        return f"{d.day:02d}-{_YF_MON[d.month - 1]}-{d.year}"
+    except (ValueError, TypeError):
+        return yf_exp
+
+
+def _nse_to_yf_date(nse_exp: str) -> Optional[str]:
+    """Convert DD-Mon-YYYY → YYYY-MM-DD for Yahoo API calls."""
+    import datetime as _dt
+    try:
+        d = _dt.datetime.strptime(nse_exp, "%d-%b-%Y")
+        return d.strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
+
+
+def _yahoo_chain_fallback(upper: str, requested_expiry: Optional[str] = None) -> tuple[list, dict]:
+    """
+    Yahoo Finance fallback — returns (expiries_in_DD-Mon-YYYY, chain_dict).
+
+    Tries all symbol candidates in order (e.g. FINNIFTY → ^CNXFIN then
+    NIFTY_FIN_SERVICE.NS).  Expiry dates are always normalised to DD-Mon-YYYY
+    so the caller receives a consistent format regardless of source.
+
+    requested_expiry: DD-Mon-YYYY (optional).  When supplied, only that
+    expiry's chain is fetched; the full expiry list is still returned.
+    """
     import yfinance as yf
-    yf_sym = _to_yf_sym(upper)
-    ticker = yf.Ticker(yf_sym)
-    exps   = ticker.options
-    if not exps:
-        raise ValueError("No options available for this symbol")
-    selected = exps[:min(2, len(exps))]
-    result: dict = {}
-    for exp in selected:
-        ch = ticker.option_chain(exp)
-        calls = ch.calls[
-            ["strike", "lastPrice", "bid", "ask", "impliedVolatility",
-             "openInterest", "volume", "inTheMoney"]
-        ].rename(columns={"impliedVolatility": "iv", "openInterest": "oi"}).copy()
-        puts = ch.puts[
-            ["strike", "lastPrice", "bid", "ask", "impliedVolatility",
-             "openInterest", "volume", "inTheMoney"]
-        ].rename(columns={"impliedVolatility": "iv", "openInterest": "oi"}).copy()
-        result[exp] = {
-            "calls": calls.fillna(0).to_dict("records"),
-            "puts":  puts.fillna(0).to_dict("records"),
-        }
-    return list(selected), result
+
+    last_err: Exception = ValueError(f"No Yahoo Finance options for {upper}")
+    for yf_sym in _to_yf_sym_candidates(upper):
+        try:
+            ticker = yf.Ticker(yf_sym)
+            exps   = ticker.options          # tuple of YYYY-MM-DD strings
+            if not exps:
+                continue
+
+            # Full list in NSE format (for the dropdown)
+            nse_exps = [_yf_to_nse_date(e) for e in exps]
+
+            # Determine which raw Yahoo expiry/expiries to fetch chain data for
+            if requested_expiry:
+                yf_req = _nse_to_yf_date(requested_expiry)
+                fetch_yf = [yf_req] if yf_req and yf_req in exps else [exps[0]]
+            else:
+                fetch_yf = list(exps[:min(3, len(exps))])
+
+            result: dict = {}
+            for yf_exp in fetch_yf:
+                try:
+                    ch      = ticker.option_chain(yf_exp)
+                    nse_key = _yf_to_nse_date(yf_exp)
+                    _cols   = ["strike", "lastPrice", "bid", "ask",
+                               "impliedVolatility", "openInterest", "volume", "inTheMoney"]
+                    calls = ch.calls[_cols].rename(
+                        columns={"impliedVolatility": "iv", "openInterest": "oi"}
+                    ).copy()
+                    puts  = ch.puts[_cols].rename(
+                        columns={"impliedVolatility": "iv", "openInterest": "oi"}
+                    ).copy()
+                    result[nse_key] = {
+                        "calls": calls.fillna(0).to_dict("records"),
+                        "puts":  puts.fillna(0).to_dict("records"),
+                    }
+                except Exception as _chain_exc:
+                    logger.debug("Yahoo chain for %s exp %s: %s", yf_sym, yf_exp, _chain_exc)
+
+            if result:
+                return nse_exps[:8], result
+
+        except Exception as exc:
+            last_err = exc
+            logger.debug("Yahoo candidate %s failed: %s", yf_sym, exc)
+
+    raise ValueError(str(last_err))
 
 
 @router.get("/chain/{symbol}")
@@ -272,14 +328,15 @@ async def get_options_chain(symbol: str, expiry: Optional[str] = None):
                 return {
                     "symbol":   upper,
                     "spot":     spot,
-                    "expiries": expiry_dates[:4],
+                    "expiries": expiry_dates[:8],
                     "chain":    chain_data,
                     "pcr":      pcr,
                     "source":   "NSE",
                 }
 
-        # 2 — Yahoo Finance fallback
-        selected, chain_data = await asyncio.to_thread(_yahoo_chain_fallback, upper)
+        # 2 — Yahoo Finance fallback (pass the requested expiry so the user can
+        #     navigate between expiries; dates normalised to DD-Mon-YYYY)
+        selected, chain_data = await asyncio.to_thread(_yahoo_chain_fallback, upper, expiry)
         spot_info = await _fetch_spot_and_hv(symbol)
         return {
             "symbol":   upper,
