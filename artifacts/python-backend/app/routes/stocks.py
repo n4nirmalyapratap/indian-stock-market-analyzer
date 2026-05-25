@@ -786,45 +786,75 @@ async def get_tri_factor_score(symbol: str):
     s_f = round(max(-1.0, min(1.0, valuation_score + health_score)), 2)
 
     # ── 2. TECHNICAL SCORE ───────────────────────────────────────────────
+    _TECH_NULL = {
+        "price": None, "ema50": None, "ema200": None, "rsi14": None,
+        "trend_score": 0.0, "momentum_score": 0.0, "score": 0.0,
+        "data_note": None,
+    }
+
     def _compute_tech(df: pd.DataFrame) -> dict:
-        from ta.momentum import RSIIndicator
-        from ta.trend import EMAIndicator
+        try:
+            from ta.momentum import RSIIndicator
+            from ta.trend import EMAIndicator
 
-        close = df["Close"]
-        price = _sf(close.iloc[-1]) if len(close) > 0 else None
+            close = df["Close"].dropna()
+            n = len(close)
+            if n == 0:
+                return {**_TECH_NULL, "data_note": "No price data after dropping NaNs"}
 
-        ema50_s  = EMAIndicator(close, window=50).ema_indicator().dropna()
-        ema200_s = EMAIndicator(close, window=200).ema_indicator().dropna()
-        rsi_s    = RSIIndicator(close, window=14).rsi().dropna()
+            price = _sf(close.iloc[-1])
 
-        ema50  = _sf(ema50_s.iloc[-1])  if not ema50_s.empty  else None
-        ema200 = _sf(ema200_s.iloc[-1]) if not ema200_s.empty else None
-        rsi14  = _sf(rsi_s.iloc[-1])    if not rsi_s.empty    else None
+            ema50_s  = EMAIndicator(close, window=50).ema_indicator().dropna()
+            ema200_s = EMAIndicator(close, window=200).ema_indicator().dropna()
+            rsi_s    = RSIIndicator(close, window=14).rsi().dropna()
 
-        trend = (0.5  if (price and ema50 and ema200 and price > ema50 > ema200)
-                 else -0.5 if (price and ema50 and ema200 and price < ema50 < ema200)
-                 else 0.0)
+            ema50  = _sf(ema50_s.iloc[-1])  if not ema50_s.empty  else None
+            ema200 = _sf(ema200_s.iloc[-1]) if not ema200_s.empty else None
+            rsi14  = _sf(rsi_s.iloc[-1])    if not rsi_s.empty    else None
 
-        momentum = (0.5  if (rsi14 is not None and rsi14 < 30)
-                    else -0.5 if (rsi14 is not None and rsi14 > 70)
-                    else 0.0)
+            # Build a human-readable note about data completeness
+            notes = []
+            if ema200 is None:
+                notes.append(f"EMA 200 unavailable (only {n} bars, need 200+)")
+            if rsi14 is None:
+                notes.append("RSI unavailable (insufficient bars)")
+            data_note = "; ".join(notes) if notes else None
 
-        return {
-            "price":          round(price,  2) if price  else None,
-            "ema50":          round(ema50,  2) if ema50  else None,
-            "ema200":         round(ema200, 2) if ema200 else None,
-            "rsi14":          round(rsi14,  2) if rsi14  else None,
-            "trend_score":    trend,
-            "momentum_score": momentum,
-            "score":          round(max(-1.0, min(1.0, trend + momentum)), 2),
-        }
+            # Guard against price=0.0 with explicit None checks (not truthiness)
+            trend_ok = price is not None and ema50 is not None and ema200 is not None
+            trend = (0.5  if (trend_ok and price > ema50 > ema200)
+                     else -0.5 if (trend_ok and price < ema50 < ema200)
+                     else 0.0)
+
+            momentum = (0.5  if (rsi14 is not None and rsi14 < 30)
+                        else -0.5 if (rsi14 is not None and rsi14 > 70)
+                        else 0.0)
+
+            def _r2(v: float | None) -> float | None:
+                return round(v, 2) if v is not None else None
+
+            return {
+                "price":          _r2(price),
+                "ema50":          _r2(ema50),
+                "ema200":         _r2(ema200),
+                "rsi14":          _r2(rsi14),
+                "trend_score":    trend,
+                "momentum_score": momentum,
+                "score":          round(max(-1.0, min(1.0, trend + momentum)), 2),
+                "bars":           n,
+                "data_note":      data_note,
+            }
+        except Exception as exc:
+            return {**_TECH_NULL, "data_note": f"Computation error: {exc}"}
 
     df = await svc.price.get_history_dataframe(sym, days=400)
-    if df is not None and not df.empty and len(df) >= 50:
+    if df is not None and not df.empty and len(df) >= 15:
+        # Accept as few as 15 bars so RSI still computes; EMA200 will be None
+        # if fewer than 200 bars, which is handled gracefully inside _compute_tech.
         tech = await asyncio.to_thread(_compute_tech, df)
     else:
-        tech = {"price": None, "ema50": None, "ema200": None, "rsi14": None,
-                "trend_score": 0.0, "momentum_score": 0.0, "score": 0.0}
+        bars = len(df) if df is not None else 0
+        tech = {**_TECH_NULL, "data_note": f"Insufficient price history ({bars} bars)"}
     s_t = tech["score"]
 
     # ── 3. SENTIMENT SCORE ───────────────────────────────────────────────
