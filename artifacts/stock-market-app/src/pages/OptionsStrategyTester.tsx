@@ -1782,7 +1782,7 @@ export default function OptionsStrategyTester() {
 
       {/* ── Main Workspace ─────────────────────────────────────────────────── */}
       {/* Single relative container — chain is a z-20 overlay, takes zero layout space */}
-      <div className="relative rounded-xl overflow-hidden" style={{ height: 610 }}>
+      <div className="relative rounded-xl overflow-hidden" style={{ height: 740 }}>
 
           {/* Chain overlay drawer (slides in from left, no layout impact) */}
           <div
@@ -1884,7 +1884,7 @@ export default function OptionsStrategyTester() {
           })()}
 
           {/* Legs table + Expiry + Greeks + Run Analysis */}
-          <div className={`shrink-0 border-b ${isDark ? "border-slate-700" : "border-gray-100"}`} style={{ maxHeight: 218, overflowY: "auto" }}>
+          <div className={`shrink-0 border-b ${isDark ? "border-slate-700" : "border-gray-100"}`} style={{ maxHeight: 160, overflowY: "auto" }}>
 
             {/* Legs header */}
             <div className={`px-3 py-2 border-b flex items-center justify-between sticky top-0 z-10 ${isDark ? "border-slate-700 bg-slate-800" : "border-gray-100 bg-white"}`}>
