@@ -1770,7 +1770,7 @@ export default function OptionsStrategyTester() {
 
       {/* ── Main Workspace ─────────────────────────────────────────────────── */}
       {/* Single relative container — chain is a z-20 overlay, takes zero layout space */}
-      <div className="relative rounded-xl overflow-hidden" style={{ height: 740 }}>
+      <div className="relative rounded-xl overflow-hidden" style={{ height: spotInfo || legs.length > 0 ? 740 : 120 }}>
 
           {/* Chain overlay drawer (slides in from left, no layout impact) */}
           <div
