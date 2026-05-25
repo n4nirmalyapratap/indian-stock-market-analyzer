@@ -64,18 +64,51 @@ function strikeStep(spot: number): number {
   return 500;
 }
 
-// BANKNIFTY → Wednesday (3), FINNIFTY → Tuesday (2), everything else → Thursday (4)
+// Post-SEBI Nov 2024: only NIFTY (Thu) and SENSEX (Fri) retain weekly expiries.
+// BANKNIFTY (Wed), FINNIFTY (Tue), MIDCPNIFTY (Mon), BANKEX (Fri): monthly last weekday.
+// All equity F&O stocks: monthly last Thursday.
+// JS day: 0=Sun 1=Mon 2=Tue 3=Wed 4=Thu 5=Fri 6=Sat
 function nextExpiries(symbol: string, count = 4): string[] {
   const sym = symbol.toUpperCase();
-  const targetDay = sym === "BANKNIFTY" ? 3 : sym === "FINNIFTY" ? 2 : 4;
-  const result: string[] = [];
-  const d = new Date();
-  const daysUntil = ((targetDay - d.getDay()) + 7) % 7 || 7;
-  d.setDate(d.getDate() + daysUntil);
   const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  for (let i = 0; i < count; i++) {
-    result.push(`${String(d.getDate()).padStart(2,"0")}-${MON[d.getMonth()]}-${d.getFullYear()}`);
-    d.setDate(d.getDate() + 7);
+
+  const WEEKLY: Record<string, number> = { NIFTY: 4, SENSEX: 5 };
+  const MONTHLY: Record<string, number> = {
+    BANKNIFTY:  3,
+    FINNIFTY:   2,
+    MIDCPNIFTY: 1,
+    BANKEX:     5,
+  };
+
+  if (sym in WEEKLY) {
+    const targetDay = WEEKLY[sym];
+    const result: string[] = [];
+    const d = new Date();
+    const daysUntil = ((targetDay - d.getDay()) + 7) % 7 || 7;
+    d.setDate(d.getDate() + daysUntil);
+    for (let i = 0; i < count; i++) {
+      result.push(`${String(d.getDate()).padStart(2,"0")}-${MON[d.getMonth()]}-${d.getFullYear()}`);
+      d.setDate(d.getDate() + 7);
+    }
+    return result;
+  }
+
+  const targetDow = sym in MONTHLY ? MONTHLY[sym] : 4;
+  const result: string[] = [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  let year  = today.getFullYear();
+  let month = today.getMonth();
+
+  while (result.length < count) {
+    const lastDay = new Date(year, month + 1, 0);
+    const d = new Date(lastDay);
+    while (d.getDay() !== targetDow) d.setDate(d.getDate() - 1);
+    if (d >= today) {
+      result.push(`${String(d.getDate()).padStart(2,"0")}-${MON[d.getMonth()]}-${d.getFullYear()}`);
+    }
+    month++;
+    if (month > 11) { month = 0; year++; }
   }
   return result;
 }
