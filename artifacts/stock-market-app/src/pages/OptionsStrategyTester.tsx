@@ -1534,7 +1534,14 @@ export default function OptionsStrategyTester() {
                   Indices
                 </button>
                 <button
-                  onClick={() => setAssetMode("stocks")}
+                  onClick={() => {
+                    setAssetMode("stocks");
+                    setStockSearch("");
+                    if (INDICES.some(i => i.sym === symbol)) {
+                      setSpotInfo(null);
+                      setSpotErr("");
+                    }
+                  }}
                   className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
                     assetMode === "stocks"
                       ? "bg-indigo-600 text-white shadow-sm"
@@ -1592,77 +1599,130 @@ export default function OptionsStrategyTester() {
               </div>
             )}
 
-            {/* ── F&O Stocks search panel ──────────────────────────────────── */}
+            {/* ── F&O Stocks panel — search bar + sector-grouped dropdown ──── */}
             {assetMode === "stocks" && (
-              <div className={`border-b p-3 ${isDark ? "border-slate-700" : "border-gray-100"}`}>
-                <div className="relative">
-                  <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition
-                    ${isDark ? "bg-slate-900/50 border-slate-600 focus-within:border-indigo-500" : "bg-white border-gray-200 focus-within:border-indigo-400"}`}>
+              <div className={`border-b ${isDark ? "border-slate-700" : "border-gray-100"}`}>
+
+                {/* Search bar */}
+                <div className={`px-3 pt-3 pb-2`}>
+                  <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border transition
+                    ${isDark
+                      ? "bg-slate-900/60 border-slate-600 focus-within:border-indigo-500"
+                      : "bg-white border-gray-200 focus-within:border-indigo-400 focus-within:ring-1 focus-within:ring-indigo-400/20"}`}>
                     <Search className={`w-4 h-4 shrink-0 ${isDark ? "text-slate-400" : "text-gray-400"}`} />
                     <input
                       type="text"
                       value={stockSearch}
-                      onChange={e => { setStockSearch(e.target.value); setShowStockDrop(true); }}
-                      onFocus={() => setShowStockDrop(true)}
-                      onBlur={() => setTimeout(() => setShowStockDrop(false), 150)}
-                      placeholder="Search 130+ F&O stocks — RELIANCE, HDFCBANK, TCS…"
+                      onChange={e => setStockSearch(e.target.value)}
+                      placeholder={`Search ${foStocks.length || "130+"}  F&O stocks — symbol or company name…`}
+                      autoComplete="off"
+                      spellCheck={false}
                       className={`flex-1 bg-transparent text-sm outline-none placeholder:text-gray-400
                         ${isDark ? "text-slate-200 placeholder:text-slate-500" : "text-gray-800"}`}
                     />
-                    {stockSearch && (
-                      <button onClick={() => { setStockSearch(""); setShowStockDrop(false); }}
-                        className={`text-gray-400 hover:text-gray-600 transition`}>
+                    {stockSearch ? (
+                      <button onClick={() => setStockSearch("")}
+                        className="text-gray-400 hover:text-gray-600 transition shrink-0">
                         <X className="w-3.5 h-3.5" />
                       </button>
+                    ) : (
+                      <span className={`text-[9px] font-semibold shrink-0 ${isDark ? "text-slate-600" : "text-gray-300"}`}>
+                        {foStocks.length} stocks
+                      </span>
                     )}
                   </div>
-                  {showStockDrop && filteredStocks.length > 0 && (
-                    <div className={`absolute z-50 top-full left-0 right-0 mt-1 rounded-xl border shadow-2xl overflow-hidden max-h-72 overflow-y-auto
-                      ${isDark ? "bg-slate-800 border-slate-600" : "bg-white border-gray-200"}`}>
-                      {filteredStocks.map(s => (
-                        <button
-                          key={s.sym}
-                          onMouseDown={() => {
-                            setShowStockDrop(false);
-                            setStockSearch("");
-                            switchAsset(s.sym);
-                          }}
-                          className={`w-full flex items-center justify-between px-4 py-2.5 text-sm transition text-left
-                            ${symbol === s.sym
-                              ? isDark ? "bg-indigo-900/50 text-indigo-300" : "bg-indigo-50 text-indigo-700"
-                              : isDark ? "text-slate-300 hover:bg-slate-700" : "text-gray-700 hover:bg-gray-50"}`}
-                        >
-                          <div className="flex items-center gap-3">
-                            <span className="font-bold font-mono text-xs w-24 shrink-0">{s.sym}</span>
-                            <span className="opacity-70 text-xs truncate max-w-[180px]">{s.name}</span>
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded ${isDark ? "bg-slate-700 text-slate-400" : "bg-gray-100 text-gray-500"}`}>
-                              {s.sector}
-                            </span>
-                            <span className={`text-[9px] font-mono ${isDark ? "text-slate-500" : "text-gray-400"}`}>
-                              lot {s.lot}
-                            </span>
-                          </div>
-                        </button>
-                      ))}
+                  {/* Active stock pill */}
+                  {!isIndex && symbol && !loadingSpot && (
+                    <div className={`mt-2 flex items-center gap-2 text-xs ${isDark ? "text-slate-400" : "text-gray-500"}`}>
+                      <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" />
+                      <span className="font-bold text-indigo-500">{symbol}</span>
+                      {foStocks.find(s => s.sym === symbol) && (
+                        <span className="opacity-60 truncate">{foStocks.find(s => s.sym === symbol)?.name}</span>
+                      )}
+                    </div>
+                  )}
+                  {loadingSpot && (
+                    <div className={`mt-2 flex items-center gap-1.5 text-xs ${isDark ? "text-slate-400" : "text-gray-500"}`}>
+                      <RefreshCw className="w-3 h-3 animate-spin text-indigo-400" />
+                      Loading {symbol} data…
                     </div>
                   )}
                 </div>
-                {!isIndex && symbol && (
-                  <div className={`mt-2 flex items-center gap-2 text-xs ${isDark ? "text-slate-400" : "text-gray-500"}`}>
-                    <span>Active:</span>
-                    <span className="font-bold">{symbol}</span>
-                    {foStocks.find(s => s.sym === symbol) && (
-                      <span className="opacity-60">— {foStocks.find(s => s.sym === symbol)?.name}</span>
-                    )}
-                  </div>
-                )}
-                {loadingSpot && (
-                  <div className={`mt-2 flex items-center gap-1.5 text-xs ${isDark ? "text-slate-400" : "text-gray-500"}`}>
-                    <RefreshCw className="w-3 h-3 animate-spin" /> Fetching {symbol} market data…
-                  </div>
-                )}
+
+                {/* Sector-grouped scrollable list */}
+                <div className="max-h-56 overflow-y-auto">
+                  {(() => {
+                    const q = stockSearch.trim().toUpperCase();
+                    const filtered = q
+                      ? foStocks.filter(s =>
+                          s.sym.includes(q) ||
+                          s.name.toUpperCase().includes(q) ||
+                          s.sector.toUpperCase().includes(q))
+                      : foStocks;
+
+                    if (!filtered.length) return (
+                      <div className={`px-4 py-6 text-center text-sm ${isDark ? "text-slate-500" : "text-gray-400"}`}>
+                        No results for "{stockSearch}"
+                      </div>
+                    );
+
+                    const grouped = filtered.reduce((acc, s) => {
+                      (acc[s.sector] = acc[s.sector] || []).push(s);
+                      return acc;
+                    }, {} as Record<string, typeof foStocks>);
+
+                    return Object.entries(grouped).map(([sector, stocks]) => (
+                      <div key={sector}>
+                        {/* Sector header */}
+                        <div className={`sticky top-0 z-10 px-3 py-1 flex items-center justify-between
+                          text-[9px] font-bold uppercase tracking-widest border-b
+                          ${isDark
+                            ? "bg-slate-800/95 text-slate-500 border-slate-700/60"
+                            : "bg-gray-50/95 text-gray-400 border-gray-100"}`}>
+                          <span>{sector}</span>
+                          <span className="font-normal opacity-60">{stocks.length}</span>
+                        </div>
+                        {/* Stock rows */}
+                        {stocks.map(s => {
+                          const active = symbol === s.sym;
+                          return (
+                            <button
+                              key={s.sym}
+                              onClick={() => { setStockSearch(""); switchAsset(s.sym); }}
+                              disabled={loadingSpot}
+                              className={`w-full flex items-center justify-between px-4 py-2 text-sm
+                                transition-colors disabled:opacity-50
+                                ${active
+                                  ? isDark ? "bg-indigo-900/40 text-indigo-300" : "bg-indigo-50 text-indigo-700"
+                                  : isDark ? "text-slate-300 hover:bg-slate-700/50" : "text-gray-700 hover:bg-gray-50"}`}
+                            >
+                              <div className="flex items-center gap-3 min-w-0">
+                                <span className={`font-bold font-mono text-xs w-[88px] shrink-0
+                                  ${active ? "" : isDark ? "text-slate-200" : "text-gray-900"}`}>
+                                  {s.sym}
+                                </span>
+                                <span className={`text-xs truncate ${isDark ? "text-slate-400" : "text-gray-500"}`}>
+                                  {s.name}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0 ml-2">
+                                {active && loadingSpot
+                                  ? <RefreshCw className="w-3 h-3 animate-spin text-indigo-400" />
+                                  : active
+                                    ? <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                                    : null}
+                                <span className={`text-[9px] font-mono tabular-nums
+                                  ${isDark ? "text-slate-500" : "text-gray-400"}`}>
+                                  lot {s.lot}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ));
+                  })()}
+                </div>
               </div>
             )}
 
