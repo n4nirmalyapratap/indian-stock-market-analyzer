@@ -52,7 +52,7 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd artifacts/stock-market-app && PORT=5000 BASE_PATH=/ pnpm dev"
+args = "cd artifacts/stock-market-app && PORT=5000 BASE_PATH=/ node_modules/.bin/vite --config vite.config.ts --host 0.0.0.0"
 waitForPort = 5000
 
 [[workflows.workflow]]
@@ -64,21 +64,21 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd artifacts/admin-dashboard && PORT=5173 BASE_PATH=/admin/ pnpm dev"
+args = "cd artifacts/admin-dashboard && PORT=5173 BASE_PATH=/admin/ node_modules/.bin/vite --config vite.config.ts --host 0.0.0.0"
 waitForPort = 5173
 
 [[workflows.workflow]]
 name = "Mockup Sandbox"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd artifacts/mockup-sandbox && PORT=8000 BASE_PATH=/__mockup/ pnpm dev"
-waitForPort = 8000
-
 [workflows.workflow.metadata]
 outputType = "console"
 isCanvasWorkflow = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd artifacts/mockup-sandbox && PORT=8000 BASE_PATH=/__mockup/ node_modules/.bin/vite dev"
+waitForPort = 8000
 
 [agent]
 stack = "BEST_EFFORT_FALLBACK"
@@ -96,10 +96,6 @@ packages = ["cargo", "glibcLocales", "libiconv", "libxcrypt", "openssl", "pkg-co
 [[ports]]
 localPort = 5000
 externalPort = 80
-
-[[ports]]
-localPort = 5001
-externalPort = 3001
 
 [[ports]]
 localPort = 5173

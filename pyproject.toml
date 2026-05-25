@@ -29,4 +29,5 @@ dependencies = [
     "vadersentiment>=3.3.2",
     "yfinance>=0.2.48",
     "python-dotenv>=1.2.2",
+    "brotli>=1.2.0",
 ]
