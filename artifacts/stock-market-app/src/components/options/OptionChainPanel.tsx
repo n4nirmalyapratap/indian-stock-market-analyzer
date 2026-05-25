@@ -237,6 +237,9 @@ export default function OptionChainPanel({
       const entry = chainData[firstKey] || { calls: [], puts: [] };
       setCalls(entry.calls || []);
       setPuts(entry.puts || []);
+      // Respect the backend's is_synthetic flag (e.g. Dhan+BS chain for SENSEX/BANKEX).
+      // Also clears any stale synthetic flag from a previous symbol's race condition.
+      setIsSynthetic(data.is_synthetic === true);
     } catch (_e: any) {
       // Live chain unavailable (NSE blocked, Yahoo fallback failed).
       // Fall back to a theoretical Black-Scholes chain if spot data is present.
@@ -291,8 +294,9 @@ export default function OptionChainPanel({
       // Already synthetic — just update prices for new spot
       const { calls: sc, puts: sp } = generateSyntheticChain(spotInfo.spot, spotInfo.hv30, T_y);
       setCalls(sc); setPuts(sp);
-    } else if (!calls.length && !puts.length) {
-      // Had no data (live chain failed before spot arrived) — generate synthetic now
+    } else if (!calls.length && !puts.length && !loading) {
+      // Had no data AND chain fetch is not in-flight (live chain failed before spot
+      // arrived, or backend returned empty) — generate a local synthetic chain now.
       setError("");
       setIsSynthetic(true);
       const synExp = nextExpiries(symbol, 4);
@@ -393,7 +397,13 @@ export default function OptionChainPanel({
           <div className={`flex items-start gap-2 text-[10px] px-3 py-2 border-b
             ${isDark ? "bg-amber-950/20 border-amber-800/30 text-amber-400" : "bg-amber-50 border-amber-100 text-amber-700"}`}>
             <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
-            <span><strong>Theoretical chain</strong> — NSE data unavailable. Prices via Black-Scholes (spot + HV30). B/S buttons work normally.</span>
+            <span>
+              <strong>Theoretical chain</strong> —{" "}
+              {source.includes("Dhan")
+                ? "Actual market strikes & expiries from Dhan. Prices via Black-Scholes."
+                : "Live data unavailable. Prices via Black-Scholes (spot + HV30)."}
+              {" "}B/S buttons work normally.
+            </span>
           </div>
         )}
 

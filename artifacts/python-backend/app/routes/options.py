@@ -297,34 +297,140 @@ def _yahoo_chain_fallback(upper: str, requested_expiry: Optional[str] = None) ->
     raise ValueError(str(last_err))
 
 
+async def _dhan_bs_chain(upper: str, expiry: Optional[str]) -> Optional[dict]:
+    """
+    Tier-3 option chain fallback: Dhan public scrip-master for expiry/strike
+    data + Black-Scholes for theoretical pricing.
+
+    Why this is better than a fully-synthetic chain:
+      • Expiry dates come from Dhan's live trading reference — authoritative
+        and updated daily; covers BOTH NSE (NIFTY, BANKNIFTY, …) and BSE
+        (SENSEX, BANKEX) derivatives.
+      • Strike prices are the actual listed strikes, not an arithmetic series
+        generated from the ATM step.  This matches what traders see on screen.
+      • Spot + HV30 come from yfinance just like the spot endpoint.
+      • Pricing via Black-Scholes with a mild Indian-market IV skew.
+
+    Returns the same JSON envelope as NSE/Yahoo sources, with
+    `source="Dhan+BS"` and `is_synthetic=True` so the frontend can show
+    the appropriate notice.
+    Returns None when Dhan data is unavailable (network failure, unknown
+    symbol) so the caller can propagate a 503.
+    """
+    from ..services import dhan_scrip_master_service as _dsm
+    from datetime import date as _date, datetime as _dt
+
+    expiry_dates = await _dsm.get_expiry_dates(upper)
+    if not expiry_dates:
+        return None
+
+    sel_expiry = expiry if (expiry and expiry in expiry_dates) else expiry_dates[0]
+
+    strikes_all = await _dsm.get_strikes(upper, sel_expiry)
+    if not strikes_all:
+        return None
+
+    try:
+        spot_info = await _fetch_spot_and_hv(upper)
+    except HTTPException:
+        return None
+
+    spot = spot_info.get("spot", 0) or 0
+    hv30 = spot_info.get("hv30", 0.20)
+
+    # Filter strikes to ±15 % of spot so the chain stays manageable
+    if spot > 0:
+        filtered = [k for k in strikes_all if abs(k - spot) / spot <= 0.15]
+        strikes  = filtered if filtered else strikes_all
+    else:
+        strikes = strikes_all
+
+    try:
+        exp_date = _dt.strptime(sel_expiry, "%d-%b-%Y").date()
+        dte      = max(1, (exp_date - _date.today()).days)
+    except (ValueError, TypeError):
+        dte = 30
+    T_years = dte / 365.0
+
+    calls: list[dict] = []
+    puts:  list[dict] = []
+    for K in strikes:
+        if K <= 0:
+            continue
+        mono = abs(K - spot) / spot if spot > 0 else 0
+        iv_c = max(0.05, hv30 + 0.60 * mono)
+        iv_p = max(0.05, hv30 + 0.15 * mono)
+        cp   = bs_price(spot, K, T_years, RISK_FREE_RATE, iv_c, "call")
+        pp   = bs_price(spot, K, T_years, RISK_FREE_RATE, iv_p, "put")
+
+        def _sp(v: float) -> float:
+            return max(0.05, v * 0.004)
+
+        calls.append({
+            "strike":     K,
+            "lastPrice":  round(cp, 2),
+            "bid":        round(cp - _sp(cp), 2),
+            "ask":        round(cp + _sp(cp), 2),
+            "iv":         round(iv_c, 4),
+            "oi":         0,
+            "volume":     0,
+            "inTheMoney": K < spot,
+        })
+        puts.append({
+            "strike":     K,
+            "lastPrice":  round(pp, 2),
+            "bid":        round(pp - _sp(pp), 2),
+            "ask":        round(pp + _sp(pp), 2),
+            "iv":         round(iv_p, 4),
+            "oi":         0,
+            "volume":     0,
+            "inTheMoney": K > spot,
+        })
+
+    if not calls:
+        return None
+
+    return {
+        "symbol":       upper,
+        "spot":         spot,
+        "expiries":     expiry_dates,
+        "chain":        {sel_expiry: {"calls": calls, "puts": puts}},
+        "pcr":          None,
+        "source":       "Dhan+BS",
+        "is_synthetic": True,
+    }
+
+
 @router.get("/chain/{symbol}")
 async def get_options_chain(symbol: str, expiry: Optional[str] = None):
     """
-    Fetch the live NSE options chain.
+    Fetch the live options chain for a symbol.
 
-    Primary: NSE India native API (new NextApi + classic /api/option-chain-*
-    fallback) via the two-page cookie warm-up technique from nsepython.
-    Fallback: Yahoo Finance (used when NSE is Akamai-blocked from this IP).
+    Three-tier source waterfall:
+      1. NSE native API — works for NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY.
+      2. Yahoo Finance  — fallback for NSE-listed symbols with yfinance coverage.
+      3. Dhan scrip-master + Black-Scholes — covers SENSEX, BANKEX and any
+         symbol where the first two tiers fail.  Returns real expiry dates and
+         actual market strikes from Dhan's public contract master, priced
+         theoretically via Black-Scholes (marked `is_synthetic: true`).
 
     Query param `expiry` (DD-Mon-YYYY) selects a specific expiry; omit for
-    the nearest two.
+    the nearest available.
     """
     upper = symbol.upper()
 
-    # Determine instrument type
     _IDX = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"}
     instrument = "OPTIDX" if any(idx in upper for idx in _IDX) else "OPTSTK"
 
     try:
-        # 1 — Try NSE native chain
+        # ── Tier 1: NSE native chain ──────────────────────────────────────────
         nse_payload = await svc.nse.get_option_chain(upper, expiry_date=expiry, instrument=instrument)
         if nse_payload:
             expiry_dates, chain_data, underlying = _normalise_nse_chain(nse_payload)
             if chain_data:
                 spot_info = await _fetch_spot_and_hv(symbol)
                 spot      = spot_info.get("spot") or underlying or 0
-                # PCR for first expiry
-                pcr = svc.nse.calculate_pcr(nse_payload, 0)
+                pcr       = svc.nse.calculate_pcr(nse_payload, 0)
                 return {
                     "symbol":   upper,
                     "spot":     spot,
@@ -334,18 +440,32 @@ async def get_options_chain(symbol: str, expiry: Optional[str] = None):
                     "source":   "NSE",
                 }
 
-        # 2 — Yahoo Finance fallback (pass the requested expiry so the user can
-        #     navigate between expiries; dates normalised to DD-Mon-YYYY)
-        selected, chain_data = await asyncio.to_thread(_yahoo_chain_fallback, upper, expiry)
-        spot_info = await _fetch_spot_and_hv(symbol)
-        return {
-            "symbol":   upper,
-            "spot":     spot_info.get("spot", 0),
-            "expiries": selected,
-            "chain":    chain_data,
-            "pcr":      None,
-            "source":   "YAHOO",
-        }
+        # ── Tier 2: Yahoo Finance fallback ────────────────────────────────────
+        yahoo_exc: Optional[Exception] = None
+        try:
+            selected, chain_data = await asyncio.to_thread(_yahoo_chain_fallback, upper, expiry)
+            spot_info = await _fetch_spot_and_hv(symbol)
+            return {
+                "symbol":   upper,
+                "spot":     spot_info.get("spot", 0),
+                "expiries": selected,
+                "chain":    chain_data,
+                "pcr":      None,
+                "source":   "YAHOO",
+            }
+        except Exception as _ye:
+            yahoo_exc = _ye
+            logger.debug("Yahoo fallback failed for %s: %s", upper, _ye)
+
+        # ── Tier 3: Dhan scrip-master + Black-Scholes ─────────────────────────
+        dhan_result = await _dhan_bs_chain(upper, expiry)
+        if dhan_result:
+            return dhan_result
+
+        raise HTTPException(
+            status_code=503,
+            detail=f"Option chain unavailable for {upper} (NSE/Yahoo/Dhan all failed). Yahoo: {yahoo_exc}",
+        )
 
     except HTTPException:
         raise
@@ -359,7 +479,8 @@ async def get_options_chain(symbol: str, expiry: Optional[str] = None):
 @router.get("/expiries/{symbol}")
 async def get_expiry_list(symbol: str):
     """
-    Return sorted list of F&O expiry dates for a symbol from NSE NextApi.
+    Return sorted list of F&O expiry dates for a symbol.
+    Primary: NSE NextApi.  Fallback: Dhan public scrip-master.
     Format: ["DD-Mon-YYYY", ...]
     """
     upper = symbol.upper()
@@ -367,9 +488,18 @@ async def get_expiry_list(symbol: str):
     instrument = "OPTIDX" if any(idx in upper for idx in _IDX) else "OPTSTK"
     try:
         dates = await svc.nse.get_expiry_list(upper, instrument=instrument)
-        return {"symbol": upper, "expiries": dates, "instrument": instrument}
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+        if dates:
+            return {"symbol": upper, "expiries": dates, "instrument": instrument, "source": "NSE"}
+    except Exception:
+        pass
+    try:
+        from ..services import dhan_scrip_master_service as _dsm
+        dhan_dates = await _dsm.get_expiry_dates(upper)
+        if dhan_dates:
+            return {"symbol": upper, "expiries": dhan_dates, "instrument": instrument, "source": "Dhan"}
+    except Exception:
+        pass
+    raise HTTPException(status_code=503, detail=f"Expiry dates unavailable for {upper}")
 
 
 # ── GET /options/pcr/{symbol} ─────────────────────────────────────────────────
