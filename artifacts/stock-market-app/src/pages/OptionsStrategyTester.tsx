@@ -1524,7 +1524,13 @@ export default function OptionsStrategyTester() {
             <div className={`flex items-center gap-3 border-b px-3 py-2 ${isDark ? "bg-slate-900/50 border-slate-700" : "bg-gray-50 border-gray-100"}`}>
               <div className={`flex items-center p-1 rounded-xl gap-0.5 ${isDark ? "bg-slate-800" : "bg-gray-200/70"}`}>
                 <button
-                  onClick={() => setAssetMode("indices")}
+                  onClick={() => {
+                    setAssetMode("indices");
+                    if (!INDICES.some(i => i.sym === symbol)) {
+                      setSpotInfo(null);
+                      setSpotErr("");
+                    }
+                  }}
                   className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
                     assetMode === "indices"
                       ? "bg-indigo-600 text-white shadow-sm"
