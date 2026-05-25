@@ -1199,6 +1199,7 @@ export default function OptionsStrategyTester() {
   const [symbol, setSymbol] = useState("NIFTY");
   const [spotInfo, setSpotInfo] = useState<SpotInfo | null>(null);
   const [loadingSpot, setLoadingSpot] = useState(false);
+  const [workspaceReady, setWorkspaceReady] = useState(false);
   const [spotErr, setSpotErr] = useState("");
 
   // Strategy builder state
@@ -1277,6 +1278,7 @@ export default function OptionsStrategyTester() {
     try {
       const info = await get<SpotInfo>(`/options/spot/${symbol.trim().toUpperCase()}`);
       setSpotInfo(info);
+      setWorkspaceReady(true);
       setLegs(prev => prev.map(l => ({
         ...l,
         lot_size: info.lot_size,
@@ -1494,6 +1496,7 @@ export default function OptionsStrategyTester() {
           try {
             const info = await get<SpotInfo>(`/options/spot/${sym.toUpperCase()}`);
             setSpotInfo(info);
+            setWorkspaceReady(true);
           } catch (e: any) {
             setSpotErr(e?.message || `Failed to fetch ${sym}`);
           } finally {
@@ -1770,7 +1773,7 @@ export default function OptionsStrategyTester() {
 
       {/* ── Main Workspace ─────────────────────────────────────────────────── */}
       {/* Single relative container — chain is a z-20 overlay, takes zero layout space */}
-      <div className="relative rounded-xl overflow-hidden" style={{ height: spotInfo || legs.length > 0 ? 740 : 120 }}>
+      <div className="relative rounded-xl overflow-hidden" style={{ height: workspaceReady ? 740 : 120 }}>
 
           {/* Chain overlay drawer (slides in from left, no layout impact) */}
           <div
