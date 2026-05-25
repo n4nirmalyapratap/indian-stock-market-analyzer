@@ -249,6 +249,46 @@ def _normalise_nse_chain(payload: dict) -> tuple[list[str], dict]:
     return expiry_dates, chain, underlying
 
 
+def _bs_fill_nse_chain(
+    chain_data: dict,
+    spot: float,
+    hv30: float,
+) -> None:
+    """Fill zero-LTP / zero-IV entries in an NSE chain dict with Black-Scholes prices.
+
+    Only patches rows where ``lastPrice == 0`` — real traded prices are never
+    overwritten.  This makes illiquid chains (e.g. MIDCPNIFTY) display a
+    complete chain instead of rows full of "—".
+
+    IV skew applied matches the Dhan+BS tier:
+      • Calls: base HV30 + 0.60 × moneyness (puts bid up for OTM calls)
+      • Puts:  base HV30 + 0.15 × moneyness (mild put skew)
+    """
+    from datetime import datetime as _dt, date as _date
+
+    for exp_str, exp_chain in chain_data.items():
+        try:
+            dte = max(1, (_dt.strptime(exp_str, "%d-%b-%Y").date() - _date.today()).days)
+        except (ValueError, TypeError):
+            dte = 30
+        T = dte / 365.0
+
+        for opt_type, legs in (("call", exp_chain.get("calls", [])),
+                                ("put",  exp_chain.get("puts",  []))):
+            for leg in legs:
+                K = leg.get("strike", 0)
+                if not K or spot <= 0:
+                    continue
+                if (leg.get("lastPrice") or 0) == 0:
+                    mono = abs(K - spot) / spot
+                    iv   = max(0.05, hv30 + (0.60 if opt_type == "call" else 0.15) * mono)
+                    price = bs_price(spot, K, T, RISK_FREE_RATE, iv, opt_type)
+                    if price >= 0.005:  # skip values that round to 0.00
+                        leg["lastPrice"] = round(price, 2)
+                        if not (leg.get("iv") or 0):
+                            leg["iv"] = round(iv, 4)
+
+
 _YF_MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
 
 def _yf_to_nse_date(yf_exp: str) -> str:
@@ -481,6 +521,11 @@ async def get_options_chain(symbol: str, expiry: Optional[str] = None):
             if chain_data:
                 spot_info = await _fetch_spot_and_hv(symbol)
                 spot      = spot_info.get("spot") or underlying or 0
+                hv30      = spot_info.get("hv30", 0.20)
+                # Fill zero-LTP strikes (illiquid/non-traded) with BS theoretical
+                # prices so the chain displays complete rows instead of gaps ("—").
+                # Real traded prices are never overwritten.
+                _bs_fill_nse_chain(chain_data, spot, hv30)
                 pcr       = svc.nse.calculate_pcr(nse_payload, 0)
                 return {
                     "symbol":   upper,
