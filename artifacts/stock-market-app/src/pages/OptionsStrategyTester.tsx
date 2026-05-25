@@ -1563,7 +1563,7 @@ export default function OptionsStrategyTester() {
                   )}
                 </button>
               </div>
-              {!isIndex && symbol && (
+              {assetMode === "stocks" && !isIndex && symbol && (
                 <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${isDark ? "bg-indigo-900/60 text-indigo-300 border border-indigo-800/50" : "bg-indigo-50 text-indigo-700 border border-indigo-100"}`}>
                   {symbol}
                 </span>
