@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, type ReactNode } from "react";
 import { fetchApi } from "@/lib/api";
 import { fmtINR, pct, fmt, clr, bg, computeHeatBars, QUICK_STRATEGIES } from "@/lib/options-utils";
 import { useTheme } from "@/context/ThemeContext";
@@ -80,12 +80,6 @@ const STRATEGY_GROUPS = [
 
 // ── Components ────────────────────────────────────────────────────────────────
 
-/**
- * SEBI Compliance card — fetches GET /options/compliance and shows the
- * authoritative lot size, expiry weekday, cost schedule, and live FRED
- * risk-free rate for the currently selected symbol.  Pure additive UI;
- * does not affect any existing inputs or analytics.
- */
 function SEBIComplianceCard({
   symbol,
   strategy,
@@ -95,14 +89,15 @@ function SEBIComplianceCard({
   strategy?: string | null;
   lots?: number;
 }) {
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
   const [data, setData] = useState<any>(null);
   const [open, setOpen] = useState(false);
   const [err,  setErr]  = useState("");
 
   useEffect(() => {
     let cancel = false;
-    setErr("");
-    setData(null);
+    setErr(""); setData(null);
     const params = new URLSearchParams({ symbol });
     if (strategy) params.set("strategy", strategy);
     if (lots && lots > 0) params.set("lots", String(lots));
@@ -112,198 +107,176 @@ function SEBIComplianceCard({
     return () => { cancel = true; };
   }, [symbol, strategy, lots]);
 
-  if (err) {
-    return (
-      <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 text-xs text-amber-700">
-        Compliance snapshot unavailable: {err}
-      </div>
-    );
-  }
-  if (!data) return null;
-
-  const sym  = data.symbols?.[0];
-  const cs   = data.cost_schedule;
-  const rfr  = data.risk_free_rate;
-  const lot  = sym?.lot_size;
-  const wd   = sym?.expiry_weekday?.weekday_name;
-  const strat = data.strategy;             // populated when strategy was sent
-  const perLeg = data.per_leg_costs;       // {per_leg:[…], total, circular_ref}
-  const margin = data.margin_estimate;     // {value, note}
-
-  // Helper: render a circular reference as a hyperlink when URL is known
+  const fmtCur = (n: number) => "₹" + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 });
   const refLink = (ref?: string | null, url?: string | null) => {
     if (!ref) return <>—</>;
-    if (!url) return <span className="break-words">{ref}</span>;
-    return (
-      <a href={url} target="_blank" rel="noopener noreferrer"
-         className="text-indigo-600 hover:underline break-words">
-        {ref} ↗
-      </a>
-    );
+    if (!url) return <span>{ref}</span>;
+    return <a href={url} target="_blank" rel="noopener noreferrer" className="text-indigo-500 hover:underline">{ref} ↗</a>;
   };
-  const fmtINR = (n: number) =>
-    "₹" + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+
+  if (err) return (
+    <div className={`mx-4 my-3 rounded-lg border px-3 py-2 text-xs flex items-center gap-2 ${isDark ? "bg-amber-900/20 border-amber-800/40 text-amber-400" : "bg-amber-50 border-amber-200 text-amber-700"}`}>
+      <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Compliance unavailable: {err}
+    </div>
+  );
+  if (!data) return (
+    <div className={`mx-4 my-3 flex items-center gap-2 text-xs ${isDark ? "text-slate-500" : "text-gray-400"}`}>
+      <RefreshCw className="w-3 h-3 animate-spin text-indigo-400" /> Loading compliance data…
+    </div>
+  );
+
+  const sym    = data.symbols?.[0];
+  const cs     = data.cost_schedule;
+  const rfr    = data.risk_free_rate;
+  const lot    = sym?.lot_size;
+  const wd     = sym?.expiry_weekday?.weekday_name;
+  const strat  = data.strategy;
+  const perLeg = data.per_leg_costs;
+  const margin = data.margin_estimate;
+
+  const statCard = (label: string, value: ReactNode, accent = false) => (
+    <div className={`rounded-lg border px-3 py-2 ${
+      accent
+        ? isDark ? "bg-indigo-900/30 border-indigo-700/40" : "bg-indigo-50 border-indigo-200"
+        : isDark ? "bg-slate-700/40 border-slate-600/50" : "bg-gray-50 border-gray-200"
+    }`}>
+      <p className={`text-[9px] font-bold uppercase tracking-widest mb-0.5 ${isDark ? "text-slate-500" : "text-gray-400"}`}>{label}</p>
+      <p className={`text-sm font-bold ${accent ? isDark ? "text-indigo-300" : "text-indigo-700" : isDark ? "text-slate-200" : "text-gray-800"}`}>{value}</p>
+    </div>
+  );
 
   return (
-    <div className="bg-indigo-50/40 border border-indigo-200 rounded-xl px-4 py-3">
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between text-left"
-      >
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-          <span className="font-semibold text-indigo-800">SEBI Compliance</span>
-          <span className="text-gray-700">
-            Lot <b>{lot?.value ?? "—"}</b>
-          </span>
-          <span className="text-gray-700">
-            Expiry <b>{wd ?? "—"}</b>
-          </span>
-          <span className="text-gray-700">
-            Weekly <b>{sym?.weekly_available ? "yes" : "no"}</b>
-          </span>
-          <span className="text-gray-700">
-            Risk-free <b>{(rfr?.value * 100).toFixed(2)}%</b>
-            <span className="ml-1 text-gray-400">({rfr?.source})</span>
-          </span>
-          <span className="text-gray-400">as of {data.as_of}</span>
+    <div className="p-4">
+      {/* Title row */}
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${isDark ? "bg-indigo-900/50" : "bg-indigo-100"}`}>
+            <Shield className="w-3.5 h-3.5 text-indigo-500" />
+          </div>
+          <div>
+            <p className={`text-sm font-bold leading-none ${isDark ? "text-slate-200" : "text-gray-800"}`}>SEBI Compliance</p>
+            <p className={`text-[10px] mt-0.5 ${isDark ? "text-slate-500" : "text-gray-400"}`}>
+              {symbol}{strategy ? ` · ${strategy}` : ""} · {data.as_of}
+            </p>
+          </div>
         </div>
-        <span className="text-indigo-600 text-xs ml-2">
-          {open ? "hide details ▾" : "show details ▸"}
-        </span>
-      </button>
+        <button onClick={() => setOpen(o => !o)}
+          className={`text-[11px] px-2.5 py-1 rounded-lg border transition ${isDark ? "border-slate-600 text-slate-400 hover:bg-slate-700" : "border-gray-200 text-gray-500 hover:bg-gray-100"}`}>
+          {open ? "Hide" : "Details"}
+        </button>
+      </div>
 
+      {/* Stat pills */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-1">
+        {statCard("Lot size", lot?.value ?? "—", true)}
+        {statCard("Expiry day", wd ?? "—")}
+        {statCard("Weekly", sym?.weekly_available ? "Available" : "No", sym?.weekly_available)}
+        {statCard("Risk-free", rfr ? `${(rfr.value * 100).toFixed(2)}%` : "—")}
+      </div>
+
+      {/* Expanded details */}
       {open && (
-        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-          <div className="bg-white border border-gray-200 rounded-lg p-3">
-            <div className="font-semibold text-gray-700 mb-1">
-              Lot size — {lot?.value ?? "—"} units
+        <div className={`mt-3 space-y-2 text-xs border-t pt-3 ${isDark ? "border-slate-700" : "border-gray-100"}`}>
+
+          {/* Cost schedule */}
+          <div className={`rounded-xl border p-3 ${isDark ? "bg-slate-900/40 border-slate-700" : "bg-white border-gray-200"}`}>
+            <p className={`font-semibold mb-2 ${isDark ? "text-slate-300" : "text-gray-700"}`}>
+              Cost schedule <span className={`font-normal text-[10px] ${isDark ? "text-slate-500" : "text-gray-400"}`}>(eff. {cs?.effective_from})</span>
+            </p>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+              {[
+                ["STT (sell premium)", `${(cs?.stt_sell_premium_pct * 100).toFixed(4)}%`],
+                ["STT (ITM exercise)",  `${(cs?.stt_exercise_pct * 100).toFixed(4)}%`],
+                ["NSE exchange",        `${(cs?.exchange_charge_pct * 100).toFixed(4)}%`],
+                ["SEBI turnover",       `${(cs?.sebi_charge_pct * 100).toFixed(5)}%`],
+                ["Stamp duty (buy)",    `${(cs?.stamp_duty_pct * 100).toFixed(4)}%`],
+                [`GST (${(cs?.gst_pct * 100).toFixed(0)}%)`,  "on brokerage+exch+SEBI"],
+                ["Brokerage",           `₹${cs?.brokerage_per_order}/order`],
+              ].map(([k, v]) => (
+                <div key={k} className="flex justify-between gap-2">
+                  <span className={isDark ? "text-slate-500" : "text-gray-500"}>{k}</span>
+                  <span className={`font-mono font-medium shrink-0 ${isDark ? "text-slate-300" : "text-gray-700"}`}>{v}</span>
+                </div>
+              ))}
             </div>
-            <div className="text-gray-600">
-              Effective from {lot?.effective_from ?? "—"}
-            </div>
-            <div className="text-gray-500 mt-1 break-words">
-              Ref: {refLink(lot?.circular_ref, lot?.circular_url)}
-            </div>
-            {lot?.notes && (
-              <div className="text-gray-500 mt-1 italic">{lot.notes}</div>
+            <p className={`mt-2 text-[10px] ${isDark ? "text-slate-600" : "text-gray-400"}`}>Circular: {refLink(cs?.circular_ref, cs?.circular_url)}</p>
+          </div>
+
+          {/* Lot size detail */}
+          <div className={`rounded-xl border p-3 ${isDark ? "bg-slate-900/40 border-slate-700" : "bg-white border-gray-200"}`}>
+            <p className={`font-semibold mb-1 ${isDark ? "text-slate-300" : "text-gray-700"}`}>Lot size — {lot?.value ?? "—"} units</p>
+            <p className={isDark ? "text-slate-400" : "text-gray-600"}>Effective from {lot?.effective_from ?? "—"}</p>
+            {lot?.notes && <p className={`mt-0.5 italic ${isDark ? "text-slate-500" : "text-gray-500"}`}>{lot.notes}</p>}
+            <p className={`mt-1 text-[10px] ${isDark ? "text-slate-600" : "text-gray-400"}`}>Circular: {refLink(lot?.circular_ref, lot?.circular_url)}</p>
+          </div>
+
+          {/* Risk-free rate */}
+          <div className={`rounded-xl border p-3 ${isDark ? "bg-slate-900/40 border-slate-700" : "bg-white border-gray-200"}`}>
+            <p className={`font-semibold mb-1 ${isDark ? "text-slate-300" : "text-gray-700"}`}>Risk-free rate</p>
+            <p className={`text-lg font-bold ${isDark ? "text-emerald-400" : "text-emerald-600"}`}>
+              {rfr ? `${(rfr.value * 100).toFixed(3)}%` : "—"}
+            </p>
+            {rfr?.asOf && <p className={`text-[10px] mt-0.5 ${isDark ? "text-slate-500" : "text-gray-400"}`}>{rfr.source} · {rfr.asOf}</p>}
+            {!rfr?.success && (
+              <p className={`mt-1 flex items-center gap-1 ${isDark ? "text-amber-400" : "text-amber-700"}`}>
+                <AlertTriangle className="w-3 h-3" /> {rfr?.note}
+              </p>
             )}
           </div>
 
-          <div className="bg-white border border-gray-200 rounded-lg p-3">
-            <div className="font-semibold text-gray-700 mb-1">
-              Cost schedule (effective {cs?.effective_from})
-            </div>
-            <ul className="text-gray-600 space-y-0.5">
-              <li>STT (sell premium): <b>{(cs?.stt_sell_premium_pct * 100).toFixed(4)}%</b></li>
-              <li>STT (exercise / ITM): <b>{(cs?.stt_exercise_pct * 100).toFixed(4)}%</b></li>
-              <li>NSE exchange charge: <b>{(cs?.exchange_charge_pct * 100).toFixed(4)}%</b></li>
-              <li>SEBI turnover: <b>{(cs?.sebi_charge_pct * 100).toFixed(5)}%</b></li>
-              <li>Stamp duty (buy): <b>{(cs?.stamp_duty_pct * 100).toFixed(4)}%</b></li>
-              <li>GST: <b>{(cs?.gst_pct * 100).toFixed(0)}%</b> on (brokerage+exch+sebi)</li>
-              <li>Brokerage: <b>₹{cs?.brokerage_per_order}</b> per executed order</li>
-            </ul>
-            <div className="text-gray-500 mt-1 break-words">
-              Ref: {refLink(cs?.circular_ref, cs?.circular_url)}
-            </div>
-          </div>
-
-          {/* Per-strategy enrichment — only when ?strategy was sent */}
+          {/* Per-leg costs when strategy provided */}
           {strat && perLeg?.per_leg?.length > 0 && (
-            <div className="bg-white border border-gray-200 rounded-lg p-3 md:col-span-2">
-              <div className="font-semibold text-gray-700 mb-1">
-                Per-leg cost breakdown — {strat.id} × {strat.lots} lot
-                {strat.lots !== 1 ? "s" : ""} (lot size {strat.lot_size})
-              </div>
+            <div className={`rounded-xl border p-3 ${isDark ? "bg-slate-900/40 border-slate-700" : "bg-white border-gray-200"}`}>
+              <p className={`font-semibold mb-2 ${isDark ? "text-slate-300" : "text-gray-700"}`}>
+                Per-leg costs — {strat.id} × {strat.lots} lot{strat.lots !== 1 ? "s" : ""}
+              </p>
               {!strat.weekly_available_now && (
-                <div className="text-amber-600 text-xs mb-2">
-                  ⚠ Weekly contracts are not available for {sym?.symbol} on this
-                  date (SEBI Nov-2024 framework) — backtests must use the
-                  monthly expiry cycle.
-                </div>
+                <p className={`mb-2 flex items-start gap-1 ${isDark ? "text-amber-400" : "text-amber-700"}`}>
+                  <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                  Weekly contracts unavailable for {sym?.symbol} — use monthly expiry for backtests.
+                </p>
               )}
               <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead className="text-gray-500">
-                    <tr className="border-b border-gray-100">
-                      <th className="text-left py-1 pr-2">#</th>
-                      <th className="text-left py-1 pr-2">Side</th>
-                      <th className="text-right py-1 pr-2">Strike</th>
-                      <th className="text-right py-1 pr-2">Brokerage</th>
-                      <th className="text-right py-1 pr-2">STT</th>
-                      <th className="text-right py-1 pr-2">Exch+SEBI</th>
-                      <th className="text-right py-1 pr-2">Stamp</th>
-                      <th className="text-right py-1 pr-2">GST</th>
-                      <th className="text-right py-1">Leg total</th>
+                <table className="w-full text-[11px]">
+                  <thead>
+                    <tr className={`border-b ${isDark ? "border-slate-700 text-slate-500" : "border-gray-100 text-gray-400"}`}>
+                      {["#","Side","Strike","Broker","STT","Exch+SEBI","Stamp","GST","Total"].map(h =>
+                        <th key={h} className="pb-1 pr-2 text-right first:text-left font-medium">{h}</th>
+                      )}
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className={`divide-y ${isDark ? "divide-slate-800" : "divide-gray-50"}`}>
                     {perLeg.per_leg.map((row: any) => {
                       const e = row.entry, x = row.exit;
                       return (
-                        <tr key={row.leg_index} className="border-b border-gray-50">
-                          <td className="py-1 pr-2 text-gray-500">{row.leg_index + 1}</td>
-                          <td className="py-1 pr-2">
-                            {row.action} {row.type}
-                          </td>
-                          <td className="py-1 pr-2 text-right">{row.strike}</td>
-                          <td className="py-1 pr-2 text-right">{fmtINR(e.brokerage + x.brokerage)}</td>
-                          <td className="py-1 pr-2 text-right">{fmtINR(e.stt + x.stt)}</td>
-                          <td className="py-1 pr-2 text-right">
-                            {fmtINR(e.exchange_charge + x.exchange_charge
-                                    + e.sebi_charge + x.sebi_charge)}
-                          </td>
-                          <td className="py-1 pr-2 text-right">{fmtINR(e.stamp_duty + x.stamp_duty)}</td>
-                          <td className="py-1 pr-2 text-right">{fmtINR(e.gst + x.gst)}</td>
-                          <td className="py-1 text-right font-semibold">{fmtINR(row.leg_total)}</td>
+                        <tr key={row.leg_index}>
+                          <td className={`py-1 pr-2 ${isDark ? "text-slate-500" : "text-gray-400"}`}>{row.leg_index + 1}</td>
+                          <td className="py-1 pr-2">{row.action} {row.type}</td>
+                          <td className="py-1 pr-2 text-right font-mono">{row.strike}</td>
+                          <td className="py-1 pr-2 text-right font-mono">{fmtCur(e.brokerage + x.brokerage)}</td>
+                          <td className="py-1 pr-2 text-right font-mono">{fmtCur(e.stt + x.stt)}</td>
+                          <td className="py-1 pr-2 text-right font-mono">{fmtCur(e.exchange_charge + x.exchange_charge + e.sebi_charge + x.sebi_charge)}</td>
+                          <td className="py-1 pr-2 text-right font-mono">{fmtCur(e.stamp_duty + x.stamp_duty)}</td>
+                          <td className="py-1 pr-2 text-right font-mono">{fmtCur(e.gst + x.gst)}</td>
+                          <td className={`py-1 text-right font-bold ${isDark ? "text-indigo-400" : "text-indigo-700"}`}>{fmtCur(row.leg_total)}</td>
                         </tr>
                       );
                     })}
                     <tr>
-                      <td colSpan={8} className="py-1 pr-2 text-right text-gray-500">
-                        Round-trip total
-                      </td>
-                      <td className="py-1 text-right font-bold text-indigo-700">
-                        {fmtINR(perLeg.total)}
-                      </td>
+                      <td colSpan={8} className={`py-1 pr-2 text-right ${isDark ? "text-slate-500" : "text-gray-400"}`}>Round-trip total</td>
+                      <td className={`py-1 text-right font-bold text-base ${isDark ? "text-indigo-300" : "text-indigo-700"}`}>{fmtCur(perLeg.total)}</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
-              {margin && (
-                <div className="mt-2 text-gray-600">
-                  Estimated SPAN+ELM margin: <b>{fmtINR(margin.value)}</b>
-                  <span className="ml-2 text-gray-400 italic">{margin.note}</span>
-                </div>
-              )}
-              {strat.applicable_circulars?.length > 0 && (
-                <div className="mt-2 text-gray-500 text-xs">
-                  Applicable circulars:{" "}
-                  {strat.applicable_circulars.map((c: any, i: number) => (
-                    <span key={i} className="mr-2">
-                      {refLink(c.ref, c.url)}
-                      {i < strat.applicable_circulars.length - 1 ? " · " : ""}
-                    </span>
-                  ))}
-                </div>
+              {margin?.value && (
+                <p className={`mt-2 ${isDark ? "text-slate-400" : "text-gray-600"}`}>
+                  SPAN+ELM margin est.: <strong>{fmtCur(margin.value)}</strong>
+                  {margin.note && <span className={`ml-1 italic ${isDark ? "text-slate-500" : "text-gray-400"}`}>{margin.note}</span>}
+                </p>
               )}
             </div>
           )}
-
-          <div className="bg-white border border-gray-200 rounded-lg p-3 md:col-span-2">
-            <div className="font-semibold text-gray-700 mb-1">
-              Risk-free rate (India 10Y G-Sec)
-            </div>
-            <div className="text-gray-600">
-              <b>{(rfr?.value * 100).toFixed(3)}%</b>
-              {rfr?.asOf && <span className="ml-2 text-gray-500">as of {rfr.asOf}</span>}
-              <span className="ml-2 text-gray-500">— source: {rfr?.source}</span>
-            </div>
-            {!rfr?.success && (
-              <div className="text-amber-600 mt-1">
-                ⚠ {rfr?.note} — strategy math is using the {(rfr?.value * 100).toFixed(2)}% fallback.
-              </div>
-            )}
-          </div>
         </div>
       )}
     </div>
@@ -1284,8 +1257,9 @@ export default function OptionsStrategyTester() {
   const [showStockDrop, setShowStockDrop] = useState(false);
 
   // Workspace panel state
-  const [advTab,   setAdvTab]   = useState<"sebi"|"backtest"|"risk"|"smart">("sebi");
-  const [rightTab, setRightTab] = useState<"payoff"|"simulator">("payoff");
+  const [advTab,        setAdvTab]        = useState<"sebi"|"backtest"|"risk"|"smart">("sebi");
+  const [rightTab,      setRightTab]      = useState<"payoff"|"simulator">("payoff");
+  const [chainCollapsed, setChainCollapsed] = useState(false);
 
   // Fetch F&O stocks list on mount
   useEffect(() => {
@@ -1806,43 +1780,70 @@ export default function OptionsStrategyTester() {
       })()}
 
       {/* ── Main Workspace ─────────────────────────────────────────────────── */}
-      <div className="grid gap-3" style={{ gridTemplateColumns: "420px 1fr" }}>
+      <div className="grid gap-3" style={{ gridTemplateColumns: chainCollapsed ? "44px 1fr" : "420px 1fr" }}>
 
-        {/* ─── LEFT: Option Chain (always visible) ──────────────────────────── */}
-        <div className={`flex flex-col rounded-xl border overflow-hidden ${isDark ? "border-slate-700 bg-slate-800" : "border-gray-200 bg-white shadow-sm"}`} style={{ height: 610 }}>
+        {/* ─── LEFT: Option Chain (collapsible) ─────────────────────────────── */}
+        <div className={`flex flex-col rounded-xl border overflow-hidden transition-all ${isDark ? "border-slate-700 bg-slate-800" : "border-gray-200 bg-white shadow-sm"}`}
+          style={{ height: 610 }}>
+          {/* Panel header + collapse toggle */}
           <div className={`shrink-0 px-3 py-2 border-b flex items-center justify-between ${isDark ? "border-slate-700 bg-slate-900/40" : "border-gray-100 bg-gray-50"}`}>
-            <div className="flex items-center gap-1.5">
-              <Layers className="w-3.5 h-3.5 text-indigo-400" />
-              <span className={`text-xs font-bold ${isDark ? "text-slate-300" : "text-gray-600"}`}>Option Chain</span>
-            </div>
-            {spotInfo ? (
-              <span className={`text-[9px] font-medium px-2 py-0.5 rounded-full flex items-center gap-1 ${isDark ? "bg-indigo-900/50 text-indigo-300 border border-indigo-800/40" : "bg-indigo-50 text-indigo-500 border border-indigo-100"}`}>
-                <Plus className="w-2.5 h-2.5" />Click B / S → adds leg
-              </span>
+            {chainCollapsed ? (
+              <button onClick={() => setChainCollapsed(false)}
+                className="flex flex-col items-center gap-1 w-full py-1"
+                title="Expand Option Chain">
+                <Layers className="w-4 h-4 text-indigo-400" />
+                <span className="text-[8px] font-bold text-indigo-400 uppercase tracking-widest"
+                  style={{ writingMode: "vertical-rl", transform: "rotate(180deg)", letterSpacing: "0.1em" }}>
+                  Chain
+                </span>
+              </button>
             ) : (
-              <span className={`text-[9px] ${isDark ? "text-slate-600" : "text-gray-300"}`}>Select an asset above</span>
+              <>
+                <div className="flex items-center gap-1.5">
+                  <Layers className="w-3.5 h-3.5 text-indigo-400" />
+                  <span className={`text-xs font-bold ${isDark ? "text-slate-300" : "text-gray-600"}`}>Option Chain</span>
+                  {spotInfo && (
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${isDark ? "bg-emerald-900/40 text-emerald-400" : "bg-emerald-50 text-emerald-600"}`}>
+                      ₹{spotInfo.atm.toLocaleString("en-IN")} ATM
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {!spotInfo && (
+                    <span className={`text-[9px] ${isDark ? "text-slate-600" : "text-gray-300"}`}>Select asset first</span>
+                  )}
+                  <button onClick={() => setChainCollapsed(true)}
+                    title="Collapse chain panel"
+                    className={`flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded transition ${isDark ? "text-slate-500 hover:text-slate-300 hover:bg-slate-700" : "text-gray-300 hover:text-gray-500 hover:bg-gray-100"}`}>
+                    ◀ Hide
+                  </button>
+                </div>
+              </>
             )}
           </div>
-          <div className="flex-1 overflow-hidden">
-            <OptionChainPanel
-              symbol={symbol}
-              spotInfo={spotInfo}
-              T={T}
-              onAddLeg={(l) => {
-                setLegs(prev => [...prev, {
-                  id:          crypto.randomUUID(),
-                  action:      l.action,
-                  option_type: l.option_type,
-                  strike:      l.strike,
-                  premium:     l.premium,
-                  lots:        l.lots,
-                  lot_size:    l.lot_size,
-                  iv:          l.iv,
-                }]);
-                setAnalysisDirty(true);
-              }}
-            />
-          </div>
+          {/* Chain panel body — hidden when collapsed */}
+          {!chainCollapsed && (
+            <div className="flex-1 overflow-hidden">
+              <OptionChainPanel
+                symbol={symbol}
+                spotInfo={spotInfo}
+                T={T}
+                onAddLeg={(l) => {
+                  setLegs(prev => [...prev, {
+                    id:          crypto.randomUUID(),
+                    action:      l.action,
+                    option_type: l.option_type,
+                    strike:      l.strike,
+                    premium:     l.premium,
+                    lots:        l.lots,
+                    lot_size:    l.lot_size,
+                    iv:          l.iv,
+                  }]);
+                  setAnalysisDirty(true);
+                }}
+              />
+            </div>
+          )}
         </div>
 
         {/* ─── RIGHT: Strategy Builder + Payoff ─────────────────────────────── */}
