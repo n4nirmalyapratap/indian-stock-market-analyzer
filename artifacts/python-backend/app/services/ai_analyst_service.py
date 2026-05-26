@@ -913,14 +913,14 @@ def _ev(phase: str, agent: str = "", status: str = "running",
     return e
 
 
-async def _run_analyst(role_key: str, role_label: str, summary: dict) -> tuple[str, str]:
-    note = await ai_client.ask(
+async def _run_analyst(role_key: str, role_label: str, summary: dict) -> tuple[str, str, str]:
+    note, model_label = await ai_client.ask_with_meta(
         _analyst_prompt(role_label, summary),
         system=_SYSTEM_BASE,
         max_tokens=600,
         temperature=0.4,
     )
-    return role_key, _scrub_advice(note or "").strip()
+    return role_key, _scrub_advice(note or "").strip(), model_label
 
 
 async def _safe_json(text: str) -> dict:
@@ -1020,15 +1020,11 @@ async def _run_analysis_impl(ticker: str, user_id: str,
       results = await asyncio.gather(*[
           _run_analyst(key, label, summary) for key, label in ANALYST_ROLES
       ], return_exceptions=True)
-      # Track which provider actually answered (Groq or OpenRouter primary)
-      models_used.append(
-          f"groq/{ai_client.GROQ_MODEL}"
-          if ai_client._s("GROQ_API_KEY", "") else ai_client.AI_MODEL
-      )
       for r in results:
           if isinstance(r, tuple):
-              k, txt = r
+              k, txt, model_label = r
               notes[k] = txt
+              models_used.append(model_label)
               yield _ev("analyst", agent=k, status="done", partial=txt)
           else:
               logger.warning("Analyst gather error: %s", r)
@@ -1040,27 +1036,36 @@ async def _run_analysis_impl(ticker: str, user_id: str,
       # Phase 2 — Bull vs Bear (in parallel)
       yield _ev("debate", agent="bull", status="running")
       yield _ev("debate", agent="bear", status="running")
-      bull_task = ai_client.ask(_debate_prompt("BULL", notes),
-                                system=_SYSTEM_BASE, max_tokens=500, temperature=0.5)
-      bear_task = ai_client.ask(_debate_prompt("BEAR", notes),
-                                system=_SYSTEM_BASE, max_tokens=500, temperature=0.5)
-      bull_text, bear_text = await asyncio.gather(bull_task, bear_task,
-                                                  return_exceptions=True)
-      bull_text = _scrub_advice((bull_text if isinstance(bull_text, str)
-                                 else "(bull researcher unavailable)").strip())
-      bear_text = _scrub_advice((bear_text if isinstance(bear_text, str)
-                                 else "(bear researcher unavailable)").strip())
+      bull_task = ai_client.ask_with_meta(_debate_prompt("BULL", notes),
+                                          system=_SYSTEM_BASE, max_tokens=500, temperature=0.5)
+      bear_task = ai_client.ask_with_meta(_debate_prompt("BEAR", notes),
+                                          system=_SYSTEM_BASE, max_tokens=500, temperature=0.5)
+      debate_results = await asyncio.gather(bull_task, bear_task, return_exceptions=True)
+      bull_raw, bear_raw = debate_results
+      if isinstance(bull_raw, tuple):
+          bull_text_raw, bull_model = bull_raw
+          models_used.append(bull_model)
+      else:
+          bull_text_raw = ""
+      if isinstance(bear_raw, tuple):
+          bear_text_raw, bear_model = bear_raw
+          models_used.append(bear_model)
+      else:
+          bear_text_raw = ""
+      bull_text = _scrub_advice((bull_text_raw if bull_text_raw else "(bull researcher unavailable)").strip())
+      bear_text = _scrub_advice((bear_text_raw if bear_text_raw else "(bear researcher unavailable)").strip())
       yield _ev("debate", agent="bull", status="done", partial=bull_text)
       yield _ev("debate", agent="bear", status="done", partial=bear_text)
 
       # Phase 3 — Trader synthesis (JSON verdict)
       yield _ev("trader", status="running")
-      trader_raw = await ai_client.ask(
+      trader_raw, trader_model = await ai_client.ask_with_meta(
           _trader_prompt(notes, bull_text, bear_text, summary),
           system=_SYSTEM_BASE + " Reply with strict JSON only.",
           max_tokens=400,
           temperature=0.2,
       )
+      models_used.append(trader_model)
       verdict_obj = await _safe_json(trader_raw)
       verdict = (verdict_obj.get("verdict") or "HOLD").upper()
       if verdict not in ("BUY", "HOLD", "SELL"):

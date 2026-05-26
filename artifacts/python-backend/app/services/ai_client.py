@@ -2,8 +2,12 @@
 Centralized AI client for the Indian Stock Market Analyzer.
 
 Provider priority:
-  1. Groq  (GROQ_API_KEY secret)   — llama-3.3-70b-versatile at 500–900 tok/s,
-                                     generous free tier, ~1 s per response.
+  1. Groq  (GROQ_API_KEY secret)   — cycles through fast free models:
+                                       1. llama-3.3-70b-versatile (primary)
+                                       2. mixtral-8x7b-32768
+                                       3. gemma2-9b-it
+                                       4. llama-3.1-8b-instant
+                                     500–900 tok/s, generous free tier, ~1 s per response.
   2. OpenRouter (AI_INTEGRATIONS_OPENROUTER_*)  — cascade of 6 models as fallback.
 
 Text cascade (OpenRouter fallback):
@@ -58,9 +62,16 @@ def _s(key: str, default: str = "") -> str:
 
 # ── Model constants ────────────────────────────────────────────────────────────
 
-# Groq — primary fast provider
-_GROQ_BASE  = "https://api.groq.com/openai/v1"
-GROQ_MODEL  = "llama-3.3-70b-versatile"   # 500–900 tok/s, free tier, same quality
+# Groq — primary fast provider, tried in order until one succeeds
+_GROQ_BASE   = "https://api.groq.com/openai/v1"
+GROQ_MODEL   = "llama-3.3-70b-versatile"   # primary; kept for back-compat
+GROQ_MODELS  = [
+    "llama-3.3-70b-versatile",  # primary — 500–900 tok/s
+    "mixtral-8x7b-32768",       # fallback 1 — fast, free
+    "gemma2-9b-it",             # fallback 2 — fast, free
+    "llama-3.1-8b-instant",     # fallback 3 — fastest, smallest, free
+]
+
 
 # OpenRouter cascade — fallback when GROQ_API_KEY absent or Groq unavailable
 AI_MODEL    = "x-ai/grok-4-fast:free"
@@ -147,31 +158,35 @@ async def _groq_call(
     messages: list[dict],
     max_tokens: int,
     temperature: float,
-) -> Optional[str]:
+) -> Optional[tuple[str, str]]:
     """
-    Try Groq with a 20 s timeout.  Returns the response text, or None on any
-    failure (caller falls through to OpenRouter cascade).
-    Groq typically responds in < 5 s at 500–900 tok/s, so 20 s is generous.
+    Try each model in GROQ_MODELS in order with a 20 s timeout per model.
+    Returns ``(response_text, model_name)`` for the first model that succeeds,
+    or ``None`` if all fail (caller falls through to the OpenRouter cascade).
     """
     client = _groq()
     if not client:
         return None
-    try:
-        resp = await asyncio.wait_for(
-            client.chat.completions.create(
-                model=GROQ_MODEL,
-                messages=messages,
-                max_completion_tokens=max_tokens,
-                temperature=temperature,
-            ),
-            timeout=20,
-        )
-        text = resp.choices[0].message.content or ""
-        log.info("AI: answered by groq/%s", GROQ_MODEL)
-        return text
-    except Exception as exc:
-        log.warning("Groq failed, falling back to OpenRouter: %s", str(exc)[:120])
-        return None
+    for groq_model in GROQ_MODELS:
+        try:
+            resp = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=groq_model,
+                    messages=messages,
+                    max_completion_tokens=max_tokens,
+                    temperature=temperature,
+                ),
+                timeout=20,
+            )
+            text = resp.choices[0].message.content or ""
+            log.info("AI: answered by groq/%s", groq_model)
+            return text, groq_model
+        except Exception as exc:
+            log.warning(
+                "Groq model %s failed, trying next: %s", groq_model, str(exc)[:120]
+            )
+    log.warning("All Groq models exhausted, falling back to OpenRouter")
+    return None
 
 
 # ── OpenRouter retry helper ────────────────────────────────────────────────────
@@ -238,9 +253,10 @@ async def ask(
 
     # 1. Groq fast path
     if not model:   # only bypass Groq when a specific OR model is requested
-        result = await _groq_call(messages, max_tokens, temperature)
-        if result is not None:
-            return result
+        groq_result = await _groq_call(messages, max_tokens, temperature)
+        if groq_result is not None:
+            text, _groq_model = groq_result
+            return text
 
     # 2. OpenRouter cascade
     or_c = _or()
@@ -270,6 +286,68 @@ async def ask(
     return "[AI unavailable: every model in the cascade is rate-limited or offline — please retry in a minute]"
 
 
+async def ask_with_meta(
+    prompt: str,
+    system: str = "You are a helpful financial assistant specialising in Indian markets.",
+    model: str  = "",
+    max_tokens: int = 4096,
+    temperature: float = 0.3,
+) -> tuple[str, str]:
+    """
+    Like ask() but also returns the provider/model label that answered.
+
+    Returns ``(response_text, model_label)`` where ``model_label`` is e.g.:
+      * ``"groq/llama-3.3-70b-versatile"``  — one of the Groq fallbacks
+      * ``"openrouter/x-ai/grok-4-fast:free"``  — OpenRouter model
+      * ``"none"`` — every provider was unavailable
+
+    Use this instead of ask() when the caller needs to record which model
+    was used (e.g. the AI Analyst pipeline's ``models_used`` field).
+    """
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user",   "content": prompt},
+    ]
+
+    # 1. Groq fast path
+    if not model:
+        groq_result = await _groq_call(messages, max_tokens, temperature)
+        if groq_result is not None:
+            text, groq_model = groq_result
+            return text, f"groq/{groq_model}"
+
+    # 2. OpenRouter cascade
+    or_c = _or()
+    if not or_c:
+        if _groq() is None:
+            return (
+                "[AI unavailable: no provider configured. "
+                "Add GROQ_API_KEY secret (free at console.groq.com) or "
+                "connect OpenRouter in Admin → Integrations.]",
+                "none",
+            )
+        return "[AI unavailable: every model in the cascade failed — please retry]", "none"
+
+    last_exc: Exception = RuntimeError("no models tried")
+    for attempt_model in _text_cascade(model):
+        try:
+            result = await _call_with_retry(
+                or_c, attempt_model, messages, max_tokens, temperature,
+                retries=1, backoff=4.0,
+            )
+            log.info("AI: answered by %s", attempt_model)
+            return result, f"openrouter/{attempt_model}"
+        except Exception as exc:
+            last_exc = exc
+            log.warning("OpenRouter model %s unavailable: %s", attempt_model, str(exc)[:120])
+
+    log.error("All models failed. Last error: %s", last_exc)
+    return (
+        "[AI unavailable: every model in the cascade is rate-limited or offline — please retry in a minute]",
+        "none",
+    )
+
+
 async def ask_stream(
     prompt: str,
     system: str = "You are a helpful financial assistant specialising in Indian markets.",
@@ -291,9 +369,10 @@ async def ask_stream(
 
     # 1. Groq fast path (returns full text, yield it as one chunk)
     if not model:
-        result = await _groq_call(messages, max_tokens, temperature)
-        if result is not None:
-            yield result
+        groq_result = await _groq_call(messages, max_tokens, temperature)
+        if groq_result is not None:
+            text, _groq_model = groq_result
+            yield text
             return
 
     # 2. OpenRouter streaming
@@ -349,9 +428,10 @@ async def chat_with_history(
 
     # 1. Groq fast path
     if not model:
-        result = await _groq_call(full_messages, max_tokens, temperature)
-        if result is not None:
-            return result
+        groq_result = await _groq_call(full_messages, max_tokens, temperature)
+        if groq_result is not None:
+            text, _groq_model = groq_result
+            return text
 
     # 2. OpenRouter cascade
     or_c = _or()
