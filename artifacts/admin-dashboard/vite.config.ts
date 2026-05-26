@@ -27,7 +27,7 @@ if (!basePath) {
 }
 
 const apiProxyTarget = process.env.VITE_API_PROXY_TARGET || "http://localhost:8090";
-const googleClientId = process.env.VITE_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || "";
+const googleClientId = process.env.VITE_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID;
 
 export default defineConfig({
   base: basePath,
