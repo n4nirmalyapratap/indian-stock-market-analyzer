@@ -112,8 +112,11 @@ def feature_enabled() -> bool:
     return val in ("1", "true", "on", "yes")
 
 
-# Hard wall-clock timeout per analysis (task spec: ≤4 min).
-_ANALYSIS_TIMEOUT_SEC = int(os.environ.get("AI_ANALYST_TIMEOUT_SEC", "240"))
+# Hard wall-clock timeout per analysis.
+# Reduced to 120 s now that Groq (< 5 s/call) handles the fast path;
+# the old 240 s budget was designed for slow free-tier OpenRouter models.
+# Override via AI_ANALYST_TIMEOUT_SEC env var if needed.
+_ANALYSIS_TIMEOUT_SEC = int(os.environ.get("AI_ANALYST_TIMEOUT_SEC", "120"))
 
 
 # ── DB ────────────────────────────────────────────────────────────────────────
@@ -1017,7 +1020,11 @@ async def _run_analysis_impl(ticker: str, user_id: str,
       results = await asyncio.gather(*[
           _run_analyst(key, label, summary) for key, label in ANALYST_ROLES
       ], return_exceptions=True)
-      models_used.append(ai_client.AI_MODEL)
+      # Track which provider actually answered (Groq or OpenRouter primary)
+      models_used.append(
+          f"groq/{ai_client.GROQ_MODEL}"
+          if ai_client._s("GROQ_API_KEY", "") else ai_client.AI_MODEL
+      )
       for r in results:
           if isinstance(r, tuple):
               k, txt = r
