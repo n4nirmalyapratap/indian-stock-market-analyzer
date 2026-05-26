@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 declare global {
   interface Window {
     google?: any;
+    __ENV__?: Record<string, string>;
   }
 }
 
@@ -34,7 +35,7 @@ function loadGoogleScript(): Promise<void> {
 }
 
 export function GoogleSignInButton({ onCredential }: GoogleSignInButtonProps) {
-  const clientId = (import.meta.env.VITE_GOOGLE_CLIENT_ID || "").trim();
+  const clientId = (window.__ENV__?.VITE_GOOGLE_CLIENT_ID || import.meta.env.VITE_GOOGLE_CLIENT_ID || "").trim();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);

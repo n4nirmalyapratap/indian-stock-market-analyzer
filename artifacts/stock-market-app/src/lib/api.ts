@@ -577,7 +577,7 @@ export function setTokenGetter(fn: (opts?: Record<string, unknown>) => Promise<s
 
 // ─── Base fetch ───────────────────────────────────────────────────────────────
 
-const BASE = (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
+const BASE = ((window as any).__ENV__?.VITE_API_URL || import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
 
 export async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   const authHeaders: Record<string, string> = {};
