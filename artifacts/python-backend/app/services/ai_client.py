@@ -1,23 +1,23 @@
 """
 Centralized AI client for the Indian Stock Market Analyzer.
 
-Routes every call through OpenRouter (one API key, many models). Cascade
-prefers Grok first because the OpenRouter free tier on Google/Qwen/Llama
-hits rate limits often; Grok-4-Fast is on a generous free tier and falls
-through to paid Gemini → Claude → the original free models as backstops.
+Provider priority:
+  1. Groq  (GROQ_API_KEY secret)   — llama-3.3-70b-versatile at 500–900 tok/s,
+                                     generous free tier, ~1 s per response.
+  2. OpenRouter (AI_INTEGRATIONS_OPENROUTER_*)  — cascade of 6 models as fallback.
 
-Text cascade:
+Text cascade (OpenRouter fallback):
   • Primary    : x-ai/grok-4-fast:free          (xAI, free, generous limits)
   • Fallback 1 : google/gemini-flash-1.5         (paid, cheap, fast)
   • Fallback 2 : anthropic/claude-3.5-sonnet     (paid, best quality)
-  • Fallback 3 : google/gemma-4-31b-it:free      (free, original primary)
+  • Fallback 3 : google/gemma-4-31b-it:free      (free)
   • Fallback 4 : qwen/qwen3-30b-a3b:free         (free)
   • Fallback 5 : meta-llama/llama-3.3-70b-instruct:free  (free)
 
-Vision cascade (for screenshot-style image input):
+Vision cascade (OpenRouter only — Groq has no vision endpoint):
   • Primary    : x-ai/grok-2-vision-1212
-  • Fallback 1 : google/gemini-flash-1.5         (multimodal-capable)
-  • Fallback 2 : anthropic/claude-3.5-sonnet     (multimodal-capable)
+  • Fallback 1 : google/gemini-flash-1.5
+  • Fallback 2 : anthropic/claude-3.5-sonnet
 
 All model IDs can be overridden via env / DB secrets (AI_MODEL,
 AI_FALLBACK_MODEL, AI_VISION_MODEL).
@@ -56,22 +56,24 @@ def _s(key: str, default: str = "") -> str:
         return os.environ.get(key, default)
 
 
-# ── Model cascade ─────────────────────────────────────────────────────────────
-# Grok first (generous free tier on OpenRouter), then paid Gemini/Claude for
-# quality fallback, then the original three free models as last-resort.
-# Anything in this list can be overridden via env or DB secrets.
+# ── Model constants ────────────────────────────────────────────────────────────
 
-AI_MODEL    = "x-ai/grok-4-fast:free"          # primary
-_FALLBACK1  = "google/gemini-flash-1.5"         # paid but cheap
-_FALLBACK2  = "anthropic/claude-3.5-sonnet"     # paid, best quality
-_FALLBACK3  = "google/gemma-4-31b-it:free"      # original primary
+# Groq — primary fast provider
+_GROQ_BASE  = "https://api.groq.com/openai/v1"
+GROQ_MODEL  = "llama-3.3-70b-versatile"   # 500–900 tok/s, free tier, same quality
+
+# OpenRouter cascade — fallback when GROQ_API_KEY absent or Groq unavailable
+AI_MODEL    = "x-ai/grok-4-fast:free"
+_FALLBACK1  = "google/gemini-flash-1.5"
+_FALLBACK2  = "anthropic/claude-3.5-sonnet"
+_FALLBACK3  = "google/gemma-4-31b-it:free"
 _FALLBACK4  = "qwen/qwen3-30b-a3b:free"
 _FALLBACK5  = "meta-llama/llama-3.3-70b-instruct:free"
 
-# Vision-capable cascade for image inputs (screenshot extraction, etc.).
-AI_VISION_MODEL    = "x-ai/grok-2-vision-1212"
-_VISION_FALLBACK1  = "google/gemini-flash-1.5"
-_VISION_FALLBACK2  = "anthropic/claude-3.5-sonnet"
+# Vision-capable cascade (OpenRouter only — Groq has no vision endpoint)
+AI_VISION_MODEL   = "x-ai/grok-2-vision-1212"
+_VISION_FALLBACK1 = "google/gemini-flash-1.5"
+_VISION_FALLBACK2 = "anthropic/claude-3.5-sonnet"
 
 
 def _get_ai_model() -> str:
@@ -83,7 +85,7 @@ def _get_ai_fallback1() -> str:
 
 
 def _text_cascade(chosen: str = "") -> list[str]:
-    """Return the ordered list of text models to try."""
+    """Return the ordered list of OpenRouter text models to try."""
     primary   = chosen or _get_ai_model()
     fallback1 = _get_ai_fallback1()
     return list(dict.fromkeys([
@@ -97,6 +99,24 @@ def _vision_cascade(chosen: str = "") -> list[str]:
     return list(dict.fromkeys([
         primary, _VISION_FALLBACK1, _VISION_FALLBACK2,
     ]))
+
+
+# ── Lazy Groq client ───────────────────────────────────────────────────────────
+
+_groq_client: Optional[AsyncOpenAI] = None
+_groq_key_seen: str = ""
+
+
+def _groq() -> Optional[AsyncOpenAI]:
+    """Return (or lazily create) the Groq client. Returns None if no key."""
+    global _groq_client, _groq_key_seen
+    key = _s("GROQ_API_KEY", "")
+    if not key:
+        return None
+    if key != _groq_key_seen:
+        _groq_client = AsyncOpenAI(base_url=_GROQ_BASE, api_key=key)
+        _groq_key_seen = key
+    return _groq_client
 
 
 # ── Lazy OpenRouter client ─────────────────────────────────────────────────────
@@ -117,11 +137,44 @@ def _or() -> Optional[AsyncOpenAI]:
 
 
 def is_available() -> bool:
-    """Return True if the OpenRouter client is configured."""
-    return _or() is not None
+    """Return True if at least one AI provider (Groq or OpenRouter) is configured."""
+    return _groq() is not None or _or() is not None
 
 
-# ── Retry helper ───────────────────────────────────────────────────────────────
+# ── Groq fast call ─────────────────────────────────────────────────────────────
+
+async def _groq_call(
+    messages: list[dict],
+    max_tokens: int,
+    temperature: float,
+) -> Optional[str]:
+    """
+    Try Groq with a 20 s timeout.  Returns the response text, or None on any
+    failure (caller falls through to OpenRouter cascade).
+    Groq typically responds in < 5 s at 500–900 tok/s, so 20 s is generous.
+    """
+    client = _groq()
+    if not client:
+        return None
+    try:
+        resp = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=messages,
+                max_completion_tokens=max_tokens,
+                temperature=temperature,
+            ),
+            timeout=20,
+        )
+        text = resp.choices[0].message.content or ""
+        log.info("AI: answered by groq/%s", GROQ_MODEL)
+        return text
+    except Exception as exc:
+        log.warning("Groq failed, falling back to OpenRouter: %s", str(exc)[:120])
+        return None
+
+
+# ── OpenRouter retry helper ────────────────────────────────────────────────────
 
 async def _call_with_retry(
     client: AsyncOpenAI,
@@ -130,9 +183,13 @@ async def _call_with_retry(
     max_tokens: int,
     temperature: float,
     retries: int = 2,
-    backoff: float = 8.0,
+    backoff: float = 4.0,
 ) -> str:
-    """Try one model, retrying on 429 rate-limit errors with exponential backoff."""
+    """
+    Try one OpenRouter model, retrying on 429 rate-limit errors with
+    exponential backoff.  Timeout reduced to 25 s (was 60 s) because Groq
+    now handles the fast path; OpenRouter is a true fallback.
+    """
     for attempt in range(retries + 1):
         try:
             resp = await asyncio.wait_for(
@@ -142,7 +199,7 @@ async def _call_with_retry(
                     max_completion_tokens=max_tokens,
                     temperature=temperature,
                 ),
-                timeout=60,
+                timeout=25,
             )
             return resp.choices[0].message.content or ""
         except Exception as exc:
@@ -168,25 +225,40 @@ async def ask(
 ) -> str:
     """
     Send a prompt and return the full response.
-    Cascade: Grok-4-Fast (free) → Gemini Flash → Claude 3.5 Sonnet → free
-    fallbacks (Gemma 4 → Qwen 3 → Llama 3.3). Any model can be overridden
-    via the AI_MODEL / AI_FALLBACK_MODEL env vars or DB secrets.
-    """
-    or_c = _or()
-    if not or_c:
-        return "[AI unavailable: OpenRouter integration not connected. Go to Admin → Integrations to enable it.]"
 
+    Provider order:
+      1. Groq llama-3.3-70b-versatile  (fast, free — if GROQ_API_KEY set)
+      2. OpenRouter cascade: Grok-4-Fast → Gemini Flash → Claude 3.5 →
+         Gemma 4 → Qwen 3 → Llama 3.3  (if OpenRouter integration connected)
+    """
     messages = [
         {"role": "system", "content": system},
         {"role": "user",   "content": prompt},
     ]
+
+    # 1. Groq fast path
+    if not model:   # only bypass Groq when a specific OR model is requested
+        result = await _groq_call(messages, max_tokens, temperature)
+        if result is not None:
+            return result
+
+    # 2. OpenRouter cascade
+    or_c = _or()
+    if not or_c:
+        if _groq() is None:
+            return (
+                "[AI unavailable: no provider configured. "
+                "Add GROQ_API_KEY secret (free at console.groq.com) or "
+                "connect OpenRouter in Admin → Integrations.]"
+            )
+        return "[AI unavailable: every model in the cascade failed — please retry]"
 
     last_exc: Exception = RuntimeError("no models tried")
     for attempt_model in _text_cascade(model):
         try:
             result = await _call_with_retry(
                 or_c, attempt_model, messages, max_tokens, temperature,
-                retries=1, backoff=6.0,
+                retries=1, backoff=4.0,
             )
             log.info("AI: answered by %s", attempt_model)
             return result
@@ -206,9 +278,25 @@ async def ask_stream(
     temperature: float = 0.3,
 ) -> AsyncGenerator[str, None]:
     """
-    Stream response tokens. Falls back to ask() if streaming fails (which
-    runs the full Grok → Gemini → Claude → free-models cascade).
+    Stream response tokens.
+
+    Tries Groq first (non-streaming but fast enough at 500 tok/s that the
+    full response arrives in ~1–2 s).  Falls back to OpenRouter streaming,
+    or to the full ask() cascade if streaming itself fails.
     """
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user",   "content": prompt},
+    ]
+
+    # 1. Groq fast path (returns full text, yield it as one chunk)
+    if not model:
+        result = await _groq_call(messages, max_tokens, temperature)
+        if result is not None:
+            yield result
+            return
+
+    # 2. OpenRouter streaming
     or_c = _or()
     if not or_c:
         yield "[AI unavailable]"
@@ -218,10 +306,7 @@ async def ask_stream(
     try:
         stream = await or_c.chat.completions.create(
             model=chosen,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user",   "content": prompt},
-            ],
+            messages=messages,
             max_completion_tokens=max_tokens,
             temperature=temperature,
             stream=True,
@@ -231,7 +316,7 @@ async def ask_stream(
             if delta:
                 yield delta
     except Exception:
-        # Non-streaming fallback through the full free cascade
+        # Non-streaming fallback through the full cascade
         text = await ask(prompt, system=system, model=model,
                          max_tokens=max_tokens, temperature=temperature)
         yield text
@@ -256,18 +341,29 @@ async def chat_with_history(
     max_tokens: int = 4096,
     temperature: float = 0.5,
 ) -> str:
-    """Multi-turn chat. `messages` = [{"role": "user"|"assistant", "content": "..."}]."""
+    """
+    Multi-turn chat. `messages` = [{"role": "user"|"assistant", "content": "..."}].
+    Tries Groq first, then OpenRouter cascade.
+    """
+    full_messages = [{"role": "system", "content": system}] + messages
+
+    # 1. Groq fast path
+    if not model:
+        result = await _groq_call(full_messages, max_tokens, temperature)
+        if result is not None:
+            return result
+
+    # 2. OpenRouter cascade
     or_c = _or()
     if not or_c:
         return "[AI unavailable]"
 
-    full_messages = [{"role": "system", "content": system}] + messages
     last_exc: Exception = RuntimeError("no models tried")
     for attempt_model in _text_cascade(model):
         try:
             return await _call_with_retry(
                 or_c, attempt_model, full_messages, max_tokens,
-                temperature, retries=1, backoff=6.0,
+                temperature, retries=1, backoff=4.0,
             )
         except Exception as exc:
             last_exc = exc
@@ -286,7 +382,7 @@ async def ask_ai_async(
     """
     Convenience wrapper for the route layer.
     Takes a system prompt + conversation history and returns the AI reply.
-    Goes through the standard cascade (Grok → Gemini → Claude → free models).
+    Goes through Groq first, then the standard OpenRouter cascade.
     """
     return await chat_with_history(
         messages=history,
@@ -311,10 +407,8 @@ async def ask_vision(
     """
     Send a prompt + base64-encoded image and return the model's response.
 
-    Used for screenshot extraction (broker portfolio pages, etc.). Cascades
-    Grok-2-vision → Gemini Flash → Claude 3.5 Sonnet. All three accept the
-    OpenAI-style multimodal `messages` payload with an ``image_url`` block
-    holding a data URI.
+    Vision stays on OpenRouter only — Groq does not expose a vision endpoint.
+    Cascades Grok-2-vision → Gemini Flash → Claude 3.5 Sonnet.
 
     Parameters
     ----------
@@ -346,7 +440,7 @@ async def ask_vision(
         try:
             result = await _call_with_retry(
                 or_c, attempt_model, messages, max_tokens, temperature,
-                retries=1, backoff=6.0,
+                retries=1, backoff=4.0,
             )
             log.info("AI Vision: answered by %s", attempt_model)
             return result
