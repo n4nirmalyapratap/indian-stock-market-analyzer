@@ -363,6 +363,36 @@ def ensure_primary_schema() -> None:
                     )
                     """
                 )
+                # Macro-indicator scrape cache. The macro service uses
+                # tradingeconomics.com/india/indicators as its primary
+                # source because FRED's OECD-mirror lags by months for
+                # India. A single page-scrape captures ~30 indicators in
+                # one HTTP call; we cache the results in PG for 24h so
+                # subsequent reads (every page load) are zero-cost. Keyed
+                # by (source, indicator) so adding new scrape sources
+                # later (PIB, macromicro) doesn't need a schema change —
+                # just insert with a different `source` value.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS macro_scraped_data (
+                        source          TEXT NOT NULL,
+                        indicator       TEXT NOT NULL,
+                        value           DOUBLE PRECISION,
+                        previous_value  DOUBLE PRECISION,
+                        forecast_value  DOUBLE PRECISION,
+                        unit            TEXT NOT NULL DEFAULT '',
+                        as_of           TEXT,
+                        category        TEXT NOT NULL DEFAULT '',
+                        raw_label       TEXT NOT NULL DEFAULT '',
+                        fetched_at_ms   BIGINT NOT NULL,
+                        PRIMARY KEY (source, indicator)
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_macro_scraped_source "
+                    "ON macro_scraped_data (source)"
+                )
         _SCHEMA_READY = True
 
 
