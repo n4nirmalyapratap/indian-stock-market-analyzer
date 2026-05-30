@@ -55,21 +55,35 @@ It gives you real-time tools to understand what's happening in the NSE (National
 🔍 **Stock Lookup** — deep dive into any NSE stock
 🕯️ **Patterns** — automatically detected candlestick patterns
 🔎 **Scanners** — filter stocks by technical criteria
-🤖 **AI Analyzer** — ask market questions in plain English
+🤖 **AI Stock Analyst** — get a full AI-written report on any stock
+🧑‍⚖️ **Investor Council** — see how 8 different investor personas rate a stock
+💼 **Portfolio** — track your holdings, see gains, generate tax reports
 📐 **Options Tester** — build and test options strategies
+🌏 **Insights** — IPOs, FII/DII flows, macro pulse, bulk deals
+📰 **News & Sentiment** — live market news with sentiment scoring
+📩 **Daily Digest** — get a portfolio summary on email every morning
+💬 **Telegram & WhatsApp bots** — ask the market anything from your phone
 
-Everything connects to live NSE/BSE data. No subscriptions, no charges.`,
-    related: ["dashboard", "chart-studio", "sectors-page", "stock-lookup", "patterns-page", "scanners-page", "ai-analyzer", "options-tester"],
+Everything connects to live NSE/BSE data. Sign in with Google to start.`,
+    related: ["dashboard", "chart-studio", "sectors-page", "stock-lookup", "patterns-page", "scanners-page", "ai-stock-analyst", "investor-council", "portfolio", "options-tester", "insights-page", "telegram-bot"],
   },
 
   // ── App Features ─────────────────────────────────────────────────────────
   {
     id: "dashboard",
     title: "What does the Dashboard show?",
-    keywords: ["dashboard", "home", "market phase", "overview", "main page", "rotation phase", "advancing", "declining", "breadth", "where to buy", "sector rotation"],
+    keywords: ["dashboard", "home", "market phase", "overview", "main page", "rotation phase", "advancing", "declining", "breadth", "where to buy", "sector rotation", "macro pulse", "top movers", "global indices"],
     answer: `The **Dashboard** is your market command centre — the first thing you see when you open the app.
 
-**What it shows:**
+**What it shows (top to bottom):**
+
+🌡️ **Macro Pulse strip** — six tile-sized readings of the Indian economy:
+  • RBI Repo Rate (interest rates)
+  • India CPI (inflation)
+  • IIP (industrial output)
+  • India 10Y G-Sec yield
+  • USD/INR
+  • Brent crude
 
 📍 **Market Phase** — the overall health of the market right now:
   • *Early Bull* → market starting to rise
@@ -81,12 +95,16 @@ Everything connects to live NSE/BSE data. No subscriptions, no charges.`,
 
 🎯 **Where to Buy Now** — sectors with the strongest momentum (green bars = positive, red = negative)
 
+🚀 **Top Movers** — biggest gainers, losers, and most-active stocks across Nifty 100, Midcap, and Smallcap segments
+
+🌏 **Global Indices** — what S&P 500, Nasdaq, Nikkei, Hang Seng, etc. did last session
+
 🕯️ **Pattern Signals** — stocks showing bullish or bearish candlestick patterns right now
 
 📊 **Sector Rotation Analysis** — a paragraph explaining what the market is doing and what to consider doing
 
-**How to use it:** Check the Dashboard each morning before markets open to get a feel for the day. The Market Phase and "Where to Buy" section tell you where momentum is strongest.`,
-    related: ["sector-rotation", "market-phase", "sectors-page"],
+**How to use it:** Check the Dashboard each morning before markets open to get a feel for the day. The Macro Pulse tells you the economic backdrop, the Market Phase tells you the trend, and "Where to Buy" shows where the action is.`,
+    related: ["sector-rotation", "market-phase", "sectors-page", "macro-pulse", "fii-dii"],
   },
   {
     id: "chart-studio",
@@ -145,41 +163,58 @@ Click any sector card to see all the stocks inside it and their individual perfo
   {
     id: "stock-lookup",
     title: "How do I use Stock Lookup?",
-    keywords: ["stock lookup", "lookup", "search stock", "find stock", "analyze stock", "stock detail", "stock search"],
-    answer: `**Stock Lookup** lets you search and analyze any NSE-listed stock in detail.
+    keywords: ["stock lookup", "lookup", "search stock", "find stock", "analyze stock", "stock detail", "stock search", "financials", "dcf", "tri factor"],
+    answer: `**Stock Lookup** is the deep-dive page for any NSE-listed stock — over 500 covered across Nifty 100, Midcap 150, Smallcap 250, and the full F&O universe.
 
 **What you get when you search a stock:**
 
-💰 **Live price** — current price, day high/low, 52-week high/low
+💰 **Live price** — current price, day high/low, 52-week high/low, market cap
 
 📊 **Technical Analysis:**
   • RSI — is it overbought or oversold?
   • MACD — what's the trend signal?
-  • EMA 20 / EMA 50 — is price above or below the average?
-  • Support and Resistance levels — where might it bounce or get stuck?
+  • EMA 20 / EMA 50 / EMA 200 — is price above or below the averages?
+  • Support and resistance levels
+  • A Technical Summary verdict (Buy / Sell / Hold)
 
 🎯 **Entry Signal** — a suggestion (BUY / SELL / HOLD) based on the technical indicators
 
-📈 **Price chart** — recent price history at a glance
+📈 **Price chart** — recent price history at a glance (open it in Chart Studio for the full version)
+
+💎 **Tri-Factor Score** — a single 0-100 score combining momentum, quality, and valuation. See the **Tri-Factor Scoring** entry for what each factor means.
+
+🏦 **Financials tab** — revenue, profit, EPS, P/E, P/B, debt/equity, ROE, recent quarterly trends
+
+🧮 **DCF Valuation** — a Discounted Cash Flow estimate of "fair value" with assumptions you can tweak
+
+📰 **Latest News** — ticker-specific headlines with sentiment scores
+
+🧑‍⚖️ **Open in Council** — see how 8 investor personas rate this stock side-by-side
+
+🤖 **Run AI Analyst** — kick off a streaming AI report on this stock
 
 **How to use it:**
 1. Type a stock name or symbol (e.g. "Reliance", "TCS", "HDFCBANK")
 2. Click Search or press Enter
 3. The full analysis appears instantly
+4. Scroll through the tabs — Overview, Technicals, Financials, News, etc.
 
-**Covered stocks:** Nifty 100, Midcap 150, Smallcap 250, and more — over 500 NSE stocks.
-
-**Tip:** Look for stocks where RSI is between 40–60 AND price is above the 50-day EMA AND MACD is bullish. That's a strong setup.`,
-    related: ["rsi", "macd", "moving-averages", "entry-signal"],
+**Tip:** Look for stocks where RSI is between 40–60 AND price is above the 50-day EMA AND MACD is bullish AND Tri-Factor score is above 60. That's a strong, well-rounded setup.`,
+    related: ["rsi", "macd", "moving-averages", "entry-signal", "dcf-valuation", "tri-factor-scoring", "investor-council", "ai-stock-analyst"],
   },
   {
     id: "patterns-page",
     title: "What is the Patterns page?",
-    keywords: ["patterns", "candlestick pattern", "pattern page", "bullish pattern", "bearish pattern", "call signal", "put signal", "hammer", "doji", "engulfing"],
+    keywords: ["patterns", "candlestick pattern", "pattern page", "bullish pattern", "bearish pattern", "call signal", "put signal", "hammer", "doji", "engulfing", "universe", "nifty 100", "midcap"],
     answer: `The **Patterns** page automatically scans hundreds of NSE stocks and finds candlestick patterns — visual signals that often predict the next price move.
 
 **How it works:**
 The system analyses recent candles for each stock every day. When a recognisable pattern forms, it shows up here.
+
+**Filter by universe:**
+  • **NIFTY 100** — the 100 largest stocks (most reliable signals)
+  • **Midcap 150** — mid-sized stocks (more opportunities, more noise)
+  • **Smallcap 250** — small stocks (high reward, high risk)
 
 **Types of patterns:**
 
@@ -206,14 +241,14 @@ The system analyses recent candles for each stock every day. When a recognisable
   {
     id: "scanners-page",
     title: "What are the Stock Scanners?",
-    keywords: ["scanner", "scanners", "screener", "stock screen", "filter stocks", "golden cross", "volume spike", "momentum", "breakout", "oversold"],
+    keywords: ["scanner", "scanners", "screener", "stock screen", "filter stocks", "golden cross", "volume spike", "momentum", "breakout", "oversold", "custom scanner", "save scanner", "ad hoc"],
     answer: `The **Scanners** page lets you filter the entire NSE market to find stocks matching specific technical criteria — automatically.
 
 **Think of it like this:** Instead of manually checking 500 stocks, the scanner does it for you in seconds.
 
-**Available scanners:**
+**Built-in scanners:**
 
-🏆 **Golden Cross** — finds stocks where the 50-day average has crossed above the 200-day average. This is one of the most powerful long-term buy signals.
+🏆 **Golden Cross** — finds stocks where the 50-day average has crossed above the 200-day average. One of the most reliable long-term buy signals.
 
 📊 **Momentum** — finds stocks with strong, consistent price momentum. Good for trend-following.
 
@@ -223,71 +258,684 @@ The system analyses recent candles for each stock every day. When a recognisable
 
 📉 **Breakout** — finds stocks breaking above a key resistance level for the first time.
 
+🐂 **Strong Trend** — stocks stacking above 20/50/200 EMAs with rising volume.
+
+➕ **Build your own** — click "New Scanner" to create custom rules using any combination of:
+  • RSI / MACD / moving average crossovers
+  • Price relative to EMAs
+  • Volume thresholds
+  • Pattern presence
+  • Market cap / sector filters
+
+🚀 **Ad-hoc Scanner** — run a one-off custom query without saving it. Use it to experiment before committing.
+
+💾 **Save & re-run** — every scanner you create is saved to your account. Click any saved scanner to re-run it on today's data.
+
 **How to use it:**
 1. Click any scanner card to run it
 2. It scans hundreds of stocks in real time
 3. Results show the matching stocks with price and percentage change
 4. Click any result to open it in Stock Lookup for more detail
 
-**Tip:** The Golden Cross scanner gives the most reliable signals. But always confirm with the Patterns page before acting.`,
-    related: ["golden-cross", "moving-averages", "rsi", "volume"],
+**Tip:** The Golden Cross scanner gives the most reliable signals. But always confirm with the Patterns page or Investor Council before acting.`,
+    related: ["golden-cross", "moving-averages", "rsi", "volume", "patterns-page"],
   },
   {
     id: "ai-analyzer",
-    title: "What is the AI Analyzer (Hydra)?",
-    keywords: ["ai analyzer", "hydra", "nlp", "natural language", "ask question", "query", "hydra alpha"],
-    answer: `The **AI Analyzer** (also called Hydra Alpha) lets you ask market questions in plain English — and get real data back.
+    title: "What is Hydra Alpha?",
+    keywords: ["hydra", "hydra alpha", "ai analyzer", "nlp", "natural language", "ask question", "query", "supervisor"],
+    answer: `**Hydra Alpha** lets you ask market questions in plain English — and get real data back instantly.
 
 **Examples of what you can ask:**
-  • "Analyze RELIANCE" → gets full technical analysis
-  • "Which sectors are up?" → shows today's sector performance
-  • "Show bullish patterns" → lists all bullish candlestick signals
-  • "Where should I invest today?" → shows sector rotation data
+  • "Analyze RELIANCE" → full technical analysis
+  • "Which sectors are up?" → today's sector performance
+  • "Show bullish patterns" → all bullish candlestick signals
+  • "Where should I invest today?" → sector rotation data
   • "Run golden cross scanner" → executes the scanner
+  • "Forecast TCS for 30 days" → ARIMA price forecast
+  • "Find pairs to trade with HDFC" → cointegrated pair candidates
+  • "Calculate VaR for my portfolio" → Value at Risk estimate
 
 **How it works:**
-It uses a rule-based NLP (Natural Language Processing) engine to understand your question, figure out what you're asking for, and pull the right data from the market.
+A rule-based NLP engine (using spaCy under the hood) understands your question, figures out what you're asking, and routes it to the right data source. For genuinely open-ended questions, it falls back to an AI assistant.
 
-**No AI costs — it's all rule-based:**
-There's no OpenAI or any paid AI behind it. It uses keyword matching and an intent recognition system to route your question to the right data source.
+**Best for:** Users who prefer typing questions naturally over clicking through menus. It's a fast lane to anything in the app.
 
-**Best for:** Users who prefer typing questions naturally rather than clicking through menus. It's like a search engine for the app.
+**Bonus — the floating Help & Learn button (this assistant):** Click the 🎓 icon in the bottom-right of any page to ask "what is this", "how do I use that", or any beginner question about the app or markets. Different from Hydra Alpha — this one teaches; Hydra Alpha does.
 
 **Tip:** You can combine concepts — "Show me bearish stocks in the banking sector" or "Which IT stocks are showing bullish patterns?"`,
-    related: ["stock-lookup", "sectors-page", "patterns-page", "scanners-page"],
+    related: ["stock-lookup", "sectors-page", "patterns-page", "scanners-page", "ai-stock-analyst"],
   },
   {
     id: "options-tester",
     title: "What is the Options Tester?",
-    keywords: ["options tester", "options", "strategy tester", "iron condor", "straddle", "strangle", "call option", "put option", "legs", "greeks", "payoff", "options strategy"],
+    keywords: ["options tester", "options", "strategy tester", "iron condor", "straddle", "strangle", "call option", "put option", "legs", "greeks", "payoff", "options strategy", "pcr", "options chain", "smart suggest"],
     answer: `The **Options Tester** is a full options strategy builder and analyser — without needing a live brokerage account.
 
 **What you can do:**
 
+📋 **View the live options chain** — every strike and expiry for NIFTY, BANKNIFTY, and 200+ F&O stocks, with live prices, open interest, and PCR (Put-Call Ratio)
+
 🏗️ **Build any options strategy** by adding "legs":
   • Each leg = a call or put option, with a strike price, premium, and lots
-  • You can build multi-leg strategies like straddles, iron condors, butterfly spreads, etc.
+  • Multi-leg strategies: straddles, strangles, iron condors, butterfly spreads, etc.
 
 📐 **Analyse the strategy** to get:
-  • **Payoff chart** — shows profit/loss at every possible price at expiry
+  • **Payoff chart** — profit/loss at every possible price at expiry
   • **Max profit** and **max loss**
   • **Breakeven points** — where you start making or losing money
   • **Greeks** (Delta, Gamma, Theta, Vega, Rho)
 
-⚡ **Preset strategies** — click to instantly load:
-  Long Call, Long Put, Short Straddle, Iron Condor, Bull Call Spread, Butterfly, and more
+⚡ **Preset strategies** — one-click load:
+  Long Call, Long Put, Short Straddle, Iron Condor, Bull Call Spread, Butterfly, Calendar Spread, and more
+
+🪄 **Smart Suggest** — describe your market view ("I think NIFTY stays flat for 2 weeks") and the tool suggests strategies that fit
 
 🤖 **Built-in AI Chat** — the Options page has its own assistant that explains Greeks, strategies, and your specific position in plain English
 
-🎯 **Risk Analysis** tab — Value at Risk (VaR), scenario analysis (how your trade performs under different price/volatility shocks)
+🎯 **Risk Analysis tab:**
+  • Value at Risk (VaR)
+  • Scenario engine — how your trade performs under different price/IV shocks
+  • Event-driven historical backtest — replay your strategy through past expiries
+
+⚖️ **SEBI Compliance Check** — flags strategies that may breach current SEBI/exchange rules (lot size limits, banned strikes, etc.)
+
+📚 **F&O Bhavcopy data** — premiums and open interest data sourced from NSE/BSE official bhavcopy files
 
 **How to use it:**
 1. Type a symbol (e.g. NIFTY, BANKNIFTY, RELIANCE) and click "Fetch Spot"
-2. Add legs using the Quick Strategy buttons or manually
+2. Add legs using a preset, Smart Suggest, or manually
 3. Click "Analyse Strategy"
-4. Study the payoff chart and numbers
-5. Ask the chat assistant to explain anything`,
+4. Study the payoff chart and Greeks
+5. Switch to Risk tab to stress-test
+6. Ask the chat assistant to explain anything`,
     related: ["call-put", "greeks", "iv", "iron-condor", "straddle"],
+  },
+
+  // ── AI Stock Analyst ──────────────────────────────────────────────────────
+  {
+    id: "ai-stock-analyst",
+    title: "What is the AI Stock Analyst?",
+    keywords: ["ai stock analyst", "ai analyst", "ai report", "deep report", "stock analysis ai", "scan", "compare", "track record"],
+    answer: `The **AI Stock Analyst** writes a full research report on any NSE stock — like having an analyst on call.
+
+**What's in a report:**
+
+📌 **Verdict** — clear BUY / SELL / HOLD call with a confidence level
+🔎 **Why** — the actual reasoning behind the call, in plain English
+📊 **Technicals** — current trend, key levels, indicator readings
+🏦 **Fundamentals** — revenue, profit, growth, valuation snapshot
+📰 **News** — what's been happening that could move the stock
+⚠️ **Risks** — what could go wrong
+🎯 **Targets** — short-term and medium-term price targets
+
+**How it works:**
+Reports stream in real-time — you watch the analyst "think" through each section. Powered by an LLM (Groq for speed, OpenAI/OpenRouter as fallback), grounded in live NSE data, technicals, news, and your portfolio.
+
+**Different modes:**
+
+🎯 **Single ticker** → /ai-analyst/RELIANCE — deep report on one stock
+🔍 **Scan mode** → /ai-analyst/scan — give it a watchlist of tickers, it analyses each one sequentially
+⚖️ **Compare mode** → /ai-analyst/compare — analyses 2-5 stocks side by side, picks the best
+💾 **Saved Analyses** → /ai-analyst/saved — every report you've run is saved for later
+📈 **Track Record** → /ai-analyst/track-record — see how accurate the AI has been (1-day, 5-day, 30-day hit rates)
+
+**Daily quota:**
+Free users get **3 deep reports per day** (cached reports don't count against the quota — re-opening a saved report is free).
+
+**Built-in anti-FOMO guard:**
+If the AI says BUY but the stock is more than 5% above its 20-day moving average, the verdict is auto-downgraded to HOLD with a "wait for a pullback" warning. Stops you from chasing extended stocks.
+
+**How to use it:**
+1. Go to /ai-analyst or click "Run AI Analyst" from any stock page
+2. Type a ticker, hit Run
+3. Watch the report stream in (~30-60 seconds)
+4. Save it, share it, or check the track record to see how accurate previous calls were`,
+    related: ["stock-lookup", "saved-analyses", "ai-track-record", "investor-council"],
+  },
+  {
+    id: "saved-analyses",
+    title: "What are Saved Analyses?",
+    keywords: ["saved analyses", "saved", "saved reports", "ai history", "my reports"],
+    answer: `**Saved Analyses** is where every AI Analyst report you've run is stored.
+
+**What you can do:**
+
+📚 **Browse all your past reports** — sortable by date, ticker, or verdict
+🔄 **Re-open any report** — cached, doesn't count against your daily quota
+🗑️ **Bulk delete** — clean up old reports in one click
+🔗 **Share** — copy a direct link to share with someone
+
+**Why it matters:**
+Reports are cached so re-opening "RELIANCE from last Tuesday" is free and instant. You can also build a personal track record of every call the AI made for you.
+
+**How to use it:** Go to /ai-analyst/saved or click "My Saved" from the AI Analyst page.
+
+**Tip:** Re-check old BUY calls a week or two later — were they right? The Track Record page does this automatically across every user's reports.`,
+    related: ["ai-stock-analyst", "ai-track-record"],
+  },
+  {
+    id: "ai-track-record",
+    title: "How accurate is the AI Stock Analyst?",
+    keywords: ["track record", "ai accuracy", "backtest", "hit rate", "ai performance", "is ai correct"],
+    answer: `The **AI Track Record** page tells you exactly how good the AI Stock Analyst's calls have been — measured against real price moves.
+
+**What it measures:**
+
+For every BUY/SELL verdict the AI has ever issued:
+  • Did the stock actually move the way the AI said it would?
+  • At three time horizons: **1 day**, **5 days**, and **30 days** later
+  • Computed automatically every night after market close
+
+**What you'll see:**
+
+📊 **Overall hit rate** — % of BUY calls where the stock actually rose, broken down by horizon
+🎯 **By verdict** — hit rate for BUY vs SELL vs HOLD separately
+📌 **By ticker** — which stocks the AI has been right (or wrong) about most often
+📜 **Last 10 calls** — your most recent reports with actual outcomes
+
+**Why this matters:**
+Most AI tools claim to be accurate. This one shows you the receipts. If the AI's BUY calls only hit 45% of the time at 5-day horizon, you'll see that — and so will everyone else.
+
+**How to use it:** Go to /ai-analyst/track-record. Use it to calibrate your trust in the AI. If a horizon shows weak accuracy, weight those calls less.`,
+    related: ["ai-stock-analyst", "saved-analyses"],
+  },
+  {
+    id: "investor-council",
+    title: "What is the Investor Council?",
+    keywords: ["investor council", "council", "agents", "personas", "warren buffett", "consensus", "screener consensus", "multi persona"],
+    answer: `The **Investor Council** shows you how 8 different investing personalities would rate the same stock — like a panel of advisors.
+
+**The personas:**
+
+🧓 **Value Investor** — Buffett-style. Cares about earnings, debt, moat, fair value.
+🚀 **Growth Investor** — Lynch/Cathie Wood style. Cares about revenue acceleration, TAM.
+📊 **Quant** — pure numbers. Cares about Sharpe, Sortino, factor exposures.
+🎯 **Technical Trader** — charts only. Cares about momentum, breakout setup.
+💎 **Quality Investor** — Munger/Pabrai style. Cares about ROCE, capital efficiency.
+🐢 **Dividend Investor** — yield + payout sustainability.
+📰 **Macro Investor** — sees the stock through interest rates, inflation, FII flows.
+🎢 **Contrarian** — buys when others are selling, asks "is this priced for disaster?"
+
+**What you get for each stock:**
+
+✅ **Each persona's verdict** — BUY / SELL / HOLD
+💭 **Each persona's reasoning** — short paragraph in their voice and worldview
+📊 **Consensus score** — how many out of 8 agree, weighted by their confidence
+
+**Two modes:**
+
+⚡ **Fast Council** — deterministic checklist-based verdicts, instant. Free.
+🤖 **Full Council** — AI writes each persona's thesis in their voice. Slower (~8 LLM calls), counts against your AI quota.
+
+🏆 **Consensus Screener** — finds stocks where almost all 8 personas agree it's a BUY. Across Nifty 100, Midcap 150, and Smallcap 250. Click "Consensus Screener" in the Council nav.
+
+**How to use it:**
+1. Go to /agents/RELIANCE (or whatever ticker)
+2. See the 8 verdicts at a glance
+3. Click any persona to read their full reasoning
+4. Use Consensus Screener to find stocks the whole panel likes
+
+**Tip:** If 7+ out of 8 personas say BUY, that's a very strong signal. If they're split 4-4, it usually means the stock is "fair value" — neither cheap nor expensive.`,
+    related: ["ai-stock-analyst", "stock-lookup", "tri-factor-scoring"],
+  },
+
+  // ── Portfolio & Tracking ──────────────────────────────────────────────────
+  {
+    id: "portfolio",
+    title: "What does the Portfolio page do?",
+    keywords: ["portfolio", "holdings", "tradebook", "import", "tax report", "capital gains", "risk", "performance", "valuation", "optimiser", "optimizer"],
+    answer: `The **Portfolio** page is where you track your actual holdings — what you own, what it's worth, how it's performing, and what tax you owe.
+
+**Getting your trades in (4 ways):**
+
+📋 **Manual entry** — type each trade one by one
+📁 **CSV upload** — drag in a tradebook CSV from any broker
+📊 **Excel upload (XLSX)** — same as CSV but works with .xlsx files
+🪄 **Screenshot OCR** — take a screenshot of your broker's holdings page, drop it in, AI extracts the rows for you to confirm
+🗺️ **Smart mapping wizard** — for unusual broker formats, a 2-step popup lets you map their columns to ours
+
+**What you see once trades are in:**
+
+💰 **Valuation** — current value, total invested, unrealised P&L, % returns
+📊 **Performance** — daily / weekly / monthly returns vs NIFTY 50
+🎯 **Risk metrics** — portfolio beta, Sharpe ratio, max drawdown, concentration
+🧪 **Risk score** — VaR (Value at Risk) at 95% and 99% confidence
+⚖️ **Optimiser** — suggests rebalancing to reduce risk or improve returns
+🥧 **Sector allocation** — pie chart of where your money is
+📈 **Top contributors** — which stocks made you the most / cost you the most
+
+**Tax reports (Indian financial year):**
+
+🧾 **FIFO capital gains** — automatically matches buys and sells using FIFO (First In First Out) — the method the Income Tax Department expects
+📅 **Per-FY breakdown** — short-term (< 1 year) vs long-term (≥ 1 year) gains separated
+💾 **Download as CSV** — drop straight into your ITR filing
+🔁 **Switch FYs** — view any past financial year that has transactions
+
+**Bulk operations:**
+
+🗑️ **Bulk delete** — remove multiple transactions in one click (and the cash balance automatically rolls back)
+
+**How to use it:**
+1. Go to /portfolio
+2. Click "Import" and pick your method
+3. Confirm the parsed transactions
+4. Switch to Valuation / Risk / Performance / Tax Report tabs
+
+**Tip:** After importing, run the Optimiser — it often spots concentration risk (too much in one sector or stock) that's easy to fix.`,
+    related: ["dcf-valuation", "tri-factor-scoring", "email-digest", "connect-broker"],
+  },
+  {
+    id: "connect-broker",
+    title: "Can I connect my brokerage account?",
+    keywords: ["broker", "zerodha", "angel one", "dhan", "groww", "upstox", "connect broker", "brokerage", "live positions", "api key"],
+    answer: `Yes — the **Settings → Broker Keys** page lets you plug in your brokerage account so the app can read your live holdings, positions, and orders.
+
+**Supported brokers:**
+
+🟢 **Zerodha** (Kite Connect)
+🟠 **Angel One** (SmartAPI)
+🔵 **Dhan**
+🟢 **Groww**
+🟡 **Upstox**
+
+**What unlocks once connected:**
+
+💼 **Live portfolio** — your real holdings appear in /portfolio automatically (no manual import needed)
+📊 **Positions sync** — open F&O positions show up in the Options Tester
+📋 **Order history** — transactions auto-populate for tax reports
+🔔 **Smarter alerts** — alerts can reference your actual positions
+
+**Setup:**
+1. Go to /settings → Broker Keys
+2. Pick your broker
+3. Paste in your API key and secret (generate them in your broker's developer portal)
+4. Click "Test" — confirms the credentials work
+5. Save
+
+**Privacy:**
+Keys are encrypted at rest in the database and never exposed in API responses or logs. Each user's keys are tied to their account — admins can't see them.
+
+**No order placement (yet):**
+The integrations are read-only. The app does NOT place orders on your behalf. That's intentional — execution is your call, every time.
+
+**How to use it:**
+Once connected, just go to Portfolio. Your real holdings appear automatically. No CSV import needed.
+
+**Tip:** Generate a read-only API key in your broker's dev portal if they offer one — there's no need for trade permissions.`,
+    related: ["portfolio", "email-digest"],
+  },
+  {
+    id: "dcf-valuation",
+    title: "What is DCF Valuation?",
+    keywords: ["dcf", "discounted cash flow", "fair value", "valuation", "intrinsic value", "dcf model"],
+    answer: `**DCF (Discounted Cash Flow)** is the most respected way to estimate what a stock is "really" worth — independent of what the market is paying for it today.
+
+**The big idea — in plain English:**
+A company's value = all the cash it'll make over its lifetime, brought back to today's money. Cash 10 years from now is worth less than cash today (because inflation + you could've invested it elsewhere). DCF does that math for you.
+
+**What the DCF page shows:**
+
+💵 **Estimated fair value per share** — what the stock is theoretically worth
+📊 **Current price vs fair value** — is it cheap, expensive, or fair?
+📉 **Margin of safety** — how much room you have if your assumptions are wrong
+🔧 **Tweak the assumptions** — change growth rate, discount rate, terminal multiple and watch the fair value update live
+
+**The three numbers that matter most:**
+
+1. **Growth rate** — how fast will the company's cash flow grow? (Higher → higher fair value)
+2. **Discount rate** — how risky is this company? (Higher → lower fair value)
+3. **Terminal value** — what's it worth after the explicit forecast period?
+
+**How to use it:**
+1. Go to /dcf (or click the DCF tab inside Stock Lookup)
+2. Pick a stock
+3. Look at the default fair-value estimate
+4. Tweak the growth and discount rate sliders to see how sensitive the answer is
+5. Compare fair value to current price — big gap = potential opportunity
+
+**The honest disclaimer:**
+DCF is only as good as your assumptions. Two analysts using DCF on the same stock can get wildly different answers. Use it as one input, not the only one.
+
+**Tip:** A DCF that says fair value is 20%+ above current price is a "wide moat" candidate. But always cross-check with the Investor Council's value persona.`,
+    related: ["stock-lookup", "tri-factor-scoring", "investor-council"],
+  },
+  {
+    id: "tri-factor-scoring",
+    title: "What is Tri-Factor Scoring?",
+    keywords: ["tri factor", "tri-factor", "score", "momentum quality value", "stock score", "factor scoring"],
+    answer: `**Tri-Factor Scoring** boils a stock down to one 0-100 number — combining the three factors that academic research has consistently shown predict returns.
+
+**The three factors:**
+
+🚀 **Momentum (1/3 weight)**
+Is the stock trending up? Looks at recent returns (3-month / 6-month / 12-month), distance from highs, RSI strength.
+*Higher = stock has positive momentum.*
+
+💎 **Quality (1/3 weight)**
+Is this a well-run business? Looks at ROE (return on equity), debt/equity, earnings consistency, profit margins.
+*Higher = better fundamentals.*
+
+💰 **Valuation (1/3 weight)**
+Is it cheap relative to peers? Looks at P/E, P/B, EV/EBITDA, dividend yield.
+*Higher = cheaper / better value.*
+
+**How to read the score:**
+
+🟢 **80-100** — All-rounder. Cheap + good business + going up. Rare and powerful.
+🟢 **60-79** — Solid all-round. Good buy candidate.
+🟡 **40-59** — Mixed. Strong on some factors, weak on others — read the breakdown.
+🔴 **20-39** — Caution. Multiple red flags.
+🔴 **0-19** — Avoid.
+
+**Why three factors and not just one?**
+Each factor works in different markets:
+  • Momentum dominates in trending markets
+  • Quality dominates in bear markets
+  • Valuation dominates in recoveries
+Combining all three smooths out the bumps.
+
+**In this app:** Tri-Factor Score appears on every Stock Lookup page. Click the score to see the breakdown — which factor is strong, which is weak.
+
+**Tip:** A stock scoring 70+ on quality but only 30 on valuation = "great business but expensive". A stock scoring 80 on momentum but 30 on quality = "running hot, but the business may not justify it". The total score is just the starting point — read the breakdown.`,
+    related: ["stock-lookup", "dcf-valuation", "investor-council"],
+  },
+  {
+    id: "email-digest",
+    title: "What is the Daily Email Digest?",
+    keywords: ["email digest", "daily email", "morning email", "portfolio email", "smtp", "subscribe email"],
+    answer: `The **Daily Email Digest** sends a summary of your portfolio and the market straight to your inbox every morning — at the IST time you pick.
+
+**What's in the email:**
+
+💼 **Your portfolio snapshot** — total value, day's P&L, top movers in your holdings
+🚀 **Today's market mood** — Macro Pulse highlights, sector rotation phase
+🕯️ **Patterns alert** — bullish/bearish signals in stocks you own or watch
+📰 **Personalised news** — headlines about your holdings
+🎯 **Where to act** — sectors with strong momentum, watchlist stocks near key levels
+
+**Setup:**
+1. Go to /email-digest
+2. Click "+ New Subscription"
+3. Pick your delivery time (e.g. 8:00 AM IST)
+4. Choose what to include (portfolio, market, watchlist, news)
+5. Save
+
+**Send-now:**
+Don't want to wait until tomorrow? Click "Send Now" on any subscription to get the digest immediately.
+
+**Behind the scenes:**
+The backend enqueues digests when their send time arrives, then a rate-limited worker dispatches them via SMTP. Every weekday morning, like clockwork.
+
+**How to use it:** Set one up Monday morning. It'll arrive every weekday before market open. If you stop reading it after a week, you don't need it — turn it off.
+
+**Tip:** Set the delivery for 8:45 AM IST. That gives you time to read it before the 9:15 AM market open.`,
+    related: ["portfolio", "dashboard", "telegram-bot"],
+  },
+
+  // ── Macro, News & Insights ────────────────────────────────────────────────
+  {
+    id: "insights-page",
+    title: "What is the Insights page?",
+    keywords: ["insights", "ipo", "ipos", "fii", "dii", "bulk deals", "block deals", "fo ban", "mtf", "slbm", "mutual fund", "mf scheme"],
+    answer: `The **Insights** page is the institutional-data hub — the stuff most retail apps don't show but pros watch closely.
+
+**What's on it (tabs):**
+
+🌡️ **Macro tab** — full macro dashboard:
+  • RBI Repo Rate history
+  • India CPI inflation trend
+  • IIP (industrial output)
+  • India 10Y G-Sec yield
+  • Global indices grid
+
+💸 **FII/DII Flows tab** — what foreign and domestic institutions did today and over time:
+  • Cash market (provisional + confirmed)
+  • F&O Index (buys/sells in NIFTY/BANKNIFTY futures + options)
+  • F&O Stock (single-stock futures + options)
+
+🎯 **IPO Calendar** — every mainboard and SME IPO currently open or upcoming:
+  • Issue dates, price band, lot size
+  • Subscription numbers in real-time
+  • GMP (Grey Market Premium) where available
+
+📋 **F&O Ban List** — stocks currently in F&O ban (no new positions allowed). Updates daily after market close.
+
+🤝 **Bulk & Block Deals** — large trades reported to NSE/BSE. Often signals institutional moves.
+
+💼 **SLBM** — Stock Lending & Borrowing data. High SLBM borrow demand often precedes short-selling pressure.
+
+📊 **MTF (Margin Trading Facility)** — outstanding MTF positions in each stock. Spikes can mean retail leverage building up.
+
+📈 **Mutual Fund schemes** — search any MF scheme code, get NAV history, returns ladder (1Y / 3Y / 5Y / 10Y / since launch), portfolio composition.
+
+**How to use it:**
+1. Go to /insights
+2. Switch between tabs at the top
+3. Click into any item for detail
+
+**Tip:** Watch FII selling + DII buying — that's typically a market that's about to bottom. The reverse (FII buy + DII sell) often happens near tops.`,
+    related: ["macro-pulse", "fii-dii", "dashboard"],
+  },
+  {
+    id: "macro-pulse",
+    title: "What is the Macro Pulse?",
+    keywords: ["macro pulse", "macro", "rbi repo rate", "cpi", "iip", "10y yield", "g-sec", "inflation", "interest rates", "fred"],
+    answer: `**Macro Pulse** is the strip at the top of the Dashboard — and a full page under Insights → Macro — showing the state of the Indian economy in one glance.
+
+**The six tiles:**
+
+🏛️ **RBI Repo Rate** — the rate at which RBI lends to banks. Higher → loans get expensive, stocks usually fall.
+
+📈 **India CPI** — Consumer Price Inflation. Rising CPI → RBI may hike rates → stocks under pressure.
+
+🏭 **IIP** — Index of Industrial Production. Higher → economy growing → bullish for stocks.
+
+📜 **India 10Y G-Sec Yield** — the government's 10-year bond yield. Rising yields → "stocks need higher returns to compete" → pressure on stock valuations.
+
+💵 **USD/INR** — exchange rate. Weaker rupee → IT/pharma (exporters) benefit, FMCG/auto (importers) hurt.
+
+🛢️ **Brent Crude** — oil price. Higher oil → inflation worry → bearish for India broadly.
+
+**Why this matters for a stock investor:**
+Even the best company gets hammered in a bad macro environment. The Macro Pulse is your "is the wind at my back or in my face" check.
+
+**Data sources:**
+RBI rates and 10Y yield come from FRED (the US Federal Reserve's free data API). CPI/IIP from World Bank + official India sources. Updated hourly.
+
+**The "What changed this week" commentary** — under Insights → Macro — uses AI to explain in plain English what moved and what it means.
+
+**How to use it:** Glance at it once in the morning. If all six are red or trending bad, scale back risk. If they're green, lean in.`,
+    related: ["dashboard", "fii-dii", "insights-page"],
+  },
+  {
+    id: "fii-dii",
+    title: "What are FII / DII flows?",
+    keywords: ["fii", "dii", "foreign investors", "domestic investors", "institutional flows", "fpi", "smart money"],
+    answer: `**FII / DII flows** show whether the big money is buying or selling Indian stocks.
+
+**FII = Foreign Institutional Investor**
+Includes US/UK/Japan pension funds, hedge funds, sovereign wealth funds (Norway, GIC, ADIA, etc.). They control trillions of dollars and move markets when they act in unison.
+
+**DII = Domestic Institutional Investor**
+Indian mutual funds, insurance companies (LIC, HDFC Life), and pension funds. Their inflows usually come from SIPs (your monthly mutual fund auto-debit) — which is why DII flows are often steady while FII flows are volatile.
+
+**What you see in the app:**
+
+📊 **Daily net buy/sell** in:
+  • Cash market — actual stock buying/selling
+  • F&O Index — futures & options on NIFTY / BANKNIFTY
+  • F&O Stock — futures & options on individual stocks
+
+📈 **30-day rolling chart** — see the trend, not just today's number
+
+📋 **Segment breakdown** — provisional (end-of-day estimate) and confirmed (next-day final)
+
+**The classic "smart money" pattern:**
+
+🟢 **FII selling + DII buying** = market often near a bottom (foreigners panicking, locals buying the dip — locals usually right)
+
+🔴 **FII buying + DII selling** = market often near a top (foreigners chasing, locals taking profits — locals usually right)
+
+**In this app:** Find FII/DII flows on the Insights page → FII/DII tab. The data refreshes every 4 hours.
+
+**Tip:** Don't trade on a single day's FII number — they're noisy. Look at 5-day or 10-day rolling sums for trends.`,
+    related: ["insights-page", "macro-pulse", "dashboard"],
+  },
+  {
+    id: "news-feed",
+    title: "What is the News Feed?",
+    keywords: ["news", "news feed", "headlines", "market news", "company news", "earnings news"],
+    answer: `The **News Feed** is your live financial news ticker — pulling from RSS feeds across major Indian financial publications and tagging each article with sentiment + companies mentioned.
+
+**What you get:**
+
+📰 **Latest headlines** — markets, companies, economy, regulation
+🏷️ **Entity tags** — every article auto-tagged with the stocks it mentions (using spaCy NER)
+😀 **Sentiment score** — positive / neutral / negative (using VADER + LLM scoring)
+🔍 **Filter by stock** — click a ticker to see only news about that company
+🗂️ **Filter by category** — markets / economy / IPO / earnings / regulation / global
+🌐 **Source link** — every story links back to the original publisher
+
+**Bonus on the Stock Lookup page:**
+Open any stock and you'll see the latest ticker-specific news in a side panel — same data, just pre-filtered.
+
+**For deeper analysis:**
+The AI Stock Analyst pulls from this same news feed plus Tavily web search (for mid/small caps where RSS coverage is thin) to write the "News" section of its reports.
+
+**How to use it:** Check it in the morning. If a stock you own is in the headlines, drill in. If sentiment turned sharply negative on a sector overnight, expect volatility on open.`,
+    related: ["sentiment-dashboard", "stock-lookup", "ai-stock-analyst"],
+  },
+  {
+    id: "sentiment-dashboard",
+    title: "What is the Sentiment Dashboard?",
+    keywords: ["sentiment", "market sentiment", "sector sentiment", "mood", "fear greed", "vader"],
+    answer: `The **Sentiment Dashboard** measures the market's mood — how bullish or bearish people are feeling, right now, based on news, social signals, and price action.
+
+**What it shows:**
+
+🌡️ **Overall market sentiment** — a single score (very bearish → bearish → neutral → bullish → very bullish) refreshed every 15 minutes
+
+🏭 **Per-sector sentiment heatmap** — green for bullish sectors, red for bearish. Lets you see WHERE the optimism (or fear) is.
+
+📰 **What's driving it** — the top headlines pushing sentiment up or down today
+
+📈 **Sentiment trend** — how the score has moved over the past week
+
+**How sentiment is calculated:**
+A mix of:
+  • News headlines (VADER + LLM scoring)
+  • Price action vs moving averages
+  • Advance/decline ratio
+  • Volume patterns
+  • Pattern detections (lots of bullish patterns = bullish sentiment)
+
+**The contrarian playbook:**
+Extreme sentiment usually reverses.
+  • "Very bullish" + everyone talking about how easy it is = often a top
+  • "Very bearish" + everyone panicking = often a bottom
+
+**In this app:** Open /sentiment for the full view. The Dashboard shows a condensed version.
+
+**Tip:** Sentiment in any single sector that diverges from the market is interesting — if the market is neutral but Pharma sentiment is "very bullish", that's worth a look.`,
+    related: ["news-feed", "dashboard", "macro-pulse"],
+  },
+
+  // ── Bots & Alerts ─────────────────────────────────────────────────────────
+  {
+    id: "telegram-bot",
+    title: "How does the Telegram Bot work?",
+    keywords: ["telegram", "telegram bot", "telegram alerts", "chatbot", "mobile alerts"],
+    answer: `The **Telegram Bot** lets you ask the market anything from your phone — without opening the app.
+
+**What you can do:**
+
+💬 **Quotes** — type "TCS" or "Reliance" → instant price + technical summary
+🕯️ **Patterns** — "show bullish patterns" → today's signals
+📊 **Sector rotation** — "where to invest" → current rotation analysis
+🔍 **Scanners** — "run golden cross" → executes scanner
+🤖 **AI questions** — "is HDFC Bank a buy?" → routes to AI Analyst
+🔔 **Alerts** — set up price/pattern alerts (see Bot Alerts)
+📰 **Sector rotation push** — get the daily rotation analysis sent to you automatically
+
+**Setup:**
+1. On Telegram, search **@NiftyNodeBot** (or whatever bot your admin configured)
+2. Hit **/start**
+3. Link your account (the bot will ask for your verification code from /settings)
+4. Done — chat away
+
+**Commands you'll use most:**
+  • Just type a stock ticker
+  • "/help" → list everything
+  • "/alerts" → manage your alerts
+  • "/portfolio" → snapshot of your holdings
+
+**How it works:**
+The bot long-polls Telegram for new messages, routes each to the same NLP engine that powers Hydra Alpha, and sends the response back. Same intelligence as the web app — just delivered through Telegram.
+
+**Tip:** Add the bot to a group with friends if you want a shared market chat that can actually answer questions.`,
+    related: ["whatsapp-bot", "bot-alerts", "ai-analyzer"],
+  },
+  {
+    id: "whatsapp-bot",
+    title: "How does the WhatsApp Bot work?",
+    keywords: ["whatsapp", "whatsapp bot", "whatsapp alerts", "twilio", "qr code"],
+    answer: `The **WhatsApp Bot** is the same intelligence as the Telegram bot — delivered through WhatsApp.
+
+**What you can do:**
+Everything the Telegram bot does — quotes, patterns, scanners, alerts, sector rotation pushes — but in WhatsApp.
+
+**Setup (because WhatsApp is stricter than Telegram):**
+1. Go to /whatsapp-bot in the app
+2. Click "Generate QR Code"
+3. Scan the QR with WhatsApp on your phone
+4. The bot replies with a verification — confirm to link your account
+5. Done — send messages directly
+
+**Or with Twilio's WhatsApp sandbox:**
+1. Send "join <sandbox-code>" to Twilio's WhatsApp number (your admin will share this)
+2. The bot replies, link your account
+3. Chat away
+
+**Why two bots?**
+  • **Telegram** — easier setup, more features, free
+  • **WhatsApp** — what most people in India already use, but Twilio billing applies
+
+**Limitations:**
+WhatsApp has stricter media + interactive message rules than Telegram, so some richer features (inline buttons, in-message charts) work better on Telegram.
+
+**How to use it:** Pick one bot, stick with it. Most users prefer Telegram for power use and WhatsApp for casual quotes.`,
+    related: ["telegram-bot", "bot-alerts"],
+  },
+  {
+    id: "bot-alerts",
+    title: "How do I set up price alerts?",
+    keywords: ["alerts", "price alert", "bot alert", "notification", "watchlist alert", "telegram alert"],
+    answer: `**Bot Alerts** let you get notified — via Telegram or WhatsApp — when a stock hits a price, a pattern fires, or a scanner finds a new match.
+
+**Types of alerts:**
+
+🎯 **Price alert** — "ping me when RELIANCE crosses ₹3000"
+🕯️ **Pattern alert** — "tell me if any Nifty 100 stock prints a bullish engulfing"
+🔍 **Scanner alert** — "run my Golden Cross scanner every morning and notify if there are matches"
+📊 **Sector alert** — "tell me when IT sector goes red 3+ days in a row"
+
+**Setup (from Telegram or WhatsApp):**
+1. Send "/alerts" or "set alert" to the bot
+2. The bot walks you through picking the alert type
+3. Confirm — you'll get a confirmation reply
+
+**Or from the web:**
+Open any stock in Stock Lookup → click the 🔔 bell icon → set the threshold.
+
+**How alerts fire:**
+Every alert subscription is evaluated every 5 minutes during market hours. When a condition is met, the alert is dispatched via your chosen channel (Telegram or WhatsApp), then auto-disabled (so you don't get spammed every 5 minutes).
+
+**Managing alerts:**
+Send "/alerts list" to the bot, or visit /settings → Alerts in the web app.
+
+**Tip:** Don't over-alert. Setting 20 alerts means you'll ignore the one that actually matters. Pick 3-5 high-value conditions.`,
+    related: ["telegram-bot", "whatsapp-bot", "patterns-page"],
   },
 
   // ── Market Concepts ───────────────────────────────────────────────────────
@@ -886,46 +1534,81 @@ const CATEGORIES = [
     label: "App Features",
     icon: "🗂️",
     questions: [
-      { q: "What does the Dashboard show?",    id: "dashboard" },
-      { q: "How do I use Chart Studio?",        id: "chart-studio" },
-      { q: "What is the Stock Lookup page?",    id: "stock-lookup" },
-      { q: "What are the Patterns?",            id: "patterns-page" },
-      { q: "What are the Scanners?",            id: "scanners-page" },
-      { q: "What is the Options Tester?",       id: "options-tester" },
+      { q: "What does the Dashboard show?",      id: "dashboard" },
+      { q: "How do I use Chart Studio?",          id: "chart-studio" },
+      { q: "What is the Stock Lookup page?",      id: "stock-lookup" },
+      { q: "What are the Patterns?",              id: "patterns-page" },
+      { q: "What are the Scanners?",              id: "scanners-page" },
+      { q: "What is the Insights page?",          id: "insights-page" },
+      { q: "What is the Options Tester?",         id: "options-tester" },
+    ],
+  },
+  {
+    label: "AI & Bots",
+    icon: "🤖",
+    questions: [
+      { q: "What is the AI Stock Analyst?",       id: "ai-stock-analyst" },
+      { q: "What is the Investor Council?",       id: "investor-council" },
+      { q: "What is Hydra Alpha?",                id: "ai-analyzer" },
+      { q: "How accurate is the AI Analyst?",     id: "ai-track-record" },
+      { q: "How does the Telegram Bot work?",     id: "telegram-bot" },
+      { q: "How does the WhatsApp Bot work?",     id: "whatsapp-bot" },
+      { q: "How do I set up price alerts?",       id: "bot-alerts" },
+    ],
+  },
+  {
+    label: "Your Portfolio",
+    icon: "💼",
+    questions: [
+      { q: "What does the Portfolio page do?",    id: "portfolio" },
+      { q: "Can I connect my brokerage account?", id: "connect-broker" },
+      { q: "What is the Daily Email Digest?",     id: "email-digest" },
+      { q: "What is DCF Valuation?",              id: "dcf-valuation" },
+      { q: "What is Tri-Factor Scoring?",         id: "tri-factor-scoring" },
+    ],
+  },
+  {
+    label: "Macro & News",
+    icon: "🌏",
+    questions: [
+      { q: "What is the Macro Pulse?",            id: "macro-pulse" },
+      { q: "What are FII / DII flows?",           id: "fii-dii" },
+      { q: "What is the News Feed?",              id: "news-feed" },
+      { q: "What is the Sentiment Dashboard?",    id: "sentiment-dashboard" },
     ],
   },
   {
     label: "Market Basics",
     icon: "📚",
     questions: [
-      { q: "What is the stock market?",         id: "stock-market" },
-      { q: "What is NIFTY 50?",                 id: "nifty" },
-      { q: "What is a sector?",                 id: "what-sector" },
-      { q: "What is market cap?",               id: "market-cap" },
-      { q: "How do I start investing?",         id: "how-to-invest" },
+      { q: "What is the stock market?",           id: "stock-market" },
+      { q: "What is NIFTY 50?",                   id: "nifty" },
+      { q: "What is a sector?",                   id: "what-sector" },
+      { q: "What is market cap?",                 id: "market-cap" },
+      { q: "How do I start investing?",           id: "how-to-invest" },
     ],
   },
   {
     label: "Technical Analysis",
     icon: "📊",
     questions: [
-      { q: "What is RSI?",                      id: "rsi" },
-      { q: "What is MACD?",                     id: "macd" },
-      { q: "What are moving averages?",         id: "moving-averages" },
-      { q: "What are candlestick patterns?",    id: "candlestick" },
-      { q: "What is support and resistance?",   id: "support-resistance" },
-      { q: "What is a volume spike?",           id: "volume" },
+      { q: "What is RSI?",                        id: "rsi" },
+      { q: "What is MACD?",                       id: "macd" },
+      { q: "What are moving averages?",           id: "moving-averages" },
+      { q: "What are candlestick patterns?",      id: "candlestick" },
+      { q: "What is support and resistance?",     id: "support-resistance" },
+      { q: "What is a volume spike?",             id: "volume" },
     ],
   },
   {
     label: "Options & Strategies",
     icon: "📐",
     questions: [
-      { q: "What are call and put options?",    id: "call-put" },
-      { q: "What are the Options Greeks?",      id: "greeks" },
-      { q: "What is implied volatility?",       id: "iv" },
-      { q: "What is an Iron Condor?",           id: "iron-condor" },
-      { q: "What is a Straddle?",               id: "straddle" },
+      { q: "What are call and put options?",      id: "call-put" },
+      { q: "What are the Options Greeks?",        id: "greeks" },
+      { q: "What is implied volatility?",         id: "iv" },
+      { q: "What is an Iron Condor?",             id: "iron-condor" },
+      { q: "What is a Straddle?",                 id: "straddle" },
     ],
   },
 ];

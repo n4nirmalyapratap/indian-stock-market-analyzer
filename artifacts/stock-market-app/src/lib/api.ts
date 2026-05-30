@@ -436,6 +436,27 @@ export interface MacroHeadlinePoint {
   staleDays:   number | null;
 }
 
+/** Curated "extra" macro indicator with optional admin-set value.
+ *  Returned by GET /api/insights/macro/extras. */
+export interface MacroExtra {
+  slug:        string;
+  label:       string;
+  unit:        string;
+  category:    string;
+  description: string;
+  sourceHint:  string;
+  value:       number | null;
+  asOf:        string | null;
+  note:        string | null;
+  setBy:       string | null;
+  updatedAtMs: number | null;
+}
+
+export interface MacroExtrasResponse {
+  items: MacroExtra[];
+  total: number;
+}
+
 export interface MacroDashboardResponse {
   rateTimeline: MacroSeriesPoint[];
   cpi:          MacroSeriesPoint[];
@@ -689,6 +710,20 @@ export const api = {
   macroStrip:     () => fetchApi<MacroStripResponse>("/insights/macro/strip"),
   macroDashboard: () => fetchApi<MacroDashboardResponse>("/insights/macro"),
   globalIndices:  () => fetchApi<GlobalIndicesResponse>("/insights/global-indices"),
+  /** Curated extra macro indicators (PMI, FX reserves, unemployment, …)
+   *  with whatever admin-set values exist in `macro_overrides`. */
+  macroExtras:    () => fetchApi<MacroExtrasResponse>("/insights/macro/extras"),
+  /** Admin: upsert a manual override for any whitelisted indicator.
+   *  Token from useCustomAuth() is sent as X-Admin-Token. */
+  setMacroOverride: (token: string, indicator: string, body: { value: number; asOf: string; note?: string }) =>
+    fetchApi<{ ok: boolean }>(
+      `/admin/macro/overrides/${encodeURIComponent(indicator)}`,
+      {
+        method:  "PUT",
+        headers: { "Content-Type": "application/json", "X-Admin-Token": token },
+        body:    JSON.stringify(body),
+      },
+    ),
 
   // ── Top Movers (Dashboard tab) ──
   topMoversAll: (count = 10) =>
@@ -1026,6 +1061,20 @@ export const api = {
   portfolioPerformance: (pid: string, benchmark = "NIFTY 50", days = 365) =>
     fetchApi<PortfolioPerformance>(
       `/portfolio/${encodeURIComponent(pid)}/performance?benchmark=${encodeURIComponent(benchmark)}&days=${days}`,
+    ),
+
+  /** Pairwise Pearson correlation between every open holding's daily
+   *  returns + portfolio beta vs benchmark. Feeds the heatmap and Beta
+   *  KPI tile on the Risk tab. */
+  portfolioCorrelation: (pid: string, lookbackDays = 365) =>
+    fetchApi<PortfolioCorrelationResult>(
+      `/portfolio/${encodeURIComponent(pid)}/correlation?lookbackDays=${lookbackDays}`,
+    ),
+
+  /** Running drawdown timeseries derived from the equity curve. */
+  portfolioDrawdown: (pid: string, lookbackDays = 365) =>
+    fetchApi<PortfolioDrawdownResult>(
+      `/portfolio/${encodeURIComponent(pid)}/drawdown?lookbackDays=${lookbackDays}`,
     ),
 
   portfolioOptimize: (pid: string, params: PortfolioOptimizeParams) =>
@@ -1538,6 +1587,35 @@ export interface PortfolioRiskParams {
   horizonDays?:   number;
   riskFreeRate?:  number;
   lookbackDays?:  number;
+}
+
+/** Pairwise Pearson correlation between every open holding + portfolio
+ *  beta vs benchmark. `matrix[i][j]` is corr(symbols[i], symbols[j]),
+ *  always in [-1, 1]. Empty `matrix` means insufficient overlapping
+ *  history (fewer than 30 common trading days). */
+export interface PortfolioCorrelationResult {
+  portfolioId:     string;
+  symbols:         string[];
+  matrix:          number[][];
+  observationDays: number;
+  beta:            number | null;
+  benchmarkSymbol: string;
+}
+
+/** Running drawdown timeseries. Each point is `equity` valued against
+ *  the running `peak`; `drawdown` (%) is always ≤ 0. `maxDrawdownPct`
+ *  is the deepest point and `maxDrawdownDate` is when it happened. */
+export interface PortfolioDrawdownResult {
+  portfolioId:      string;
+  series:           Array<{
+    date:     string;
+    equity:   number;
+    peak:     number;
+    drawdown: number;  // negative %, e.g. -12.34 means 12.34% below peak
+  }>;
+  maxDrawdownPct:   number;
+  maxDrawdownDate:  string | null;
+  observationDays:  number;
 }
 
 export interface PortfolioRiskResult {
