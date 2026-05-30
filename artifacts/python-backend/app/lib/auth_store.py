@@ -363,35 +363,59 @@ def ensure_primary_schema() -> None:
                     )
                     """
                 )
-                # Macro-indicator scrape cache. The macro service uses
-                # tradingeconomics.com/india/indicators as its primary
-                # source because FRED's OECD-mirror lags by months for
-                # India. A single page-scrape captures ~30 indicators in
-                # one HTTP call; we cache the results in PG for 24h so
-                # subsequent reads (every page load) are zero-cost. Keyed
-                # by (source, indicator) so adding new scrape sources
-                # later (PIB, macromicro) doesn't need a schema change —
-                # just insert with a different `source` value.
+                # Macro-indicator scrape cache. History-preserving — each
+                # *new release* (different `as_of`) creates its own row
+                # so we accumulate a time series naturally over scrapes.
+                # Re-scraping the same release period (same `as_of`)
+                # updates in place (UPSERT) so we don't bloat with
+                # duplicates when TE re-publishes identical values.
+                #
+                # Why history matters here:
+                #   * Charts: "RBI repo over time" needs more than one row
+                #   * Revisions: if TE later changes Apr-26 CPI, we see
+                #     both attempts (via fetched_at_ms ordering)
+                #   * Audit: "when did our cache first see this value?"
+                #     is answerable
+                #
+                # Reads of "current value" use
+                #     ORDER BY fetched_at_ms DESC LIMIT 1
+                # which is fast given the index below. Multi-row scans
+                # (time series queries) hit the same index.
+                #
+                # The earlier `macro_scraped_data` PK was (source,
+                # indicator) — that overwrote everything on each scrape.
+                # Dropping the old table is destructive but the dataset
+                # is recoverable: the scheduler refills within ~30s of
+                # the next boot via tradingeconomics.com.
+                cur.execute("DROP TABLE IF EXISTS macro_scraped_data")
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS macro_scraped_data (
                         source          TEXT NOT NULL,
                         indicator       TEXT NOT NULL,
+                        as_of           TEXT NOT NULL DEFAULT '',
                         value           DOUBLE PRECISION,
                         previous_value  DOUBLE PRECISION,
                         forecast_value  DOUBLE PRECISION,
                         unit            TEXT NOT NULL DEFAULT '',
-                        as_of           TEXT,
                         category        TEXT NOT NULL DEFAULT '',
                         raw_label       TEXT NOT NULL DEFAULT '',
                         fetched_at_ms   BIGINT NOT NULL,
-                        PRIMARY KEY (source, indicator)
+                        PRIMARY KEY (source, indicator, as_of)
                     )
                     """
                 )
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS idx_macro_scraped_source "
                     "ON macro_scraped_data (source)"
+                )
+                # Index on (source, indicator, fetched_at_ms DESC) makes
+                # the "give me the latest observation" query a single
+                # B-tree lookup instead of a sort over the indicator's
+                # history.
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_macro_scraped_latest "
+                    "ON macro_scraped_data (source, indicator, fetched_at_ms DESC)"
                 )
         _SCHEMA_READY = True
 

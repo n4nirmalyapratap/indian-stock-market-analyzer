@@ -29,6 +29,7 @@ import AIAnalystTrackRecord from "@/pages/AIAnalystTrackRecord";
 import EmailDigestSettings from "@/pages/EmailDigestSettings";
 import SavedAnalyses from "@/pages/SavedAnalyses";
 import GlobalAssistant from "@/components/GlobalAssistant";
+import CommandPalette from "@/components/CommandPalette";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { CustomAuthProvider, useCustomAuth } from "@/context/CustomAuthContext";
 import { setTokenGetter } from "@/lib/api";
@@ -193,6 +194,9 @@ function AuthGate() {
       <MarketStateBoundary />
       <AppRoutes />
       <GlobalAssistant />
+      {/* Global ⌘K / Ctrl+K palette — listens at window scope so it
+          works from any route. Stock search + page navigation + actions. */}
+      <CommandPalette />
     </>
   );
 }

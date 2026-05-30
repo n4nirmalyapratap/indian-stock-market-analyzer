@@ -3530,3 +3530,57 @@ async def get_global_indices():
     }
     _cache_set("global_indices", payload)
     return payload
+
+
+# ── Macro extras (admin-curated) ─────────────────────────────────────────────
+# Curated catalog of useful indicators (PMI, FX reserves, unemployment, …)
+# that we don't have a free data source for. Values come from the
+# manual-override system; an admin sets them via PUT /admin/macro/overrides
+# whenever there's a new release. This endpoint reads the catalog +
+# overlays whatever overrides exist into a single response the UI grid
+# can render directly.
+
+@router.get("/macro/extras")
+async def get_macro_extras():
+    """Return every curated extra macro indicator, with its latest
+    admin-set value if any."""
+    from app.services.macro_extras_catalog import MACRO_EXTRAS  # noqa: PLC0415
+    from app.lib.auth_store import get_conn, ensure_primary_schema  # noqa: PLC0415
+
+    ensure_primary_schema()
+    slugs = [x["slug"] for x in MACRO_EXTRAS]
+
+    # Pull all matching overrides in one query (cheap, table is tiny).
+    overrides: dict[str, dict] = {}
+    if slugs:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                placeholders = ",".join(["%s"] * len(slugs))
+                cur.execute(
+                    f"SELECT indicator, value, as_of, note, set_by, updated_at_ms "
+                    f"  FROM macro_overrides "
+                    f" WHERE indicator IN ({placeholders})",
+                    tuple(slugs),
+                )
+                for r in cur.fetchall():
+                    overrides[r["indicator"]] = dict(r)
+
+    # Join catalog + overrides, preserving catalog order.
+    items = []
+    for entry in MACRO_EXTRAS:
+        o = overrides.get(entry["slug"])
+        items.append({
+            "slug":        entry["slug"],
+            "label":       entry["label"],
+            "unit":        entry["unit"],
+            "category":    entry["category"],
+            "description": entry["description"],
+            "sourceHint":  entry["sourceHint"],
+            "value":       (o or {}).get("value"),
+            "asOf":        (o or {}).get("as_of"),
+            "note":        (o or {}).get("note"),
+            "setBy":       (o or {}).get("set_by"),
+            "updatedAtMs": (o or {}).get("updated_at_ms"),
+        })
+
+    return {"items": items, "total": len(items)}

@@ -626,8 +626,14 @@ async def delete_bug(bug_id: str, request: Request):
 # by macro_service._get_override() with highest priority in the source chain.
 
 # Indicators we accept overrides for — keeps the API surface narrow and
-# rejects typos like 'repp' before they hit the DB.
-_ALLOWED_MACRO_INDICATORS = {"repo", "cpi", "iip", "wpi", "gdp", "yield10"}
+# rejects typos like 'repp' before they hit the DB. Headline 6 are the
+# tiles on the dashboard strip; the catalog below adds PMI / FX reserves
+# / unemployment / etc. so admins can manually update those too via the
+# extras grid on the Macro Pulse page.
+from app.services.macro_extras_catalog import MACRO_EXTRAS_SLUGS  # noqa: E402
+_ALLOWED_MACRO_INDICATORS = (
+    {"repo", "cpi", "iip", "wpi", "gdp", "yield10"} | MACRO_EXTRAS_SLUGS
+)
 
 
 @router.get("/admin/macro/overrides")
@@ -771,56 +777,6 @@ async def fii_dii_refresh(request: Request):
     except Exception as exc:
         return JSONResponse(status_code=500, content={
             "ok": False, "error": f"FII/DII refresh failed: {exc}"})
-
-
-# ── Macro scraper diagnostics ───────────────────────────────────────────────
-# Lets admins inspect the macro_scraped_data table and force a refresh
-# without restarting. Useful when TE changes their HTML and our parser
-# returns 0 rows — the admin can see "0 indicators saved" in the next
-# refresh attempt and report it.
-
-@router.get("/admin/macro/scraped")
-async def list_macro_scraped(request: Request):
-    """Return everything in the macro_scraped_data table, grouped by
-    source. Each row shows value/unit/asOf/category/fetched-at so the
-    admin can spot stale or missing indicators at a glance."""
-    if not _require_admin(request):
-        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
-    from app.services.macro_scraper_service import list_indicators  # noqa: PLC0415
-    rows = list_indicators()
-    out: dict[str, list[dict]] = {}
-    for r in rows:
-        src = r.get("source") or "unknown"
-        out.setdefault(src, []).append({
-            "indicator":     r.get("indicator"),
-            "value":         r.get("value"),
-            "previousValue": r.get("previous_value"),
-            "unit":          r.get("unit"),
-            "asOf":          r.get("as_of"),
-            "category":      r.get("category"),
-            "rawLabel":      r.get("raw_label"),
-            "fetchedAtMs":   r.get("fetched_at_ms"),
-        })
-    return {"bySource": out, "total": len(rows)}
-
-
-@router.post("/admin/macro/scraped/refresh")
-async def force_macro_scrape(request: Request):
-    """Trigger an immediate scrape across every configured source.
-
-    Useful right after a deploy if you don't want to wait for the
-    background scheduler's first tick (~30s after boot), or when TE
-    just published a release you want to see immediately.
-    """
-    if not _require_admin(request):
-        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
-    from app.services.macro_scraper_service import refresh_all_sources  # noqa: PLC0415
-    try:
-        saved = await refresh_all_sources()
-    except Exception as exc:
-        return JSONResponse(status_code=500, content={
-            "error": f"Scrape failed: {str(exc)[:200]}"})
-    return {"saved": saved, "total": sum(saved.values())}
 
 
 @router.delete("/admin/macro/overrides/{indicator}")

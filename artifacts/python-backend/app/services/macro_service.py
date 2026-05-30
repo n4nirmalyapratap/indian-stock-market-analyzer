@@ -535,19 +535,6 @@ async def _resolve_indicator(
     if o is not None:
         return o["value"], o["date"], "Manual", o.get("note") or None
 
-    # 1b. TE scrape cache (fastest fresh source). Pure PG read — no
-    # outbound HTTP — so this is essentially free even on cache-hit-
-    # heavy dashboards. The scraper runs once per day via the macro
-    # scheduler; values are typically days-fresh vs FRED's months-stale.
-    try:
-        from . import macro_scraper_service as _scraper  # noqa: PLC0415
-        scraped = _scraper.get_indicator(indicator)
-        if scraped and scraped.get("value") is not None:
-            return (scraped["value"], scraped.get("as_of") or "",
-                    "TradingEconomics", None)
-    except Exception as exc:
-        log.debug("scraper lookup failed for %s: %s", indicator, str(exc)[:80])
-
     # 2. Fire IMF + DBnomics in parallel. Previously these were awaited
     # sequentially — that's the main reason the macro page got slow.
     # Each is ~1-2s on a normal network; running them concurrently
@@ -608,19 +595,6 @@ async def _resolve_yoy_indicator(
     o = _get_override(indicator)
     if o is not None:
         return o["value"], o["date"], "Manual"
-
-    # TE scrape cache check — PG read, no HTTP, returns whatever the
-    # daily scrape last saved. For YoY indicators (cpi/iip/wpi/gdp) the
-    # scraped value is already a % growth rate so we can use it directly
-    # without the level→YoY transform that FRED needs.
-    try:
-        from . import macro_scraper_service as _scraper  # noqa: PLC0415
-        scraped = _scraper.get_indicator(indicator)
-        if scraped and scraped.get("value") is not None:
-            return (scraped["value"], scraped.get("as_of") or fred_as_of or "",
-                    "TradingEconomics")
-    except Exception as exc:
-        log.debug("scraper lookup failed for %s: %s", indicator, str(exc)[:80])
 
     candidates: list[tuple[str, float, str]] = []
     imf = await _fetch_imf_indicator(indicator)

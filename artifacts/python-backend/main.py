@@ -257,14 +257,14 @@ async def lifespan(app: FastAPI):
     digest_worker_task = asyncio.create_task(_email_digest_worker())
     fii_dii_task    = asyncio.create_task(_fii_dii_scheduler())
     dhan_task       = asyncio.create_task(_dhan_scrip_master_preload())
-    macro_scrape_task = asyncio.create_task(_macro_scraper_scheduler())
+    pcr_task        = asyncio.create_task(_pcr_snapshot_scheduler())
     try:
         yield
     finally:
         for t in (poll_task, universe_task, warmup_task, transition_task,
                   fixer_task, rfr_task, bhav_task, alerts_task, backtest_task,
                   digest_sched_task, digest_worker_task, fii_dii_task, dhan_task,
-                  macro_scrape_task):
+                  pcr_task):
             t.cancel()
             try:
                 await t
@@ -383,54 +383,37 @@ async def _bhavcopy_refresh_scheduler() -> None:
             break
 
 
-async def _macro_scraper_scheduler() -> None:
-    """Refresh the macro scrape cache once per day.
-
-    Indian macro indicators (CPI, WPI, IIP, GDP, PMI, etc.) are released
-    monthly or quarterly — no point polling more often than once a day.
-    The earlier 6h cadence was wasteful overhead for the same data.
-
-    Each tick fetches tradingeconomics.com/india/indicators once and
-    upserts every recognised indicator into PG. Reads on the macro page
-    hit only PG (no outbound HTTP) and so are essentially free. Even
-    when TE itself becomes unreachable, the previous successful scrape
-    keeps the dashboard correct for days — PG entries never expire,
-    just get overwritten by the next successful fetch.
+async def _pcr_snapshot_scheduler() -> None:
+    """Snapshot PCR for the F&O watch-list every 15 min during market hours.
 
     Schedule:
-      * Startup → wait ~30s for boot logs to settle, then scrape once.
-        First user request after deploy finds warm cache.
-      * Every 24h after that. Misaligned with release calendars on
-        purpose — the data we'd capture sooner is the same data we'd
-        capture later in the day. If you ever need a fresher fetch
-        (e.g. immediately after an RBI MPC announcement) use
-        POST /admin/macro/scraped/refresh.
+      * Boot: 30s settle, then a first snapshot so the analytics chart
+        isn't empty on first open.
+      * Loop: every 15 min check if IST market is open; if yes snapshot,
+        if no sleep till next tick. Closed-market ticks are no-ops, no
+        wasted NSE calls.
 
-    Loud-fallback: never raises out of the loop. Every tick logs
-    "saved N indicators" or "0 indicators (TE blocked?)" so operators
-    can see at a glance whether the scrape pipeline is alive.
+    Snapshots ride on the existing NseService instance from registry so
+    the same cookies / rate-limits apply as any other NSE fetch on the
+    backend.
     """
-    from app.services.macro_scraper_service import refresh_all_sources  # noqa: PLC0415
-    await asyncio.sleep(30)  # let boot settle
+    from app.services import options_pcr_service as _pcr  # noqa: PLC0415
+    from app.services import registry as _reg              # noqa: PLC0415
+    from app.services import market_cache_service as _disk # noqa: PLC0415
+
+    await asyncio.sleep(30)  # boot settle
+    interval_sec = 15 * 60  # 15 min
     while True:
         try:
-            saved = await refresh_all_sources()
-            total = sum(saved.values())
-            if total > 0:
-                detail = ", ".join(f"{src}={n}" for src, n in saved.items())
-                logger.info("Macro scraper tick: saved %d indicators (%s)",
-                            total, detail)
-            else:
-                logger.warning(
-                    "Macro scraper tick: 0 indicators saved — TE may be "
-                    "blocked from this IP. Macro tiles fall back to existing "
-                    "FRED/IMF chain.")
+            if _disk.is_market_open():
+                await _pcr.snapshot_now(_reg.nse)
+            # else: market closed, no-op tick.
         except Exception as exc:
-            logger.warning("Macro scraper tick failed: %s", exc)
+            logger.warning("PCR snapshot tick failed: %s", exc)
         try:
-            await asyncio.sleep(24 * 3600)
+            await asyncio.sleep(interval_sec)
         except asyncio.CancelledError:
-            logger.info("Macro scraper scheduler stopped.")
+            logger.info("PCR snapshot scheduler stopped.")
             break
 
 

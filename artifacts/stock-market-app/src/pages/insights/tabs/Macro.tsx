@@ -9,6 +9,7 @@ import {
 import { api } from "@/lib/api";
 import type { MacroQuote, MacroSeriesPoint, MacroYieldCurvePoint } from "@/lib/api";
 import { Card, PageHeader, Loading, ErrorState, useChartPalette, fmtNum } from "../_shared";
+import MacroExtrasGrid from "@/components/macro/MacroExtrasGrid";
 
 /* ──────────────────────────────────────────────────────────────────────────
  * Macro tab — India macro pulse dashboard.
@@ -329,6 +330,16 @@ export default function Macro() {
           </div>
         </Card>
       )}
+
+      {/* ── Curated extra indicators (admin-editable) ───────────────────── */}
+      {/*
+        PMI, FX reserves, unemployment, trade balance, fiscal deficit, etc.
+        Values come from manual overrides — admins click a tile's pencil to
+        update. Non-admins see the grid read-only. The catalog lives at
+        backend `app/services/macro_extras_catalog.py`; add a tile by adding
+        an entry there (no DB migration needed).
+      */}
+      <MacroExtrasGrid />
 
       {/* ── RBI policy-rate timeline ────────────────────────────────────── */}
       <Card className="p-4 md:p-5">
