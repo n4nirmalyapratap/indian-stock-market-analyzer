@@ -34,6 +34,7 @@ def _cid() -> str:
 DEFAULT_SCANNERS_DEF = [
     {
         "name": "EMA Golden Cross (20/50)",
+        "category": "Trend",
         "description": "EMA20 just crossed above EMA50 — classic medium-term buy signal",
         "universe": ["NIFTY100", "MIDCAP"],
         "logic": "AND",
@@ -44,6 +45,7 @@ DEFAULT_SCANNERS_DEF = [
     },
     {
         "name": "RSI Oversold + EMA50 Support",
+        "category": "Oscillators",
         "description": "RSI below 35 while price is above EMA50 — dip buy setup",
         "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
         "logic": "AND",
@@ -54,6 +56,7 @@ DEFAULT_SCANNERS_DEF = [
     },
     {
         "name": "Momentum Breakout",
+        "category": "Momentum",
         "description": "Price above EMA200, RSI 55-72, volume spike ≥150%",
         "universe": ["NIFTY100"],
         "logic": "AND",
@@ -66,6 +69,7 @@ DEFAULT_SCANNERS_DEF = [
     },
     {
         "name": "Near 52-Week High (within 5%)",
+        "category": "Momentum",
         "description": "Price within 5% of true 52-week high — momentum continuation",
         "universe": ["NIFTY100", "MIDCAP"],
         "logic": "AND",
@@ -76,6 +80,7 @@ DEFAULT_SCANNERS_DEF = [
     },
     {
         "name": "Bollinger Band Lower Bounce",
+        "category": "Mean Reversion",
         "description": "Price near/below BB lower, RSI oversold — mean reversion buy",
         "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
         "logic": "AND",
@@ -86,6 +91,7 @@ DEFAULT_SCANNERS_DEF = [
     },
     {
         "name": "MACD Bullish Crossover",
+        "category": "Oscillators",
         "description": "MACD line just crossed above signal line — fresh buy signal",
         "universe": ["NIFTY100", "MIDCAP"],
         "logic": "AND",
@@ -95,6 +101,7 @@ DEFAULT_SCANNERS_DEF = [
     },
     {
         "name": "Superb Momentum (All EMAs aligned)",
+        "category": "Trend",
         "description": "Price > EMA9 > EMA20 > EMA50 > EMA200 — textbook bull trend",
         "universe": ["NIFTY100"],
         "logic": "AND",
@@ -107,12 +114,240 @@ DEFAULT_SCANNERS_DEF = [
     },
     {
         "name": "Volume Spike Breakout",
+        "category": "Volume",
         "description": "Volume ≥ 300% of 20-day average on a green candle",
         "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
         "logic": "AND",
         "conditions": [
             {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "gte", "right": {"type": "number", "value": 300}},
             {"left": {"type": "indicator", "indicator": "CHANGE_PCT"},   "operator": "gt",  "right": {"type": "number", "value": 0}},
+        ],
+    },
+
+    # ── Volume category ──────────────────────────────────────────────
+    # Nine new scanners powered by the volume helpers (HIGHEST_VOLUME,
+    # VOLUME_ZSCORE, WICK_RATIO, HIGHER_LOWS_COUNT, VOLUME_TREND_UP).
+    # All carry category="Volume" so the UI can group them in a tab
+    # separate from the indicator/pattern scanners.
+    #
+    # Three of the original 12 (Opening-Volume Blast, High-Vol Bullish
+    # Engulfing, Delivery % Spike) are deferred — they need intraday
+    # 15-min bars, a candlestick-pattern indicator framework, and per-
+    # symbol delivery data respectively. None of those exist today.
+
+    {
+        "name": "RVOL Spike (Bullish)",
+        "category": "Volume",
+        "description": "Today's volume > 2× 20-day average AND price up — classic intraday CALL signal",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "gt", "right": {"type": "number", "value": 200}},
+            {"left": {"type": "indicator", "indicator": "CHANGE_PCT"},   "operator": "gt", "right": {"type": "number", "value": 0}},
+        ],
+    },
+    {
+        "name": "RVOL Spike (Bearish)",
+        "category": "Volume",
+        "description": "Today's volume > 2× 20-day average AND price down — classic intraday PUT signal",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "gt", "right": {"type": "number", "value": 200}},
+            {"left": {"type": "indicator", "indicator": "CHANGE_PCT"},   "operator": "lt", "right": {"type": "number", "value": 0}},
+        ],
+    },
+    {
+        "name": "Volume Breakout Before Price",
+        "category": "Volume",
+        "description": "Volume > heaviest of last 10 days AND price still below 20-day high — early-warning signal",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "VOLUME"},
+             "operator": "gt",
+             "right": {"type": "indicator", "indicator": "HIGHEST_VOLUME", "period": 10}},
+            {"left": {"type": "indicator", "indicator": "CLOSE"},
+             "operator": "lt",
+             "right": {"type": "indicator", "indicator": "HIGHEST_HIGH", "period": 20}},
+        ],
+    },
+    {
+        "name": "Accumulation (Quiet Heavy Volume)",
+        "category": "Volume",
+        "description": "Price barely moves (|Δ| < 2%) but volume > 3× average — institutions absorbing supply",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "gt",  "right": {"type": "number", "value": 300}},
+            {"left": {"type": "indicator", "indicator": "CHANGE_PCT"},   "operator": "lt",  "right": {"type": "number", "value": 2}},
+            {"left": {"type": "indicator", "indicator": "CHANGE_PCT"},   "operator": "gt",  "right": {"type": "number", "value": -2}},
+        ],
+    },
+    {
+        "name": "Volume Dry-Up",
+        "category": "Volume",
+        "description": "Today's volume < 50% of 20-day average — often precedes strong breakouts after a correction",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "lt", "right": {"type": "number", "value": 50}},
+        ],
+    },
+    {
+        "name": "Hidden Accumulation (5-bar)",
+        "category": "Volume",
+        "description": "≥4 of last 5 bars had higher lows AND volume trend is rising — stealth accumulation",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "HIGHER_LOWS_COUNT", "period": 5},
+             "operator": "gte",
+             "right": {"type": "number", "value": 4}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_TREND_UP", "period": 5},
+             "operator": "eq",
+             "right": {"type": "number", "value": 1}},
+        ],
+    },
+    {
+        "name": "Breakout + Volume Confirmation",
+        "category": "Volume",
+        "description": "Close above 20-day high AND volume > 150% of average — the most reliable breakout filter",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "CLOSE"},
+             "operator": "gt",
+             "right": {"type": "indicator", "indicator": "HIGHEST_HIGH", "period": 20}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "gt", "right": {"type": "number", "value": 150}},
+        ],
+    },
+    {
+        "name": "VWAP Reclaim + Volume",
+        "category": "Volume",
+        "description": "Price crossed above VWAP today on volume > 2× average — strong intraday reversal",
+        "universe": ["NIFTY100", "MIDCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "CLOSE"}, "operator": "crosses_above", "right": {"type": "indicator", "indicator": "VWAP"}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "gt", "right": {"type": "number", "value": 200}},
+        ],
+    },
+    {
+        "name": "Unusual Volume (Z-Score ≥ 2)",
+        "category": "Volume",
+        "description": "Volume is ≥ 2 standard deviations above the 20-day mean — statistically abnormal activity",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "VOLUME_ZSCORE", "period": 20},
+             "operator": "gte",
+             "right": {"type": "number", "value": 2}},
+        ],
+    },
+    {
+        "name": "Volume Climax",
+        "category": "Volume",
+        "description": "Highest volume in 50 days + long wick (> 50% of range) — possible top/bottom reversal",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "VOLUME"},
+             "operator": "gt",
+             "right": {"type": "indicator", "indicator": "HIGHEST_VOLUME", "period": 50}},
+            {"left": {"type": "indicator", "indicator": "WICK_RATIO"},
+             "operator": "gt",
+             "right": {"type": "number", "value": 50}},
+        ],
+    },
+
+    # ── Pattern + Volume combinations ────────────────────────────────
+    # Centralised candle patterns from app/lib/candle_patterns.py are
+    # now first-class scanner indicators. These defaults pair the
+    # highest-confidence patterns with a volume-confirmation filter —
+    # the classic "real signal vs noise" combo most retail screeners
+    # bake in. Boolean pattern indicators take values 0.0 / 1.0; we
+    # compare with `eq 1` (also `gt 0` works).
+
+    {
+        "name": "High-Volume Bullish Engulfing",
+        "category": "Pattern + Volume",
+        "description": "Bullish Engulfing today AND volume > 150% of 20-day average — the classic confirmed reversal",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "BULLISH_ENGULFING"},
+             "operator": "eq",
+             "right": {"type": "number", "value": 1}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"},
+             "operator": "gt",
+             "right": {"type": "number", "value": 150}},
+        ],
+    },
+    {
+        "name": "High-Volume Bearish Engulfing",
+        "category": "Pattern + Volume",
+        "description": "Bearish Engulfing today AND volume > 150% — confirmed reversal short setup",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "BEARISH_ENGULFING"},
+             "operator": "eq",
+             "right": {"type": "number", "value": 1}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"},
+             "operator": "gt",
+             "right": {"type": "number", "value": 150}},
+        ],
+    },
+    {
+        "name": "Hammer at Support (Oversold)",
+        "category": "Pattern + Volume",
+        "description": "Hammer candle AND RSI < 35 AND volume > 120% — reversal at oversold support",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "HAMMER"},
+             "operator": "eq",
+             "right": {"type": "number", "value": 1}},
+            {"left": {"type": "indicator", "indicator": "RSI", "period": 14},
+             "operator": "lt",
+             "right": {"type": "number", "value": 35}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"},
+             "operator": "gt",
+             "right": {"type": "number", "value": 120}},
+        ],
+    },
+    {
+        "name": "Shooting Star at Resistance (Overbought)",
+        "category": "Pattern + Volume",
+        "description": "Shooting Star AND RSI > 70 AND volume > 120% — exhaustion top",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "SHOOTING_STAR"},
+             "operator": "eq",
+             "right": {"type": "number", "value": 1}},
+            {"left": {"type": "indicator", "indicator": "RSI", "period": 14},
+             "operator": "gt",
+             "right": {"type": "number", "value": 70}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"},
+             "operator": "gt",
+             "right": {"type": "number", "value": 120}},
+        ],
+    },
+    {
+        "name": "Inside Bar Squeeze",
+        "category": "Pattern + Volume",
+        "description": "Inside Bar (compression) AND today's volume < 70% of average — coiled spring before breakout",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "INSIDE_BAR"},
+             "operator": "eq",
+             "right": {"type": "number", "value": 1}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"},
+             "operator": "lt",
+             "right": {"type": "number", "value": 70}},
         ],
     },
 ]
@@ -123,11 +358,31 @@ DEFAULT_SCANNERS_DEF = [
 _PERIOD_INDS = {
     "EMA", "SMA", "RSI", "BB_UPPER", "BB_MID", "BB_LOWER", "ATR",
     "AVG_VOLUME",
+    # Volume-scanner helpers — bars needed = period * BUFFER_MULT for
+    # stable rolling-window stats.
+    "HIGHEST_VOLUME", "HIGHEST_HIGH", "LOWEST_LOW", "VOLUME_ZSCORE",
+    "HIGHER_LOWS_COUNT", "VOLUME_TREND_UP",
 }
 # Fixed-window indicators: bars needed = WINDOW_52W
 _WINDOW_52W_INDS = {"HIGH_52W", "LOW_52W", "PCT_52W_HIGH", "PCT_52W_LOW"}
 # MACD: 26 + 9 = 35 bars minimum, * BUFFER_MULT for stable seeding
 _MACD_INDS = {"MACD", "MACD_SIGNAL", "MACD_HIST"}
+
+# Candle-pattern indicators (boolean). Defined by name explicitly rather
+# than implicitly to avoid accidentally accepting typos. Two-candle
+# patterns need ≥ 2 bars of history; the default 90-day fetch is plenty.
+_PATTERN_INDS = {
+    # Single-candle
+    "DOJI", "DRAGONFLY_DOJI", "GRAVESTONE_DOJI",
+    "HAMMER", "INVERTED_HAMMER", "SHOOTING_STAR", "HANGING_MAN",
+    "BULLISH_MARUBOZU", "BEARISH_MARUBOZU", "SPINNING_TOP",
+    # Two-candle
+    "BULLISH_ENGULFING", "BEARISH_ENGULFING",
+    "BULLISH_HARAMI",    "BEARISH_HARAMI",
+    "INSIDE_BAR", "OUTSIDE_BAR",
+    "PIERCING_LINE", "DARK_CLOUD_COVER",
+    "TWEEZER_BOTTOM", "TWEEZER_TOP",
+}
 
 
 def _required_bars_for(scanner: dict) -> int:
@@ -257,6 +512,145 @@ class _SymbolEvaluator:
             if not avg or cur_vol is None:
                 return None
             return cur_vol / avg * 100
+
+        # ── Volume scanners (new — backs the "Volume" scanner category) ─
+        # HIGHEST_VOLUME(p): max single-bar volume in the last `p` bars
+        # *excluding* the current bar — so the comparison "current volume
+        # > HIGHEST_VOLUME(10)" means "today is the heaviest of the last
+        # 10 trading days". Without the exclusion the condition would
+        # never fire (current volume is always ≤ itself).
+        if ind == "HIGHEST_VOLUME":
+            p = period or 10
+            end = self.n + idx   # excludes the current bar
+            window = [d.get("volume") or 0 for d in self.ohlcv[max(0, end - p):end]]
+            return max(window) if window else None
+
+        # HIGHEST_HIGH(p) / LOWEST_LOW(p): rolling-window extremes
+        # (also excluding the current bar) — used to detect price breakouts.
+        if ind == "HIGHEST_HIGH":
+            p = period or 20
+            end = self.n + idx
+            window = [d.get("high") or 0 for d in self.ohlcv[max(0, end - p):end]]
+            return max(window) if window else None
+        if ind == "LOWEST_LOW":
+            p = period or 20
+            end = self.n + idx
+            window = [d.get("low") or 0 for d in self.ohlcv[max(0, end - p):end]]
+            return min(window) if window else None
+
+        # VOLUME_ZSCORE(p): (current_volume - mean) / stdev over the last
+        # `p` bars (excluding current). Catches statistical outliers that
+        # simple ratio thresholds miss when a stock's normal volume is
+        # already volatile. > 2 = "abnormal", > 3 = "extreme".
+        if ind == "VOLUME_ZSCORE":
+            p = period or 20
+            cur_vol = _safe_idx([d.get("volume") for d in self.ohlcv], idx)
+            end = self.n + idx
+            window = [d.get("volume") or 0 for d in self.ohlcv[max(0, end - p):end]]
+            if not window or cur_vol is None or len(window) < 3:
+                return None
+            mu = sum(window) / len(window)
+            var = sum((v - mu) ** 2 for v in window) / len(window)
+            sd = var ** 0.5
+            if sd == 0:
+                return None
+            return (cur_vol - mu) / sd
+
+        # WICK_RATIO: combined upper+lower wick length / total range, in
+        # percent. 0 = marubozu (no wicks), 100 = doji (all wick).
+        # > 60 with high volume often marks reversals / climaxes.
+        if ind == "WICK_RATIO":
+            o = _safe_idx([d.get("open")  for d in self.ohlcv], idx)
+            h = _safe_idx([d.get("high")  for d in self.ohlcv], idx)
+            l = _safe_idx([d.get("low")   for d in self.ohlcv], idx)
+            c = _safe_idx([d.get("close") for d in self.ohlcv], idx)
+            if None in (o, h, l, c):
+                return None
+            total_range = h - l
+            if total_range <= 0:
+                return None
+            body_top  = max(o, c)
+            body_bot  = min(o, c)
+            upper     = max(0, h - body_top)
+            lower     = max(0, body_bot - l)
+            return (upper + lower) / total_range * 100
+
+        # HIGHER_LOWS_COUNT(p): how many of the last `p` consecutive
+        # bars have a low strictly greater than the previous bar's low.
+        # Used for accumulation patterns ("last 5 candles higher lows").
+        # Returns int [0, p].
+        if ind == "HIGHER_LOWS_COUNT":
+            p = period or 5
+            end = self.n + idx + 1
+            window = [d.get("low") or 0 for d in self.ohlcv[max(0, end - p - 1):end]]
+            if len(window) < 2:
+                return None
+            return float(sum(
+                1 for i in range(1, len(window)) if window[i] > window[i-1]
+            ))
+
+        # VOLUME_TREND_UP(p): 1.0 when the second half of the last `p`
+        # bars has higher average volume than the first half, else 0.0.
+        # Boolean-style — operators "gt 0" / "eq 1" express "volume is
+        # rising over the period".
+        if ind == "VOLUME_TREND_UP":
+            p = period or 5
+            end = self.n + idx + 1
+            window = [d.get("volume") or 0 for d in self.ohlcv[max(0, end - p):end]]
+            if len(window) < 2:
+                return None
+            half = len(window) // 2
+            if half == 0:
+                return None
+            first_half  = window[:half]
+            second_half = window[half:]
+            avg_first  = sum(first_half)  / len(first_half)
+            avg_second = sum(second_half) / len(second_half)
+            return 1.0 if avg_second > avg_first else 0.0
+
+        # ── Candle patterns (centralised in app/lib/candle_patterns) ───
+        # Boolean indicators — return 1.0 if today's candle (and the
+        # prior candle, for two-bar patterns) matches the shape, else
+        # 0.0. Pair with operator `eq 1` in conditions, or `gt 0` —
+        # both work. Single source of truth with patterns_service.py.
+        if ind.startswith("PATTERN_") or ind in _PATTERN_INDS:
+            from ..lib import candle_patterns as _cp  # noqa: PLC0415
+            if self.n < 1:
+                return None
+            c0 = self.ohlcv[idx]
+            c1 = self.ohlcv[idx - 1] if abs(idx - 1) <= self.n else None
+            try:
+                # Single-candle patterns
+                if ind == "DOJI":             return 1.0 if _cp.is_doji(c0) else 0.0
+                if ind == "DRAGONFLY_DOJI":   return 1.0 if _cp.is_dragonfly_doji(c0) else 0.0
+                if ind == "GRAVESTONE_DOJI":  return 1.0 if _cp.is_gravestone_doji(c0) else 0.0
+                if ind == "HAMMER":           return 1.0 if _cp.is_hammer(c0) else 0.0
+                if ind == "INVERTED_HAMMER":  return 1.0 if _cp.is_inverted_hammer(c0) else 0.0
+                if ind == "SHOOTING_STAR":    return 1.0 if _cp.is_shooting_star(c0) else 0.0
+                if ind == "HANGING_MAN":      return 1.0 if _cp.is_hanging_man(c0) else 0.0
+                if ind == "BULLISH_MARUBOZU": return 1.0 if _cp.is_bullish_marubozu(c0) else 0.0
+                if ind == "BEARISH_MARUBOZU": return 1.0 if _cp.is_bearish_marubozu(c0) else 0.0
+                if ind == "SPINNING_TOP":     return 1.0 if _cp.is_spinning_top(c0) else 0.0
+                # Two-candle patterns — return 0 (not None) if we don't
+                # have a prior bar, so AND-chained conditions reject
+                # the row instead of erroring out.
+                if c1 is None:
+                    return 0.0
+                if ind == "BULLISH_ENGULFING": return 1.0 if _cp.is_bullish_engulfing(c0, c1) else 0.0
+                if ind == "BEARISH_ENGULFING": return 1.0 if _cp.is_bearish_engulfing(c0, c1) else 0.0
+                if ind == "BULLISH_HARAMI":    return 1.0 if _cp.is_bullish_harami(c0, c1) else 0.0
+                if ind == "BEARISH_HARAMI":    return 1.0 if _cp.is_bearish_harami(c0, c1) else 0.0
+                if ind == "INSIDE_BAR":        return 1.0 if _cp.is_inside_bar(c0, c1) else 0.0
+                if ind == "OUTSIDE_BAR":       return 1.0 if _cp.is_outside_bar(c0, c1) else 0.0
+                if ind == "PIERCING_LINE":     return 1.0 if _cp.is_piercing_line(c0, c1) else 0.0
+                if ind == "DARK_CLOUD_COVER":  return 1.0 if _cp.is_dark_cloud_cover(c0, c1) else 0.0
+                if ind == "TWEEZER_BOTTOM":    return 1.0 if _cp.is_tweezer_bottom(c0, c1) else 0.0
+                if ind == "TWEEZER_TOP":       return 1.0 if _cp.is_tweezer_top(c0, c1) else 0.0
+            except (KeyError, TypeError, ZeroDivisionError):
+                # Malformed bar (None close, missing high) — treat as
+                # "no pattern" rather than crash the whole scan.
+                return 0.0
+            return None  # Unknown pattern name — let comparison fail loudly
 
         # ── 52-week aggregations (true 252-day window) ─────────────────
         if ind in _WINDOW_52W_INDS:

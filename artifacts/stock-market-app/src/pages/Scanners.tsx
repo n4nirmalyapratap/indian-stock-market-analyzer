@@ -11,8 +11,35 @@ import DataFreshness from "@/components/DataFreshness";
 import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
 // ─── Indicator Definitions ───────────────────────────────────────────────────
+//
+// CategoryColor is the SINGLE source of truth for which colors the
+// indicator-picker recognises. Adding a new color requires three
+// coordinated touch-points and the compiler enforces all three:
+//   1. Add the literal here     → forces step 2 (record exhaustiveness)
+//   2. Add the row in CAT_COLORS → forces nothing missed at runtime
+//   3. Use it in INDICATOR_GROUPS color field → still typesafe
+// Without this union, a typo like `color: "pink"` silently produced an
+// undefined CAT_COLORS lookup and crashed render with "Cannot read
+// properties of undefined (reading 'bg')".
+type CategoryColor =
+  | "blue" | "cyan" | "green" | "purple" | "orange" | "red"
+  | "teal" | "pink" | "gray";
 
-const INDICATOR_GROUPS = [
+interface IndicatorPickerItem {
+  value:         string;
+  label:         string;
+  hasPeriod:     boolean;
+  defaultPeriod?: number;
+  isNumber?:     boolean;
+}
+
+interface IndicatorGroup {
+  label:  string;
+  color:  CategoryColor;
+  items:  IndicatorPickerItem[];
+}
+
+const INDICATOR_GROUPS: IndicatorGroup[] = [
   { label: "Price",           color: "blue",   items: [
     { value: "CLOSE",       label: "Close",          hasPeriod: false },
     { value: "OPEN",        label: "Open",           hasPeriod: false },
@@ -22,9 +49,24 @@ const INDICATOR_GROUPS = [
     { value: "CHANGE_PCT",  label: "Change %",       hasPeriod: false },
   ]},
   { label: "Volume",          color: "cyan",   items: [
-    { value: "VOLUME",       label: "Volume",         hasPeriod: false },
-    { value: "AVG_VOLUME",   label: "Avg Volume",     hasPeriod: true, defaultPeriod: 20 },
-    { value: "VOLUME_RATIO", label: "Volume Ratio %", hasPeriod: false },
+    { value: "VOLUME",            label: "Volume",                hasPeriod: false },
+    { value: "AVG_VOLUME",        label: "Avg Volume",            hasPeriod: true,  defaultPeriod: 20 },
+    { value: "VOLUME_RATIO",      label: "Volume Ratio %",        hasPeriod: false },
+    // New Volume-category helpers — pair with VOLUME or CLOSE on the
+    // other side of the condition. e.g.
+    //   VOLUME > HIGHEST_VOLUME(10)   → today is heaviest of 10 days
+    //   VOLUME_ZSCORE(20) gte 2       → ≥ 2σ above 20-day mean
+    //   CLOSE > HIGHEST_HIGH(20)      → 20-day price breakout
+    //   WICK_RATIO gt 50              → long-wick candle (climax / reversal)
+    //   HIGHER_LOWS_COUNT(5) gte 4    → 4 of last 5 bars made higher lows
+    //   VOLUME_TREND_UP(5) eq 1       → 5-bar volume trend is rising
+    { value: "HIGHEST_VOLUME",    label: "Highest Volume (N)",    hasPeriod: true,  defaultPeriod: 10 },
+    { value: "HIGHEST_HIGH",      label: "Highest High (N)",      hasPeriod: true,  defaultPeriod: 20 },
+    { value: "LOWEST_LOW",        label: "Lowest Low (N)",        hasPeriod: true,  defaultPeriod: 20 },
+    { value: "VOLUME_ZSCORE",     label: "Volume Z-Score (N)",    hasPeriod: true,  defaultPeriod: 20 },
+    { value: "WICK_RATIO",        label: "Wick Ratio %",          hasPeriod: false },
+    { value: "HIGHER_LOWS_COUNT", label: "Higher Lows Count (N)", hasPeriod: true,  defaultPeriod: 5 },
+    { value: "VOLUME_TREND_UP",   label: "Volume Trend Up (N)",   hasPeriod: true,  defaultPeriod: 5 },
   ]},
   { label: "Moving Averages", color: "green",  items: [
     { value: "EMA", label: "EMA", hasPeriod: true, defaultPeriod: 20 },
@@ -50,6 +92,32 @@ const INDICATOR_GROUPS = [
     { value: "PCT_52W_HIGH", label: "% from 52W High", hasPeriod: false },
     { value: "PCT_52W_LOW",  label: "% from 52W Low",  hasPeriod: false },
   ]},
+  // Candle-pattern boolean indicators — return 1 if today's bar
+  // (and the prior bar for two-bar patterns) matches the shape, else 0.
+  // Use with operator `eq` and value 1 — e.g.
+  //   BULLISH_ENGULFING eq 1 AND VOLUME_RATIO > 150
+  { label: "Patterns",        color: "pink",   items: [
+    { value: "BULLISH_ENGULFING", label: "Bullish Engulfing",  hasPeriod: false },
+    { value: "BEARISH_ENGULFING", label: "Bearish Engulfing",  hasPeriod: false },
+    { value: "BULLISH_HARAMI",    label: "Bullish Harami",     hasPeriod: false },
+    { value: "BEARISH_HARAMI",    label: "Bearish Harami",     hasPeriod: false },
+    { value: "HAMMER",            label: "Hammer",             hasPeriod: false },
+    { value: "INVERTED_HAMMER",   label: "Inverted Hammer",    hasPeriod: false },
+    { value: "SHOOTING_STAR",     label: "Shooting Star",      hasPeriod: false },
+    { value: "HANGING_MAN",       label: "Hanging Man",        hasPeriod: false },
+    { value: "DOJI",              label: "Doji",               hasPeriod: false },
+    { value: "DRAGONFLY_DOJI",    label: "Dragonfly Doji",     hasPeriod: false },
+    { value: "GRAVESTONE_DOJI",   label: "Gravestone Doji",    hasPeriod: false },
+    { value: "BULLISH_MARUBOZU",  label: "Bullish Marubozu",   hasPeriod: false },
+    { value: "BEARISH_MARUBOZU",  label: "Bearish Marubozu",   hasPeriod: false },
+    { value: "SPINNING_TOP",      label: "Spinning Top",       hasPeriod: false },
+    { value: "INSIDE_BAR",        label: "Inside Bar",         hasPeriod: false },
+    { value: "OUTSIDE_BAR",       label: "Outside Bar",        hasPeriod: false },
+    { value: "PIERCING_LINE",     label: "Piercing Line",      hasPeriod: false },
+    { value: "DARK_CLOUD_COVER",  label: "Dark Cloud Cover",   hasPeriod: false },
+    { value: "TWEEZER_BOTTOM",    label: "Tweezer Bottom",     hasPeriod: false },
+    { value: "TWEEZER_TOP",       label: "Tweezer Top",        hasPeriod: false },
+  ]},
   { label: "Constant Value",  color: "gray",   items: [
     { value: "NUMBER", label: "Number", hasPeriod: false, isNumber: true },
   ]},
@@ -64,8 +132,15 @@ const ALL_INDICATORS: IndicatorItem[] = INDICATOR_GROUPS.flatMap(g =>
   g.items.map(i => ({ ...i, group: g.label, color: g.color }))
 );
 
-// Color map for indicator categories
-const CAT_COLORS: Record<string, { bg: string; text: string; border: string }> = {
+// Color map for indicator categories. Typed as `Record<CategoryColor, …>`
+// so the compiler refuses both directions of drift:
+//   • Missing a key (e.g. forget to add the "pink" row here after
+//     widening CategoryColor)  → TS2741 compile error
+//   • Adding an extra key not in CategoryColor                       → TS2353 compile error
+// Crashes like "Cannot read properties of undefined (reading 'bg')"
+// are now impossible to ship as a single-file change.
+interface ColorClasses { bg: string; text: string; border: string }
+const CAT_COLORS: Record<CategoryColor, ColorClasses> = {
   blue:   { bg: "bg-blue-50",   text: "text-blue-700",   border: "border-blue-200"   },
   cyan:   { bg: "bg-cyan-50",   text: "text-cyan-700",   border: "border-cyan-200"   },
   green:  { bg: "bg-green-50",  text: "text-green-700",  border: "border-green-200"  },
@@ -73,8 +148,19 @@ const CAT_COLORS: Record<string, { bg: string; text: string; border: string }> =
   orange: { bg: "bg-orange-50", text: "text-orange-700", border: "border-orange-200" },
   red:    { bg: "bg-red-50",    text: "text-red-700",    border: "border-red-200"    },
   teal:   { bg: "bg-teal-50",   text: "text-teal-700",   border: "border-teal-200"   },
+  pink:   { bg: "bg-pink-50",   text: "text-pink-700",   border: "border-pink-200"   },
   gray:   { bg: "bg-gray-50",   text: "text-gray-700",   border: "border-gray-200"   },
 };
+
+// Defensive runtime helper — paranoid backstop in case data flowing in
+// from the server (saved scanners, custom indicator groups) ever ships
+// a color string that isn't in CategoryColor. Compile-time is the real
+// safety net; this just prevents a single bad row crashing the page.
+const FALLBACK_COLOR = CAT_COLORS.gray;
+function catColor(name: string | undefined): ColorClasses {
+  if (!name) return FALLBACK_COLOR;
+  return CAT_COLORS[name as CategoryColor] || FALLBACK_COLOR;
+}
 
 const OPERATORS = [
   { value: "gt",            label: "Greater than",    short: ">"  },
@@ -122,7 +208,7 @@ function blankCondition(): Condition {
 }
 
 function blankDraft(): ScannerDraft {
-  return { name: "", description: "", universe: ["NIFTY100"], logic: "AND", conditions: [blankCondition()] };
+  return { name: "", description: "", category: "", universe: ["NIFTY100"], logic: "AND", conditions: [blankCondition()] };
 }
 
 function condSummary(c: Condition): string {
@@ -144,7 +230,10 @@ function IndicatorPicker({ side, onChange, label }: {
   label: string;
 }) {
   const info  = indInfo(side.indicator);
-  const color = info ? CAT_COLORS[info.color ?? "gray"] : CAT_COLORS.gray;
+  // Route through catColor() so an INDICATOR_GROUPS entry with a color
+  // missing from CAT_COLORS falls back to gray instead of throwing
+  // "Cannot read properties of undefined (reading 'bg')".
+  const color = catColor(info?.color);
 
   function handleChange(v: string) {
     const newInfo = indInfo(v);
@@ -296,7 +385,7 @@ function ScannerCard({ scanner, isRunning, isSelected, onRun, onEdit, onDuplicat
           <div className="mt-2 space-y-1">
             {scanner.conditions?.slice(0, 3).map((c: any, i: number) => {
               const info = indInfo(c.left?.indicator);
-              const col  = CAT_COLORS[info?.color ?? "gray"];
+              const col  = catColor(info?.color);
               return (
                 <span key={i} className={`inline-block text-xs px-2 py-0.5 rounded-full font-mono mr-1 ${col.bg} ${col.text} border ${col.border}`}>
                   {condSummary(c)}
@@ -349,12 +438,51 @@ export default function Scanners() {
   const [runningId, setRunningId]   = useState<string | null>(null);
   const [result, setResult]         = useState<ScanResult | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Active category filter. "All" → grouped view with sticky headers.
+  // A specific category → flat filtered list.
+  const [categoryFilter, setCategoryFilter] = useState<string>("All");
 
   const { data: scannersResp, isLoading } = useQuery(
     marketDataQueryOptions(["scanners"], api.scannersWithMeta),
   );
   const scanners: Scanner[] = scannersResp?.scanners ?? [];
   const scannersMeta = pickMeta(scannersResp);
+
+  // ── Category grouping ──────────────────────────────────────────────────
+  // Bucket scanners by their `category` field. Legacy scanners that pre-
+  // date the field land in "Uncategorized". `groupedScanners` is the
+  // source of truth for both the filter-pill counts and the rendered
+  // sections so the two can't drift.
+  const groupedScanners: Record<string, Scanner[]> = {};
+  for (const s of scanners) {
+    const cat = (s.category || "Uncategorized").trim() || "Uncategorized";
+    (groupedScanners[cat] ||= []).push(s);
+  }
+  // Stable display order. Anything not in this list appears alphabetically
+  // after the explicit entries. Order matches typical retail workflow:
+  // trend → momentum → mean-reversion → oscillators → volume → patterns.
+  const CATEGORY_ORDER = [
+    "Trend", "Momentum", "Mean Reversion", "Oscillators",
+    "Volume", "Pattern + Volume", "Uncategorized",
+  ];
+  const orderedCategories: string[] = [
+    ...CATEGORY_ORDER.filter(c => groupedScanners[c]?.length),
+    ...Object.keys(groupedScanners)
+        .filter(c => !CATEGORY_ORDER.includes(c))
+        .sort(),
+  ];
+  // Pill list — "All" first with total count, then each category with its count.
+  const categoryPills: { key: string; label: string; count: number }[] = [
+    { key: "All", label: "All", count: scanners.length },
+    ...orderedCategories.map(c => ({
+      key: c, label: c, count: groupedScanners[c].length,
+    })),
+  ];
+  // When a specific category is active, only that bucket renders. When
+  // "All" is active, render every bucket with a sticky header.
+  const visibleCategories = categoryFilter === "All"
+    ? orderedCategories
+    : orderedCategories.filter(c => c === categoryFilter);
 
   const saveMut = useMutation({
     mutationFn: (d: ScannerDraft & { id?: string }) =>
@@ -408,6 +536,7 @@ export default function Scanners() {
   function startEdit(scanner: any) {
     setDraft({
       name: scanner.name, description: scanner.description ?? "",
+      category: scanner.category ?? "",
       universe: scanner.universe ?? ["NIFTY100"], logic: scanner.logic ?? "AND",
       conditions: scanner.conditions?.map((c: any) => ({ ...c, id: c.id || uid() })) ?? [],
     });
@@ -417,6 +546,7 @@ export default function Scanners() {
   function duplicate(scanner: any) {
     setDraft({
       name: `${scanner.name} (copy)`, description: scanner.description ?? "",
+      category: scanner.category ?? "",
       universe: scanner.universe ?? ["NIFTY100"], logic: scanner.logic ?? "AND",
       conditions: scanner.conditions?.map((c: any) => ({ ...c, id: uid() })) ?? [],
     });
@@ -462,29 +592,77 @@ export default function Scanners() {
       <div className="flex gap-5 flex-1 min-h-0">
 
         {/* ── LEFT: Scanner List ────────────────────────────────────────────── */}
-        <div className="w-80 flex-shrink-0 flex flex-col gap-3 overflow-y-auto pb-4">
-          {isLoading ? (
-            [...Array(3)].map((_, i) => <div key={i} className="h-36 bg-gray-100 animate-pulse rounded-xl" />)
-          ) : scanners.length === 0 ? (
-            <div className="text-center py-12 text-gray-400 border-2 border-dashed border-gray-200 rounded-xl">
-              <Filter className="w-8 h-8 mx-auto mb-2 opacity-30" />
-              <p className="font-medium text-sm">No scanners yet</p>
-              <p className="text-xs mt-1">Click "New Scanner" to start</p>
+        <div className="w-80 flex-shrink-0 flex flex-col overflow-hidden">
+          {/* Category filter pills — sticky at the top of the column.
+              Shows All / each category with the scanner count per group.
+              Clicking a pill switches between "All grouped" and "single
+              category flat" modes. */}
+          {!isLoading && scanners.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 pb-3 sticky top-0 bg-inherit z-10">
+              {categoryPills.map(p => {
+                const active = categoryFilter === p.key;
+                return (
+                  <button
+                    key={p.key}
+                    onClick={() => setCategoryFilter(p.key)}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition border ${
+                      active
+                        ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
+                        : "bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100 dark:bg-gray-800/60 dark:text-gray-300 dark:border-gray-700 dark:hover:bg-gray-700"
+                    }`}
+                  >
+                    {p.label}
+                    <span className={`ml-1 ${active ? "opacity-80" : "opacity-60"}`}>
+                      {p.count}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
-          ) : (
-            scanners.map((s: any) => (
-              <ScannerCard
-                key={s.id} scanner={s}
-                isRunning={runningId === s.id}
-                isSelected={selectedId === s.id}
-                onRun={() => { setSelectedId(s.id); runMut.mutate(s.id); }}
-                onEdit={() => startEdit(s)}
-                onDuplicate={() => duplicate(s)}
-                onDelete={() => { if (confirm(`Delete "${s.name}"?`)) deleteMut.mutate(s.id); }}
-                onSelect={() => setSelectedId(s.id)}
-              />
-            ))
           )}
+
+          <div className="flex-1 flex flex-col gap-3 overflow-y-auto pb-4 pr-1">
+            {isLoading ? (
+              [...Array(3)].map((_, i) => <div key={i} className="h-36 bg-gray-100 animate-pulse rounded-xl" />)
+            ) : scanners.length === 0 ? (
+              <div className="text-center py-12 text-gray-400 border-2 border-dashed border-gray-200 rounded-xl">
+                <Filter className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                <p className="font-medium text-sm">No scanners yet</p>
+                <p className="text-xs mt-1">Click "New Scanner" to start</p>
+              </div>
+            ) : (
+              visibleCategories.map(cat => (
+                <div key={cat} className="flex flex-col gap-3">
+                  {/* Section header — visible whenever multiple categories
+                      are being rendered (i.e. "All" mode). Hidden when a
+                      single category is selected since the active pill
+                      already shows what's being viewed. */}
+                  {categoryFilter === "All" && (
+                    <div className="flex items-baseline justify-between px-1 pt-1 pb-0.5">
+                      <h3 className="text-[10px] font-bold uppercase tracking-widest text-gray-500 dark:text-gray-400">
+                        {cat}
+                      </h3>
+                      <span className="text-[10px] text-gray-400">
+                        {groupedScanners[cat].length}
+                      </span>
+                    </div>
+                  )}
+                  {groupedScanners[cat].map((s: Scanner) => (
+                    <ScannerCard
+                      key={s.id} scanner={s}
+                      isRunning={runningId === s.id}
+                      isSelected={selectedId === s.id}
+                      onRun={() => { setSelectedId(s.id); runMut.mutate(s.id); }}
+                      onEdit={() => startEdit(s)}
+                      onDuplicate={() => duplicate(s)}
+                      onDelete={() => { if (confirm(`Delete "${s.name}"?`)) deleteMut.mutate(s.id); }}
+                      onSelect={() => setSelectedId(s.id)}
+                    />
+                  ))}
+                </div>
+              ))
+            )}
+          </div>
         </div>
 
         {/* ── RIGHT: Builder or Results ─────────────────────────────────────── */}
@@ -514,6 +692,25 @@ export default function Scanners() {
                       placeholder="Describe what this scanner finds…"
                       className="w-full border-2 border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-400 transition"
                     />
+                  </div>
+                  {/* Category — determines which filter-pill group the
+                      scanner shows up under on the left column. Free-text
+                      so power users can introduce new buckets (e.g.
+                      "Mean Reversion (Custom)") without a code change. */}
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">Category (optional)</label>
+                    <input
+                      list="scanner-category-options"
+                      value={draft.category ?? ""}
+                      onChange={e => setDraft(d => ({ ...d, category: e.target.value }))}
+                      placeholder='e.g. "Volume" or "Trend"'
+                      className="w-full border-2 border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-400 transition"
+                    />
+                    <datalist id="scanner-category-options">
+                      {orderedCategories.filter(c => c !== "Uncategorized").map(c => (
+                        <option key={c} value={c} />
+                      ))}
+                    </datalist>
                   </div>
                 </div>
               </div>

@@ -10,6 +10,12 @@ from .indicators import (
     calculate_macd, calculate_bollinger_bands, calculate_atr,
 )
 from ..lib.universe import NIFTY100, MIDCAP, SMALLCAP
+# Candle-pattern primitives — centralised in app/lib so the scanner DSL
+# can use the same definitions (BULLISH_ENGULFING etc. as boolean
+# indicators). The underscore-prefixed locals below are kept as thin
+# aliases so the rest of this module's detection logic doesn't need
+# to be rewritten.
+from ..lib import candle_patterns as _cp
 
 # Pattern scans are expensive (~65 symbols × ~400ms each ≈ 26s) and entirely
 # derived from daily OHLCV, so a 30-minute TTL is plenty during market
@@ -38,30 +44,16 @@ def _get_scan_lock() -> asyncio.Lock:
     return _scan_lock
 
 
-def _body(c: dict) -> float:
-    return abs(c["close"] - c["open"])
-
-def _upper(c: dict) -> float:
-    return c["high"] - max(c["open"], c["close"])
-
-def _lower(c: dict) -> float:
-    return min(c["open"], c["close"]) - c["low"]
-
-def _range(c: dict) -> float:
-    return c["high"] - c["low"]
-
-def _is_bull(c: dict) -> bool:
-    return c["close"] > c["open"]
-
-def _is_bear(c: dict) -> bool:
-    return c["close"] < c["open"]
-
-def _is_doji(c: dict) -> bool:
-    rng = _range(c)
-    return rng > 0 and _body(c) <= rng * 0.1
-
-def _mid(c: dict) -> float:
-    return (c["open"] + c["close"]) / 2
+# Aliases for backward compat with the inline detection blocks below.
+# Real definitions live in `app/lib/candle_patterns.py`.
+_body   = _cp.body
+_upper  = _cp.upper_wick
+_lower  = _cp.lower_wick
+_range  = _cp.candle_range
+_is_bull = _cp.is_bull
+_is_bear = _cp.is_bear
+_is_doji = _cp.is_doji
+_mid    = _cp.midpoint
 
 
 def _adj_conf(
