@@ -15,12 +15,20 @@ above suggests rally exhaustion). The chart makes that visible.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Optional
 
 from app.lib.auth_store import ensure_primary_schema, get_conn
 
 logger = logging.getLogger("options_pcr")
+
+# Cache the CREATE TABLE IF NOT EXISTS check. `IF NOT EXISTS` is cheap
+# (~ms) but on a high-traffic read path it adds up; the flag below
+# elevates it to "free after the first call" while staying safe across
+# threads via the lock.
+_TABLE_INITIALIZED = False
+_TABLE_INIT_LOCK = threading.Lock()
 
 
 # Symbols we snapshot. Limited to the most-traded F&O underlyings;
@@ -42,30 +50,37 @@ def _watchlist() -> list[str]:
 
 
 def _ensure_table():
-    """Create the PCR history table if it doesn't exist. Uses the same
-    auth_store helper every other module uses so schema bootstrap is
-    consistent."""
-    ensure_primary_schema()
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS options_pcr_history (
-                    symbol         TEXT NOT NULL,
-                    expiry_index   INT  NOT NULL DEFAULT 0,
-                    fetched_at_ms  BIGINT NOT NULL,
-                    pcr_oi         DOUBLE PRECISION,
-                    pcr_volume     DOUBLE PRECISION,
-                    spot           DOUBLE PRECISION,
-                    expiry         TEXT,
-                    PRIMARY KEY (symbol, expiry_index, fetched_at_ms)
+    """Create the PCR history table if it doesn't exist. Idempotent and
+    thread-safe; only the first call actually hits PG, subsequent calls
+    are a flag check (~ns)."""
+    global _TABLE_INITIALIZED
+    if _TABLE_INITIALIZED:
+        return
+    with _TABLE_INIT_LOCK:
+        if _TABLE_INITIALIZED:
+            return
+        ensure_primary_schema()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS options_pcr_history (
+                        symbol         TEXT NOT NULL,
+                        expiry_index   INT  NOT NULL DEFAULT 0,
+                        fetched_at_ms  BIGINT NOT NULL,
+                        pcr_oi         DOUBLE PRECISION,
+                        pcr_volume     DOUBLE PRECISION,
+                        spot           DOUBLE PRECISION,
+                        expiry         TEXT,
+                        PRIMARY KEY (symbol, expiry_index, fetched_at_ms)
+                    )
+                    """
                 )
-                """
-            )
-            cur.execute(
-                "CREATE INDEX IF NOT EXISTS idx_pcr_recent "
-                "ON options_pcr_history (symbol, fetched_at_ms DESC)"
-            )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pcr_recent "
+                    "ON options_pcr_history (symbol, fetched_at_ms DESC)"
+                )
+        _TABLE_INITIALIZED = True
 
 
 def get_history(symbol: str, hours: int = 24, expiry_index: int = 0) -> list[dict]:
@@ -148,7 +163,11 @@ async def snapshot_now(nse_service, symbols: Optional[list[str]] = None) -> int:
                         (sym.upper(), 0, now_ms,
                          pcr_oi, pcr_vol, spot, expiry),
                     )
-            saved += 1
+                    # rowcount reflects whether ON CONFLICT was a NO-OP
+                    # (1 = inserted, 0 = duplicate / skipped). Counting
+                    # only successful inserts gives an honest log line.
+                    if cur.rowcount > 0:
+                        saved += 1
         except Exception as exc:
             logger.warning("PCR snapshot failed for %s: %s", sym, str(exc)[:120])
             continue

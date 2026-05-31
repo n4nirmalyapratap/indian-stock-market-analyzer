@@ -20,7 +20,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import {
-  ResponsiveContainer, BarChart, Bar, LineChart, Line, AreaChart, Area,
+  ResponsiveContainer, BarChart, Bar, LineChart, Line,
   XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine, Cell,
 } from "recharts";
 import {

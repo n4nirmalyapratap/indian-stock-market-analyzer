@@ -149,7 +149,15 @@ export default function CommandPalette() {
   useEffect(() => {
     if (!open) return;
     const q = query.trim();
-    if (q.length < 1) { setHits([]); return; }
+    if (q.length < 1) {
+      // Abort any in-flight fetch from a previous keystroke before
+      // clearing hits — without this, a stale response can race in
+      // after the user has cleared the input and repopulate hits.
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setHits([]);
+      return;
+    }
     const t = setTimeout(() => {
       abortRef.current?.abort();
       const ctrl = new AbortController();

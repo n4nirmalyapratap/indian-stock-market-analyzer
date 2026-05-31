@@ -58,7 +58,13 @@ function EditModal({
   const [value, setValue] = useState<string>(
     extra.value != null ? String(extra.value) : "",
   );
-  const [asOf,  setAsOf]  = useState<string>(extra.asOf ?? new Date().toISOString().slice(0, 10));
+  // Default to today in the user's LOCAL timezone, not UTC. Using
+  // toISOString() rolls over to "tomorrow" for IST users after 18:30
+  // local time (UTC = next-day). en-CA produces YYYY-MM-DD which
+  // matches the `<input type="date">` format exactly.
+  const [asOf,  setAsOf]  = useState<string>(
+    extra.asOf ?? new Date().toLocaleDateString("en-CA"),
+  );
   const [note,  setNote]  = useState<string>(extra.note ?? "");
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
@@ -91,19 +97,25 @@ function EditModal({
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`macro-extra-modal-${extra.slug}`}
         className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-white/[0.08] shadow-2xl w-full max-w-md overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-5 py-3 border-b border-gray-100 dark:border-white/[0.04] flex items-start justify-between gap-3">
           <div>
-            <h3 className="font-bold text-gray-900 dark:text-white text-sm">
+            <h3 id={`macro-extra-modal-${extra.slug}`}
+                className="font-bold text-gray-900 dark:text-white text-sm">
               Update {extra.label}
             </h3>
             <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
               {extra.description}
             </p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
+          <button onClick={onClose}
+                  aria-label="Close dialog"
+                  className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
             <XIcon className="w-4 h-4" />
           </button>
         </div>
@@ -223,6 +235,7 @@ function ExtraTile({
           <button
             onClick={() => onEdit(extra)}
             title="Edit value"
+            aria-label={`Edit ${extra.label}`}
             className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition p-1 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400"
           >
             <Pencil className="w-3 h-3" />

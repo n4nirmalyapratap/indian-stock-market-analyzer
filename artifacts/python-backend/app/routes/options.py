@@ -674,13 +674,23 @@ async def get_pcr_history(symbol: str, hours: int = 24, expiry_index: int = 0):
     The intraday scheduler snapshots PCR every 15 min during market
     hours and persists to `options_pcr_history`. This endpoint pulls
     the rows back for the F&O analytics chart on the frontend.
+
+    Inputs are clamped to safe bounds (not 400'd) so the chart still
+    renders if a client passes an oddly large value — but `hours` is
+    capped at 30 days so a caller can't unintentionally trigger a
+    full-table scan.
     """
+    _MAX_HOURS = 24 * 30   # 30 days — plenty for the chart's 72h default
+    _MAX_EXPIRY_INDEX = 10
+    safe_hours = max(1, min(int(hours or 24), _MAX_HOURS))
+    safe_idx   = max(0, min(int(expiry_index or 0), _MAX_EXPIRY_INDEX))
+
     from ..services import options_pcr_service as _pcr  # noqa: PLC0415
-    rows = _pcr.get_history(symbol.upper(), hours=hours, expiry_index=expiry_index)
+    rows = _pcr.get_history(symbol.upper(), hours=safe_hours, expiry_index=safe_idx)
     return {
         "symbol":       symbol.upper(),
-        "expiry_index": expiry_index,
-        "hours":        hours,
+        "expiry_index": safe_idx,
+        "hours":        safe_hours,
         "count":        len(rows),
         "series":       rows,
     }

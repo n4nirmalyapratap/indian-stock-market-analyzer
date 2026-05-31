@@ -472,60 +472,14 @@ def ensure_primary_schema() -> None:
                     )
                     """
                 )
-                # Macro-indicator scrape cache. History-preserving — each
-                # *new release* (different `as_of`) creates its own row
-                # so we accumulate a time series naturally over scrapes.
-                # Re-scraping the same release period (same `as_of`)
-                # updates in place (UPSERT) so we don't bloat with
-                # duplicates when TE re-publishes identical values.
-                #
-                # Why history matters here:
-                #   * Charts: "RBI repo over time" needs more than one row
-                #   * Revisions: if TE later changes Apr-26 CPI, we see
-                #     both attempts (via fetched_at_ms ordering)
-                #   * Audit: "when did our cache first see this value?"
-                #     is answerable
-                #
-                # Reads of "current value" use
-                #     ORDER BY fetched_at_ms DESC LIMIT 1
-                # which is fast given the index below. Multi-row scans
-                # (time series queries) hit the same index.
-                #
-                # The earlier `macro_scraped_data` PK was (source,
-                # indicator) — that overwrote everything on each scrape.
-                # Dropping the old table is destructive but the dataset
-                # is recoverable: the scheduler refills within ~30s of
-                # the next boot via tradingeconomics.com.
-                cur.execute("DROP TABLE IF EXISTS macro_scraped_data")
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS macro_scraped_data (
-                        source          TEXT NOT NULL,
-                        indicator       TEXT NOT NULL,
-                        as_of           TEXT NOT NULL DEFAULT '',
-                        value           DOUBLE PRECISION,
-                        previous_value  DOUBLE PRECISION,
-                        forecast_value  DOUBLE PRECISION,
-                        unit            TEXT NOT NULL DEFAULT '',
-                        category        TEXT NOT NULL DEFAULT '',
-                        raw_label       TEXT NOT NULL DEFAULT '',
-                        fetched_at_ms   BIGINT NOT NULL,
-                        PRIMARY KEY (source, indicator, as_of)
-                    )
-                    """
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_macro_scraped_source "
-                    "ON macro_scraped_data (source)"
-                )
-                # Index on (source, indicator, fetched_at_ms DESC) makes
-                # the "give me the latest observation" query a single
-                # B-tree lookup instead of a sort over the indicator's
-                # history.
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_macro_scraped_latest "
-                    "ON macro_scraped_data (source, indicator, fetched_at_ms DESC)"
-                )
+                # Note: the macro_scraped_data table (TradingEconomics +
+                # data.gov.in scrape cache) was removed from the schema
+                # bootstrap when the entire scraper pipeline was deleted.
+                # The PR-review comment about "DROP destroying history"
+                # is moot — no service writes to or reads from this table
+                # anymore. If a legacy table still exists in your DB it
+                # can be manually dropped with `DROP TABLE IF EXISTS
+                # macro_scraped_data;` — leaving it does no harm.
         _SCHEMA_READY = True
 
 

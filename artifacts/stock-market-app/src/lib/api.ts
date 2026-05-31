@@ -448,7 +448,8 @@ export interface MacroExtra {
   value:       number | null;
   asOf:        string | null;
   note:        string | null;
-  setBy:       string | null;
+  // setBy intentionally omitted — see backend route /insights/macro/extras.
+  // Admin identity is private; visible only via /admin/macro/overrides.
   updatedAtMs: number | null;
 }
 
@@ -714,9 +715,10 @@ export const api = {
    *  with whatever admin-set values exist in `macro_overrides`. */
   macroExtras:    () => fetchApi<MacroExtrasResponse>("/insights/macro/extras"),
   /** Admin: upsert a manual override for any whitelisted indicator.
-   *  Token from useCustomAuth() is sent as X-Admin-Token. */
+   *  Token from useCustomAuth() is sent as X-Admin-Token.
+   *  Returns the upserted row (`{indicator, value, asOf, setBy}`). */
   setMacroOverride: (token: string, indicator: string, body: { value: number; asOf: string; note?: string }) =>
-    fetchApi<{ ok: boolean }>(
+    fetchApi<{ indicator: string; value: number; asOf: string; setBy: string }>(
       `/admin/macro/overrides/${encodeURIComponent(indicator)}`,
       {
         method:  "PUT",
