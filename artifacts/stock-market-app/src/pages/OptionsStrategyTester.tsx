@@ -13,6 +13,7 @@ import {
 } from "recharts";
 import OptionsSimulatorPanel from "@/components/options/OptionsSimulatorPanel";
 import OptionChainPanel from "@/components/options/OptionChainPanel";
+import FOAnalyticsPanel from "@/components/options/FOAnalyticsPanel";
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 const J = { "Content-Type": "application/json" };
@@ -1259,7 +1260,7 @@ export default function OptionsStrategyTester() {
 
   // Workspace panel state
   const [advTab,        setAdvTab]        = useState<"sebi"|"backtest"|"risk"|"smart">("sebi");
-  const [rightTab,      setRightTab]      = useState<"payoff"|"simulator">("payoff");
+  const [rightTab,      setRightTab]      = useState<"payoff"|"simulator"|"analytics">("payoff");
   const [chainCollapsed, setChainCollapsed] = useState(false);
 
   // Fetch F&O stocks list on mount
@@ -1450,7 +1451,7 @@ export default function OptionsStrategyTester() {
         : `border-transparent ${isDark ? "text-slate-400 hover:text-slate-200" : "text-gray-500 hover:text-gray-700"}`
     }`;
 
-  const rtCls = (t: "payoff" | "simulator") =>
+  const rtCls = (t: "payoff" | "simulator" | "analytics") =>
     `px-3 py-1.5 text-[10px] font-semibold transition-all rounded-md flex items-center gap-1 ${
       rightTab === t
         ? "bg-indigo-600 text-white"
@@ -1774,8 +1775,24 @@ export default function OptionsStrategyTester() {
       {/* ── Main Workspace ─────────────────────────────────────────────────── */}
       {/* Single relative container — chain is a z-20 overlay, takes zero layout space */}
       <div className="relative rounded-xl overflow-hidden" style={{ height: 740 }}>
-
-          {/* Chain overlay drawer (slides in from left, no layout impact) */}
+        {rightTab === "simulator" ? (
+          <OptionsSimulatorPanel
+            legs={legs}
+            setLegs={setLegs}
+            spotInfo={spotInfo}
+            T={T}
+            sigma={spotInfo?.hv30 ?? 0.20}
+            symbol={symbol}
+            setSymbol={setSymbol}
+            expiryDate={expiryDate}
+            setExpiryDate={setExpiryDate}
+            NSE_EXPIRIES={NSE_EXPIRIES}
+            rightTab={rightTab}
+            setRightTab={setRightTab}
+          />
+        ) : (
+          <>
+            {/* Chain overlay drawer (slides in from left, no layout impact) */}
           <div
             className={`absolute left-0 top-0 bottom-0 z-20 flex flex-col border-r shadow-2xl overflow-hidden
               transition-transform duration-300 ease-in-out
@@ -2075,6 +2092,9 @@ export default function OptionsStrategyTester() {
                 <button onClick={() => setRightTab("simulator")} className={rtCls("simulator")}>
                   <Activity className="w-3 h-3" />Time Simulator
                 </button>
+                <button onClick={() => setRightTab("analytics")} className={rtCls("analytics")}>
+                  <Layers className="w-3 h-3" />F&amp;O Analytics
+                </button>
               </div>
               {analysisErr && <span className={`text-[10px] flex items-center gap-1 text-red-400`}><AlertTriangle className="w-3 h-3" />{analysisErr}</span>}
             </div>
@@ -2141,15 +2161,22 @@ export default function OptionsStrategyTester() {
               </div>
             )}
 
-            {/* ── Time Simulator tab ── */}
-            {rightTab === "simulator" && (
-              <div className="flex-1 overflow-hidden">
-                <OptionsSimulatorPanel legs={legs} spotInfo={spotInfo} T={T} sigma={spotInfo?.hv30 ?? 0.20} />
+            {/* ── F&O Analytics tab ── */}
+            {/* Six derived views on top of the option chain: max pain,
+                OI buildup, PCR history, IV smile, unusual activity, and
+                strategy heatmap. Renders only when the user clicks the
+                "F&O Analytics" mini-tab — no upfront fetch cost. */}
+            {rightTab === "analytics" && (
+              <div className="flex-1 min-h-0 overflow-y-auto p-3">
+                <FOAnalyticsPanel symbol={symbol} />
               </div>
             )}
+
           </div>
 
         </div>{/* end strategy builder */}
+          </>
+        )}
       </div>{/* end workspace */}
 
       {/* ── Advanced Tools ────────────────────────────────────────────────────── */}
