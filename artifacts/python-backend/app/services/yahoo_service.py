@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Optional
 import httpx
 from . import market_cache_service as _disk
-from ..lib.symbol_map import to_yahoo_ticker
+from ..lib.symbol_map import to_yahoo_ticker, is_yahoo_unavailable
 
 MAX_ENTRIES = 400
 _CACHE: dict[str, dict] = {}
@@ -158,6 +158,13 @@ def _hist_ttl() -> int:
 
 class YahooService:
     async def get_quote(self, symbol: str) -> Optional[dict]:
+        # Short-circuit symbols Yahoo is known to 404 on (e.g.
+        # ^CNXHEALTH, ^CNXOILGAS after Yahoo dropped them late 2025).
+        # Returning None here lets the price-provider chain fall through
+        # to NSE / BSE / disk-cache without spamming yfinance warnings.
+        if is_yahoo_unavailable(symbol):
+            return None
+
         cache_key = f"yq-{symbol}"
         cached = _get_cache(cache_key)
         if cached is not None:
@@ -218,6 +225,11 @@ class YahooService:
         return await task
 
     async def get_historical_data(self, symbol: str, days: int = 90) -> list[dict]:
+        # Same short-circuit as get_quote — saves a guaranteed-404 round
+        # trip for indices Yahoo no longer publishes.
+        if is_yahoo_unavailable(symbol):
+            return []
+
         cache_key = f"yh-{symbol}-{days}"
 
         # --- Disk cache: when market is closed AND we have an EOD-sealed snapshot,

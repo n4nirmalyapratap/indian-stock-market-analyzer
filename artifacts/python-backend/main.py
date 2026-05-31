@@ -270,6 +270,14 @@ async def lifespan(app: FastAPI):
                 await t
             except asyncio.CancelledError:
                 pass
+        # Drain the PG connection pool last — after all scheduler tasks
+        # have stopped issuing queries. atexit also handles this on SIGKILL
+        # / unclean exit, but explicit shutdown is faster + logs cleanly.
+        try:
+            from app.lib.auth_store import close_pool  # noqa: PLC0415
+            close_pool()
+        except Exception as _exc:
+            logger.warning("PG pool shutdown failed: %s", _exc)
 
 
 async def _bot_alerts_tick_loop() -> None:
