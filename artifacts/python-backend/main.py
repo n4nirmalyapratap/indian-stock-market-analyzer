@@ -257,17 +257,27 @@ async def lifespan(app: FastAPI):
     digest_worker_task = asyncio.create_task(_email_digest_worker())
     fii_dii_task    = asyncio.create_task(_fii_dii_scheduler())
     dhan_task       = asyncio.create_task(_dhan_scrip_master_preload())
+    pcr_task        = asyncio.create_task(_pcr_snapshot_scheduler())
     try:
         yield
     finally:
         for t in (poll_task, universe_task, warmup_task, transition_task,
                   fixer_task, rfr_task, bhav_task, alerts_task, backtest_task,
-                  digest_sched_task, digest_worker_task, fii_dii_task, dhan_task):
+                  digest_sched_task, digest_worker_task, fii_dii_task, dhan_task,
+                  pcr_task):
             t.cancel()
             try:
                 await t
             except asyncio.CancelledError:
                 pass
+        # Drain the PG connection pool last — after all scheduler tasks
+        # have stopped issuing queries. atexit also handles this on SIGKILL
+        # / unclean exit, but explicit shutdown is faster + logs cleanly.
+        try:
+            from app.lib.auth_store import close_pool  # noqa: PLC0415
+            close_pool()
+        except Exception as _exc:
+            logger.warning("PG pool shutdown failed: %s", _exc)
 
 
 async def _bot_alerts_tick_loop() -> None:
@@ -378,6 +388,40 @@ async def _bhavcopy_refresh_scheduler() -> None:
             await asyncio.sleep(24 * 3600)
         except asyncio.CancelledError:
             logger.info("Bhavcopy scheduler stopped.")
+            break
+
+
+async def _pcr_snapshot_scheduler() -> None:
+    """Snapshot PCR for the F&O watch-list every 15 min during market hours.
+
+    Schedule:
+      * Boot: 30s settle, then a first snapshot so the analytics chart
+        isn't empty on first open.
+      * Loop: every 15 min check if IST market is open; if yes snapshot,
+        if no sleep till next tick. Closed-market ticks are no-ops, no
+        wasted NSE calls.
+
+    Snapshots ride on the existing NseService instance from registry so
+    the same cookies / rate-limits apply as any other NSE fetch on the
+    backend.
+    """
+    from app.services import options_pcr_service as _pcr  # noqa: PLC0415
+    from app.services import registry as _reg              # noqa: PLC0415
+    from app.services import market_cache_service as _disk # noqa: PLC0415
+
+    await asyncio.sleep(30)  # boot settle
+    interval_sec = 15 * 60  # 15 min
+    while True:
+        try:
+            if _disk.is_market_open():
+                await _pcr.snapshot_now(_reg.nse)
+            # else: market closed, no-op tick.
+        except Exception as exc:
+            logger.warning("PCR snapshot tick failed: %s", exc)
+        try:
+            await asyncio.sleep(interval_sec)
+        except asyncio.CancelledError:
+            logger.info("PCR snapshot scheduler stopped.")
             break
 
 

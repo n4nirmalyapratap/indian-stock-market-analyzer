@@ -230,6 +230,11 @@ def _normalise_nse_chain(payload: dict) -> tuple[list[str], dict]:
                 "ask":         d.get("askPrice", d.get("ask", 0)) or 0,
                 "iv":          round((d.get("impliedVolatility", 0) or 0) / 100, 4),
                 "oi":          d.get("openInterest", 0) or 0,
+                # Day-over-day OI change — needed by the OI-buildup
+                # classifier on the F&O analytics tab. NSE returns it
+                # under `changeinOpenInterest`; Yahoo doesn't ship it
+                # so the Yahoo-fallback path will leave this at 0.
+                "oiChange":    d.get("changeinOpenInterest", 0) or 0,
                 "volume":      d.get("totalTradedVolume", d.get("volume", 0)) or 0,
                 "inTheMoney":  d.get("inTheMoney", False),
                 "change":      d.get("change", 0) or 0,
@@ -599,6 +604,97 @@ async def get_expiry_list(symbol: str):
 
 
 # ── GET /options/pcr/{symbol} ─────────────────────────────────────────────────
+
+@router.get("/analytics/{symbol}")
+async def get_options_analytics(symbol: str, expiry: Optional[str] = None):
+    """Run the six-pass F&O analytics suite (max pain, OI buildup,
+    IV smile, unusual activity, strategy heatmap) on a single chain
+    snapshot.
+
+    Reuses `get_options_chain` for the actual chain fetch so the
+    source waterfall (NSE → Yahoo → Dhan-BS) and the BS-fill behavior
+    stay consistent with what the existing chain table shows.
+
+    Returns:
+        {
+          "symbol":   str,
+          "spot":     float,
+          "expiry":   str,
+          "expiries": list[str],
+          "source":   "NSE" | "YAHOO" | "DHAN_BS",
+          "analytics": {
+            "maxPain":   { maxPainStrike, byStrike },
+            "oiBuildup": { calls, puts },
+            "smile":     [{strike, callIV, putIV, isATM}],
+            "unusual":   [...],
+            "strategy":  [...],
+          }
+        }
+    """
+    upper = symbol.upper()
+    # Reuse the same chain fetcher the existing chain endpoint uses.
+    # Calling the route function directly bypasses the HTTP layer
+    # entirely — no extra round-trip, full source-waterfall behavior.
+    chain_resp = await get_options_chain(upper, expiry=expiry)
+    spot     = chain_resp.get("spot", 0) or 0
+    expiries = chain_resp.get("expiries", [])
+    chain    = chain_resp.get("chain", {}) or {}
+
+    # Pick the expiry we'll analyze. The chain endpoint returns a dict
+    # keyed by expiry string; we use the first key if no `expiry` was
+    # supplied (matches NSE's "nearest" default).
+    if expiry and expiry in chain:
+        selected_expiry = expiry
+    elif chain:
+        selected_expiry = next(iter(chain))
+    else:
+        raise HTTPException(status_code=503,
+                            detail="No option chain data to analyze.")
+    leg = chain[selected_expiry]
+    calls, puts = leg.get("calls", []), leg.get("puts", [])
+
+    from ..services import options_analytics_service as _ana  # noqa: PLC0415
+    return {
+        "symbol":    upper,
+        "spot":      spot,
+        "expiry":    selected_expiry,
+        "expiries":  expiries,
+        "source":    chain_resp.get("source"),
+        "analytics": _ana.compute_analytics(calls, puts, spot),
+    }
+
+
+# ── PCR time-series (history) ───────────────────────────────────────────────
+
+
+@router.get("/pcr-history/{symbol}")
+async def get_pcr_history(symbol: str, hours: int = 24, expiry_index: int = 0):
+    """Return accumulated PCR snapshots for a symbol over the last N hours.
+
+    The intraday scheduler snapshots PCR every 15 min during market
+    hours and persists to `options_pcr_history`. This endpoint pulls
+    the rows back for the F&O analytics chart on the frontend.
+
+    Inputs are clamped to safe bounds (not 400'd) so the chart still
+    renders if a client passes an oddly large value — but `hours` is
+    capped at 30 days so a caller can't unintentionally trigger a
+    full-table scan.
+    """
+    _MAX_HOURS = 24 * 30   # 30 days — plenty for the chart's 72h default
+    _MAX_EXPIRY_INDEX = 10
+    safe_hours = max(1, min(int(hours or 24), _MAX_HOURS))
+    safe_idx   = max(0, min(int(expiry_index or 0), _MAX_EXPIRY_INDEX))
+
+    from ..services import options_pcr_service as _pcr  # noqa: PLC0415
+    rows = _pcr.get_history(symbol.upper(), hours=safe_hours, expiry_index=safe_idx)
+    return {
+        "symbol":       symbol.upper(),
+        "expiry_index": safe_idx,
+        "hours":        safe_hours,
+        "count":        len(rows),
+        "series":       rows,
+    }
+
 
 @router.get("/pcr/{symbol}")
 async def get_pcr(symbol: str, expiry_index: int = 0):

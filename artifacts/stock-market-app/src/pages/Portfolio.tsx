@@ -22,6 +22,7 @@ import {
   PieChart, Pie, Cell, ScatterChart, Scatter, ZAxis, Legend, Line, ComposedChart,
 } from "recharts";
 import { StockCombobox } from "@/components/StockCombobox";
+import RiskVisuals from "@/components/portfolio/RiskVisuals";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1184,6 +1185,12 @@ function RiskTab({ pid }: { pid: string }) {
               </tbody>
             </table>
           </div>
+
+          {/* ── Visual analytics: drawdown curve + correlation heatmap + beta ── */}
+          {/* Lazy-fetches its own data — independent of the VaR/Sharpe mutation
+              above so the existing tiles render fast and the heavier
+              correlation matrix loads in parallel. */}
+          <RiskVisuals pid={pid} />
         </>
       )}
       {mut.isError && <ErrorBox msg={(mut.error as Error).message} />}

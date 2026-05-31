@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import atexit
+import logging
 import os
 import threading
 import time
@@ -8,6 +10,9 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
+
+logger = logging.getLogger("auth_store")
 
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_READY = False
@@ -20,8 +25,112 @@ def _database_url() -> str:
     return url
 
 
-def get_conn() -> psycopg.Connection[Any]:
-    return psycopg.connect(_database_url(), row_factory=dict_row)
+# ── Connection pool ─────────────────────────────────────────────────────────
+#
+# Pre-pool: every `with get_conn() as conn:` did a fresh TCP + TLS + auth
+# handshake (~50-150ms per call on a non-LAN PG). The app does this on
+# essentially every request and every scheduler tick, so it was the
+# dominant latency component for short queries.
+#
+# Pool: psycopg_pool.ConnectionPool keeps a warm pool of connections open
+# and hands them out on demand. Same `with ... as conn:` context-manager
+# API — pool.connection() returns a context manager that yields a
+# psycopg.Connection, identical to psycopg.connect() so zero call-site
+# changes were needed.
+#
+# Sizing:
+#   min_size=2   — always-warm baseline so the first request after a
+#                  quiet period doesn't pay the cold-start handshake.
+#   max_size=20  — cap. Most managed PG instances allow ~100 connections
+#                  total, and we run alongside other workers; 20 gives
+#                  plenty of headroom without exhausting the server.
+#   timeout=30s  — caller waits up to 30s for a free connection. Beats
+#                  silently dropping requests under burst load.
+#   max_idle=600s — connections that sit idle >10 min get recycled. PG
+#                  may close idle connections; this evicts them before
+#                  the next request hits a stale socket.
+# Override via env vars for production tuning.
+
+_POOL: ConnectionPool | None = None
+_POOL_LOCK = threading.Lock()
+
+
+def _pool_size_envs() -> tuple[int, int, float, float]:
+    return (
+        int(os.environ.get("DB_POOL_MIN_SIZE", "2")),
+        int(os.environ.get("DB_POOL_MAX_SIZE", "20")),
+        float(os.environ.get("DB_POOL_TIMEOUT_SEC", "30")),
+        float(os.environ.get("DB_POOL_MAX_IDLE_SEC", "600")),
+    )
+
+
+def _init_pool() -> ConnectionPool:
+    """Build (or return) the module-level pool. Thread-safe via
+    _POOL_LOCK. Called lazily on first get_conn() so import order
+    doesn't matter."""
+    global _POOL
+    if _POOL is not None:
+        return _POOL
+    with _POOL_LOCK:
+        if _POOL is not None:
+            return _POOL
+        min_sz, max_sz, timeout_s, max_idle_s = _pool_size_envs()
+        # `kwargs={"row_factory": dict_row}` applies to every connection
+        # the pool hands out — matches the previous get_conn() default.
+        pool = ConnectionPool(
+            conninfo=_database_url(),
+            min_size=min_sz,
+            max_size=max_sz,
+            timeout=timeout_s,
+            max_idle=max_idle_s,
+            kwargs={"row_factory": dict_row},
+            # `open=True` opens min_size connections at construction so
+            # the first request gets warm pool, not a handshake.
+            open=True,
+            name="auth-store",
+        )
+        _POOL = pool
+        logger.info(
+            "PG pool initialised (min=%d, max=%d, timeout=%ds, max_idle=%ds)",
+            min_sz, max_sz, int(timeout_s), int(max_idle_s),
+        )
+        # Defensive: if the process exits without main.py's lifespan
+        # cleanup running (scripts, tests, SIGKILL on workers), still
+        # try to drain the pool so PG doesn't see orphan connections.
+        atexit.register(close_pool)
+        return pool
+
+
+def get_conn():
+    """Check out a connection from the pool.
+
+    Returns a context manager — use it the same way as before:
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(...)
+                rows = cur.fetchall()
+
+    On `__exit__` the connection is returned to the pool (NOT closed).
+    Broken connections are auto-detected and replaced — callers don't
+    need to retry.
+    """
+    return _init_pool().connection()
+
+
+def close_pool() -> None:
+    """Drain and close the pool. Called by main.py's lifespan shutdown
+    and by atexit. Safe to call multiple times — second call is a no-op."""
+    global _POOL
+    if _POOL is None:
+        return
+    try:
+        _POOL.close()
+        logger.info("PG pool closed.")
+    except Exception as exc:
+        logger.warning("PG pool close failed: %s", exc)
+    finally:
+        _POOL = None
 
 
 def now_ms() -> int:
@@ -363,6 +472,14 @@ def ensure_primary_schema() -> None:
                     )
                     """
                 )
+                # Note: the macro_scraped_data table (TradingEconomics +
+                # data.gov.in scrape cache) was removed from the schema
+                # bootstrap when the entire scraper pipeline was deleted.
+                # The PR-review comment about "DROP destroying history"
+                # is moot — no service writes to or reads from this table
+                # anymore. If a legacy table still exists in your DB it
+                # can be manually dropped with `DROP TABLE IF EXISTS
+                # macro_scraped_data;` — leaving it does no harm.
         _SCHEMA_READY = True
 
 

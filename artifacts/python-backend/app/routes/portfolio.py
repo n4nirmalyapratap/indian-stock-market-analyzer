@@ -712,6 +712,163 @@ async def performance(pid: str, request: Request, benchmark: str = "NIFTY 50",
     return perf
 
 
+# ── Correlation matrix + beta (visual diversification analytics) ─────────────
+
+@router.get("/{pid}/correlation")
+async def compute_correlation(
+    pid: str, request: Request,
+    lookbackDays: int = 365,
+    benchmark: str = "NIFTY 50",
+):
+    """Return the Pearson correlation matrix between every open holding
+    plus the portfolio's beta against the benchmark.
+
+    The heatmap built from `matrix` exposes hidden concentration risk —
+    two holdings with corr ≥ 0.85 are "the same bet" even when they look
+    diversified by name. Beta tells the user how much the portfolio moves
+    for each 1% move in the benchmark.
+    """
+    user_id = _user_id(request)
+    val = await ps.value_portfolio(user_id, pid, svc.price)
+    if val is None:
+        return JSONResponse(status_code=404, content={"error": "portfolio not found"})
+
+    holdings = val["holdings"] or []
+    syms     = [h["symbol"] for h in holdings]
+
+    # Pull every holding's daily history concurrently. We re-use the
+    # PriceService chain (broker → NSE → BSE → Yahoo → …) so the data
+    # source matches what the rest of the portfolio page already used.
+    import asyncio  # noqa: PLC0415
+    async def _hist(sym: str) -> tuple[str, list[tuple[str, float]]]:
+        try:
+            data = await svc.price.get_historical_data(sym, lookbackDays)
+            return sym, [(str(d["date"])[:10], float(d["close"]))
+                         for d in (data or []) if d.get("close")]
+        except Exception as exc:
+            logger.warning("portfolio.correlation: %s history failed: %s", sym, exc)
+            return sym, []
+
+    results: dict[str, list[tuple[str, float]]] = dict(
+        await asyncio.gather(*[_hist(s) for s in syms])
+    ) if syms else {}
+
+    # Correlation matrix — needs ≥2 holdings and enough overlapping dates.
+    # We align by intersecting trading-day sets; symbols with sparse data
+    # (newly listed, suspended) naturally drop out of the comparison.
+    matrix: list[list[float]] = []
+    observations = 0
+    if len(syms) >= 2 and all(results.get(s) for s in syms):
+        date_sets = [set(d for d, _ in results[s]) for s in syms]
+        common = sorted(set.intersection(*date_sets))
+        if len(common) >= 30:
+            observations = len(common) - 1   # one return per consecutive pair
+            import numpy as np  # noqa: PLC0415
+            returns = []
+            for s in syms:
+                prices_by_date = dict(results[s])
+                p = [prices_by_date[d] for d in common]
+                rets = [(p[i] / p[i-1] - 1) if p[i-1] else 0.0
+                        for i in range(1, len(p))]
+                returns.append(rets)
+            arr = np.array(returns)
+            # corrcoef can NaN out on a constant-return symbol — replace
+            # NaN with 0 so the heatmap renders cleanly instead of breaking.
+            corr = np.nan_to_num(np.corrcoef(arr), nan=0.0)
+            matrix = corr.tolist()
+
+    # Beta vs benchmark — derived from the equity_curve's portfolio +
+    # benchmark series so the two numbers are guaranteed consistent
+    # (same date alignment, same lookback). When equity_curve has too
+    # few overlapping points we surface `None` rather than a noisy beta.
+    beta: Optional[float] = None
+    bench_symbol = benchmark
+    try:
+        perf = await ps.equity_curve(user_id, pid, svc.price,
+                                     days=lookbackDays, benchmark=benchmark)
+        if perf and perf.get("series") and perf.get("benchmarkSeries"):
+            eq_by_date = {pt["date"]: pt["equity"]
+                          for pt in perf["series"]
+                          if pt.get("equity") and pt["equity"] > 0}
+            bs_by_date = {pt["date"]: pt["value"]
+                          for pt in perf["benchmarkSeries"]
+                          if pt.get("value") and pt["value"] > 0}
+            common_b = sorted(set(eq_by_date) & set(bs_by_date))
+            if len(common_b) >= 30:
+                import numpy as np  # noqa: PLC0415
+                eq_arr  = np.array([eq_by_date[d] for d in common_b], dtype=float)
+                bs_arr  = np.array([bs_by_date[d] for d in common_b], dtype=float)
+                eq_rets = np.diff(eq_arr) / eq_arr[:-1]
+                bs_rets = np.diff(bs_arr) / bs_arr[:-1]
+                var_b   = float(np.var(bs_rets, ddof=1))
+                if var_b > 0:
+                    cov_eb = float(np.cov(eq_rets, bs_rets, ddof=1)[0, 1])
+                    beta   = round(cov_eb / var_b, 3)
+            bench_symbol = perf.get("benchmark") or benchmark
+    except Exception as exc:
+        logger.warning("portfolio.correlation: beta calc failed: %s", exc)
+
+    return {
+        "portfolioId":      pid,
+        "symbols":          syms,
+        "matrix":           matrix,
+        "observationDays":  observations,
+        "beta":             beta,
+        "benchmarkSymbol":  bench_symbol,
+    }
+
+
+# ── Portfolio drawdown series (visual centerpiece for the Risk tab) ──────────
+
+@router.get("/{pid}/drawdown")
+async def compute_drawdown(
+    pid: str, request: Request,
+    lookbackDays: int = 365,
+    benchmark: str = "NIFTY 50",
+):
+    """Return the running-drawdown timeseries derived from the equity
+    curve. Drawdown[t] = (equity[t] − rolling_max[0..t]) / rolling_max[0..t]
+    — always ≤ 0; "max DD" is the deepest point.
+
+    Pre-computed server-side because (a) it keeps the math in one place
+    against the same data the Sharpe/Sortino numbers use, (b) the chart
+    component can render directly without any JS-side reduction.
+    """
+    user_id = _user_id(request)
+    perf = await ps.equity_curve(user_id, pid, svc.price,
+                                 days=lookbackDays, benchmark=benchmark)
+    if perf is None:
+        return JSONResponse(status_code=404, content={"error": "portfolio not found"})
+
+    series = perf.get("series") or []
+    points = []
+    peak = 0.0
+    max_dd = 0.0
+    max_dd_date: Optional[str] = None
+    for pt in series:
+        eq = pt.get("equity") or 0.0
+        if eq <= 0:
+            continue
+        peak = eq if eq > peak else peak
+        dd_pct = (eq - peak) / peak * 100 if peak > 0 else 0.0
+        if dd_pct < max_dd:
+            max_dd = dd_pct
+            max_dd_date = pt["date"]
+        points.append({
+            "date":     pt["date"],
+            "equity":   eq,
+            "peak":     peak,
+            "drawdown": round(dd_pct, 3),
+        })
+    return {
+        "portfolioId":      pid,
+        "series":           points,
+        "maxDrawdownPct":   round(max_dd, 3),
+        "maxDrawdownDate":  max_dd_date,
+        "observationDays":  len(points),
+    }
+
+
 # ── Optimizer (Markowitz frontier + CVaR + rebalance trades) ─────────────────
 
 @router.post("/{pid}/optimize")

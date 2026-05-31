@@ -26,8 +26,10 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import difflib
 import io
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -913,16 +915,85 @@ def _parse_dhan_holdings(lines: list[str], tradedAt_iso: str) -> dict:
     return {"format": "dhan-holdings", "transactions": txs, "errors": errors}
 
 
+_NORMALIZE_SUFFIX_RE = re.compile(
+    r"\b("
+    r"limited|ltd|pvt|private|"
+    r"corporation|corp|"
+    r"company|co|"
+    r"industries|inc|"
+    r"holdings|holding|"
+    r"the"
+    r")\b\.?",
+    re.IGNORECASE,
+)
+_NORMALIZE_PUNCT_RE = re.compile(r"[^a-z0-9]+", re.IGNORECASE)
+
+
+def _normalize_company_name(s: str) -> str:
+    """Aggressive normalization for company-name matching.
+
+    Strips legal suffixes (LIMITED/LTD/PVT/CORP/INC/CO/HOLDINGS), drops
+    all punctuation and whitespace, lowercases. The point is to collapse
+    every imported variant — "HDFC Bank Ltd.", "HDFC Bank Limited",
+    "HDFC BANK", "HDFCBANK" — to the same canonical key (`hdfcbank`),
+    so a single equality check catches ~90% of misses.
+    """
+    if not s:
+        return ""
+    # Strip suffix words first, while spaces still exist as word
+    # boundaries; then strip remaining punctuation/whitespace.
+    no_suffix = _NORMALIZE_SUFFIX_RE.sub(" ", s)
+    return _NORMALIZE_PUNCT_RE.sub("", no_suffix).lower()
+
+
+# Lazily-built dict[normalized_name -> ticker]. Cached at module scope
+# so we don't rebuild on every import row. Cleared by `_invalidate_name_map`
+# if/when universe.COMPANY_MAP gets refreshed.
+_NORMALIZED_NAME_MAP: Optional[dict[str, str]] = None
+
+
+def _normalized_name_map() -> dict[str, str]:
+    """Returns dict[normalized_name -> ticker]. Lazily constructed from
+    universe.COMPANY_MAP plus the ticker symbols themselves; subsequent
+    calls reuse the cached dict."""
+    global _NORMALIZED_NAME_MAP
+    if _NORMALIZED_NAME_MAP is not None:
+        return _NORMALIZED_NAME_MAP
+    from ..lib import universe  # noqa: PLC0415
+    out: dict[str, str] = {}
+    for sym, company in universe.COMPANY_MAP.items():
+        # 1. Map the company-name key. First entry wins — universe order
+        # is large-cap first, so "RELIANCE" resolves to RELIANCE rather
+        # than RELIANCEPOWER or any smaller name.
+        key = _normalize_company_name(company or "")
+        if key and key not in out:
+            out[key] = sym
+        # 2. Map the ticker itself so "INFY" or "HDFCBANK" pass through
+        # the same lookup even when ALL_SYMBOLS membership misses (the
+        # caller may have lowercase'd or spaced the ticker).
+        ticker_key = _normalize_company_name(sym)
+        if ticker_key and ticker_key not in out:
+            out[ticker_key] = sym
+    _NORMALIZED_NAME_MAP = out
+    return out
+
+
 def _resolve_symbol(name: str) -> str:
     """Map a company name to an NSE ticker using `universe.COMPANY_MAP`.
 
-    Order:
-      1. `name` is already a known ticker → use it
-      2. Exact case-insensitive match against a company name → that ticker
-      3. Company name starts with `name` (prefix match) → that ticker
-      4. `name` appears inside a company name (substring, name ≥4 chars)
-      5. Fallback: uppercased raw name (so the row still imports — user can
-         fix the ticker after import; quote lookup will gracefully show '—')
+    Strategy, in order:
+      1. `name` is already a known ticker (case-insensitive) → use it
+      2. Normalized exact match — strip "LIMITED"/"LTD"/"PVT"/"CORP"/
+         "INC"/"CO"/"HOLDINGS"/punctuation/whitespace, compare canonical
+         forms. Catches "HDFC Bank Ltd." == "HDFC BANK LIMITED" ==
+         "HDFC Bank" == "HDFCBANK"
+      3. Fuzzy match (difflib ratio ≥ 0.85) over the normalized name
+         map — catches typos, vendor abbreviations ("HDFC Bnk" → HDFCBANK)
+      4. Legacy prefix match — narrow case where the user supplies only
+         the first 2-3 words of a long company name
+      5. Legacy substring match (name ≥4 chars)
+      6. Fallback: uppercased raw name (the row still imports — the
+         user can fix the ticker manually; quote lookup will show '—')
     """
     name_s = (name or "").strip()
     if not name_s:
@@ -933,20 +1004,43 @@ def _resolve_symbol(name: str) -> str:
     # exercise CSV import.
     from ..lib import universe  # noqa: PLC0415
 
+    # 1. Already a known ticker (case-insensitive).
     name_upper = name_s.upper()
     if name_upper in universe.ALL_SYMBOLS:
         return name_upper
 
+    # 2. Normalized exact match — covers ~90% of vendor name variants.
+    name_norm = _normalize_company_name(name_s)
+    if name_norm:
+        nmap = _normalized_name_map()
+        hit = nmap.get(name_norm)
+        if hit:
+            return hit
+
+    # 3. Fuzzy match on normalized form. Threshold 0.85 is
+    # high-confidence — "hdfcbnk" (typo) matches "hdfcbank" at ratio
+    # ≈0.93; unrelated names score <0.5. Costs O(N) per call so we only
+    # run it on misses, never on already-matched rows.
+    if name_norm and len(name_norm) >= 3:
+        try:
+            nmap = _normalized_name_map()
+            best = difflib.get_close_matches(name_norm, nmap.keys(), n=1, cutoff=0.85)
+            if best:
+                return nmap[best[0]]
+        except Exception:
+            # Fall through to legacy matchers — never break import on a
+            # difflib edge case. Log at debug so the failure is grep-able
+            # if a real bug ever causes the fuzzy stage to silently miss.
+            logger.debug("fuzzy match error for name_norm=%r",
+                         name_norm, exc_info=True)
+
+    # 4–5. Legacy prefix/substring fallback — sometimes rescues a
+    # partial name the normalizer can't reach (very short inputs like
+    # "Reliance" still need to find RELIANCE).
     name_lower = name_s.lower()
-    # 2. Exact name match
-    for sym, company in universe.COMPANY_MAP.items():
-        if (company or "").strip().lower() == name_lower:
-            return sym
-    # 3. Prefix match
     for sym, company in universe.COMPANY_MAP.items():
         if (company or "").strip().lower().startswith(name_lower):
             return sym
-    # 4. Substring match (only for reasonably specific names)
     if len(name_lower) >= 4:
         for sym, company in universe.COMPANY_MAP.items():
             if name_lower in (company or "").strip().lower():

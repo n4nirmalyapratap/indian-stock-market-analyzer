@@ -62,6 +62,9 @@ SYMBOL_MAP: dict[str, str] = {
     "NIFTY PSU BANK":                  "^CNXPSUBANK",
     "NIFTY MNC":                       "^CNXMNC",
     "NIFTY MEDIA":                     "^CNXMEDIA",
+    # Yahoo dropped ^CNXHEALTH in late 2025 (404s on every fetch). We
+    # keep the slug in `YAHOO_UNAVAILABLE_TICKERS` below so the chain
+    # skips Yahoo entirely and goes NSE-direct for the sector card.
     "NIFTY HEALTHCARE":                "^CNXHEALTH",
     "NIFTY HEALTHCARE INDEX":          "^CNXHEALTH",
     "NIFTY COMMODITIES":               "^CNXCOMDTY",
@@ -160,10 +163,50 @@ def is_index_symbol(symbol: str) -> bool:
     return bool(mapped and mapped.startswith("^"))
 
 
+# Yahoo-side tickers that consistently 404. Adding a slug or its Yahoo
+# alias here makes `yahoo_candidates()` return [] and `is_yahoo_unavailable()`
+# return True — callers skip Yahoo entirely instead of burning HTTP round-trips
+# and polluting logs with `possibly delisted` warnings from yfinance.
+#
+# Both raw aliases ('^CNXHEALTH') and our slug names ('NIFTY HEALTHCARE')
+# are included so the check is one-shot regardless of where in the chain
+# we're called.
+YAHOO_UNAVAILABLE_TICKERS: set[str] = {
+    # NSE Healthcare — Yahoo dropped late 2025
+    "^CNXHEALTH",
+    "NIFTY HEALTHCARE", "NIFTY HEALTHCARE INDEX",
+    # NSE Oil & Gas — Yahoo dropped late 2025
+    "^CNXOILGAS",
+    "NIFTY OIL & GAS", "NIFTY OIL AND GAS",
+}
+
+
+def is_yahoo_unavailable(symbol: str) -> bool:
+    """True when this symbol is known to 404 on Yahoo. Lookups treat it
+    as "Yahoo has nothing here" so the chain skips Yahoo and tries the
+    next provider (NSE/BSE direct, Twelve Data, Stooq, history-derived).
+
+    Both the canonical slug ('NIFTY HEALTHCARE') and the mapped Yahoo
+    ticker ('^CNXHEALTH') match — order doesn't matter.
+    """
+    if not symbol:
+        return False
+    sym = symbol.strip().upper()
+    if sym in YAHOO_UNAVAILABLE_TICKERS:
+        return True
+    mapped = SYMBOL_MAP.get(sym)
+    return mapped is not None and mapped in YAHOO_UNAVAILABLE_TICKERS
+
+
 def yahoo_candidates(symbol: str) -> list[str]:
-    """Return ordered Yahoo ticker candidates for fallback lookup."""
+    """Return ordered Yahoo ticker candidates for fallback lookup.
+    Empty list when the symbol is on the Yahoo-unavailable list — that
+    tells the YahooProvider to short-circuit instead of hitting the API.
+    """
     sym = (symbol or "").strip().upper()
     if not sym:
+        return []
+    if is_yahoo_unavailable(sym):
         return []
     if sym in SYMBOL_MAP:
         return [SYMBOL_MAP[sym]]

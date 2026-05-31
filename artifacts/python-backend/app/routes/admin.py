@@ -626,8 +626,14 @@ async def delete_bug(bug_id: str, request: Request):
 # by macro_service._get_override() with highest priority in the source chain.
 
 # Indicators we accept overrides for — keeps the API surface narrow and
-# rejects typos like 'repp' before they hit the DB.
-_ALLOWED_MACRO_INDICATORS = {"repo", "cpi", "iip", "wpi", "gdp", "yield10"}
+# rejects typos like 'repp' before they hit the DB. Headline 6 are the
+# tiles on the dashboard strip; the catalog below adds PMI / FX reserves
+# / unemployment / etc. so admins can manually update those too via the
+# extras grid on the Macro Pulse page.
+from app.services.macro_extras_catalog import MACRO_EXTRAS_SLUGS  # noqa: E402
+_ALLOWED_MACRO_INDICATORS = (
+    {"repo", "cpi", "iip", "wpi", "gdp", "yield10"} | MACRO_EXTRAS_SLUGS
+)
 
 
 @router.get("/admin/macro/overrides")

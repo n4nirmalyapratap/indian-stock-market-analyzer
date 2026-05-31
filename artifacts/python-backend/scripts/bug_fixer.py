@@ -28,7 +28,6 @@ import asyncio
 import logging
 import os
 import re
-import sqlite3
 import subprocess
 import sys
 import time
@@ -88,58 +87,104 @@ COMPONENT_PATHS: dict[str, list[str]] = {
 
 
 # ── DB helpers ─────────────────────────────────────────────────────────────────
+#
+# bug_reports lives in PostgreSQL (managed by admin.py:_init_bugs_db /
+# /admin/bugs CRUD). The pre-PG version of this script opened a SQLite
+# `users.db` that no longer exists — every 10-min tick logged
+# "no such table: bug_reports". We now use the same PG connection the
+# rest of the app uses.
+#
+# `created_at` / `updated_at` are stored as BIGINT epoch-ms in the
+# bug_reports schema (see admin.py), so the seconds-based 24h freshness
+# check below converts on read.
 
-def _get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(BACKEND_DIR / "users.db"))
-    conn.row_factory = sqlite3.Row
-    return conn
+
+def _ensure_bug_reports_table() -> None:
+    """Create the bug_reports PG table if it doesn't exist.
+
+    `admin.py:_init_bugs_db` creates the same table lazily when an admin
+    opens /admin/bugs. The scheduler can run before any admin has, so we
+    bootstrap here too to make the script self-sufficient. Identical
+    schema — keep it in sync with admin.py manually if either changes.
+    """
+    from app.lib.auth_store import get_conn  # noqa: PLC0415
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS bug_reports (
+                    id          TEXT PRIMARY KEY,
+                    title       TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    severity    TEXT NOT NULL DEFAULT 'medium',
+                    status      TEXT NOT NULL DEFAULT 'open',
+                    component   TEXT NOT NULL DEFAULT '',
+                    reported_by TEXT NOT NULL DEFAULT '',
+                    created_at  BIGINT NOT NULL,
+                    updated_at  BIGINT NOT NULL
+                )
+            """)
 
 
 def _list_open_bugs(bug_id: str | None = None) -> list[dict]:
-    conn = _get_db()
-    if bug_id:
-        rows = conn.execute(
-            "SELECT * FROM bug_reports WHERE id = ?", (bug_id,)
-        ).fetchall()
-    else:
-        # Skip bugs that already have a fresh analysis (done in last 24h)
-        rows = conn.execute(
-            "SELECT * FROM bug_reports WHERE status IN ('open','in-progress') ORDER BY created_at ASC"
-        ).fetchall()
-    conn.close()
+    from app.lib.auth_store import get_conn  # noqa: PLC0415
+    _ensure_bug_reports_table()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if bug_id:
+                cur.execute(
+                    "SELECT * FROM bug_reports WHERE id = %s",
+                    (bug_id,),
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM bug_reports "
+                    " WHERE status IN ('open','in-progress') "
+                    " ORDER BY created_at ASC"
+                )
+            rows = cur.fetchall()
     return [dict(r) for r in rows]
 
 
 def _already_analysed(bug: dict) -> bool:
-    """Return True if this bug already has a recent AI analysis (< 24h old)."""
+    """Return True if this bug already has a recent AI analysis (< 24h old).
+
+    `updated_at` is epoch-MS in PG (BIGINT). Convert to seconds before
+    comparing with `time.time()`.
+    """
     desc = bug.get("description", "") or ""
     if ANALYSIS_TAG not in desc:
         return False
-    # Check updated_at — if updated within last 24h, skip
-    updated = bug.get("updated_at", 0)
-    return (time.time() - updated) < 86400
+    updated_ms = int(bug.get("updated_at") or 0)
+    if updated_ms == 0:
+        return False
+    age_sec = time.time() - (updated_ms / 1000.0)
+    return age_sec < 86400
 
 
 def _save_analysis(bug_id: str, analysis: str) -> None:
-    now  = int(time.time())
-    conn = _get_db()
-    # Read current description (preserve original bug description)
-    row = conn.execute("SELECT description FROM bug_reports WHERE id=?", (bug_id,)).fetchone()
-    if row:
-        current = row["description"] or ""
-        # Strip old analysis if re-running
-        if ANALYSIS_TAG in current:
-            current = current[:current.index(ANALYSIS_TAG)].rstrip()
-        new_desc = f"{current}\n\n{ANALYSIS_TAG}\n{analysis}".strip()
-    else:
-        new_desc = f"{ANALYSIS_TAG}\n{analysis}"
-
-    conn.execute(
-        "UPDATE bug_reports SET description=?, updated_at=? WHERE id=?",
-        (new_desc, now, bug_id),
-    )
-    conn.commit()
-    conn.close()
+    from app.lib.auth_store import get_conn  # noqa: PLC0415
+    now_ms = int(time.time() * 1000)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT description FROM bug_reports WHERE id = %s",
+                (bug_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                current = row["description"] or ""
+                # Strip any prior analysis so we don't concatenate
+                # successive AI passes into the description forever.
+                if ANALYSIS_TAG in current:
+                    current = current[:current.index(ANALYSIS_TAG)].rstrip()
+                new_desc = f"{current}\n\n{ANALYSIS_TAG}\n{analysis}".strip()
+            else:
+                new_desc = f"{ANALYSIS_TAG}\n{analysis}"
+            cur.execute(
+                "UPDATE bug_reports SET description = %s, updated_at = %s "
+                " WHERE id = %s",
+                (new_desc, now_ms, bug_id),
+            )
 
 
 # ── Code context builder ───────────────────────────────────────────────────────
