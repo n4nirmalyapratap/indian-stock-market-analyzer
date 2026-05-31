@@ -3569,6 +3569,11 @@ async def get_macro_extras():
     items = []
     for entry in MACRO_EXTRAS:
         o = overrides.get(entry["slug"])
+        # NOTE: `set_by` (admin email) is deliberately omitted here.
+        # /insights/macro/extras is a PUBLIC endpoint; exposing the
+        # admin who set an override leaks operator identity. The audit
+        # trail still exists in macro_overrides.set_by and is readable
+        # via the admin-only /admin/macro/overrides route.
         items.append({
             "slug":        entry["slug"],
             "label":       entry["label"],
@@ -3579,7 +3584,6 @@ async def get_macro_extras():
             "value":       (o or {}).get("value"),
             "asOf":        (o or {}).get("as_of"),
             "note":        (o or {}).get("note"),
-            "setBy":       (o or {}).get("set_by"),
             "updatedAtMs": (o or {}).get("updated_at_ms"),
         })
 

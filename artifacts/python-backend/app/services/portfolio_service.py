@@ -1029,8 +1029,10 @@ def _resolve_symbol(name: str) -> str:
                 return nmap[best[0]]
         except Exception:
             # Fall through to legacy matchers — never break import on a
-            # difflib edge case.
-            pass
+            # difflib edge case. Log at debug so the failure is grep-able
+            # if a real bug ever causes the fuzzy stage to silently miss.
+            logger.debug("fuzzy match error for name_norm=%r",
+                         name_norm, exc_info=True)
 
     # 4–5. Legacy prefix/substring fallback — sometimes rescues a
     # partial name the normalizer can't reach (very short inputs like

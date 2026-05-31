@@ -886,7 +886,7 @@ The bot long-polls Telegram for new messages, routes each to the same NLP engine
 Everything the Telegram bot does — quotes, patterns, scanners, alerts, sector rotation pushes — but in WhatsApp.
 
 **Setup (because WhatsApp is stricter than Telegram):**
-1. Go to /whatsapp-bot in the app
+1. Go to /settings → WhatsApp Bot section
 2. Click "Generate QR Code"
 3. Scan the QR with WhatsApp on your phone
 4. The bot replies with a verification — confirm to link your account
