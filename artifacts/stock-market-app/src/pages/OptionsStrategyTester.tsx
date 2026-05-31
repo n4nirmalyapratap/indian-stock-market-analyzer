@@ -669,7 +669,18 @@ function computeMarketFit(
 }
 
 // ── Verdict colours ───────────────────────────────────────────────────────────
-const VERDICT_STYLE = {
+// Reuse the existing FitVerdict union ("recommended" | "caution" |
+// "avoid") so the compiler refuses both forgetting a verdict row here
+// and adding a row whose key isn't a FitVerdict member.
+interface VerdictBadgeStyle {
+  badge:   string;
+  badgeDk: string;
+  bar:     string;
+  icon:    string;
+  iconDk:  string;
+  label:   string;
+}
+const VERDICT_STYLE: Record<FitVerdict, VerdictBadgeStyle> = {
   recommended: {
     badge:   "bg-emerald-100 text-emerald-800 border-emerald-300",
     badgeDk: "bg-emerald-900/40 text-emerald-300 border-emerald-700",

@@ -176,6 +176,9 @@ export interface Scanner {
   id: string;
   name: string;
   description?: string;
+  /** Optional UI grouping label (e.g. "Volume", "Trend", "Pattern + Volume").
+   *  Missing on legacy scanners — frontend buckets those as "Uncategorized". */
+  category?: string;
   universe: string[];
   logic: "AND" | "OR";
   conditions: Condition[];
@@ -188,6 +191,10 @@ export interface Scanner {
 export interface ScannerCreateInput {
   name: string;
   description?: string;
+  /** Optional UI grouping label. Free-text by design (so power users can
+   *  introduce new categories without a code change). Drives which
+   *  filter-pill bucket the scanner shows up under on the list page. */
+  category?: string;
   universe: string[];
   logic: "AND" | "OR";
   conditions: Condition[];
