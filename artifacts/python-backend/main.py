@@ -260,13 +260,15 @@ async def lifespan(app: FastAPI):
     pcr_task        = asyncio.create_task(_pcr_snapshot_scheduler())
     synth_class_task = asyncio.create_task(_synthetic_classifier_scheduler())
     synth_metrics_task = asyncio.create_task(_synthetic_metrics_scheduler())
+    synth_bootstrap_task = asyncio.create_task(_synth_bootstrap_task())
     try:
         yield
     finally:
         for t in (poll_task, universe_task, warmup_task, transition_task,
                   fixer_task, rfr_task, bhav_task, alerts_task, backtest_task,
                   digest_sched_task, digest_worker_task, fii_dii_task, dhan_task,
-                  pcr_task, synth_class_task, synth_metrics_task):
+                  pcr_task, synth_class_task, synth_metrics_task,
+                  synth_bootstrap_task):
             t.cancel()
             try:
                 await t
@@ -612,6 +614,64 @@ async def _universe_scheduler() -> None:
         except Exception as e:
             logger.warning("Universe scheduler error: %s — retrying tomorrow", e)
             await asyncio.sleep(3600)   # back-off 1 h on unexpected error
+
+
+async def _synth_bootstrap_task() -> None:
+    """One-shot startup task: seed sub_industry_overrides from SUBSECTOR_TAXONOMY
+    and immediately rebuild today's metrics grid when the grid is sparse.
+
+    This runs 30 s after startup — long enough for the DB schema to be ready
+    and all import paths to be warm, but short enough that the grid is
+    populated before the first user opens /sector-analytics.
+
+    Why overrides instead of re-classifying stocks:
+      2 000+ stocks are already in `stocks` with real market_cap data from Yahoo.
+      But Yahoo uses its own generic industry labels (e.g. "Banks - Regional"),
+      and only 3 of those clusters reached the 3-constituent minimum required by
+      the synthetic index — so the grid shows 3 rows.  SUBSECTOR_TAXONOMY maps
+      each stock to a curated Indian sub-industry name.  Seeding those mappings
+      into sub_industry_overrides lets _load_classified_stocks() pick them up
+      immediately at the next metrics run, without waiting for the weekly Yahoo
+      re-classifier.  The stocks already have market_cap → they contribute to
+      the cap-weighted index straight away.
+    """
+    from app.services import synthetic_sectors_service as synth  # noqa: PLC0415
+    from app.services.yahoo_service import YahooService as _YS  # noqa: PLC0415
+
+    await asyncio.sleep(30)          # let schema + pool initialise
+    try:
+        seed = await asyncio.to_thread(synth.seed_overrides_from_taxonomy)
+        logger.info("synth bootstrap: taxonomy seed complete — %s", seed)
+
+        # Only re-run metrics when the grid is thin (first-time or after taxonomy added).
+        latest_date = await asyncio.to_thread(synth._latest_metric_date)
+        n_subs = 0
+        if latest_date is not None:
+            from app.lib import auth_store as _as  # noqa: PLC0415
+            with _as.get_conn() as _conn:
+                with _conn.cursor() as _cur:
+                    _cur.execute(
+                        "SELECT COUNT(DISTINCT sub_industry) AS n FROM synthetic_sector_daily_metrics "
+                        "WHERE metric_date = %s AND sub_industry <> '__NIFTY50__'",
+                        (latest_date,),
+                    )
+                    row = _cur.fetchone()
+                    n_subs = dict(row)["n"] if row else 0
+
+        if n_subs < 10:
+            logger.info(
+                "synth bootstrap: grid has %d sub-industries — running metrics now …", n_subs
+            )
+            yahoo = _YS()
+            result = await synth.run_nightly_metrics(yahoo)
+            logger.info("synth bootstrap: metrics complete — %s", result)
+        else:
+            logger.info("synth bootstrap: grid already has %d sub-industries — skipping metrics run", n_subs)
+    except asyncio.CancelledError:
+        logger.info("synth bootstrap task cancelled.")
+        raise
+    except Exception as exc:
+        logger.warning("synth bootstrap task error: %s", exc)
 
 
 async def _synthetic_classifier_scheduler() -> None:

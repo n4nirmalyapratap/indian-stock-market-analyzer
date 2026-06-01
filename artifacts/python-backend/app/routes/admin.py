@@ -897,15 +897,21 @@ async def delete_subsector_override(override_id: str, request: Request):
 
 @router.post("/admin/subsectors/reclassify")
 async def trigger_reclassify(request: Request):
-    """Trigger an immediate classifier run for all taxonomy symbols so that
-    any newly-added stock gets its Yahoo market-cap filled in without waiting
-    for the weekly scheduler."""
+    """Trigger an immediate classifier run for all taxonomy symbols, then
+    re-seed overrides from the taxonomy and rebuild today's metrics grid so
+    the /sector-analytics page shows all sub-industries immediately."""
     if not _require_admin(request):
         return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
     try:
+        import asyncio  # noqa: PLC0415
         from app.services import synthetic_sectors_service as synth  # noqa: PLC0415
-        result = await synth.refresh_classifications(force=False)
-        return {"ok": True, **result}
+        from app.services.yahoo_service import YahooService as _YS  # noqa: PLC0415
+
+        classify_result = await synth.refresh_classifications(force=False)
+        seed_result = await asyncio.to_thread(synth.seed_overrides_from_taxonomy)
+        yahoo = _YS()
+        metrics_result = await synth.run_nightly_metrics(yahoo)
+        return {"ok": True, "classify": classify_result, "seed": seed_result, "metrics": metrics_result}
     except Exception as exc:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
