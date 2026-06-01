@@ -539,6 +539,30 @@ def ensure_primary_schema() -> None:
                     "CREATE INDEX IF NOT EXISTS idx_synth_metrics_date "
                     "ON synthetic_sector_daily_metrics (metric_date DESC)"
                 )
+                # Admin-managed sub-industry overrides: lets admins add any
+                # symbol to a sub-industry when Yahoo/NSE/BSE miss it.
+                # These rows are merged with the Yahoo-classified `stocks`
+                # rows at query time so the engine always uses both sources.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS sub_industry_overrides (
+                        id             TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+                        symbol         TEXT NOT NULL,
+                        sub_industry   TEXT NOT NULL,
+                        industry       TEXT NOT NULL DEFAULT '',
+                        sector         TEXT NOT NULL DEFAULT '',
+                        note           TEXT NOT NULL DEFAULT '',
+                        set_by         TEXT NOT NULL DEFAULT '',
+                        created_at_ms  BIGINT NOT NULL,
+                        updated_at_ms  BIGINT NOT NULL,
+                        UNIQUE (symbol, sub_industry)
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_overrides_sub_industry "
+                    "ON sub_industry_overrides (sub_industry)"
+                )
         _SCHEMA_READY = True
 
 

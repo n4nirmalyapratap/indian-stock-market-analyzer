@@ -85,7 +85,7 @@ function Drilldown({ subIndustry, isDark }: { subIndustry: string; isDark: boole
       {data.constituents.map((c) => (
         <Link
           key={c.symbol}
-          href={`/chart/${encodeURIComponent(c.symbol)}`}
+          href={`/trading?symbol=${encodeURIComponent(c.symbol)}`}
           className="grid grid-cols-12 gap-2 px-2 py-2 rounded-lg items-center hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
         >
           <div className="col-span-5 min-w-0">

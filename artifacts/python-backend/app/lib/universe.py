@@ -212,6 +212,517 @@ SECTOR_SYMBOLS: dict[str, list[str]] = {
 }
 
 
+# ── Comprehensive Indian Sub-Industry Taxonomy ────────────────────────────────
+# Manually curated mapping of NSE sub-industry → constituent symbols.
+# Used as a SEED for the synthetic rotation engine: any symbol here gets a
+# valid sub_industry tag even if Yahoo profile fetch fails or Yahoo uses a
+# different label. The engine merges these seeds with Yahoo-classified rows
+# so real Yahoo data always takes precedence for market-cap and pricing.
+#
+# Admin overrides (stored in sub_industry_overrides DB table) are merged on
+# top at query time — admins can add any missing stock without code changes.
+#
+# Coverage goal: every meaningful Indian equity sub-sector with ≥3 constituents
+# across Banking, Finance, Insurance, IT, Pharma, FMCG, Auto, Metals, Energy,
+# Chemicals, Capital Goods, Real Estate, Textiles, Media, Diagnostics, QSR,
+# Hospitals, Jewellery, Defence, Agrochemicals, Logistics, Retail, etc.
+
+SUBSECTOR_TAXONOMY: dict[str, dict] = {
+    # ── Banking ───────────────────────────────────────────────────────────────
+    "Banks - Private Large Cap": {
+        "industry": "Banks",
+        "sector": "Financial Services",
+        "symbols": ["HDFCBANK", "ICICIBANK", "AXISBANK", "KOTAKBANK", "INDUSINDBK"],
+    },
+    "Banks - Private Mid & Small Cap": {
+        "industry": "Banks",
+        "sector": "Financial Services",
+        "symbols": [
+            "FEDERALBNK", "IDFCFIRSTB", "BANDHANBNK", "RBLBANK", "YESBANK",
+            "KARURVYSYA", "DCBBANK", "SOUTHBANK", "CSBBANK", "JKBANK",
+            "UCOBANK", "EQUITASBNK", "UJJIVANSFB", "SURYODAY", "UTKARSHBNK",
+            "LAKSHVILAS",
+        ],
+    },
+    "Banks - PSU": {
+        "industry": "Banks",
+        "sector": "Financial Services",
+        "symbols": [
+            "SBIN", "BANKBARODA", "PNB", "CANBK", "IOB",
+            "CENTRALBNK", "MAHABANK", "UCOBANK",
+        ],
+    },
+    # ── NBFC & Lending ────────────────────────────────────────────────────────
+    "NBFC - Consumer Lending": {
+        "industry": "NBFC & Lending",
+        "sector": "Financial Services",
+        "symbols": [
+            "BAJFINANCE", "CHOLAFIN", "MUTHOOTFIN", "MANAPPURAM",
+            "SHRIRAMFIN", "LTFH", "FIVESTAR", "CREDITACC", "ARMANFIN",
+            "SPANDANA", "INDOSTAR", "POONAWALLA",
+        ],
+    },
+    "NBFC - Housing Finance": {
+        "industry": "NBFC & Lending",
+        "sector": "Financial Services",
+        "symbols": [
+            "PNBHOUSING", "CANFINHOME", "AAVAS", "HOMEFIRST",
+            "APTUS", "REPCO", "AWHCL",
+        ],
+    },
+    "NBFC - Gold Finance": {
+        "industry": "NBFC & Lending",
+        "sector": "Financial Services",
+        "symbols": ["MUTHOOTFIN", "MANAPPURAM", "IIFL"],
+    },
+    # ── Capital Markets ───────────────────────────────────────────────────────
+    "Asset Management": {
+        "industry": "Capital Markets",
+        "sector": "Financial Services",
+        "symbols": ["HDFCAMC", "NIPPINDIA", "IIFLWAM", "360ONE", "ANANDRAT"],
+    },
+    "Broking & Wealth Management": {
+        "industry": "Capital Markets",
+        "sector": "Financial Services",
+        "symbols": [
+            "MOTILALOS", "5PAISA", "ANGELONE", "GEOJIT", "IIFL",
+            "JMFINANCIL", "ICICIPRULI",
+        ],
+    },
+    "Exchanges & Depositories": {
+        "industry": "Capital Markets",
+        "sector": "Financial Services",
+        "symbols": ["BSE", "MCX", "CDSL", "CAMS", "IEX", "CRISIL"],
+    },
+    # ── Insurance ─────────────────────────────────────────────────────────────
+    "Insurance - Life": {
+        "industry": "Insurance",
+        "sector": "Financial Services",
+        "symbols": ["LICI", "SBILIFE", "HDFCLIFE", "MAXLIFE", "ICICIPRULI", "BAJAJFINSV", "MFSL"],
+    },
+    "Insurance - General": {
+        "industry": "Insurance",
+        "sector": "Financial Services",
+        "symbols": ["GENERALINS", "NIACL", "STARHEALTH", "ICICIlombard", "BAJAJFINSV"],
+    },
+    # ── IT & Technology ───────────────────────────────────────────────────────
+    "IT Services - Tier 1": {
+        "industry": "IT Services",
+        "sector": "Technology",
+        "symbols": ["TCS", "INFY", "WIPRO", "HCLTECH", "TECHM"],
+    },
+    "IT Services - Mid Tier": {
+        "industry": "IT Services",
+        "sector": "Technology",
+        "symbols": [
+            "LTTS", "PERSISTENT", "COFORGE", "MPHASIS", "KPITTECH",
+            "TATAELXSI", "CYIENT", "MASTEK", "BIRLASOFT", "HAPPSTMNDS",
+        ],
+    },
+    "IT Services - Small Cap": {
+        "industry": "IT Services",
+        "sector": "Technology",
+        "symbols": [
+            "TANLA", "ROUTE", "LATENTVIEW", "NAZARA", "INTELLECT",
+            "NEWGEN", "NUCLEUS", "DATAMATICS", "SAKSOFT", "XCHANGING",
+            "ONMOBILE",
+        ],
+    },
+    "Software Products": {
+        "industry": "Software",
+        "sector": "Technology",
+        "symbols": ["INFOEDGE", "ZOMATO", "NAUKRI", "POLICYBZR", "PAYTM", "NYKAA"],
+    },
+    "IT - Data & Analytics": {
+        "industry": "IT Services",
+        "sector": "Technology",
+        "symbols": ["KFINTECH", "CDSL", "CAMS", "CRISIL"],
+    },
+    # ── Pharmaceuticals ───────────────────────────────────────────────────────
+    "Pharma - Large Cap Formulations": {
+        "industry": "Pharmaceuticals",
+        "sector": "Healthcare",
+        "symbols": [
+            "SUNPHARMA", "CIPLA", "DRREDDY", "DIVISLAB", "LUPIN",
+            "BIOCON", "AUROPHARMA", "ZYDUSLIFE", "ALKEM", "TORNTPHARM",
+        ],
+    },
+    "Pharma - Mid Cap Formulations": {
+        "industry": "Pharmaceuticals",
+        "sector": "Healthcare",
+        "symbols": [
+            "GLENMARK", "GRANULES", "LAURUSLABS", "JBCHEPHARM", "AJANTPHARM",
+            "IPCA", "STRIDES", "MARKSANS", "NEULAND", "SOLARA",
+            "MORPEN", "INDOCO",
+        ],
+    },
+    "Pharma - APIs & CRAMS": {
+        "industry": "Pharmaceuticals",
+        "sector": "Healthcare",
+        "symbols": [
+            "NEULAND", "SUVEN", "SEQUENT", "GLAND", "CAPLIN",
+            "LXCHEM", "TATVA", "RPGLIFE",
+        ],
+    },
+    "Pharma - Veterinary & Specialty": {
+        "industry": "Pharmaceuticals",
+        "sector": "Healthcare",
+        "symbols": ["SEQUENT", "HERANBA", "INSECTICID"],
+    },
+    # ── Healthcare ────────────────────────────────────────────────────────────
+    "Hospitals & Healthcare Services": {
+        "industry": "Healthcare Services",
+        "sector": "Healthcare",
+        "symbols": [
+            "APOLLOHOSP", "MAXHEALTH", "FORTIS", "NARAYANAH", "ASTER",
+            "YATHARTH", "PRISTINE",
+        ],
+    },
+    "Diagnostics & Pathology": {
+        "industry": "Healthcare Services",
+        "sector": "Healthcare",
+        "symbols": [
+            "METROPOLIS", "THYROCARE", "KRSNAA", "VIJAYADIAG",
+            "REDCLIFFE", "LALPATHLAB",
+        ],
+    },
+    # ── FMCG ──────────────────────────────────────────────────────────────────
+    "FMCG - HPC & Personal Care": {
+        "industry": "FMCG",
+        "sector": "Consumer Goods",
+        "symbols": [
+            "HINDUNILVR", "GODREJCP", "COLPAL", "MARICO", "EMAMI",
+            "JYOTHYLAB", "DABUR",
+        ],
+    },
+    "FMCG - Food & Beverages": {
+        "industry": "FMCG",
+        "sector": "Consumer Goods",
+        "symbols": [
+            "NESTLEIND", "BRITANNIA", "TATACONSUM", "ITC", "MARICO",
+            "MCDOWELL-N", "RADICO", "BALRAMCHIN", "RENUKA", "TRIVENI",
+            "KRBL", "AVANTIFEED",
+        ],
+    },
+    "FMCG - Paints & Adhesives": {
+        "industry": "FMCG",
+        "sector": "Consumer Goods",
+        "symbols": ["ASIANPAINT", "BERGEPAINT", "KANSAINER", "AKZOINDIA", "INDIGO", "PIDILITE"],
+    },
+    # ── Retail & QSR ──────────────────────────────────────────────────────────
+    "Quick Service Restaurants": {
+        "industry": "Retail",
+        "sector": "Consumer Cyclical",
+        "symbols": [
+            "JUBLFOOD", "DEVYANI", "WESTLIFE", "SAPPHIRE", "BARBEQUE",
+        ],
+    },
+    "Retail - Specialty": {
+        "industry": "Retail",
+        "sector": "Consumer Cyclical",
+        "symbols": [
+            "DMART", "TRENT", "VMART", "SHOPERSTOP", "VLMART",
+        ],
+    },
+    "Food Delivery & Quick Commerce": {
+        "industry": "Internet Services",
+        "sector": "Consumer Cyclical",
+        "symbols": ["ZOMATO", "SWIGGY"],
+    },
+    # ── Automobiles ───────────────────────────────────────────────────────────
+    "Automobiles - Passenger Vehicles": {
+        "industry": "Automobiles",
+        "sector": "Consumer Cyclical",
+        "symbols": ["MARUTI", "TATAMOTORS", "MAHINDRA", "M&M"],
+    },
+    "Automobiles - Two Wheelers": {
+        "industry": "Automobiles",
+        "sector": "Consumer Cyclical",
+        "symbols": ["BAJAJ-AUTO", "HEROMOTOCO", "EICHERMOT", "TVSMOTORS"],
+    },
+    "Automobiles - Commercial Vehicles": {
+        "industry": "Automobiles",
+        "sector": "Consumer Cyclical",
+        "symbols": ["TATAMOTORS", "ASHOKLEY", "SML"],
+    },
+    "Auto Components": {
+        "industry": "Auto Components",
+        "sector": "Consumer Cyclical",
+        "symbols": [
+            "BOSCHLTD", "BALKRISIND", "MRF", "ESCORTS", "TIINDIA",
+            "SUBROS", "SUPRAJIT", "LUMAXTECH", "ENDURANCE", "SANSERA",
+            "LUMAX", "PRICOLLTD", "MOTHERSON", "EXIDEIND", "AMARON",
+        ],
+    },
+    # ── Metals & Mining ───────────────────────────────────────────────────────
+    "Steel - Integrated": {
+        "industry": "Metals & Mining",
+        "sector": "Basic Materials",
+        "symbols": ["TATASTEEL", "JSWSTEEL", "SAIL", "GPIL"],
+    },
+    "Steel - Long Products": {
+        "industry": "Metals & Mining",
+        "sector": "Basic Materials",
+        "symbols": ["JSWSTEEL", "JINDALSAW", "WELCORP", "RATNAMANI", "APLAPOLLO"],
+    },
+    "Aluminium & Non-Ferrous Metals": {
+        "industry": "Metals & Mining",
+        "sector": "Basic Materials",
+        "symbols": ["HINDALCO", "NATIONALUM", "VEDL", "HINDZINC", "MOIL"],
+    },
+    "Mining & Minerals": {
+        "industry": "Metals & Mining",
+        "sector": "Basic Materials",
+        "symbols": ["COALINDIA", "NMDC", "MOIL", "GMRINFRA"],
+    },
+    # ── Chemicals ─────────────────────────────────────────────────────────────
+    "Specialty Chemicals": {
+        "industry": "Chemicals",
+        "sector": "Basic Materials",
+        "symbols": [
+            "PIDILITE", "DEEPAKNTR", "AARTIIND", "FINEORG", "SUDARSCHEM",
+            "NOCIL", "ATUL", "GHCL", "TATVA", "CLEAN", "LXCHEM",
+        ],
+    },
+    "Agrochemicals & Fertilizers": {
+        "industry": "Chemicals",
+        "sector": "Basic Materials",
+        "symbols": [
+            "PIIND", "DHANUKA", "RALLIS", "PRAJIND", "BAYER",
+            "DEEPAKFERT", "CHAMBAL", "COROMANDEL", "INSECTICID", "HERANBA",
+            "SUMITCHEM", "IFFCO",
+        ],
+    },
+    "Petrochemicals": {
+        "industry": "Chemicals",
+        "sector": "Basic Materials",
+        "symbols": ["RELIANCE", "GAIL", "DEEPAKFERT", "BASF", "INDIAGLYCO"],
+    },
+    # ── Oil & Gas ─────────────────────────────────────────────────────────────
+    "Oil & Gas - Upstream": {
+        "industry": "Oil & Gas",
+        "sector": "Energy",
+        "symbols": ["ONGC", "OIL", "CAIRN"],
+    },
+    "Oil & Gas - Downstream / Refining": {
+        "industry": "Oil & Gas",
+        "sector": "Energy",
+        "symbols": ["RELIANCE", "BPCL", "IOCL", "HPCL", "MRPL", "CPCL"],
+    },
+    "Oil & Gas - Distribution & City Gas": {
+        "industry": "Oil & Gas",
+        "sector": "Energy",
+        "symbols": ["GAIL", "IGL", "MGL", "GUJS", "ATGL", "GSPL"],
+    },
+    # ── Power & Utilities ─────────────────────────────────────────────────────
+    "Power Generation - Thermal & Hydro": {
+        "industry": "Power & Utilities",
+        "sector": "Utilities",
+        "symbols": ["NTPC", "NHPC", "SJVN", "TATAPOWER", "ADANIPOWER", "TORNTPOWER"],
+    },
+    "Power Generation - Renewable": {
+        "industry": "Power & Utilities",
+        "sector": "Utilities",
+        "symbols": [
+            "ADANIGREEN", "ADANITRANS", "WAAREEENER", "INOXWIND",
+            "SUZLON", "GREENKO", "IREDA",
+        ],
+    },
+    "Power Transmission & Distribution": {
+        "industry": "Power & Utilities",
+        "sector": "Utilities",
+        "symbols": ["POWERGRID", "ADANITRANS", "CESC", "BSES", "TORNTPOWER"],
+    },
+    # ── Capital Goods & Engineering ───────────────────────────────────────────
+    "Heavy Engineering & Capital Goods": {
+        "industry": "Capital Goods",
+        "sector": "Industrials",
+        "symbols": [
+            "LT", "SIEMENS", "ABB", "BHEL", "THERMAX",
+            "ELGIEQUIP", "APARINDS", "TIINDIA",
+        ],
+    },
+    "Defence & Aerospace": {
+        "industry": "Defence",
+        "sector": "Industrials",
+        "symbols": [
+            "HAL", "BEL", "BEML", "COCHINSHIP", "GRSE",
+            "MTAR", "IDEAFORGE", "PARAS", "DRONEACHARYA", "SANSERA",
+            "DYNAMATECH", "SOLARA",
+        ],
+    },
+    "Electronics Manufacturing (EMS)": {
+        "industry": "Capital Goods",
+        "sector": "Industrials",
+        "symbols": ["DIXON", "AMBER", "KAYNES", "SYRMA", "AVALON"],
+    },
+    "Cables & Wires": {
+        "industry": "Capital Goods",
+        "sector": "Industrials",
+        "symbols": ["POLYCAB", "HAVELLS", "VGUARD", "HFCL", "APAR", "KEI"],
+    },
+    # ── Infrastructure ────────────────────────────────────────────────────────
+    "EPC & Construction": {
+        "industry": "Capital Goods",
+        "sector": "Industrials",
+        "symbols": [
+            "LT", "NCC", "PNCINFRA", "RVNL", "IRCON",
+            "ASHOKA", "IRB", "CAPACITE", "HGINFRA", "KNRCON",
+        ],
+    },
+    "Ports & Logistics": {
+        "industry": "Logistics",
+        "sector": "Industrials",
+        "symbols": [
+            "ADANIPORTS", "CONCOR", "DELHIVERY", "BLUEDART",
+            "MAHLOG", "GATI", "ALLCARGO",
+        ],
+    },
+    "Railways & Rail Infrastructure": {
+        "industry": "Industrials",
+        "sector": "Industrials",
+        "symbols": ["IRCTC", "RVNL", "IRCON", "IRFC", "HUDCO", "RAILTEL"],
+    },
+    "Shipping & Aviation": {
+        "industry": "Industrials",
+        "sector": "Industrials",
+        "symbols": [
+            "COCHINSHIP", "GRSE", "GESHIP", "INTERGLOBE", "SPICEJET",
+        ],
+    },
+    # ── Real Estate ───────────────────────────────────────────────────────────
+    "Real Estate - Residential": {
+        "industry": "Real Estate",
+        "sector": "Real Estate",
+        "symbols": [
+            "DLF", "GODREJPROP", "OBEROIRLTY", "PRESTIGE", "SOBHA",
+            "BRIGADE", "KOLTEPATIL", "MAHINDRACIE", "SUNTECK", "PURVA",
+            "LODHA", "MACROTECH",
+        ],
+    },
+    "Real Estate - Commercial": {
+        "industry": "Real Estate",
+        "sector": "Real Estate",
+        "symbols": ["DLF", "MINDSPACE", "BROOKFIELD", "EMBASSY"],
+    },
+    # ── Consumer Durables & Electronics ──────────────────────────────────────
+    "White Goods & Appliances": {
+        "industry": "Consumer Durables",
+        "sector": "Consumer Cyclical",
+        "symbols": [
+            "TITAN", "HAVELLS", "VOLTAS", "WHIRLPOOL", "BLUESTARCO",
+            "VGUARD", "CROMPTON", "AMBER",
+        ],
+    },
+    "Consumer Electronics": {
+        "industry": "Consumer Durables",
+        "sector": "Consumer Cyclical",
+        "symbols": ["DIXON", "AMBER", "VGUARD", "VIMICRO"],
+    },
+    # ── Textiles & Apparel ────────────────────────────────────────────────────
+    "Textile - Spinning & Yarn": {
+        "industry": "Textiles",
+        "sector": "Consumer Cyclical",
+        "symbols": [
+            "WELSPUNLIV", "TRIDENT", "VARDHMAN", "RUPA", "DOLLAR",
+            "KPRMILL", "NITIN",
+        ],
+    },
+    "Textile - Technical & Home Furnishing": {
+        "industry": "Textiles",
+        "sector": "Consumer Cyclical",
+        "symbols": ["WELSPUNLIV", "TRIDENT", "GREENPANEL", "CENTURYPLY"],
+    },
+    "Apparel & Fashion Retail": {
+        "industry": "Retail",
+        "sector": "Consumer Cyclical",
+        "symbols": ["ABFRL", "RAYMOND", "BATA", "RELAXO", "VMART"],
+    },
+    # ── Building Materials & Cement ───────────────────────────────────────────
+    "Cement - Large Cap": {
+        "industry": "Construction Materials",
+        "sector": "Basic Materials",
+        "symbols": [
+            "ULTRACEMCO", "SHREECEM", "AMBUJACEM", "GRASIM", "JKCEMENT",
+        ],
+    },
+    "Cement - Mid & Small Cap": {
+        "industry": "Construction Materials",
+        "sector": "Basic Materials",
+        "symbols": [
+            "RAMCOCEM", "HEIDELBERG", "BIRLACORPN", "NUVOCO",
+            "ORIENTCEM", "STARCEMENT", "KCP",
+        ],
+    },
+    "Building Products - Pipes & Fittings": {
+        "industry": "Construction Materials",
+        "sector": "Basic Materials",
+        "symbols": ["ASTRAL", "SUPREMIND", "FINOLEX", "PRINCE"],
+    },
+    "Building Products - Tiles & Sanitaryware": {
+        "industry": "Construction Materials",
+        "sector": "Basic Materials",
+        "symbols": [
+            "KAJARIA", "CERA", "SOMANYCER", "ORIENTBELL", "ASIANTILES",
+            "KAJARIACER",
+        ],
+    },
+    "Wood & Laminates": {
+        "industry": "Construction Materials",
+        "sector": "Basic Materials",
+        "symbols": ["GREENPANEL", "CENTURYPLY", "APLAPOLLO"],
+    },
+    # ── Jewellery ─────────────────────────────────────────────────────────────
+    "Jewellery & Watches": {
+        "industry": "Retail",
+        "sector": "Consumer Cyclical",
+        "symbols": [
+            "TITAN", "KALYAN", "SENCO", "THANGAMAYL", "RAJESHEXPO",
+            "GOLDIAM", "PCJEWELLER", "TRIBHOVANDAS",
+        ],
+    },
+    # ── Media & Entertainment ─────────────────────────────────────────────────
+    "Television Broadcasting": {
+        "industry": "Media",
+        "sector": "Communication Services",
+        "symbols": ["ZEEL", "SUNTV", "PVRINOX"],
+    },
+    "Digital Media & Gaming": {
+        "industry": "Media",
+        "sector": "Communication Services",
+        "symbols": ["NAZARA", "TIPSINDLTD", "TIPSFILMS", "INDIGOPNTS"],
+    },
+    # ── Telecom ───────────────────────────────────────────────────────────────
+    "Telecom Services": {
+        "industry": "Telecom",
+        "sector": "Communication Services",
+        "symbols": ["BHARTIARTL", "IDEA", "TATACOMM", "HFCL"],
+    },
+    "Telecom Infrastructure": {
+        "industry": "Telecom",
+        "sector": "Communication Services",
+        "symbols": ["INDUS", "ASTER", "GTLINFRA", "HATHWAY"],
+    },
+    # ── Sugar & Agri ──────────────────────────────────────────────────────────
+    "Sugar Refineries": {
+        "industry": "Sugar",
+        "sector": "Consumer Goods",
+        "symbols": ["BALRAMCHIN", "RENUKA", "TRIVENI", "EIDPARRY", "UGAR"],
+    },
+    "Aquaculture & Processed Foods": {
+        "industry": "Agri & Food",
+        "sector": "Consumer Goods",
+        "symbols": ["AVANTIFEED", "WATERBASE", "APEX", "KRBL"],
+    },
+}
+
+# All unique symbols across the taxonomy (used to seed the classifier)
+SUBSECTOR_SYMBOLS: list[str] = sorted(set(
+    sym
+    for entry in SUBSECTOR_TAXONOMY.values()
+    for sym in entry["symbols"]
+))
+
 # ── Combined universe ─────────────────────────────────────────────────────────
 def _merge(*lists: list[str]) -> list[str]:
     seen: set[str] = set()
@@ -324,7 +835,7 @@ INDICES_COMPANY_MAP: dict[str, str] = {
 # Pre-populate COMPANY_MAP with index names (stocks will be added from cache later)
 COMPANY_MAP: dict[str, str] = dict(INDICES_COMPANY_MAP)
 
-ALL_SYMBOLS: list[str] = INDICES + _merge(NIFTY100, MIDCAP, SMALLCAP, MICROCAP)
+ALL_SYMBOLS: list[str] = INDICES + _merge(NIFTY100, MIDCAP, SMALLCAP, MICROCAP, SUBSECTOR_SYMBOLS)
 
 
 # Tracks whether the live AMFI / NSE-membership cache was successfully loaded

@@ -1,2 +1,3 @@
 - [Backend test running](backend-testing.md) — pytest isn't preinstalled; full suite is huge & network-bound — run targeted subsets with DISABLE_AUTH=1.
 - [Synthetic sector rotation](synthetic-sector-rotation.md) — how the sub-industry rotation engine is structured and the non-obvious math contracts (RS windowing, 20-DMA gating).
+- [Sub-industry taxonomy](sub-industry-taxonomy.md) — comprehensive 50+ Indian sub-sector taxonomy in universe.py; admin override table; TradingView rule.
