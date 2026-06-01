@@ -258,13 +258,15 @@ async def lifespan(app: FastAPI):
     fii_dii_task    = asyncio.create_task(_fii_dii_scheduler())
     dhan_task       = asyncio.create_task(_dhan_scrip_master_preload())
     pcr_task        = asyncio.create_task(_pcr_snapshot_scheduler())
+    synth_class_task = asyncio.create_task(_synthetic_classifier_scheduler())
+    synth_metrics_task = asyncio.create_task(_synthetic_metrics_scheduler())
     try:
         yield
     finally:
         for t in (poll_task, universe_task, warmup_task, transition_task,
                   fixer_task, rfr_task, bhav_task, alerts_task, backtest_task,
                   digest_sched_task, digest_worker_task, fii_dii_task, dhan_task,
-                  pcr_task):
+                  pcr_task, synth_class_task, synth_metrics_task):
             t.cancel()
             try:
                 await t
@@ -610,6 +612,80 @@ async def _universe_scheduler() -> None:
         except Exception as e:
             logger.warning("Universe scheduler error: %s — retrying tomorrow", e)
             await asyncio.sleep(3600)   # back-off 1 h on unexpected error
+
+
+async def _synthetic_classifier_scheduler() -> None:
+    """Classify the curated universe into the `stocks` table for the synthetic
+    sub-industry rotation engine. Runs once shortly after startup (only stale /
+    missing rows are fetched) then weekly. Bounded Yahoo concurrency lives
+    inside the service — this just paces the cadence.
+    """
+    from app.services import synthetic_sectors_service as synth
+    await asyncio.sleep(120)  # let startup + universe cache settle first
+    while True:
+        try:
+            result = await synth.refresh_classifications()
+            logger.info("synthetic classifier scheduler: %s", result)
+        except asyncio.CancelledError:
+            logger.info("Synthetic classifier scheduler stopped.")
+            break
+        except Exception as exc:
+            logger.warning("synthetic classifier scheduler error: %s", exc)
+        try:
+            await asyncio.sleep(7 * 24 * 3600)   # weekly
+        except asyncio.CancelledError:
+            logger.info("Synthetic classifier scheduler stopped.")
+            break
+
+
+async def _synthetic_metrics_scheduler() -> None:
+    """Nightly synthetic sub-industry index build. Fires at 16:30 IST
+    (11:00 UTC) — 30 min after the 16:00 IST EOD-data grace window so Yahoo's
+    sealed close and the NSE delivery archive are both available. Idempotent
+    per date, so a missed/duplicated run is harmless.
+    """
+    from app.services import synthetic_sectors_service as synth
+    from app.services.yahoo_service import YahooService as _YahooService
+    yahoo = _YahooService()
+
+    # Opportunistic catch-up: if the latest stored metrics are older than the
+    # latest trading day, run once on startup (after the classifier has had
+    # time to populate `stocks`) so the grid has real data immediately rather
+    # than waiting for the next nightly tick. Gated so we never re-run an
+    # already-current day.
+    try:
+        await asyncio.sleep(300)  # land after the classifier's first pass
+        latest = await asyncio.to_thread(synth._latest_metric_date)
+        if latest is None or latest < synth._latest_trading_day():
+            logger.info("Synthetic metrics: startup catch-up run starting…")
+            result = await synth.run_nightly_metrics(yahoo)
+            logger.info("synthetic metrics catch-up: %s", result)
+    except asyncio.CancelledError:
+        logger.info("Synthetic metrics scheduler stopped.")
+        return
+    except Exception as exc:
+        logger.warning("synthetic metrics catch-up error: %s", exc)
+
+    while True:
+        try:
+            now_utc = dt.datetime.utcnow()
+            target = now_utc.replace(hour=11, minute=0, second=0, microsecond=0)
+            if now_utc >= target:
+                target += dt.timedelta(days=1)
+            wait_s = (target - now_utc).total_seconds()
+            logger.info(
+                "Synthetic metrics scheduler: next run in %.0f s (at %s UTC)",
+                wait_s, target.strftime("%Y-%m-%d %H:%M"),
+            )
+            await asyncio.sleep(wait_s)
+            result = await synth.run_nightly_metrics(yahoo)
+            logger.info("synthetic metrics scheduler: %s", result)
+        except asyncio.CancelledError:
+            logger.info("Synthetic metrics scheduler stopped.")
+            break
+        except Exception as exc:
+            logger.warning("synthetic metrics scheduler error: %s — retry tomorrow", exc)
+            await asyncio.sleep(3600)
 
 
 async def _dhan_scrip_master_preload() -> None:

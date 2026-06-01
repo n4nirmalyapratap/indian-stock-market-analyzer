@@ -480,6 +480,65 @@ def ensure_primary_schema() -> None:
                 # anymore. If a legacy table still exists in your DB it
                 # can be manually dropped with `DROP TABLE IF EXISTS
                 # macro_scraped_data;` — leaving it does no harm.
+
+                # ── Hyper-granular sector rotation ───────────────────────
+                # `stocks` is the classification store for the synthetic
+                # sub-industry rotation engine. One row per NSE symbol in
+                # the curated universe, enriched with Yahoo profile data
+                # (sector / industry / sub_industry / market_cap). Refreshed
+                # weekly by the classifier. `classified_ok` is FALSE when the
+                # Yahoo profile fetch failed — those rows are excluded from
+                # synthetic-index aggregation so we never fake a sector tag.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS stocks (
+                        symbol         TEXT PRIMARY KEY,
+                        name           TEXT NOT NULL DEFAULT '',
+                        yahoo_ticker   TEXT NOT NULL DEFAULT '',
+                        sector         TEXT,
+                        industry       TEXT,
+                        sub_industry   TEXT,
+                        market_cap     DOUBLE PRECISION,
+                        cap_category   TEXT,
+                        active         BOOLEAN NOT NULL DEFAULT TRUE,
+                        classified_ok  BOOLEAN NOT NULL DEFAULT FALSE,
+                        classify_error TEXT NOT NULL DEFAULT '',
+                        updated_at_ms  BIGINT NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_stocks_sub_industry "
+                    "ON stocks (sub_industry) WHERE active AND classified_ok"
+                )
+                # One dated row per synthetic sub-industry index. The nightly
+                # worker writes the market-cap-weighted daily return, the
+                # chained synthetic index level (base 1000 at inception), the
+                # average NSE delivery % across constituents and its 20-DMA,
+                # and the 50-EMA breadth (% of constituents above their own
+                # 50-day EMA). Scanner endpoints derive RS / build-up flags
+                # from this series at read time.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS synthetic_sector_daily_metrics (
+                        sub_industry      TEXT NOT NULL,
+                        metric_date       DATE NOT NULL,
+                        index_value       DOUBLE PRECISION,
+                        daily_return_pct  DOUBLE PRECISION,
+                        avg_delivery_pct  DOUBLE PRECISION,
+                        delivery_20dma    DOUBLE PRECISION,
+                        breadth_50ema_pct DOUBLE PRECISION,
+                        constituent_count INTEGER NOT NULL DEFAULT 0,
+                        total_market_cap  DOUBLE PRECISION,
+                        created_at_ms     BIGINT NOT NULL,
+                        PRIMARY KEY (sub_industry, metric_date)
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_synth_metrics_date "
+                    "ON synthetic_sector_daily_metrics (metric_date DESC)"
+                )
         _SCHEMA_READY = True
 
 
