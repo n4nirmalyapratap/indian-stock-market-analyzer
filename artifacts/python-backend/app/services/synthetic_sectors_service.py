@@ -299,6 +299,48 @@ def _classify_one_sync(symbol: str) -> dict[str, Any]:
         return base
 
 
+def seed_overrides_from_taxonomy() -> dict[str, int]:
+    """Bulk-seed `sub_industry_overrides` from SUBSECTOR_TAXONOMY for every
+    symbol that already has a real market_cap in the `stocks` table.
+
+    Unlike `_seed_taxonomy_stocks()` which puts stub rows in `stocks`
+    (classified_ok=False, no market_cap), THIS function creates override rows
+    for already-classified stocks — so the nightly metrics worker immediately
+    sees all taxonomy sub-industries the next time it runs, without waiting for
+    Yahoo to re-classify everyone under our new sub_industry label names.
+
+    Safe to call repeatedly: ON CONFLICT (symbol, sub_industry) DO NOTHING
+    means existing overrides are never clobbered.
+
+    Returns {"seeded": <N new rows inserted>}
+    """
+    from ..lib.universe import SUBSECTOR_TAXONOMY
+    auth_store.ensure_primary_schema()
+    now = _now_ms()
+    inserted = 0
+    with auth_store.get_conn() as conn:
+        with conn.cursor() as cur:
+            for sub_industry, entry in SUBSECTOR_TAXONOMY.items():
+                industry = entry.get("industry", "")
+                sector = entry.get("sector", "")
+                for sym in entry["symbols"]:
+                    cur.execute(
+                        """
+                        INSERT INTO sub_industry_overrides
+                            (symbol, sub_industry, industry, sector, note,
+                             set_by, created_at_ms, updated_at_ms)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (symbol, sub_industry) DO NOTHING
+                        """,
+                        (sym, sub_industry, industry, sector,
+                         "auto-seeded from SUBSECTOR_TAXONOMY",
+                         "system", now, now),
+                    )
+                    inserted += cur.rowcount
+    logger.info("seed_overrides_from_taxonomy: %d new override rows inserted", inserted)
+    return {"seeded": inserted}
+
+
 def _seed_taxonomy_stocks() -> None:
     """Upsert stub rows for every symbol in SUBSECTOR_TAXONOMY so they appear
     in the `stocks` table even before Yahoo classification succeeds. The row is
