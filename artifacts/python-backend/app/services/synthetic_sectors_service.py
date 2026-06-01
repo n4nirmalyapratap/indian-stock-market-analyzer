@@ -162,10 +162,13 @@ def _upsert_stock(row: dict[str, Any]) -> None:
 
 
 def _load_classified_stocks() -> list[dict[str, Any]]:
-    """Active stocks that classified OK and have a real sub_industry tag."""
+    """Active stocks that classified OK and have a real sub_industry tag,
+    merged with admin-managed overrides. Overrides can add any symbol to any
+    sub-industry even if Yahoo classification failed for that symbol."""
     auth_store.ensure_primary_schema()
     with auth_store.get_conn() as conn:
         with conn.cursor() as cur:
+            # Yahoo-classified rows
             cur.execute(
                 """
                 SELECT symbol, name, yahoo_ticker, sector, industry, sub_industry,
@@ -177,7 +180,44 @@ def _load_classified_stocks() -> list[dict[str, Any]]:
                  ORDER BY sub_industry, market_cap DESC
                 """
             )
-            return [dict(r) for r in cur.fetchall()]
+            yahoo_rows = [dict(r) for r in cur.fetchall()]
+
+            # Admin overrides: pull market_cap from stocks if known
+            cur.execute(
+                """
+                SELECT o.symbol, o.sub_industry, o.industry, o.sector,
+                       s.name, s.yahoo_ticker, s.market_cap, s.cap_category,
+                       s.active
+                  FROM sub_industry_overrides o
+                  LEFT JOIN stocks s ON s.symbol = o.symbol
+                 ORDER BY o.sub_industry, s.market_cap DESC NULLS LAST
+                """
+            )
+            override_rows = cur.fetchall()
+
+    # Build set of (symbol, sub_industry) already in yahoo_rows to avoid duplication
+    yahoo_keys = {(r["symbol"], r["sub_industry"]) for r in yahoo_rows}
+
+    merged = list(yahoo_rows)
+    for r in override_rows:
+        r = dict(r)
+        key = (r["symbol"], r["sub_industry"])
+        if key in yahoo_keys:
+            continue  # Yahoo classification already covers this slot
+        market_cap = r.get("market_cap")
+        if market_cap is None or market_cap <= 0:
+            continue  # Can't contribute to market-cap-weighted index without cap
+        merged.append({
+            "symbol": r["symbol"],
+            "name": r.get("name") or r["symbol"],
+            "yahoo_ticker": r.get("yahoo_ticker") or r["symbol"],
+            "sector": r.get("sector") or "",
+            "industry": r.get("industry") or "",
+            "sub_industry": r["sub_industry"],
+            "market_cap": market_cap,
+            "cap_category": r.get("cap_category"),
+        })
+    return merged
 
 
 def _stale_or_missing_symbols(symbols: list[str]) -> list[str]:
@@ -259,11 +299,64 @@ def _classify_one_sync(symbol: str) -> dict[str, Any]:
         return base
 
 
+def _seed_taxonomy_stocks() -> None:
+    """Upsert stub rows for every symbol in SUBSECTOR_TAXONOMY so they appear
+    in the `stocks` table even before Yahoo classification succeeds. The row is
+    marked classified_ok=False / active=True so it won't be included in the
+    index calculation until Yahoo fills in the market_cap — but it WILL be
+    picked up by the classifier's stale-check and fetched on the next weekly run.
+    Rows that already exist are left untouched (the symbol col is the PK)."""
+    from ..lib.universe import SUBSECTOR_TAXONOMY
+    now = _now_ms()
+    rows_to_seed: list[dict[str, Any]] = []
+    for sub_industry, entry in SUBSECTOR_TAXONOMY.items():
+        for sym in entry["symbols"]:
+            rows_to_seed.append({
+                "symbol": sym,
+                "name": sym,
+                "yahoo_ticker": sym,
+                "sector": entry.get("sector", ""),
+                "industry": entry.get("industry", ""),
+                "sub_industry": sub_industry,
+                "market_cap": None,
+                "cap_category": None,
+                "active": True,
+                "classified_ok": False,
+                "classify_error": "taxonomy seed — awaiting Yahoo classification",
+                "updated_at_ms": now,
+            })
+    if not rows_to_seed:
+        return
+    auth_store.ensure_primary_schema()
+    with auth_store.get_conn() as conn:
+        with conn.cursor() as cur:
+            for row in rows_to_seed:
+                cur.execute(
+                    """
+                    INSERT INTO stocks (symbol, name, yahoo_ticker, sector, industry,
+                                        sub_industry, market_cap, cap_category, active,
+                                        classified_ok, classify_error, updated_at_ms)
+                    VALUES (%(symbol)s, %(name)s, %(yahoo_ticker)s, %(sector)s, %(industry)s,
+                            %(sub_industry)s, %(market_cap)s, %(cap_category)s, %(active)s,
+                            %(classified_ok)s, %(classify_error)s, %(updated_at_ms)s)
+                    ON CONFLICT (symbol) DO NOTHING
+                    """,
+                    row,
+                )
+
+
 async def refresh_classifications(force: bool = False) -> dict[str, Any]:
     """Classify the curated universe into the `stocks` table. Only stale /
     missing symbols are fetched unless `force=True`. Bounded concurrency keeps
-    Yahoo load and event-loop pressure in check."""
+    Yahoo load and event-loop pressure in check.
+
+    Before fetching Yahoo data, we upsert taxonomy stub rows so that every
+    curated sub-industry symbol exists in the table and will be picked up by
+    the next classifier run even if it wasn't in the original universe lists."""
     from ..lib import universe
+
+    # Seed taxonomy stubs first (ON CONFLICT DO NOTHING — safe to re-run)
+    await asyncio.to_thread(_seed_taxonomy_stocks)
 
     symbols = [s for s in universe.ALL_SYMBOLS if not s.startswith("^")]
     targets = symbols if force else _stale_or_missing_symbols(symbols)
@@ -778,12 +871,13 @@ def _nifty_series_since(since: dt.date) -> list[tuple[dt.date, float]]:
 
 
 def get_drilldown(sub_industry: str, yahoo) -> dict[str, Any]:
-    """Constituents of a sub-industry ranked by individual RS (their own
-    daily return contribution). Synchronous DB read; live quotes left to the
-    caller to keep this fast and cache-friendly."""
+    """Constituents of a sub-industry ranked by market-cap weight. Merges
+    Yahoo-classified stocks with admin-managed overrides so every manually
+    curated stock is visible even if Yahoo classification failed."""
     auth_store.ensure_primary_schema()
     with auth_store.get_conn() as conn:
         with conn.cursor() as cur:
+            # Yahoo-classified members
             cur.execute(
                 """
                 SELECT symbol, name, sector, industry, market_cap, cap_category
@@ -794,6 +888,37 @@ def get_drilldown(sub_industry: str, yahoo) -> dict[str, Any]:
                 (sub_industry,),
             )
             members = [dict(r) for r in cur.fetchall()]
+
+            # Admin-override members (symbol may or may not be in stocks)
+            cur.execute(
+                """
+                SELECT o.symbol, o.sub_industry, o.industry, o.sector, o.note,
+                       s.name, s.market_cap, s.cap_category, s.classified_ok
+                  FROM sub_industry_overrides o
+                  LEFT JOIN stocks s ON s.symbol = o.symbol
+                 WHERE o.sub_industry = %s
+                 ORDER BY s.market_cap DESC NULLS LAST
+                """,
+                (sub_industry,),
+            )
+            overrides = cur.fetchall()
+
+    yahoo_syms = {m["symbol"] for m in members}
+    for r in overrides:
+        r = dict(r)
+        if r["symbol"] in yahoo_syms:
+            continue
+        members.append({
+            "symbol": r["symbol"],
+            "name": r.get("name") or r["symbol"],
+            "sector": r.get("sector") or "",
+            "industry": r.get("industry") or "",
+            "market_cap": r.get("market_cap"),
+            "cap_category": r.get("cap_category"),
+            "_override": True,
+            "_note": r.get("note", ""),
+        })
+
     if not members:
         return {"subIndustry": sub_industry, "available": False, "constituents": []}
     total_cap = sum((m["market_cap"] or 0) for m in members) or 0

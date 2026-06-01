@@ -779,6 +779,137 @@ async def fii_dii_refresh(request: Request):
             "ok": False, "error": f"FII/DII refresh failed: {exc}"})
 
 
+@router.get("/admin/subsectors")
+async def list_subsectors(request: Request):
+    """Return the full taxonomy (from universe.py) merged with all DB overrides,
+    showing which sub-industries exist, how many curated symbols they have, and
+    every admin-added override row."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.lib.auth_store import ensure_primary_schema  # noqa: PLC0415
+    from app.lib.universe import SUBSECTOR_TAXONOMY  # noqa: PLC0415
+    ensure_primary_schema()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT o.id, o.symbol, o.sub_industry, o.industry, o.sector,
+                       o.note, o.set_by, o.created_at_ms, o.updated_at_ms,
+                       s.name AS stock_name, s.market_cap, s.cap_category,
+                       s.classified_ok
+                  FROM sub_industry_overrides o
+                  LEFT JOIN stocks s ON s.symbol = o.symbol
+                 ORDER BY o.sub_industry, o.symbol
+                """
+            )
+            overrides = [dict(r) for r in cur.fetchall()]
+
+    taxonomy_out = [
+        {
+            "subIndustry": k,
+            "industry": v.get("industry", ""),
+            "sector": v.get("sector", ""),
+            "curatedCount": len(v.get("symbols", [])),
+            "curatedSymbols": v.get("symbols", []),
+        }
+        for k, v in sorted(SUBSECTOR_TAXONOMY.items())
+    ]
+    return {
+        "taxonomy": taxonomy_out,
+        "overrides": overrides,
+        "totalSubIndustries": len(taxonomy_out),
+        "totalOverrides": len(overrides),
+    }
+
+
+@router.post("/admin/subsectors/overrides")
+async def add_subsector_override(request: Request):
+    """Add a symbol to a sub-industry. If the sub-industry doesn't exist in
+    the taxonomy it is created as a new group. The symbol will be picked up by
+    the next classifier run and included in the rotation grid once it has
+    market-cap data."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON"})
+    symbol      = (str(body.get("symbol") or "")).strip().upper()
+    sub_industry = (str(body.get("subIndustry") or "")).strip()
+    industry    = (str(body.get("industry") or "")).strip()
+    sector      = (str(body.get("sector") or "")).strip()
+    note        = (str(body.get("note") or "")).strip()[:300]
+    if not symbol or not sub_industry:
+        return JSONResponse(status_code=400, content={"error": "symbol and subIndustry are required"})
+
+    set_by = ""
+    try:
+        from app.lib.auth_tokens import verify_token  # noqa: PLC0415
+        payload = verify_token(request.headers.get("X-Admin-Token", ""), required_scope="admin")
+        set_by  = str(payload.get("email") or payload.get("sub") or "")[:120]
+    except Exception:
+        pass
+
+    from app.lib.auth_store import ensure_primary_schema  # noqa: PLC0415
+    ensure_primary_schema()
+    now_ms = int(time.time() * 1000)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO sub_industry_overrides
+                    (symbol, sub_industry, industry, sector, note, set_by,
+                     created_at_ms, updated_at_ms)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (symbol, sub_industry) DO UPDATE SET
+                    industry     = EXCLUDED.industry,
+                    sector       = EXCLUDED.sector,
+                    note         = EXCLUDED.note,
+                    set_by       = EXCLUDED.set_by,
+                    updated_at_ms = EXCLUDED.updated_at_ms
+                RETURNING id
+                """,
+                (symbol, sub_industry, industry, sector, note, set_by, now_ms, now_ms),
+            )
+            row = cur.fetchone()
+    return {"ok": True, "id": row["id"] if row else None,
+            "symbol": symbol, "subIndustry": sub_industry}
+
+
+@router.delete("/admin/subsectors/overrides/{override_id}")
+async def delete_subsector_override(override_id: str, request: Request):
+    """Remove an admin override by its ID."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.lib.auth_store import ensure_primary_schema  # noqa: PLC0415
+    ensure_primary_schema()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM sub_industry_overrides WHERE id = %s RETURNING symbol, sub_industry",
+                (override_id,),
+            )
+            row = cur.fetchone()
+    if not row:
+        return JSONResponse(status_code=404, content={"error": "Override not found"})
+    return {"ok": True, "removed": dict(row)}
+
+
+@router.post("/admin/subsectors/reclassify")
+async def trigger_reclassify(request: Request):
+    """Trigger an immediate classifier run for all taxonomy symbols so that
+    any newly-added stock gets its Yahoo market-cap filled in without waiting
+    for the weekly scheduler."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    try:
+        from app.services import synthetic_sectors_service as synth  # noqa: PLC0415
+        result = await synth.refresh_classifications(force=False)
+        return {"ok": True, **result}
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+
+
 @router.delete("/admin/macro/overrides/{indicator}")
 async def delete_macro_override(indicator: str, request: Request):
     """Remove an override so the macro service falls back to live sources."""
