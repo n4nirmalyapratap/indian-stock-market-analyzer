@@ -18,6 +18,7 @@ import DCF from "@/pages/DCF";
 import NotFound from "@/pages/not-found";
 import TradingPlatform from "@/pages/TradingPlatform";
 import SectorDetail from "@/pages/SectorDetail";
+import SectorAnalytics from "@/pages/SectorAnalytics";
 import NewsFeed from "@/pages/NewsFeed";
 import SentimentDashboard from "@/pages/SentimentDashboard";
 import LoginPage from "@/pages/LoginPage";
@@ -96,6 +97,7 @@ function AppRoutes() {
       <Switch>
         <Route path="/"                component={Dashboard} />
         <Route path="/trading"         component={TradingPlatform} />
+        <Route path="/sector-analytics" component={SectorAnalytics} />
         <Route path="/sectors/:sectorId" component={SectorDetail} />
         <Route path="/sectors"          component={Sectors} />
         <Route path="/insights/:tab*"   component={InsightsLayout} />

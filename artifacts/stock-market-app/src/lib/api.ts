@@ -835,6 +835,12 @@ export const api = {
   sectorDetail: (sector: string, period: "3mo" | "6mo" | "1y" | "5y" = "1y") =>
     fetchApi<SectorDetailData>(`/sector-analytics/${encodeURIComponent(sector)}/detail?period=${period}`),
 
+  syntheticGrid: () =>
+    fetchApi<SyntheticGrid>("/sector-analytics/synthetic/grid"),
+
+  syntheticDrilldown: (subIndustry: string) =>
+    fetchApi<SyntheticDrilldown>(`/sector-analytics/synthetic/${encodeURIComponent(subIndustry)}/drilldown`),
+
   newsFeed: (params?: { category?: string; search?: string; limit?: number; offset?: number }) => {
     const q = new URLSearchParams(
       Object.fromEntries(Object.entries(params ?? {}).filter(([, v]) => v != null && v !== "").map(([k, v]) => [k, String(v)]))
@@ -1209,6 +1215,43 @@ export interface SectorTopMovers {
   period:  string;
   gainers: SectorHeatmapItem[];
   losers:  SectorHeatmapItem[];
+}
+
+// ─── Synthetic sub-industry rotation engine ───────────────────────────────────
+
+export interface SyntheticGridRow {
+  subIndustry:      string;
+  indexValue:       number | null;
+  dailyReturnPct:   number | null;
+  rs30d:            number | null;   // 30D relative strength vs Nifty 50 (pp)
+  avgDeliveryPct:   number | null;
+  delivery20dma:    number | null;
+  deliveryBuildup:  boolean | null;  // avg delivery ≥15% above 20-DMA
+  breadth50emaPct:  number | null;   // % constituents above their 50-EMA
+  constituentCount: number;
+}
+
+export interface SyntheticGrid {
+  asOf:      string | null;
+  available: boolean;
+  rows:      SyntheticGridRow[];
+  note?:     string;
+}
+
+export interface SyntheticConstituent {
+  symbol:      string;
+  name:        string;
+  sector:      string | null;
+  industry:    string | null;
+  marketCap:   number | null;
+  capCategory: string | null;
+  weightPct:   number | null;
+}
+
+export interface SyntheticDrilldown {
+  subIndustry:  string;
+  available:    boolean;
+  constituents: SyntheticConstituent[];
 }
 
 export interface RSPoint {
