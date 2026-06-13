@@ -563,6 +563,99 @@ def ensure_primary_schema() -> None:
                     "CREATE INDEX IF NOT EXISTS idx_overrides_sub_industry "
                     "ON sub_industry_overrides (sub_industry)"
                 )
+
+                # ── Shareholding pattern history ─────────────────────────
+                # Quarterly shareholding-pattern snapshots per security.
+                # One row per (symbol, as_on_date) combination — composite
+                # PK so re-fetches naturally upsert without duplicates.
+                #
+                # Why store rather than always-live-fetch:
+                #   1. SEBI LODR filings are immutable per quarter — once a
+                #      quarter is filed, the numbers never change. Cache it
+                #      forever; only the latest quarter ever needs refresh.
+                #   2. NSE/BSE shareholding endpoints are rate-limited and
+                #      Akamai-prone; serving from PG is ~1000x faster.
+                #   3. Multi-source merge: NSE may only give us summary
+                #      (Promoter/Public split), BSE gives the full FII/DII
+                #      breakdown. We upsert from whichever source had data,
+                #      and the most-detailed source wins per column.
+                #
+                # NULL is meaningful: when a source only provides
+                # Promoter/Public totals (no FII/DII split), the FII and
+                # DII columns are NULL. UI distinguishes "data not
+                # available" from "0%" using this.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS shareholding_history (
+                        symbol            TEXT NOT NULL,
+                        as_on_date        DATE NOT NULL,
+                        promoter_pct      DOUBLE PRECISION,
+                        fii_pct           DOUBLE PRECISION,
+                        dii_pct           DOUBLE PRECISION,
+                        public_pct        DOUBLE PRECISION,
+                        num_shareholders  BIGINT,
+                        source            TEXT NOT NULL,
+                        fetched_at_ms     BIGINT NOT NULL,
+                        PRIMARY KEY (symbol, as_on_date)
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_shareholding_symbol_date "
+                    "ON shareholding_history (symbol, as_on_date DESC)"
+                )
+
+                # ── Symbol quarantine ─────────────────────────────────────
+                # Tracks symbols where every provider in the price chain
+                # has returned empty results for multiple consecutive
+                # scans. After a configurable threshold of consecutive
+                # failures with zero successes recorded, the symbol is
+                # auto-quarantined and silently skipped by the scanner
+                # instead of cluttering the error panel.
+                #
+                # Why this exists:
+                #   Universe lists accumulate dead symbols over time —
+                #   genuinely delisted (JSWISPL merged into JSWSTEEL),
+                #   SME-only listings that aren't on the main board
+                #   (DRONEACHARYA), or low-volume names with no recent
+                #   trades (SAMEERA). Each one wastes a fetch attempt
+                #   per scan AND shows up as an "error" the user has to
+                #   visually filter through. The registry can't fix this
+                #   — these symbols ARE the canonical NSE ticker; the
+                #   underlying security just has no data anywhere.
+                #
+                #   The quarantine is empirical: if NSE + BSE + Yahoo +
+                #   TwelveData + Stooq all return zero bars across N
+                #   consecutive attempts (default 3), the system learns
+                #   "this symbol has no usable data" and stops surfacing
+                #   it as a scanner error. Quarantine auto-expires after
+                #   30 days so re-listings get rediscovered.
+                #
+                #   `manual_override = TRUE` means an admin forced the
+                #   release; we skip auto-quarantining it again for
+                #   that session (so an operator can investigate without
+                #   the system instantly re-quarantining behind them).
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS symbol_quarantine (
+                        symbol                 TEXT PRIMARY KEY,
+                        first_failed_at_ms     BIGINT NOT NULL,
+                        last_attempted_at_ms   BIGINT NOT NULL,
+                        last_success_at_ms     BIGINT,
+                        consecutive_failures   INTEGER NOT NULL DEFAULT 0,
+                        total_failures         INTEGER NOT NULL DEFAULT 0,
+                        total_successes        INTEGER NOT NULL DEFAULT 0,
+                        quarantined            BOOLEAN NOT NULL DEFAULT FALSE,
+                        quarantined_at_ms      BIGINT,
+                        reason                 TEXT NOT NULL DEFAULT '',
+                        manual_override        BOOLEAN NOT NULL DEFAULT FALSE
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_quarantine_active "
+                    "ON symbol_quarantine (quarantined) WHERE quarantined = TRUE"
+                )
         _SCHEMA_READY = True
 
 

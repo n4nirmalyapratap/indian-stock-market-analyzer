@@ -573,14 +573,27 @@ class PriceProviderChain:
         *,
         user_id: Optional[str] = None,
     ) -> Optional[Quote]:
+        # Canonicalise BEFORE handing to any provider. Universe lists
+        # historically used legacy short names (BATA, INFOEDGE) that
+        # don't exist on NSE/BSE/Yahoo; the alias map in symbol_map.py
+        # translates them to real tickers (BATAINDIA, NAUKRI). Doing
+        # this at the chain layer means every provider gets the right
+        # symbol for free — one change, seven beneficiaries.
+        from ..lib.symbol_map import canonical_symbol  # noqa: PLC0415
+        canon = canonical_symbol(symbol)
         for p in self.providers:
             try:
-                q = await p.get_quote(symbol, user_id=user_id)
+                q = await p.get_quote(canon, user_id=user_id)
             except Exception as exc:
                 logger.debug("provider %s raised on get_quote(%s): %s",
-                             p.name, symbol, str(exc)[:120])
+                             p.name, canon, str(exc)[:120])
                 continue
             if q is not None:
+                # Preserve the CALLER's symbol on the returned Quote
+                # so downstream callers don't suddenly see "BATAINDIA"
+                # when they asked for "BATA" — the alias is internal.
+                if canon != symbol and q.symbol == canon:
+                    q.symbol = symbol.upper().strip() or symbol
                 return q
         return None
 
@@ -595,14 +608,16 @@ class PriceProviderChain:
         """Returns `(bars, winning_provider)`. The provider is exposed
         so PriceService can consult its `disk_cache_safe` flag before
         persisting."""
+        from ..lib.symbol_map import canonical_symbol  # noqa: PLC0415
+        canon = canonical_symbol(symbol)
         for p in self.providers:
             if is_index and p.skip_for_indices:
                 continue
             try:
-                bars = await p.get_historical(symbol, days, user_id=user_id)
+                bars = await p.get_historical(canon, days, user_id=user_id)
             except Exception as exc:
                 logger.debug("provider %s raised on get_historical(%s): %s",
-                             p.name, symbol, str(exc)[:120])
+                             p.name, canon, str(exc)[:120])
                 continue
             if bars and len(bars) >= p.min_history_rows:
                 return bars, p

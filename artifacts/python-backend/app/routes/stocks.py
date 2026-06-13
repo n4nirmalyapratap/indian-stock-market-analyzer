@@ -958,6 +958,28 @@ async def get_tri_factor_score(symbol: str):
     }
 
 
+@router.get("/{symbol}/shareholding")
+async def get_shareholding(
+    symbol: str,
+    view:   str = Query("quarterly", pattern="^(quarterly|yearly)$"),
+    quarters: int = Query(32, ge=1, le=40),
+    force:  bool = Query(False),
+):
+    """Quarterly shareholding-pattern history (Promoter / FII / DII /
+    Public %) for the requested symbol. Data merged from NSE, BSE,
+    Yahoo and (last-resort) Screener.in, cached in PG.
+
+    Query params:
+      view      `quarterly` (default) or `yearly` (only March quarters).
+      quarters  Max rows to return (1..40). Default 16 = 4 years.
+      force     Skip the staleness check and force a refresh fetch.
+                Helpful for the "Refresh" button on the UI.
+    """
+    from ..services.shareholding_service import get_shareholding as _svc  # noqa: PLC0415
+    data = await _svc(symbol, view=view, quarters=quarters, force=force)
+    return data
+
+
 @router.get("/{symbol}")
 async def get_stock(symbol: str):
     data = await svc.stocks.get_stock_details(symbol)
