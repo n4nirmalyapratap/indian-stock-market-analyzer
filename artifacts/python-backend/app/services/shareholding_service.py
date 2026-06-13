@@ -306,75 +306,109 @@ async def _fetch_nse(symbol: str) -> list[dict]:
 # the XBRL switchover.
 
 
-# SEBI XBRL Taxonomy mapping. Each company quarterly files an XBRL
-# document tagging percentage values with a `contextRef` that points
-# to a category definition. We aggregate leaf categories into 4 UI
-# buckets, deliberately ignoring parent categories ("Public" parent
-# total) so we don't double-count when both parent + children are
-# present in the same filing.
+# ── XBRL category mapping (multi-taxonomy) ──────────────────────────────────
 #
-# Matching is lowercased substring — robust against minor schema
-# version drift across SEBI taxonomy versions (2013, 2016, 2018, 2021).
-_XBRL_CATEGORY_PATTERNS = {
-    "promoter": [
-        "promoter",          # excludes "nonpromoter" via explicit check below
-    ],
-    "fii": [
-        "foreignportfolio", "foreignportfolioinvestor",
-        "fpicategory", "fpicat",
-        "foreigninstitutional", "foreigncompan",
-        "qfi",                # Qualified Foreign Investor (older filings)
-    ],
-    "dii": [
-        "mutualfund",
-        "insurance",
-        "bank",               # banks / financial institutions
-        "financialinstitution",
-        "alternateinvestment", "alternativeinvestment",
-        "nbfc", "nonbankingfinancial",
-        "venturecapital",
-        "providentfund", "pensionfund",
-    ],
-    "public": [
-        "individual",
-        "bodycorporate", "bodiescorporate",
-        "trust",
-        "nri",
-        "clearing",
-        "others", "anyother",
-        # NOTE: we deliberately do NOT include bare "Public" here —
-        # that's the parent category. Aggregating leaf sub-categories
-        # gives us the correct breakdown without double-counting.
-    ],
+# SEBI has published five distinct XBRL taxonomy versions for the
+# shareholding pattern schema between 2019 and 2026. The member names
+# differ across versions, so a single substring matcher silently
+# misses values for any version it wasn't tuned to. The disk cache
+# in /app/data/xbrl_cache shows files spanning all five:
+#
+#   2019-06-30  ForeignInstitutions (FII rollup), ForeignPortfolioInvestor,
+#               MutualFundsOrUti, NBFCsRegisteredWithRbi, NonInstitutions, …
+#               NO InstitutionsDomestic rollup — DII must be computed.
+#   2020-09-30  Same member set as 2019-06-30.
+#   2022-09-30  New rollups InstitutionsForeign + InstitutionsDomestic;
+#               FPI split into Cat I / Cat II ("Catergory" typo);
+#               retains MutualFundsOrUti / NBFCsRegisteredWithRbi casing.
+#   2025-05-31  Same shape as 2022-09-30.
+#   2025-10-31  Typo fixed (Catergory → Category); case changes
+#               (MutualFundsOrUTI, NBFCsRegisteredWithRBI); new members
+#               BanksMember, ForeignNationalsMember, KMP, IEPF, …
+#
+# Strategy: prefer aggregate (rollup) members per bucket; back-fill
+# with a component sum when no aggregate exists for that taxonomy.
+# All comparisons happen after lowercasing + stripping the trailing
+# "Member" suffix.
+
+# Exact aggregate member names → bucket. EXACT match (not substring)
+# so children like "InstitutionsForeignPortfolioInvestor" don't
+# accidentally collide with the "InstitutionsForeign" aggregate.
+_XBRL_BUCKETS_BY_AGGREGATE = {
+    # Promoter — consistent across every taxonomy version.
+    "shareholdingofpromoterandpromotergroup":  "promoter",
+    # FII rollup — distinct names per taxonomy era.
+    "institutionsforeign":                     "fii",      # 2022-09-30, 2025-05-31, 2025-10-31
+    "foreigninstitutions":                     "fii",      # 2019-06-30, 2020-09-30
+    # DII rollup — post-2022 taxonomies only. Pre-2022 has no aggregate
+    # so we compute via Institutions − ForeignInstitutions, or via
+    # component sum (see _parse_xbrl below).
+    "institutionsdomestic":                    "dii",      # 2022-09-30 onwards
+    # Public (non-institutional retail) rollup — every taxonomy.
+    "noninstitutions":                         "public",
 }
 
+# Pre-2022 "Institutions" total — used to derive DII as
+# Institutions − ForeignInstitutions when no DII aggregate exists.
+_XBRL_INSTITUTIONS_TOTAL = "institutions"
 
-def _xbrl_category_to_bucket(category: str) -> Optional[str]:
-    """Map an XBRL context-member name to one of our 4 buckets.
+# Component (leaf) member name patterns per bucket. Substring matched
+# against the lowercased member name. Only used to fill in a bucket
+# whose aggregate wasn't found in this filing.
+_XBRL_COMPONENT_PATTERNS = {
+    "fii": (
+        "foreignportfolioinvestor",      # FPI in every taxonomy (incl Cat I/II)
+        "foreignventurecapital",         # FVCI
+        "foreigndirectinvestment",       # FDI
+        "foreignnational",               # ForeignNationalsMember (2025-10)
+        "otherinstitutionsforeign",      # 2022+
+        "otherforeignshareholder",       # 2019/2020
+        "overseasdepositor",             # GDR holders
+        "sovereignwealthfundsforeign",   # 2022+
+        "qfi",                           # legacy Qualified Foreign Investor
+    ),
+    "dii": (
+        "mutualfunds",                   # MutualFundsOrUti / MutualFundsOrUTI
+        "insurancecompanies",
+        "alternativeinvestmentfund", "alternateinvestmentfund",
+        "venturecapitalfund",            # domestic VC; foreign VC handled in FII
+        "indianfinancialinstitutionsorbanks",
+        "financialinstitutionorbanks",
+        "nbfcsregisteredwith",           # NBFCsRegisteredWithRbi / WithRBI
+        "providentfundsorpensionfunds",
+        "assetreconstructioncompanies",
+        "sovereignwealthfundsdomestic",
+        "otherfinancialinstitutions",
+        "otherinstitutionsdomestic",
+    ),
+    "public": (
+        "individualsorhindu", "individualshareholder",
+        "bodiescorporate", "bodycorporate",
+        "centralgovernment", "stategovernment", "presidentofindia",
+        "governments", "goverments",     # "Goverments" typo seen in 2019/2020
+        "nonresidentindi",                # NRI variants
+        "trust",
+        "clearing",
+        "otherindianshareholder",
+        "anyother", "anyothers",
+        "investoreducation",              # IEPF (2025-10)
+        "directorsanddirectorsrelative",  # 2025-10
+        "keymanagerialpersonnel",         # 2025-10
+        "relativesofpromotersotherthanpromotergroup",
+        "shareholdingbycompaniesorbodiescorporate",
+        "employeebenefitstrust", "employeetrust",
+    ),
+}
 
-    Returns None for parent categories ("Public") and unknowns —
-    callers skip those values, which is what we want (we only count
-    leaf-level percentages so the totals across buckets add to ~100
-    without double-counting parent + child contexts in the same file).
-    """
-    if not category:
-        return None
-    norm = category.lower()
-    # Defensive: exclude "NonPromoterNonPublic" and similar
-    # weirdness before considering the promoter bucket.
-    if "nonpromoter" in norm or "non-promoter" in norm:
-        # NonPromoterNonPublic = locked-in shares (employee trusts, ESOPs);
-        # fold into public per SEBI convention.
-        return "public"
-    if any(p in norm for p in _XBRL_CATEGORY_PATTERNS["promoter"]):
-        return "promoter"
-    if any(p in norm for p in _XBRL_CATEGORY_PATTERNS["fii"]):
-        return "fii"
-    if any(p in norm for p in _XBRL_CATEGORY_PATTERNS["dii"]):
-        return "dii"
-    if any(p in norm for p in _XBRL_CATEGORY_PATTERNS["public"]):
-        return "public"
-    return None
+# Parent / supercategory members to skip during the component-sum
+# pass — they're already covered by an aggregate or would double-count.
+_XBRL_PARENT_MEMBERS = frozenset({
+    "publicshareholding",          # = NonInstitutions + Institutions + …
+    "shareholdingpattern",         # grand total = 100%
+    "indian", "foreign",           # 2019/2020 super-rollups
+    "sharesheldbynonpromotnonpublicshareholders",
+    "sharesheldbynonpromoternonpublicshareholders",
+})
 
 
 # XBRL files are immutable per quarter — once a filing is published,
@@ -435,22 +469,24 @@ async def _fetch_xbrl_file(url: str) -> Optional[bytes]:
 
 
 def _parse_xbrl(xml_bytes: bytes) -> Optional[dict]:
-    """Parse a SEBI XBRL shareholding pattern filing.
+    """Parse a SEBI XBRL shareholding pattern filing into the 4 UI buckets.
 
-    Strategy:
-      1. Walk the XML and find every <xbrli:context> element. Each
-         carries an `id` and contains an `<xbrldi:explicitMember>`
-         pointing to the SEBI taxonomy member name (the category).
-         Build `context_id -> category` map.
-      2. Walk again and find every `*PercentageOfShareholding*`
-         element. Look up its `contextRef` -> category -> bucket.
-         Sum percentages into the 4 UI buckets.
-      3. Optionally pull `*NumberOfShareholders*` text content.
-
-    Defensive against XBRL version drift: we match by `localname`
-    (ignoring namespace) and use lowercase substring matching for
-    category names. SEBI taxonomy is stable enough that the bucket
-    mapping doesn't need per-version overrides.
+    Multi-taxonomy strategy:
+      1. Walk every <xbrli:context> and build `ctx_id → member` (lowercased,
+         "Member" suffix stripped, namespace prefix stripped).
+      2. Walk every percentage element and collect `member → pct` for the
+         holding-% values. Members are emitted once per filing so a dict
+         is fine (last-write-wins is irrelevant here).
+      3. Aggregate-first resolution per bucket:
+           a. Look up exact aggregate names (`InstitutionsForeign`,
+              `InstitutionsDomestic`, `NonInstitutions`,
+              `ShareholdingOfPromoterAndPromoterGroup`).
+           b. For DII in pre-2022 filings without that aggregate, derive
+              as Institutions − ForeignInstitutions.
+           c. Last resort: sum leaf components per bucket from
+              `_XBRL_COMPONENT_PATTERNS`, with foreign/domestic cross-
+              contamination excluded.
+      4. Sanity: total of the 4 buckets must be ≤105.
 
     Returns None on any parse failure or if no recognised category
     yielded a value — caller treats as "skip, try next source".
@@ -467,67 +503,197 @@ def _parse_xbrl(xml_bytes: bytes) -> Optional[dict]:
         logger.debug("XBRL parse: lxml failed: %s", str(exc)[:120])
         return None
 
-    # Step 1: context_id -> category member name
-    context_to_category: dict[str, str] = {}
+    # Detect taxonomy version from any in-bse-shp namespace URL —
+    # surfaced in the diagnostic log line so future drift is visible.
+    taxo_version = "unknown"
+    nsmap = getattr(root, "nsmap", {}) or {}
+    for ns in nsmap.values():
+        m = re.search(r"xbrl/shp/(\d{4}-\d{2}-\d{2})", ns or "")
+        if m:
+            taxo_version = m.group(1)
+            break
+
+    # Step 1: context_id → member name (lowercased, "Member" stripped).
+    context_to_member: dict[str, str] = {}
     for ctx in root.iter():
         if etree.QName(ctx).localname != "context":
             continue
         ctx_id = ctx.get("id", "").strip()
         if not ctx_id:
             continue
-        # Find an explicitMember inside this context (anywhere — it
-        # may be wrapped in scenario, segment, etc.).
         for descendant in ctx.iter():
             if etree.QName(descendant).localname == "explicitMember":
                 member = (descendant.text or "").strip()
-                # Member names are namespaced like "in-capmkt:PromoterMember";
-                # strip the namespace prefix for cleaner pattern matching.
                 if ":" in member:
                     member = member.split(":", 1)[1]
-                # Strip trailing "Member" suffix common in SEBI taxonomy
                 if member.endswith("Member"):
                     member = member[:-6]
-                context_to_category[ctx_id] = member
+                context_to_member[ctx_id] = member.lower()
                 break
 
-    # Step 2: aggregate percentages by bucket
-    buckets = {"promoter": 0.0, "fii": 0.0, "dii": 0.0, "public": 0.0}
-    found_any = False
-
+    # Step 2: collect MAX % per member. SEBI filings sometimes emit
+    # the same member across multiple contexts with one zero placeholder
+    # and one real value (varies by filer). Max-per-member picks the
+    # real value while still producing 0 for genuinely-empty categories.
+    member_pct: dict[str, float] = {}
     for el in root.iter():
         localname = etree.QName(el).localname
-        # Match any element whose name looks like a percentage-of-
-        # shareholding value. SEBI has used several variant names
-        # across taxonomy versions.
         if not localname:
             continue
         ln_lower = localname.lower()
-        is_pct_elem = (
-            "percentageofshareholding" in ln_lower
-            or "shareholdingaspercentage" in ln_lower
-            or "percentageholding" in ln_lower
+        # Skip elements that report locked-in / pledged status, not the
+        # bucket breakdown.
+        if "lockedinshares" in ln_lower or "pledgedorencumbered" in ln_lower:
+            continue
+        is_holding = (
+            "shareholdingasapercentageoftotalnumberofshares" in ln_lower
+            or "shareholdingasapercentageassumingfullconversion" in ln_lower
         )
-        if not is_pct_elem:
+        if not is_holding:
+            continue
+        # Skip elements with no text — empty placeholders read as 0 and
+        # would wrongly populate a member entry.
+        text = (el.text or "").strip()
+        if not text:
             continue
         ctx_ref = el.get("contextRef", "")
-        category = context_to_category.get(ctx_ref, "")
-        bucket = _xbrl_category_to_bucket(category)
-        if not bucket:
+        member = context_to_member.get(ctx_ref, "")
+        if not member:
             continue
         try:
-            pct = float((el.text or "0").strip())
+            pct = float(text)
         except (ValueError, TypeError):
             continue
-        # Skip obviously bogus values.
+        # Accept 0-100 (percentage form) and 0-1 (fraction form); we
+        # detect-and-scale fractions after bucket resolution.
         if pct < 0 or pct > 100:
             continue
-        buckets[bucket] += pct
-        found_any = True
+        existing = member_pct.get(member, -1.0)
+        if pct > existing:
+            member_pct[member] = pct
 
-    if not found_any:
+    if not member_pct:
         return None
 
-    # Step 3: total shareholder count (optional)
+    # Step 3a: aggregate-first resolution.
+    # Note: many SEBI filings emit the FII/DII rollups as a value-0
+    # placeholder and only fill component leaves. We reject value==0
+    # for those two buckets so the component-sum step can fill them.
+    # Promoter/Public aggregates are accepted at 0 because some companies
+    # genuinely have zero promoter holding (and have no component
+    # fallback patterns defined here).
+    buckets: dict[str, Optional[float]] = {
+        "promoter": None, "fii": None, "dii": None, "public": None,
+    }
+    bucket_strategy: dict[str, str] = {}    # diagnostic trail
+
+    for member, value in member_pct.items():
+        bucket = _XBRL_BUCKETS_BY_AGGREGATE.get(member)
+        if not bucket or buckets[bucket] is not None:
+            continue
+        if value == 0 and bucket in ("fii", "dii"):
+            # Placeholder aggregate; let the component-sum step
+            # backfill from the leaves.
+            continue
+        buckets[bucket] = value
+        bucket_strategy[bucket] = f"aggregate:{member}"
+
+    # Step 3b: DII via subtraction (pre-2022 taxonomies have
+    # InstitutionsMember total and a ForeignInstitutions aggregate
+    # but no DomesticInstitutions rollup).
+    if buckets["dii"] is None:
+        inst_total = member_pct.get(_XBRL_INSTITUTIONS_TOTAL)
+        foreign_inst = (
+            member_pct.get("foreigninstitutions")
+            or member_pct.get("institutionsforeign")
+        )
+        if inst_total is not None and foreign_inst is not None:
+            diff = inst_total - foreign_inst
+            if 0 <= diff <= 100:
+                buckets["dii"] = diff
+                bucket_strategy["dii"] = "subtract:institutions-foreigninst"
+
+    # Step 3c: component-sum fallback for any bucket still NULL.
+    for bucket_name, patterns in _XBRL_COMPONENT_PATTERNS.items():
+        if buckets[bucket_name] is not None:
+            continue
+        total = 0.0
+        any_matched = False
+        for member, value in member_pct.items():
+            # Skip members already consumed as aggregates / parents.
+            if member in _XBRL_BUCKETS_BY_AGGREGATE:
+                continue
+            if member in _XBRL_PARENT_MEMBERS:
+                continue
+            if member == _XBRL_INSTITUTIONS_TOTAL:
+                continue
+            # Cross-bucket exclusions so e.g. ForeignVentureCapital
+            # doesn't get pulled into DII via the "venturecapital"
+            # substring.
+            if bucket_name == "dii" and "foreign" in member:
+                continue
+            if bucket_name == "fii" and ("domestic" in member
+                                         or "indian" in member):
+                continue
+            if any(p in member for p in patterns):
+                total += value
+                any_matched = True
+        if any_matched:
+            buckets[bucket_name] = total
+            bucket_strategy[bucket_name] = "component_sum"
+
+    # Detect fraction-encoded filings and scale. Starting with some
+    # 2025-09-30 filings, certain filers emit percentage element values
+    # as 0-1 fractions (e.g. 0.7177 for 71.77%) rather than 0-100. The
+    # XBRL `unitRef="pure"` doesn't distinguish — only the magnitude
+    # gives it away. Real percentage breakdowns always sum to ~100; if
+    # the total is below 5, treat the file as fraction-encoded.
+    total_all = sum(v for v in buckets.values() if v is not None)
+    if 0 < total_all < 5:
+        for k in list(buckets.keys()):
+            if buckets[k] is not None:
+                buckets[k] *= 100
+        total_all *= 100
+        bucket_strategy["_scale"] = "x100_fractions"
+
+    # Infer Promoter = 0 for companies with no promoter holding (e.g.
+    # ICICIBANK, HDFCBANK). These filers omit the Promoter aggregate
+    # element entirely rather than emit it as zero. If the other three
+    # buckets account for ~100%, the missing Promoter is genuinely 0%.
+    if buckets["promoter"] is None:
+        others_sum = sum(v for k, v in buckets.items()
+                         if k != "promoter" and v is not None)
+        if 90 < others_sum < 105:
+            buckets["promoter"] = 0.0
+            bucket_strategy["promoter"] = "inferred_zero"
+            total_all = others_sum
+
+    # Sanity check — sum > 105 indicates double-counting (parent +
+    # children both pulled in). Drop and let a fallback source handle.
+    if total_all > 105:
+        logger.debug(
+            "XBRL parse (taxo=%s): bucket total %.2f > 105 — dropping (buckets=%s)",
+            taxo_version, total_all, buckets,
+        )
+        return None
+
+    if all(v is None for v in buckets.values()):
+        logger.debug(
+            "XBRL parse (taxo=%s): no buckets resolved from %d members",
+            taxo_version, len(member_pct),
+        )
+        return None
+
+    # Diagnostic — emitted at DEBUG so it's visible when
+    # SHAREHOLDING_DISABLE_CACHE=1 + LOG_LEVEL=DEBUG is set.
+    logger.debug(
+        "XBRL parse (taxo=%s) promoter=%s fii=%s dii=%s public=%s strategies=%s",
+        taxo_version,
+        buckets["promoter"], buckets["fii"], buckets["dii"], buckets["public"],
+        bucket_strategy,
+    )
+
+    # Step 4: total shareholder count (unchanged).
     num_shareholders: Optional[int] = None
     for el in root.iter():
         ln = etree.QName(el).localname or ""
@@ -537,9 +703,6 @@ def _parse_xbrl(xml_bytes: bytes) -> Optional[dict]:
         if ("numberofshareholders" in ll
                 or "totalnoofshareholders" in ll
                 or "totalnumberofshareholders" in ll):
-            # Skip context-scoped per-category counts; we want the
-            # top-level total. Heuristic: pick the LARGEST value
-            # encountered, which is always the all-shareholders total.
             try:
                 v = int(float((el.text or "0").strip()))
                 if num_shareholders is None or v > num_shareholders:
@@ -547,20 +710,11 @@ def _parse_xbrl(xml_bytes: bytes) -> Optional[dict]:
             except (ValueError, TypeError):
                 continue
 
-    # Sanity check — if buckets total well above 100, something is
-    # double-counted (probably parent + child contexts both included
-    # despite our exclusion logic). Better to return None and let a
-    # fallback source handle it than to surface obviously-wrong data.
-    total = sum(buckets.values())
-    if total > 105:
-        logger.debug("XBRL parse: bucket total %.2f > 105, dropping", total)
-        return None
-
     return {
-        "promoter_pct": _round(buckets["promoter"]) if buckets["promoter"] else None,
-        "fii_pct":      _round(buckets["fii"])      if buckets["fii"]      else None,
-        "dii_pct":      _round(buckets["dii"])      if buckets["dii"]      else None,
-        "public_pct":   _round(buckets["public"])   if buckets["public"]   else None,
+        "promoter_pct": _round(buckets["promoter"]),
+        "fii_pct":      _round(buckets["fii"]),
+        "dii_pct":      _round(buckets["dii"]),
+        "public_pct":   _round(buckets["public"]),
         "num_shareholders": num_shareholders,
     }
 
@@ -791,43 +945,67 @@ def _parse_screener_html(html: str) -> list[dict]:
 
 
 def _last_quarter_end(d: date) -> date:
-    """Snap a date to the most recent quarter-end (31-Mar, 30-Jun,
-    30-Sep, 31-Dec). Used by Yahoo/Screener fallback paths that don't
-    carry an explicit date — they default to today's last quarter-end."""
-    m = d.month
-    if   m >= 12: return date(d.year, 12, 31)
-    elif m >=  9: return date(d.year,  9, 30)
-    elif m >=  6: return date(d.year,  6, 30)
-    elif m >=  3: return date(d.year,  3, 31)
-    return date(d.year - 1, 12, 31)
+    """Return the most recent COMPLETED quarter-end on or before `d`.
+
+    For d=2026-06-13 returns 2026-03-31 — Jun 30 hasn't happened yet,
+    so labelling a snapshot today with "Jun 30 2026" creates a phantom
+    column ahead of reality. For d=2026-06-30 returns 2026-06-30 (the
+    quarter just completed). For d=2026-04-01 returns 2026-03-31.
+
+    Used by Yahoo / Screener fallback paths that take a current
+    snapshot and need to label it with a quarter-end. Always snaps
+    backward so the row goes into a real, settled column.
+    """
+    candidates = [
+        date(d.year - 1, 12, 31),
+        date(d.year,      3, 31),
+        date(d.year,      6, 30),
+        date(d.year,      9, 30),
+        date(d.year,     12, 31),
+    ]
+    past = [c for c in candidates if c <= d]
+    return max(past) if past else candidates[0]
 
 
 def _snap_to_quarter_end(d: date) -> date:
-    """Snap any filing date to the NEAREST standard quarter-end.
+    """Snap any filing date to the nearest PAST or CURRENT standard
+    quarter-end (31-Mar, 30-Jun, 30-Sep, 31-Dec).
 
     Why this exists: SEBI requires shareholding filings for the four
-    standard quarter-ends (31-Mar, 30-Jun, 30-Sep, 31-Dec). But the
-    NSE / XBRL / Screener pipelines occasionally surface non-standard
-    dates — interim corrigendum filings, re-filings with the actual
-    document date instead of the period-end, off-by-a-day dates from
-    different timezones. Without snapping, those become phantom
-    columns in the UI ("OCT 2024" alongside SEP 2024 and DEC 2024),
-    looking like the system is broken.
+    standard quarter-ends. But the NSE / XBRL / Screener pipelines
+    occasionally surface non-standard dates — interim corrigendum
+    filings, re-filings with the document date instead of the
+    period-end, corporate-event record dates (bonus issue, buyback).
+    Without snapping, those become phantom columns in the UI ("OCT 2024"
+    alongside SEP 2024 and DEC 2024).
 
-    Algorithm: build candidate quarter-ends for the same year and the
-    previous-year December, pick the one closest in absolute days.
-    A filing dated 2024-10-15 collapses into 2024-09-30 (15 days away)
-    rather than 2024-12-31 (77 days away).
+    Constraint: never snap to a FUTURE quarter-end. A filing dated
+    2026-06-11 (when today is 2026-06-13) used to snap forward to
+    2026-06-30 — a quarter that hasn't occurred yet. That created a
+    phantom JUN 2026 column with partial data. We now cap candidates
+    at the most recently completed quarter-end.
+
+    Algorithm: pick the closest quarter-end that is ≤ today's last
+    completed quarter-end. For an Oct 29 2024 filing, snaps to Sep 30
+    2024 (29 days back). For a Jun 11 2026 filing (when today is
+    mid-June 2026), snaps to Mar 31 2026 instead of Jun 30 2026.
 
     Idempotent — already-snapped dates pass through unchanged."""
     candidates = [
-        date(d.year, 3, 31),
-        date(d.year, 6, 30),
-        date(d.year, 9, 30),
-        date(d.year, 12, 31),
         date(d.year - 1, 12, 31),
-        date(d.year + 1, 3, 31),
+        date(d.year - 1,  9, 30),
+        date(d.year,      3, 31),
+        date(d.year,      6, 30),
+        date(d.year,      9, 30),
+        date(d.year,     12, 31),
     ]
+    # Cap at today's last completed quarter-end so we never project
+    # a row forward into a quarter that hasn't happened.
+    last_completed = _last_quarter_end(date.today())
+    candidates = [c for c in candidates if c <= last_completed]
+    if not candidates:
+        # Pathological: d is far in the past. Fall back to the floor.
+        return last_completed
     return min(candidates, key=lambda c: abs((c - d).days))
 
 
