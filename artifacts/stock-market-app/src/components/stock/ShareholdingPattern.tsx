@@ -130,12 +130,12 @@ export default function ShareholdingPattern({ symbol }: Props) {
     setForceRefresh(true);
   };
 
-  // Reverse the row order client-side so columns read left-to-right
-  // oldest → newest, matching the screenshot. Server gives newest first
-  // (good for "most recent" reads); pivoting needs the opposite.
+  // Server gives newest first. Keep that order in the pivot so columns
+  // read left-to-right newest → oldest (most recent quarter is leftmost,
+  // which is what the user wants in the table view).
   const ordered = useMemo<ShareholdingRow[]>(() => {
     if (!data?.rows) return [];
-    return [...data.rows].reverse();
+    return data.rows;
   }, [data]);
 
   // ── render branches ──
