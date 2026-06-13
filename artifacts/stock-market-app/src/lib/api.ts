@@ -221,6 +221,14 @@ export interface ScanResult {
   totalScanned: number;
   totalMatched: number;
   results: MatchedStock[];
+  /** Symbols silently dropped from the universe because the system has
+   *  empirically learned they have no usable data anywhere (delisted,
+   *  SME-only, etc.). NOT errors — surfaced separately so the UI can
+   *  show a "N symbols auto-skipped" badge instead of polluting the
+   *  per-symbol error list. */
+  quarantinedCount?:   number;
+  quarantinedSymbols?: string[];
+  scanErrors?:         Array<{ symbol: string; reason?: string; got?: number; needed?: number; error?: string }>;
   error?: string;
 }
 
@@ -694,6 +702,24 @@ export const api = {
   stockTriFactor: (symbol: string) =>
     fetchApi<any>(`/stocks/${encodeURIComponent(symbol)}/tri-factor`),
 
+  /** Quarterly shareholding pattern history (Promoter/FII/DII/Public %)
+   *  for a single security. Backend aggregates NSE + BSE + Yahoo and
+   *  caches each quarter in PG, so this is a fast lookup on warm cache.
+   *  Pass `view="yearly"` to filter to March-quarter snapshots only. */
+  stockShareholding: (
+    symbol: string,
+    opts: { view?: "quarterly" | "yearly"; quarters?: number; force?: boolean } = {},
+  ) => {
+    const p = new URLSearchParams();
+    if (opts.view)     p.set("view",     opts.view);
+    if (opts.quarters) p.set("quarters", String(opts.quarters));
+    if (opts.force)    p.set("force",    "1");
+    const qs = p.toString();
+    return fetchApi<ShareholdingResponse>(
+      `/stocks/${encodeURIComponent(symbol)}/shareholding${qs ? `?${qs}` : ""}`,
+    );
+  },
+
   // ── Famous-Investor AI Council ──
   agentsList: () =>
     fetchApi<AgentsListResponse>("/agents"),
@@ -801,6 +827,49 @@ export const api = {
     fetchApi<ScanResult>(`/scanners/${id}/run`, { method: "POST" }),
   runAdHoc:      (data: ScannerCreateInput) =>
     fetchApi<ScanResult>("/scanners/adhoc/run", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(data) }),
+
+  /** Async scan — kicks off a background job and returns its id
+   *  immediately. Poll `getScanJob(jobId)` every ~1s for progress.
+   *  Survives the user navigating away — the scan keeps running
+   *  on the backend and the result is available when they return. */
+  runScannerAsync: (id: string) =>
+    fetchApi<{
+      jobId:        string;
+      scannerId:    string;
+      scannerName:  string;
+      universeSize: number;
+      status:       "queued" | "running" | "completed" | "failed";
+    }>(`/scanners/${id}/run-job`, { method: "POST" }),
+
+  /** Poll a scan job's current state. While `status === "running"` the
+   *  `progress` field updates after each symbol and `partialMatches`
+   *  carries matches in ARRIVAL order. When status flips to "completed"
+   *  the `result` field carries the same shape as `runScanner` would
+   *  have returned (with results re-sorted by score). */
+  getScanJob: (jobId: string) =>
+    fetchApi<{
+      jobId:       string;
+      scannerId:   string;
+      scannerName: string;
+      status:      "queued" | "running" | "completed" | "failed" | "cancelled";
+      startedAt:   number;
+      completedAt: number | null;
+      progress: {
+        total:   number;
+        scanned: number;
+        matched: number;
+        failed:  number;
+        errors:  number;
+        stage:   string;
+      };
+      /** Live stream of matches in arrival order, capped at 500.
+       *  Frontend uses this to populate the results panel while the
+       *  scan is still running. Once status flips to "completed", use
+       *  `result.results` instead (full, sorted by score). */
+      partialMatches: any[];
+      result:      ScanResult | null;
+      error:       string | null;
+    }>(`/scanners/jobs/${encodeURIComponent(jobId)}`),
 
   whatsappStatus:   () => fetchApi<BotStatus>("/whatsapp/status"),
   whatsappMessages: () => fetchApi<WhatsAppMessage[]>("/whatsapp/messages"),
@@ -1453,6 +1522,27 @@ export interface DividendRow {
 export interface EpsRow {
   date: string;
   eps:  number | null;
+}
+
+/** One quarter of shareholding pattern. Any of the four % buckets may
+ *  be null when the contributing source didn't supply that breakdown
+ *  (e.g. NSE summary-only fetches give Promoter + Public but no
+ *  FII/DII split). UI should treat null as "no data" not "0%". */
+export interface ShareholdingRow {
+  asOnDate:        string;               // ISO YYYY-MM-DD (quarter-end)
+  promoterPct:     number | null;
+  fiiPct:          number | null;
+  diiPct:          number | null;
+  publicPct:       number | null;
+  numShareholders: number | null;
+  source:          string;                // last writer ("NSE","BSE","YAHOO","SCREENER")
+}
+
+export interface ShareholdingResponse {
+  symbol:  string;
+  view:    "quarterly" | "yearly";
+  sources: string[];                      // distinct sources contributing rows
+  rows:    ShareholdingRow[];             // newest quarter first
 }
 
 export interface StockFinancials {

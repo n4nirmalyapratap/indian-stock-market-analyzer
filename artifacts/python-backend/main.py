@@ -261,6 +261,11 @@ async def lifespan(app: FastAPI):
     synth_class_task = asyncio.create_task(_synthetic_classifier_scheduler())
     synth_metrics_task = asyncio.create_task(_synthetic_metrics_scheduler())
     synth_bootstrap_task = asyncio.create_task(_synth_bootstrap_task())
+    # Security registry — populates from NSE + Zerodha so every other
+    # symbol-aware path (price chain, scanners, search) sees the live
+    # NSE master list with multi-source fallback. Run on startup +
+    # once a day at 06:00 IST (after the overnight CSV refresh).
+    registry_task   = asyncio.create_task(_security_registry_scheduler())
     try:
         yield
     finally:
@@ -268,7 +273,7 @@ async def lifespan(app: FastAPI):
                   fixer_task, rfr_task, bhav_task, alerts_task, backtest_task,
                   digest_sched_task, digest_worker_task, fii_dii_task, dhan_task,
                   pcr_task, synth_class_task, synth_metrics_task,
-                  synth_bootstrap_task):
+                  synth_bootstrap_task, registry_task):
             t.cancel()
             try:
                 await t
@@ -343,6 +348,45 @@ async def _bot_alerts_tick_loop() -> None:
             await asyncio.sleep(5 * 60)
         except asyncio.CancelledError:
             logger.info("Bot alerts scheduler stopped.")
+            break
+
+
+async def _security_registry_scheduler() -> None:
+    """Keep the SecurityRegistry fresh.
+
+    Strategy:
+      * On startup → brief settle delay, then one fire-and-forget
+        refresh. Until this completes we serve from the disk cache /
+        baseline (so the app never blocks on the network for startup).
+      * Subsequent ticks → once every 24 h. NSE EQUITY_L.csv is the
+        canonical source; if NSE direct fails the registry falls back
+        to Zerodha's public instruments dump, then disk cache, then
+        the bundled baseline (in that priority).
+
+    Never raises out of the loop — the registry's `refresh()` already
+    catches every fetch failure internally. We log + continue here so
+    one bad day doesn't kill the scheduler for the rest of the process'
+    lifetime.
+    """
+    from app.services.security_registry_service import refresh_registry
+    # ~10 s settle delay so the rest of startup logs land first and we
+    # don't compete with `_universe_scheduler` for the network on
+    # cold boot.
+    await asyncio.sleep(10)
+    while True:
+        try:
+            await refresh_registry()
+        except Exception as exc:
+            logger.warning("Security registry scheduler tick failed: %s", exc)
+        try:
+            # 24h refresh — NSE updates EQUITY_L overnight, so a daily
+            # tick is more than enough. We don't try to align to 06:00
+            # IST precisely; the startup tick already covers freshness
+            # for new launches, and a 24h re-tick from boot is simpler
+            # than wall-clock alignment and just as good for this use.
+            await asyncio.sleep(24 * 3600)
+        except asyncio.CancelledError:
+            logger.info("Security registry scheduler stopped.")
             break
 
 

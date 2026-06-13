@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearch, useLocation, Link } from "wouter";
 import { api } from "@/lib/api";
-import { Search, TrendingUp, TrendingDown, AlertCircle, BarChart2, Activity, Users, ArrowLeft, Newspaper, Layers } from "lucide-react";
+import { Search, TrendingUp, TrendingDown, AlertCircle, BarChart2, Activity, Users, ArrowLeft, Newspaper, Layers, PieChart } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
 import AIAnalystButton from "@/components/AIAnalystButton";
 import StockFinancials from "@/components/financials/StockFinancials";
@@ -13,6 +13,7 @@ import TickerNewsPanel from "@/components/TickerNewsPanel";
 import { marketDataQueryOptions, pickMeta } from "@/lib/marketData";
 import StockLogo from "@/components/StockLogo";
 import TriFactorScoring from "@/components/TriFactorScoring";
+import ShareholdingPattern from "@/components/stock/ShareholdingPattern";
 
 const NIFTY100_QUICK = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","ITC","SBIN","BHARTIARTL","KOTAKBANK","BAJFINANCE","AXISBANK","MARUTI","HCLTECH","WIPRO","TITAN","SUNPHARMA"];
 
@@ -21,7 +22,7 @@ export default function StockLookup() {
   const [, navigate] = useLocation();
   const [input, setInput] = useState("");
   const [symbol, setSymbol] = useState("");
-  const [view, setView] = useState<"technicals" | "financials" | "news" | "scoring">("technicals");
+  const [view, setView] = useState<"technicals" | "financials" | "news" | "scoring" | "shareholding">("technicals");
   // True only when ChartButton explicitly set the flag — cleared immediately so
   // coming back from Investor Council (or any other back-nav) never re-shows it.
   const cameFromLink = useRef((() => {
@@ -194,6 +195,13 @@ export default function StockLookup() {
             >
               <Layers className="w-3.5 h-3.5" /> Scoring
             </button>
+            <button
+              onClick={() => setView("shareholding")}
+              data-testid="shareholding-tab-btn"
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "shareholding" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+            >
+              <PieChart className="w-3.5 h-3.5" /> Shareholding
+            </button>
           </div>
 
           {/* Technicals view — TradingView-style Indicators Summary */}
@@ -214,6 +222,11 @@ export default function StockLookup() {
           {/* Tri-Factor Composite Scoring */}
           {view === "scoring" && (
             <TriFactorScoring symbol={data.symbol} />
+          )}
+
+          {/* Shareholding pattern — quarterly Promoter / FII / DII / Public % */}
+          {view === "shareholding" && (
+            <ShareholdingPattern symbol={data.symbol} />
           )}
         </div>
       )}

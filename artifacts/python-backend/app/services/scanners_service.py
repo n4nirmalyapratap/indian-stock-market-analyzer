@@ -350,6 +350,69 @@ DEFAULT_SCANNERS_DEF = [
              "right": {"type": "number", "value": 70}},
         ],
     },
+
+    # ── Hidden Gems category ────────────────────────────────────────
+    # Fundamental-driven screens for undervalued small/mid caps.
+    # Each scanner's RESULT rows are also enriched with `hiddenGemScore`
+    # (0-100) + `hiddenGemBreakdown` because of the `category` field —
+    # see _evaluate() in run_scanner. Note: these scanners trigger a
+    # Yahoo `info` prefetch for the entire universe on first run within
+    # any 12h window. First run on a fresh deploy is slow (~30-90s for
+    # NIFTY100); subsequent runs are instant.
+
+    {
+        "name": "Small-Cap Multibagger Setup",
+        "category": "Hidden Gems",
+        "description": "Small/mid cap (₹500-5000 Cr) + low PE + high ROE + low debt — the classic hidden-gem profile",
+        "universe": ["MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "MARKET_CAP_CR"}, "operator": "gte", "right": {"type": "number", "value": 500}},
+            {"left": {"type": "indicator", "indicator": "MARKET_CAP_CR"}, "operator": "lte", "right": {"type": "number", "value": 5000}},
+            {"left": {"type": "indicator", "indicator": "PE_RATIO"},      "operator": "lt",  "right": {"type": "number", "value": 20}},
+            {"left": {"type": "indicator", "indicator": "ROE"},           "operator": "gt",  "right": {"type": "number", "value": 15}},
+            {"left": {"type": "indicator", "indicator": "DEBT_TO_EQUITY"},"operator": "lt",  "right": {"type": "number", "value": 0.5}},
+        ],
+    },
+    {
+        "name": "Quality Compounder",
+        "category": "Hidden Gems",
+        "description": "High ROE (>18%) + strong margin (>12%) + revenue growth (>15%) + low debt — the buy-and-hold profile",
+        "universe": ["NIFTY100", "MIDCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "ROE"},               "operator": "gt", "right": {"type": "number", "value": 18}},
+            {"left": {"type": "indicator", "indicator": "PROFIT_MARGIN"},     "operator": "gt", "right": {"type": "number", "value": 12}},
+            {"left": {"type": "indicator", "indicator": "REVENUE_GROWTH_YOY"},"operator": "gt", "right": {"type": "number", "value": 15}},
+            {"left": {"type": "indicator", "indicator": "DEBT_TO_EQUITY"},    "operator": "lt", "right": {"type": "number", "value": 0.4}},
+        ],
+    },
+    {
+        "name": "Deep Value + Momentum",
+        "category": "Hidden Gems",
+        "description": "PE < 12 AND P/B < 2 AND price above 50-DMA AND volume > 120% — cheap stocks that are starting to move",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "PE_RATIO"},   "operator": "lt", "right": {"type": "number", "value": 12}},
+            {"left": {"type": "indicator", "indicator": "PB_RATIO"},   "operator": "lt", "right": {"type": "number", "value": 2}},
+            {"left": {"type": "indicator", "indicator": "CLOSE"},      "operator": "gt", "right": {"type": "indicator", "indicator": "EMA", "period": 50}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "gt", "right": {"type": "number", "value": 120}},
+        ],
+    },
+    {
+        "name": "Conservative Hidden Gem (Debt-Free Compounder)",
+        "category": "Hidden Gems",
+        "description": "Essentially debt-free (D/E < 0.2) + high ROE + positive FCF yield — capital-light businesses",
+        "universe": ["MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "DEBT_TO_EQUITY"}, "operator": "lt", "right": {"type": "number", "value": 0.2}},
+            {"left": {"type": "indicator", "indicator": "ROE"},            "operator": "gt", "right": {"type": "number", "value": 15}},
+            {"left": {"type": "indicator", "indicator": "FCF_YIELD"},      "operator": "gt", "right": {"type": "number", "value": 4}},
+            {"left": {"type": "indicator", "indicator": "PE_RATIO"},       "operator": "lt", "right": {"type": "number", "value": 25}},
+        ],
+    },
 ]
 
 
@@ -367,6 +430,18 @@ _PERIOD_INDS = {
 _WINDOW_52W_INDS = {"HIGH_52W", "LOW_52W", "PCT_52W_HIGH", "PCT_52W_LOW"}
 # MACD: 26 + 9 = 35 bars minimum, * BUFFER_MULT for stable seeding
 _MACD_INDS = {"MACD", "MACD_SIGNAL", "MACD_HIST"}
+
+# Fundamental indicators (Yahoo Finance `info` dict, normalised + cached
+# by app.services.fundamentals_service). Need no historical bars beyond
+# whatever the scanner's technical conditions require, so they don't
+# inflate the lookback window. Pre-fetched in run_scanner() via
+# fundamentals.prefetch() when any condition uses one of these.
+_FUNDAMENTAL_INDS = {
+    "PE_RATIO", "PB_RATIO", "PEG_RATIO",
+    "ROE", "ROCE", "DEBT_TO_EQUITY",
+    "MARKET_CAP_CR", "PROFIT_MARGIN", "REVENUE_GROWTH_YOY",
+    "EARNINGS_GROWTH_YOY", "FCF_YIELD",
+}
 
 # Candle-pattern indicators (boolean). Defined by name explicitly rather
 # than implicitly to avoid accidentally accepting typos. Two-candle
@@ -436,12 +511,32 @@ class _SymbolEvaluator:
     phantom crossovers in low-volatility names.
     """
 
-    def __init__(self, ohlcv: list[dict]):
+    def __init__(self, ohlcv: list[dict], symbol: Optional[str] = None):
         self.ohlcv  = ohlcv
         self.n      = len(ohlcv)
+        # Symbol is optional so existing test-only constructions still
+        # work. It's required ONLY when the scanner condition references
+        # a fundamental indicator (PE_RATIO etc.) — those look up the
+        # symbol's cached fundamentals via fundamentals_service.
+        self.symbol = (symbol or "").upper().strip() or None
         # Filter once; downstream indicator helpers expect non-null closes.
         self.closes = [d["close"] for d in ohlcv if d.get("close") is not None]
         self._series_cache: dict = {}
+        # Lazy: fundamentals are only read on demand. `None` means "not
+        # looked up yet"; the property does the cache check on first access.
+        self._fundamentals: Optional[dict] = None
+        self._fundamentals_loaded: bool = False
+
+    def _get_fundamentals(self) -> Optional[dict]:
+        """Lazy fetch from the in-process fundamentals cache. Returns
+        None when the symbol wasn't prefetched (the run_scanner caller
+        warms the cache for any universe that needs them)."""
+        if not self._fundamentals_loaded:
+            self._fundamentals_loaded = True
+            if self.symbol:
+                from . import fundamentals_service as _fs  # noqa: PLC0415
+                self._fundamentals = _fs.get_cached(self.symbol)
+        return self._fundamentals
 
     # ── Series builders (cached) ────────────────────────────────────────
     def _series(self, ind: str, period: Optional[int]) -> list[float]:
@@ -607,6 +702,48 @@ class _SymbolEvaluator:
             avg_first  = sum(first_half)  / len(first_half)
             avg_second = sum(second_half) / len(second_half)
             return 1.0 if avg_second > avg_first else 0.0
+
+        # ── Fundamentals (Yahoo info dict, cached 12h) ──────────────────
+        # Read from in-process cache populated by fundamentals.prefetch()
+        # at scan-start. If the symbol's fundamentals aren't available
+        # (None — Yahoo had no data, or prefetch was skipped), every
+        # fundamental indicator returns None which makes the surrounding
+        # condition fail. That's the correct behavior: "data unavailable"
+        # MUST exclude the row rather than silently pass.
+        if ind in _FUNDAMENTAL_INDS:
+            f = self._get_fundamentals()
+            if f is None:
+                return None
+            if ind == "PE_RATIO":            return f.get("pe")
+            if ind == "PB_RATIO":            return f.get("pb")
+            if ind == "PEG_RATIO":
+                # PEG = PE / earnings-growth (in %). yahoo_norm gives
+                # earningsGrowth as a percent (e.g. 18.0). PEG only makes
+                # sense for positive growth — return None for the rest so
+                # conditions like `PEG < 1` exclude unprofitable growers.
+                pe = f.get("pe")
+                eg = f.get("earningsGrowth")
+                if pe and eg and eg > 0:
+                    return pe / eg
+                return None
+            if ind == "ROE":                 return f.get("roe")
+            if ind == "ROCE":
+                # yfinance doesn't ship ROCE directly. ROA is the closest
+                # proxy from Yahoo's free dataset; we expose both names
+                # so screener authors familiar with Indian retail
+                # terminology can use either.
+                return f.get("roa")
+            if ind == "DEBT_TO_EQUITY":      return f.get("debtToEquityRatio")
+            if ind == "MARKET_CAP_CR":       return f.get("marketCapCr")
+            if ind == "PROFIT_MARGIN":       return f.get("netMargin")
+            if ind == "REVENUE_GROWTH_YOY":  return f.get("revenueGrowth")
+            if ind == "EARNINGS_GROWTH_YOY": return f.get("earningsGrowth")
+            if ind == "FCF_YIELD":
+                fcf = f.get("freeCashflow")
+                mc  = f.get("marketCap")
+                if fcf and mc and mc > 0:
+                    return (fcf / mc) * 100
+                return None
 
         # ── Candle patterns (centralised in app/lib/candle_patterns) ───
         # Boolean indicators — return 1.0 if today's candle (and the
@@ -827,12 +964,56 @@ class ScannersService:
             return True
         return False
 
-    async def run_scanner(self, sid: str) -> dict:
+    async def run_scanner(
+        self,
+        sid: str,
+        progress_cb=None,
+    ) -> dict:
+        """Execute a scanner.
+
+        `progress_cb` is an optional callable invoked at key phases so
+        the async-job wrapper can stream live updates to the UI. It's
+        called with kwargs:
+          * stage="prefetch_fundamentals" | "scanning" | "done"
+          * scanned=int, matched=int, failed=int, errors=int
+            (sent after each symbol completes, scanning stage only)
+          * total=int (sent once at start so the wrapper knows the universe size)
+
+        When `progress_cb` is None (legacy sync path) the function
+        behaves exactly as before — no overhead, no protocol change.
+        """
+        def _emit(**kwargs):
+            """Local no-op-aware progress emitter. Centralises the
+            None-check so the call sites stay clean."""
+            if progress_cb is None:
+                return
+            try:
+                progress_cb(**kwargs)
+            except Exception as exc:
+                logger.debug("progress_cb failed (continuing): %s", exc)
+
         scanner = _scanners.get(sid)
         if not scanner:
             return {"error": "Scanner not found"}
 
         symbols      = build_universe(scanner["universe"])
+        # ── Quarantine pre-filter ──────────────────────────────────────────
+        # Drop symbols that have been empirically flagged as "no usable
+        # data in any provider" (delisted, SME-only, suspended, etc.).
+        # These don't get surfaced as scanner errors anymore — they're
+        # reported separately in the response envelope as
+        # `quarantinedCount` so the user knows the scanner is aware of
+        # them, rather than appearing to silently miss them.
+        from . import symbol_quarantine_service as _qsvc  # noqa: PLC0415
+        symbols, quarantined_symbols = _qsvc.filter_quarantined(symbols)
+        if quarantined_symbols:
+            logger.info(
+                "scanner %s: skipping %d quarantined symbols (auto-detected dead): %s%s",
+                sid, len(quarantined_symbols),
+                ", ".join(quarantined_symbols[:5]),
+                "…" if len(quarantined_symbols) > 5 else "",
+            )
+
         conditions   = scanner["conditions"]
         logic        = scanner["logic"]
         market_open_at_start = _mcs.is_market_open()
@@ -840,6 +1021,29 @@ class ScannersService:
         # Minimum bars for any meaningful eval — at least 2 closes for
         # CHANGE_PCT, plus the largest period across conditions.
         min_eval_bars = max(2, min(bars_needed // 2, 35))
+
+        _emit(total=len(symbols), stage="starting")
+
+        # Fundamentals prefetch — only triggers when at least one
+        # condition uses a fundamental indicator (PE_RATIO etc.). Warms
+        # the in-process cache for the entire universe in parallel
+        # BEFORE the per-symbol evaluation loop, so the actual
+        # `_SymbolEvaluator.value()` reads hit a warm cache in O(1).
+        # Cost is paid once per 12h per universe (the cache TTL).
+        needs_fundamentals = any(
+            (side or {}).get("indicator") in _FUNDAMENTAL_INDS
+            for c in conditions
+            for side in (c.get("left"), c.get("right"))
+        )
+        if needs_fundamentals:
+            _emit(stage="prefetch_fundamentals")
+            try:
+                from . import fundamentals_service as _fs  # noqa: PLC0415
+                await _fs.prefetch(symbols)
+            except Exception as exc:
+                logger.warning("Fundamentals prefetch failed (continuing without): %s", exc)
+
+        _emit(stage="scanning")
 
         scan_errors: list[dict] = []
 
@@ -852,8 +1056,26 @@ class ScannersService:
                     "got":    len(h),
                     "needed": min_eval_bars,
                 })
+                # Record failure ONLY for the zero-bars case. >0 bars but
+                # below `min_eval_bars` is a genuine "thin history" /
+                # "new listing" case — not a dead symbol, don't quarantine.
+                if len(h) == 0:
+                    try:
+                        _qsvc.record_failure(sym, reason="no-data")
+                    except Exception:
+                        pass   # never let bookkeeping break the scan
                 return None
-            ev = _SymbolEvaluator(h)
+            # >= min_eval_bars means the chain returned usable data.
+            # Wipe any prior failure state so a previously-quarantined
+            # symbol that's come back online gets re-enabled. Only fire
+            # the write when the symbol is in the active quarantine set
+            # — avoids a PG round-trip per healthy symbol on every scan.
+            if _qsvc.is_quarantined(sym):
+                try:
+                    _qsvc.record_success(sym)
+                except Exception:
+                    pass
+            ev = _SymbolEvaluator(h, symbol=sym)
             closes = ev.closes
             if len(closes) < 2:
                 scan_errors.append({"symbol": sym, "reason": "insufficient-closes"})
@@ -882,7 +1104,7 @@ class ScannersService:
             # match's data was sealed (avoids the "single runAt" lie when a
             # 100-symbol scan takes 3 minutes).
             row_as_of = h[-1].get("date") if h else None
-            return {
+            row = {
                 "symbol":             None,  # filled by caller
                 "lastPrice":          lc,
                 "change":             round(change, 2),
@@ -895,27 +1117,84 @@ class ScannersService:
                 "score":              score,
                 "asOf":               row_as_of,
             }
+            # Hidden Gem Score — only attached for scanners in the
+            # "Hidden Gems" category. Avoids paying the (cheap, pure
+            # Python) score computation on every result row of every
+            # scanner. Two extra fields: `hiddenGemScore` (0-100) and
+            # `hiddenGemBreakdown` (array of strings explaining the
+            # score) so the UI can render a tooltip without re-deriving.
+            if scanner.get("category") == "Hidden Gems":
+                f = ev._get_fundamentals()
+                if f:
+                    from . import fundamentals_service as _fs  # noqa: PLC0415
+                    hg_score, hg_breakdown = _fs.compute_hidden_gem_score(f)
+                    row["hiddenGemScore"]     = hg_score
+                    row["hiddenGemBreakdown"] = hg_breakdown
+                else:
+                    row["hiddenGemScore"]     = None
+                    row["hiddenGemBreakdown"] = ["fundamentals unavailable"]
+            return row
 
         results: list[dict] = []
         market_state_changed = False
 
+        # Live counters — closed over by _scan_one in the fast path
+        # and incremented in-line in the live path. Both paths emit
+        # progress through these so the polling client sees a unified
+        # scanned/matched/failed/errors trio regardless of which mode
+        # the scan is running in.
+        scanned_n = 0
+        matched_n = 0
+        errors_n  = 0
+
+        def _push_progress() -> None:
+            # `failed` is the residual: we scanned it, didn't error, but
+            # it didn't pass the conditions. Computed rather than tracked
+            # so the three numbers can't disagree.
+            failed_n = max(0, scanned_n - matched_n - errors_n)
+            _emit(
+                scanned=scanned_n, matched=matched_n,
+                failed=failed_n,   errors=errors_n,
+            )
+
         if not market_open_at_start:
             # ── FAST PATH: market closed → all data from disk → run fully parallel ──
             async def _scan_one(sym: str):
+                nonlocal scanned_n, matched_n, errors_n
                 try:
                     h = await self.price.get_historical_data(sym, bars_needed)
-                    return _evaluate(sym, h or []), sym
+                    row = _evaluate(sym, h or [])
+                    scanned_n += 1
+                    if row:
+                        matched_n += 1
+                        # Stamp `symbol` BEFORE emitting so the live
+                        # stream shipping to the UI carries the same
+                        # field layout as the final sorted result.
+                        # Without this, the partial-matches list would
+                        # have `symbol: None` until the collection
+                        # phase below mutates it.
+                        row["symbol"] = sym
+                        _emit(match=row)
+                    _push_progress()
+                    return row, sym
                 except Exception as e:
                     scan_errors.append({
                         "symbol": sym,
                         "reason": "fetch-failed",
                         "error":  f"{type(e).__name__}: {e}",
                     })
+                    scanned_n += 1
+                    errors_n  += 1
+                    _push_progress()
                     return None, sym
 
             scanned = await asyncio.gather(*[_scan_one(s) for s in symbols])
             for row, sym in scanned:
                 if row:
+                    # `row["symbol"]` was already set inside _scan_one
+                    # for the live emit; this is now a no-op assignment
+                    # kept for clarity (and as a safety net if a future
+                    # refactor moves emit logic elsewhere).
                     row["symbol"] = sym
                     results.append(row)
 
@@ -925,9 +1204,13 @@ class ScannersService:
                 try:
                     h = await self.price.get_historical_data(sym, bars_needed)
                     row = _evaluate(sym, h or [])
+                    scanned_n += 1
                     if row:
+                        matched_n += 1
                         row["symbol"] = sym
                         results.append(row)
+                        _emit(match=row)
+                    _push_progress()
                     await asyncio.sleep(RATE_LIMIT_DELAY_S)
                 except Exception as e:
                     scan_errors.append({
@@ -935,11 +1218,16 @@ class ScannersService:
                         "reason": "fetch-failed",
                         "error":  f"{type(e).__name__}: {e}",
                     })
+                    scanned_n += 1
+                    errors_n  += 1
+                    _push_progress()
                 # Detect intra-scan market-state transition so the response
                 # can warn the user that early symbols ran on live data and
                 # later symbols ran on freshly-sealed EOD.
                 if not market_state_changed and not _mcs.is_market_open():
                     market_state_changed = True
+
+        _emit(stage="done")
 
         results.sort(key=lambda r: r["score"], reverse=True)
         _scanners[sid] = {
@@ -964,6 +1252,14 @@ class ScannersService:
             "totalMatched":       len(results),
             "results":            results,
             "scanErrors":         scan_errors,
+            # Quarantined symbols are NOT scan errors — they're known
+            # dead/unreachable names that the system has empirically
+            # learned to skip. Surface them separately so the UI can
+            # show "N symbols auto-skipped (delisted/no data)" without
+            # cluttering the per-symbol error list. `quarantinedCount`
+            # plus `totalScanned` equals the original universe size.
+            "quarantinedCount":   len(quarantined_symbols),
+            "quarantinedSymbols": quarantined_symbols,
             "barsRequested":      bars_needed,
             "marketOpenAtStart":  market_open_at_start,
             "marketStateChanged": market_state_changed,

@@ -80,6 +80,211 @@ async def admin_google_login(request: Request):
 
 # ── App status ────────────────────────────────────────────────────────────────
 
+@router.get("/admin/registry/stats")
+async def admin_registry_stats(request: Request):
+    """Inspect the Security Registry's current state. Use this to
+    triage "symbol not found" issues in scanners — if `count` is small
+    (~150) the live NSE refresh hasn't succeeded yet and the registry
+    is running from baseline. Pass ?resolve=LTFH (etc.) to test how a
+    specific symbol would resolve."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.services.security_registry_service import get_registry  # noqa: PLC0415
+    reg = get_registry()
+    stats = reg.stats()
+    # Optional resolution probe — let the admin test arbitrary inputs.
+    probe = (request.query_params.get("resolve") or "").strip()
+    probe_result = None
+    if probe:
+        sec = reg.resolve(probe)
+        probe_result = (
+            {"input": probe, "nse_symbol": sec.nse_symbol, "name": sec.name,
+             "aliases": list(sec.aliases), "isin": sec.isin}
+            if sec else
+            {"input": probe, "resolved": False}
+        )
+    return {**stats, "probe": probe_result}
+
+
+@router.get("/admin/shareholding/diagnose/{symbol}")
+async def admin_shareholding_diagnose(symbol: str, request: Request):
+    """Per-source diagnostic for the shareholding chain.
+
+    Walks NSE → XBRL (first available URL only) → Screener → Yahoo
+    INDEPENDENTLY (no upserts, no caching), and reports what each
+    source returned. Use this to triage "Shareholding tab shows 1
+    column with YAHOO badge" — the response tells you exactly which
+    source is failing and why.
+
+    Example: GET /admin/shareholding/diagnose/TCS
+    Returns: {
+      "input": "TCS",
+      "canonical": "TCS",
+      "sources": {
+        "nse":      { "ok": true,  "rows_count": 80, "first_row": {...}, "xbrl_urls": 80 },
+        "xbrl":     { "ok": true,  "xml_size": 23456, "parsed": {...} },
+        "screener": { "ok": false, "error": "..."  },
+        "yahoo":    { "ok": true,  "rows_count": 1 }
+      }
+    }
+    """
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+
+    from app.services import shareholding_service as _sh  # noqa: PLC0415
+    from app.lib.symbol_map import canonical_symbol       # noqa: PLC0415
+
+    canon = canonical_symbol(symbol)
+    result: dict = {
+        "input": symbol,
+        "canonical": canon,
+        "sources": {},
+    }
+
+    # NSE — primary index source.
+    nse_rows: list = []
+    try:
+        nse_rows = await _sh._fetch_nse(canon)
+        result["sources"]["nse"] = {
+            "ok":          True,
+            "rows_count":  len(nse_rows),
+            "xbrl_urls":   sum(1 for r in nse_rows if r.get("_xbrl_url")),
+            "first_row":   _sanitize_row_for_debug(nse_rows[0]) if nse_rows else None,
+            "first_xbrl_url": next(
+                (r["_xbrl_url"] for r in nse_rows if r.get("_xbrl_url")),
+                None,
+            ),
+        }
+    except Exception as e:
+        result["sources"]["nse"] = {
+            "ok": False,
+            "error": f"{type(e).__name__}: {str(e)[:200]}",
+        }
+
+    # XBRL — only if NSE gave us a URL.
+    xbrl_url = result["sources"]["nse"].get("first_xbrl_url") if isinstance(result["sources"]["nse"], dict) else None
+    if xbrl_url:
+        try:
+            xml = await _sh._fetch_xbrl_file(xbrl_url)
+            if xml:
+                parsed = _sh._parse_xbrl(xml)
+                result["sources"]["xbrl"] = {
+                    "ok":       True,
+                    "url":      xbrl_url,
+                    "xml_size": len(xml),
+                    "parsed":   parsed,
+                }
+            else:
+                result["sources"]["xbrl"] = {
+                    "ok": False, "url": xbrl_url, "reason": "fetch returned empty bytes",
+                }
+        except Exception as e:
+            result["sources"]["xbrl"] = {
+                "ok": False, "url": xbrl_url,
+                "error": f"{type(e).__name__}: {str(e)[:200]}",
+            }
+    else:
+        result["sources"]["xbrl"] = {"ok": False, "reason": "no XBRL URL from NSE"}
+
+    # Screener — independent HTML scrape.
+    try:
+        s_rows = await _sh._fetch_screener(canon)
+        result["sources"]["screener"] = {
+            "ok":         True,
+            "rows_count": len(s_rows),
+            "first_row":  _sanitize_row_for_debug(s_rows[0]) if s_rows else None,
+            "url":        f"https://www.screener.in/company/{canon}/",
+        }
+    except Exception as e:
+        result["sources"]["screener"] = {
+            "ok": False,
+            "error": f"{type(e).__name__}: {str(e)[:200]}",
+        }
+
+    # Yahoo — the conflated last-resort.
+    try:
+        y_rows = await _sh._fetch_yahoo(canon)
+        result["sources"]["yahoo"] = {
+            "ok":         True,
+            "rows_count": len(y_rows),
+            "first_row":  _sanitize_row_for_debug(y_rows[0]) if y_rows else None,
+        }
+    except Exception as e:
+        result["sources"]["yahoo"] = {
+            "ok": False,
+            "error": f"{type(e).__name__}: {str(e)[:200]}",
+        }
+
+    return result
+
+
+def _sanitize_row_for_debug(row: dict) -> dict:
+    """Strip the internal `_xbrl_url` field and ISO-format dates so
+    the diagnostic JSON is paste-safe."""
+    if not isinstance(row, dict):
+        return {}
+    out = {k: v for k, v in row.items() if not k.startswith("_")}
+    if "as_on_date" in out and hasattr(out["as_on_date"], "isoformat"):
+        out["as_on_date"] = out["as_on_date"].isoformat()
+    return out
+
+
+@router.get("/admin/quarantine")
+async def admin_list_quarantine(request: Request):
+    """List every symbol currently quarantined by the scanner. These
+    are symbols where every provider returned 0 bars enough times to
+    trip the auto-quarantine threshold — typically delisted, SME-only,
+    or genuinely no-data tickers that scanners would otherwise show as
+    errors on every run."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.services import symbol_quarantine_service as _qsvc  # noqa: PLC0415
+    rows  = _qsvc.list_quarantined()
+    stats = _qsvc.stats()
+    return {"stats": stats, "quarantined": rows}
+
+
+@router.delete("/admin/quarantine/{symbol}")
+async def admin_release_quarantine(symbol: str, request: Request):
+    """Release one symbol from quarantine. Useful when manual
+    investigation confirms a flagged symbol is actually valid (e.g. a
+    transient NSE outage caused the auto-quarantine).
+
+    The released symbol carries a `manual_override` flag so the
+    auto-quarantine logic won't immediately re-fire on the next scan
+    — gives operators room to investigate without the system fighting
+    them."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.services import symbol_quarantine_service as _qsvc  # noqa: PLC0415
+    released = _qsvc.release(symbol)
+    return {"symbol": symbol.upper(), "released": released}
+
+
+@router.post("/admin/quarantine/release-all")
+async def admin_release_all_quarantine(request: Request):
+    """Nuclear option — release every quarantined symbol. Use after a
+    sustained upstream outage that over-flagged a large batch."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.services import symbol_quarantine_service as _qsvc  # noqa: PLC0415
+    count = _qsvc.release_all()
+    return {"released": count}
+
+
+@router.post("/admin/registry/refresh")
+async def admin_registry_refresh(request: Request):
+    """Force an immediate registry refresh (fetches NSE EQUITY_L + the
+    symbol-change history). Returns the new stats. Useful after a
+    rename ships in production and you don't want to wait 24h for the
+    scheduler's next tick."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.services.security_registry_service import get_registry, refresh_registry  # noqa: PLC0415
+    await refresh_registry()
+    return get_registry().stats()
+
+
 @router.get("/admin/status")
 async def admin_status(request: Request):
     if not _require_admin(request):
