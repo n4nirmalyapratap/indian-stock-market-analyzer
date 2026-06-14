@@ -386,9 +386,13 @@ async def warmup_cache(price_service, batch_size: int = 10) -> dict:
     Runs in parallel batches of `batch_size` to avoid overwhelming APIs.
     Returns a summary dict.
     """
-    from ..lib.universe import build_universe
+    from ..lib.universe import get_scan_universe
 
-    all_symbols = list(set(build_universe(["NIFTY100", "MIDCAP", "SMALLCAP"])))
+    # Warm the FULL tradeable universe (~2,000) so the cache-first scans
+    # (screener / patterns / scanners) read EOD data from disk and run fast.
+    # Order-stable & deduped; gentle batch_size + per-fetch sleep keep providers
+    # happy across the larger set.
+    all_symbols = get_scan_universe()
     total = len(all_symbols)
     saved = 0
     errors = 0

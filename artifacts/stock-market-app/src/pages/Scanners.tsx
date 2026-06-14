@@ -715,16 +715,29 @@ export default function Scanners() {
         </div>
       </div>
 
-      {/* Stale-universe banner — surfaces honestly when the AMFI cache failed
-          to load and we're scanning a hardcoded fallback list that may be
-          months out of date. Silent fallback is exactly the kind of thing
-          users rightly hate; flag it. */}
+      {/* Universe freshness banner — surfaces honestly. Two distinct states:
+          (1) hardcoded fallback (cache never loaded) → hard warning;
+          (2) live cache present but stale (>2 days old) → mild "last refreshed"
+          note. Silent fallback is exactly the kind of thing users rightly hate. */}
       {scannersMeta?.universe && scannersMeta.universe.isLiveUniverse === false && (
         <div className="mb-4 flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 text-xs">
           <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
           <div>
             <p className="font-semibold">Scanning fallback universe ({scannersMeta.universe.totalSymbols} symbols)</p>
             <p className="opacity-80">Live NSE/AMFI membership cache is unavailable — recently listed or delisted stocks may be missing. Re-running the universe builder will refresh this list.</p>
+          </div>
+        </div>
+      )}
+      {scannersMeta?.universe
+        && scannersMeta.universe.isLiveUniverse !== false
+        && (scannersMeta.universe.ageSeconds ?? 0) > 2 * 86400 && (
+        <div className="mb-4 flex items-start gap-2 bg-amber-50/60 border border-amber-200/70 text-amber-700 rounded-lg px-3 py-2 text-xs">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">
+              Live universe ({scannersMeta.universe.totalSymbols} symbols) · last refreshed {Math.round(scannersMeta.universe.ageSeconds! / 86400)} days ago
+            </p>
+            <p className="opacity-80">Membership hasn't refreshed in a while — very recently listed/delisted stocks may be missing.</p>
           </div>
         </div>
       )}
@@ -885,12 +898,20 @@ export default function Scanners() {
                         { key: "MIDCAP",   label: "Mid Cap"   },
                         { key: "SMALLCAP", label: "Small Cap" },
                         { key: "MICROCAP", label: "Micro Cap" },
+                        { key: "ALL",      label: "All Stocks (full market)" },
                       ] as const).map(({ key: u, label }) => {
                         const active = draft.universe.includes(u);
                         return (
                           <button key={u} onClick={() => setDraft(d => ({
                             ...d,
-                            universe: active ? d.universe.filter(x => x !== u) : [...d.universe, u]
+                            // "All Stocks" is the whole tradeable universe, so it's
+                            // exclusive: picking it clears the cap selections and
+                            // vice-versa.
+                            universe: u === "ALL"
+                              ? (active ? [] : ["ALL"])
+                              : (active
+                                  ? d.universe.filter(x => x !== u)
+                                  : [...d.universe.filter(x => x !== "ALL"), u])
                           }))}
                             className={`px-3 py-1.5 rounded-lg text-sm font-semibold border-2 transition ${
                               active

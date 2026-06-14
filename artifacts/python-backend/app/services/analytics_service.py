@@ -15,7 +15,7 @@ import pandas as pd
 from .yahoo_service import YahooService
 from .nse_service import NseService
 from .sectors_service import SectorsService
-from .patterns_service import PatternsService, _cached_patterns
+from .patterns_service import PatternsService
 from ..lib.universe import NIFTY100 as NIFTY100_SYMBOLS
 
 # Yahoo Finance index tickers for Indian sector indices
@@ -314,9 +314,10 @@ class AnalyticsService:
         if cached:
             return cached
 
-        patterns = _cached_patterns
-        if not patterns:
-            patterns = await self.patterns.run_scan()
+        # Cache-first: serve whatever the patterns scan has cached (kicks a
+        # background scan if stale). Non-blocking — may be empty on a cold start
+        # and fill in on a later call (we avoid caching an empty result below).
+        patterns = self.patterns.all_patterns()
 
         stats_by_pattern: dict[str, dict] = {}
         for p in patterns:
@@ -383,7 +384,10 @@ class AnalyticsService:
             "putPatterns":  put_stats,
             "highestSuccessRate": best_rate,
         }
-        _set_cache(cache_key, result, 7200)
+        # Don't pin an empty result: on a cold start the background pattern scan
+        # may not have produced rows yet, so only cache once we have stats.
+        if stats_list:
+            _set_cache(cache_key, result, 7200)
         return result
 
     # ── Sector heatmap ────────────────────────────────────────────────────────

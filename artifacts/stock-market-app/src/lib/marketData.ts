@@ -37,6 +37,7 @@ export interface MarketDataMeta {
   universe?: {
     isLiveUniverse: boolean;
     loadedAt:       string | null;
+    ageSeconds?:    number | null;   // age of the live cache file; large ⇒ stale
     totalSymbols:   number;
     totalSectors:   number;
   };

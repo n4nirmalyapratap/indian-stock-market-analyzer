@@ -154,6 +154,20 @@ async def _market_state_transition_loop() -> None:
                     logger.info("EOD seal after transition: %s", result)
                 except Exception as e:
                     logger.warning("Post-transition EOD seal failed: %s", e)
+                # Aggressive post-close warm: pull the FULL universe's EOD bars
+                # onto disk now, so the day's cache-first scans (screener /
+                # patterns / scanners) read from disk and run fast instead of
+                # hitting the network per symbol. Bounded + gentle inside
+                # warmup_cache; non-fatal on failure.
+                try:
+                    warm = await _mcs.warmup_cache(price_service)
+                    logger.info(
+                        "Post-close full-universe warm: %d/%d cached, %d errors",
+                        warm.get("filesSaved", 0), warm.get("totalSymbols", 0),
+                        warm.get("errors", 0),
+                    )
+                except Exception as e:
+                    logger.warning("Post-close full-universe warm failed: %s", e)
 
             last_state = state
         except asyncio.CancelledError:
@@ -613,11 +627,15 @@ async def _universe_scheduler() -> None:
     — just after NSE market close (15:30 IST).
     On first startup, load from cache if it exists; only fetch live if cache is stale.
     """
-    from app.lib.universe_builder import load_cache, get_or_refresh
+    from app.lib.universe_builder import (
+        load_cache, cache_age_seconds, CACHE_TTL, fetch_universe, save_cache,
+    )
     from app.lib.universe import _apply_live_data
 
-    # Apply whatever is already cached so the server starts with live data
-    cached = load_cache()
+    # Apply whatever is already cached so the server starts with live data —
+    # even if stale (ignore_ttl). A months-old list of real NSE symbols beats
+    # the hardcoded fallback; staleness is surfaced to the UI separately.
+    cached = load_cache(ignore_ttl=True)
     if cached:
         _apply_live_data(cached)
         logger.info(
@@ -625,6 +643,24 @@ async def _universe_scheduler() -> None:
             len(cached.get("all_symbols", [])),
             cached.get("generated_at", "?"),
         )
+
+    # Self-heal: if the cache is missing or stale (>TTL), attempt one refresh
+    # now instead of waiting until the daily 16:05 IST window. Failures are
+    # non-fatal — we keep serving the cache we already applied above.
+    age = cache_age_seconds()
+    if age is None or age > CACHE_TTL:
+        try:
+            data = await fetch_universe()
+            if data and data.get("all_symbols"):
+                save_cache(data)
+                _apply_live_data(data)
+                logger.info(
+                    "Universe self-heal refresh ok — %d symbols, %d sectors",
+                    len(data.get("all_symbols", [])),
+                    len(data.get("sector_symbols", {})),
+                )
+        except Exception as e:
+            logger.warning("Universe self-heal refresh failed (keeping cache): %s", e)
 
     while True:
         try:
