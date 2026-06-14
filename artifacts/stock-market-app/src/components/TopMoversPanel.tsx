@@ -159,7 +159,7 @@ function ViewAllModal({
           {rows.length === 0 ? (
             <EmptyColumn tone={tone} message="No data" />
           ) : (
-            rows.map(r => <MoverRow key={r.symbol} row={r} tone={tone} />)
+            rows.map((r, i) => <MoverRow key={`${r.symbol}-${i}`} row={r} tone={tone} />)
           )}
         </div>
       </div>
@@ -260,8 +260,8 @@ export default function TopMoversPanel() {
             ) : (
               <>
                 <div className="divide-y divide-gray-100 dark:divide-gray-700/60">
-                  {inlineGainers.map(row => (
-                    <MoverRow key={row.symbol} row={row} tone="up" />
+                  {inlineGainers.map((row, i) => (
+                    <MoverRow key={`${row.symbol}-${i}`} row={row} tone="up" />
                   ))}
                 </div>
                 {gainers.length > INLINE_COUNT && (
@@ -285,8 +285,8 @@ export default function TopMoversPanel() {
             ) : (
               <>
                 <div className="divide-y divide-gray-100 dark:divide-gray-700/60">
-                  {inlineLosers.map(row => (
-                    <MoverRow key={row.symbol} row={row} tone="down" />
+                  {inlineLosers.map((row, i) => (
+                    <MoverRow key={`${row.symbol}-${i}`} row={row} tone="down" />
                   ))}
                 </div>
                 {losers.length > INLINE_COUNT && (

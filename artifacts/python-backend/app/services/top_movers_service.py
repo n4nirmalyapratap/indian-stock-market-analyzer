@@ -156,7 +156,10 @@ class TopMoversService:
             "small": universe.SMALLCAP,
             "micro": universe.MICROCAP,
         }
-        symbols = list(universe_map.get(segment, []))
+        # dict.fromkeys dedups while preserving order — the universe lists are
+        # hand-maintained and occasionally carry a repeated symbol, which would
+        # otherwise surface as the same stock twice in a gainers/losers column.
+        symbols = list(dict.fromkeys(universe_map.get(segment, [])))
         if not symbols:
             return None
 
