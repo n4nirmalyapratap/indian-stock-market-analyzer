@@ -66,6 +66,11 @@ artifacts/python-backend/app/middleware/__pycache__/*
 artifacts/python-backend/app/services/__pycache__/*
 artifacts/python-backend/pandas_ta/__pycache__/*
 artifacts/python-backend/scripts/__pycache__/*
+# Global Python bytecode ignore — covers tests/__pycache__ and any other dir
+# the per-folder rules above miss. .pyc are auto-generated build artifacts.
+__pycache__/
+*.pyc
+*.pyo
 .env
 artifacts/python-backend/hydra_prices.db
 artifacts/python-backend/data

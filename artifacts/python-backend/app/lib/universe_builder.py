@@ -303,16 +303,35 @@ async def fetch_universe() -> dict:
 
 # ── cache helpers ─────────────────────────────────────────────────────────────
 
-def load_cache() -> Optional[dict]:
-    """Return cached universe if it exists and is fresh, else None."""
+def load_cache(ignore_ttl: bool = False) -> Optional[dict]:
+    """Return the cached universe.
+
+    By default only returns it when fresh (< CACHE_TTL old) so callers that
+    want to trigger a refresh (``get_or_refresh``) still see ``None`` on
+    staleness. Pass ``ignore_ttl=True`` to return a usable-but-stale cache
+    anyway: a 10-day-old list of ~2,400 real NSE symbols is far better than the
+    ~540 hardcoded fallback, so the import-time loader and the startup
+    scheduler use this and surface the age to the UI instead of discarding it.
+    """
     if not CACHE_FILE.exists():
         return None
     try:
-        age = time.time() - CACHE_FILE.stat().st_mtime
-        if age > CACHE_TTL:
-            return None
+        if not ignore_ttl:
+            age = time.time() - CACHE_FILE.stat().st_mtime
+            if age > CACHE_TTL:
+                return None
         with CACHE_FILE.open() as f:
             return json.load(f)
+    except Exception:
+        return None
+
+
+def cache_age_seconds() -> Optional[float]:
+    """Age of the universe cache file in seconds, or None if it doesn't exist."""
+    if not CACHE_FILE.exists():
+        return None
+    try:
+        return time.time() - CACHE_FILE.stat().st_mtime
     except Exception:
         return None
 

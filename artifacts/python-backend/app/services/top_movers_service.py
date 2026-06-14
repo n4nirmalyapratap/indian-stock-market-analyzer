@@ -63,6 +63,20 @@ def _ttl() -> int:
     return _OPEN_TTL if _disk.is_market_open() else _CLOSED_TTL
 
 
+def _name_for(sym: str, provided: Optional[str]) -> str:
+    """Best available company name: provider's name → universe COMPANY_MAP → symbol.
+
+    Brand-new tickers (e.g. TMCV after the Tata Motors demerger) often have no
+    company name from Yahoo / NSE index meta yet, but our universe cache does —
+    so fall back to it instead of showing a bare symbol (which the UI then
+    renders as just a price)."""
+    p = (provided or "").strip()
+    if p and p.upper() != sym.upper():
+        return p
+    from ..lib import universe as _u  # noqa: PLC0415
+    return _u.COMPANY_MAP.get(sym) or p or sym
+
+
 def _row(stock: dict) -> Optional[dict]:
     """Flatten one NSE constituent into the shape the frontend expects.
 
@@ -86,9 +100,10 @@ def _row(stock: dict) -> Optional[dict]:
         pchange = float(pchange)
     except (TypeError, ValueError):
         return None
+    _nse_name = stock.get("meta", {}).get("companyName") if isinstance(stock.get("meta"), dict) else None
     return {
         "symbol":      sym,
-        "name":        stock.get("meta", {}).get("companyName") if isinstance(stock.get("meta"), dict) else sym,
+        "name":        _name_for(sym, _nse_name),
         "lastPrice":   stock.get("lastPrice"),
         "change":      stock.get("change"),
         "pChange":     round(pchange, 2),
@@ -193,7 +208,7 @@ class TopMoversService:
                     return None
                 return {
                     "symbol":         sym,
-                    "name":           q.get("companyName") or sym,
+                    "name":           _name_for(sym, q.get("companyName")),
                     "lastPrice":      q.get("lastPrice"),
                     "change":         q.get("change"),
                     "pChange":        round(pchange_f, 2),

@@ -845,15 +845,74 @@ ALL_SYMBOLS: list[str] = INDICES + _merge(NIFTY100, MIDCAP, SMALLCAP, MICROCAP, 
 is_live_universe: bool = False
 universe_loaded_at: str | None = None
 
+# Bumped whenever _apply_live_data rewrites the cap lists, so memoised views
+# (e.g. cap_label's symbol→segment map) can detect they're stale and rebuild.
+_cap_version: int = 0
+
 
 def universe_freshness() -> dict:
     """Public freshness contract for the universe — read by /scanners and /stocks endpoints."""
+    age_seconds: float | None = None
+    try:
+        from .universe_builder import cache_age_seconds as _age
+        age_seconds = _age()
+    except Exception:
+        age_seconds = None
     return {
         "isLiveUniverse":   is_live_universe,
         "loadedAt":         universe_loaded_at,
+        "ageSeconds":       age_seconds,
         "totalSymbols":     len(ALL_SYMBOLS),
         "totalSectors":     len(SECTOR_SYMBOLS),
     }
+
+
+def get_scan_universe() -> list[str]:
+    """Canonical list of tradeable NSE equity symbols to scan (~2,000 main board).
+
+    Source of truth is the security registry (robust NSE→Zerodha→disk→baseline
+    multi-source list, EQ-only, symbol-change aware), so the scan universe stays
+    full even when NSE blocks this server's IP. Falls back to the cache-backed
+    ALL_SYMBOLS (minus index tickers) if the registry is unavailable.
+    Deduped, order-stable.
+    """
+    # Cache/hardcoded-backed equities (drop index tickers — we never scan those).
+    _idx = set(INDICES)
+    base = [s for s in ALL_SYMBOLS if s and s not in _idx and not s.startswith("^")]
+    # Registry equities (canonical, symbol-change aware). May be empty/degraded.
+    reg: list[str] = []
+    try:
+        from ..services.security_registry_service import get_registry  # noqa: PLC0415
+        reg = [s.nse_symbol for s in get_registry().all_securities() if getattr(s, "nse_symbol", None)]
+    except Exception:
+        reg = []
+    # Union (registry first for canonical ordering), deduped & order-stable, so
+    # we always scan the most complete set either source knows about — never a
+    # regression if one source is temporarily degraded.
+    return list(dict.fromkeys(reg + base))
+
+
+_CAP_MAP: dict[str, str] = {}
+_CAP_MAP_VERSION: int = -1
+
+
+def cap_label(symbol: str) -> str:
+    """Cap segment for a symbol: NIFTY100 / MIDCAP / SMALLCAP / MICROCAP / OTHER.
+
+    Backed by a memoised symbol→segment map rebuilt only when the cap lists
+    change (tracked via _cap_version), so it's cheap to call per-symbol across
+    the full ~2,000-symbol scan universe. Larger caps win on overlap.
+    """
+    global _CAP_MAP, _CAP_MAP_VERSION
+    if _CAP_MAP_VERSION != _cap_version:
+        m: dict[str, str] = {}
+        for s in MICROCAP: m[s] = "MICROCAP"
+        for s in SMALLCAP: m[s] = "SMALLCAP"
+        for s in MIDCAP:   m[s] = "MIDCAP"
+        for s in NIFTY100: m[s] = "NIFTY100"
+        _CAP_MAP = m
+        _CAP_MAP_VERSION = _cap_version
+    return _CAP_MAP.get(symbol, "OTHER")
 
 
 def build_universe(universes: list[str]) -> list[str]:
@@ -867,7 +926,9 @@ def build_universe(universes: list[str]) -> list[str]:
     if "MICROCAP" in universes:
         out.extend(MICROCAP)
     if "ALL" in universes:
-        return list(ALL_SYMBOLS)
+        # "ALL" means the full tradeable equity universe — not ALL_SYMBOLS,
+        # which also carries index tickers we never want to scan.
+        return get_scan_universe()
     return list(dict.fromkeys(out))
 
 
@@ -938,20 +999,28 @@ def _apply_live_data(cache: dict) -> None:
         if "NIFTY 50" not in SECTOR_SYMBOLS:
             SECTOR_SYMBOLS["NIFTY 50"] = NIFTY100[:50]
 
+    # Cap lists may have been rewritten above — invalidate cap_label's memoised map.
+    global _cap_version
+    _cap_version += 1
 
-# Apply cache immediately at import time (fast: just a JSON read)
+
+# Apply cache immediately at import time (fast: just a JSON read).
+# ignore_ttl=True: a stale-but-real cache (thousands of live NSE symbols) is
+# far better than the ~540 hardcoded fallback. We still surface its age via
+# universe_freshness() so the UI can show "updated N days ago" and a daily
+# scheduler refreshes it.
 try:
     from .universe_builder import load_cache as _load_cache
-    _cached = _load_cache()
+    _cached = _load_cache(ignore_ttl=True)
     if _cached:
         _apply_live_data(_cached)
         is_live_universe = True
-        from datetime import datetime as _dt, timezone as _tz
-        universe_loaded_at = _dt.now(_tz.utc).isoformat()
+        # Record the cache's own generation time (true data age), not load time.
+        universe_loaded_at = _cached.get("generated_at")
         import logging as _log
         _log.getLogger(__name__).info(
-            "universe: loaded live data — %d symbols, %d sectors",
-            len(ALL_SYMBOLS), len(SECTOR_SYMBOLS),
+            "universe: loaded live data — %d symbols, %d sectors (generated %s)",
+            len(ALL_SYMBOLS), len(SECTOR_SYMBOLS), universe_loaded_at,
         )
     else:
         import logging as _log

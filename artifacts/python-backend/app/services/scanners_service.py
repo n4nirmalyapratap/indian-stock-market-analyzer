@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import random
 import string
 from datetime import datetime
@@ -21,6 +22,11 @@ VALID_OPERATORS = {"gt", "gte", "lt", "lte", "eq", "crosses_above", "crosses_bel
 # ── Tunables (no longer magic — surfaced in /scanners metadata) ───────────────
 EQ_TOLERANCE_PCT       = 0.1      # "eq" operator: |a-b| / max(|b|,1) < 0.1%
 RATE_LIMIT_DELAY_S     = 0.35     # live-path delay between symbols
+# Bounded concurrency for the closed-market fast path. Scanning the full
+# ~2,000-symbol "ALL" universe with an unbounded gather would fire 2,000
+# simultaneous fetches at any cache-cold symbols and risk a provider ban, so
+# cap it. Disk-cached symbols still complete near-instantly. Env-tunable.
+SCANNER_SCAN_CONCURRENCY = int(os.environ.get("SCANNER_SCAN_CONCURRENCY", "16"))
 WINDOW_52W             = 252      # trading days that constitute "52 weeks"
 DEFAULT_FETCH_DAYS     = 90       # baseline bars when no big-period indicator used
 BUFFER_MULT            = 3        # indicator seeding buffer multiplier
@@ -1158,7 +1164,7 @@ class ScannersService:
             )
 
         if not market_open_at_start:
-            # ── FAST PATH: market closed → all data from disk → run fully parallel ──
+            # ── FAST PATH: market closed → all data from disk → run parallel ──
             async def _scan_one(sym: str):
                 nonlocal scanned_n, matched_n, errors_n
                 try:
@@ -1188,7 +1194,16 @@ class ScannersService:
                     _push_progress()
                     return None, sym
 
-            scanned = await asyncio.gather(*[_scan_one(s) for s in symbols])
+            # Bounded so a full-universe ("ALL") scan can't fire thousands of
+            # simultaneous fetches at cache-cold symbols and trip a provider
+            # ban; disk-cached symbols still complete near-instantly.
+            _sem = asyncio.Semaphore(SCANNER_SCAN_CONCURRENCY)
+
+            async def _bounded(sym: str):
+                async with _sem:
+                    return await _scan_one(sym)
+
+            scanned = await asyncio.gather(*[_bounded(s) for s in symbols])
             for row, sym in scanned:
                 if row:
                     # `row["symbol"]` was already set inside _scan_one

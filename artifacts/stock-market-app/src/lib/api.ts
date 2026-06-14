@@ -257,6 +257,12 @@ export interface PatternsResponse {
   patterns: ChartPattern[];
   topCalls: ChartPattern[];
   topPuts: ChartPattern[];
+  // Cache-first background scan status (full ~2,000-symbol universe).
+  scanInProgress?: boolean;
+  scanProgress?: { done: number; total: number } | null;
+  universeScanned?: number;
+  symbolsScanned?: number;
+  cacheAgeSeconds?: number;
 }
 
 // ── Famous-Investor AI Council types ─────────────────────────────────────────
@@ -807,7 +813,7 @@ export const api = {
   },
 
   triggerScan: () =>
-    fetchApi<{ message: string; totalFound: number; callSignals: number; putSignals: number; patterns: ChartPattern[] }>(
+    fetchApi<{ message: string; scanInProgress?: boolean; scanProgress?: { done: number; total: number } | null; universeScanned?: number }>(
       "/patterns/scan",
       { method: "POST" },
     ),
