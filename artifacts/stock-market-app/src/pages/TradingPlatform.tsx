@@ -592,7 +592,14 @@ export default function TradingPlatform() {
   const [chartType, setChartType] = useState<ChartType>("candles");
   const { theme } = useTheme();
   const [drawingTool, setDrawingTool] = useState<string>("none");
-  const [indicators, setIndicators] = useState<Set<string>>(new Set());
+  const [indicators, setIndicators] = useState<Set<string>>(() => {
+    // Pre-apply indicators passed via ?indicators=rsi,ema50,… (e.g. when opened
+    // from the Sector Rotation cockpit). Validated against the catalog so
+    // unknown keys are ignored; no param → start clean as before.
+    const raw = new URLSearchParams(window.location.search).get("indicators") || "";
+    const valid = new Set(INDICATOR_CATALOG.map(i => i.key));
+    return new Set(raw.split(",").map(s => s.trim().toLowerCase()).filter(k => valid.has(k)));
+  });
   const [showWatchlist, setShowWatchlist] = useState(true);
   const [showLayouts, setShowLayouts] = useState(false);
   const [showIndMenu, setShowIndMenu] = useState(false);

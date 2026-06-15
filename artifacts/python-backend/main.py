@@ -24,6 +24,7 @@ from app.routes.options import router as options_router
 from app.routes.chat import router as chat_router
 from app.routes.assistant import router as assistant_router
 from app.routes.sector_analytics import router as sector_analytics_router
+from app.routes.sector_rotation import router as sector_rotation_router
 from app.routes.news import router as news_router
 from app.routes.admin import router as admin_router
 from app.routes.auth import router as auth_router
@@ -920,6 +921,7 @@ app.include_router(options_router,   prefix="/api")
 app.include_router(chat_router,      prefix="/api")
 app.include_router(assistant_router,        prefix="/api")
 app.include_router(sector_analytics_router, prefix="/api")
+app.include_router(sector_rotation_router,  prefix="/api")
 app.include_router(news_router,             prefix="/api")
 app.include_router(admin_router,            prefix="/api")
 app.include_router(auth_router,             prefix="/api")
