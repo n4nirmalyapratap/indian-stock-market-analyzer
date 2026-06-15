@@ -6,6 +6,8 @@ interface ChartButtonProps {
   className?: string;
   /** Hide the secondary lookup/detail icon (e.g. when rendered inside the destination page itself). */
   hideLookup?: boolean;
+  /** Comma-separated indicator keys to pre-apply in Chart Studio (e.g. "rsi,ema50,macd"). */
+  indicators?: string;
 }
 
 /**
@@ -22,7 +24,7 @@ interface ChartButtonProps {
  * (`<ChartButton symbol="RELIANCE.NS" />`) automatically gain the second
  * icon without any code changes.
  */
-export default function ChartButton({ symbol, className = "", hideLookup = false }: ChartButtonProps) {
+export default function ChartButton({ symbol, className = "", hideLookup = false, indicators }: ChartButtonProps) {
   const [, navigate] = useLocation();
   const clean = symbol.replace(/\.(NS|BO)$/i, "").trim().toUpperCase();
   const isSector = /\s/.test(clean);
@@ -40,7 +42,7 @@ export default function ChartButton({ symbol, className = "", hideLookup = false
         type="button"
         onClick={(e) => {
           e.stopPropagation();
-          navigate(`/trading?symbol=${encodeURIComponent(clean)}`);
+          navigate(`/trading?symbol=${encodeURIComponent(clean)}${indicators ? `&indicators=${encodeURIComponent(indicators)}` : ""}`);
         }}
         title={`Open ${clean} in Chart Studio`}
         aria-label={`Open ${clean} in Chart Studio`}

@@ -28,6 +28,7 @@ interface DeliveryItem {
   turnover: number;       // in ₹
   delivValue: number;     // in ₹
   sector: string | null;
+  sectors?: string[];   // NSE sector-index memberships (a stock can be in several)
   logo?: string;
 }
 interface DeliveryStats {
@@ -179,7 +180,7 @@ export default function TopDeliveries() {
   // Client-side sector slice — keeps the API call cheap and lets users
   // toggle sectors without a network round-trip.
   const visibleItems = sectorFilter && data?.items
-    ? data.items.filter(it => (it.sector || "Unclassified") === sectorFilter)
+    ? data.items.filter(it => (it.sectors || []).includes(sectorFilter))
     : (data?.items || []);
 
   const stocksRef = useRef<HTMLDivElement | null>(null);

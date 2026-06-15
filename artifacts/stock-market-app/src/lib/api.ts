@@ -766,6 +766,21 @@ export const api = {
       },
     ),
 
+  // ── Sector Rotation cockpit ──
+  sectorRotationRrg: (level: "sector" | "subindustry", timeframe: "short" | "mid" | "long" = "short") =>
+    fetchApi<RrgResponse>(`/sector-rotation/rrg?level=${level}&timeframe=${timeframe}`),
+  sectorRotationFunnel: (timeframe: "short" | "mid" | "long" = "short") =>
+    fetchApi<FunnelResponse>(`/sector-rotation/funnel?timeframe=${timeframe}`),
+  deliveryHistory: (symbol: string, days = 40) =>
+    fetchApi<DeliveryHistoryResponse>(`/insights/delivery-history?symbol=${encodeURIComponent(symbol)}&days=${days}`),
+
+  sectorRotationShortlist: (params: { subIndustry?: string; sector?: string }) =>
+    fetchApi<ShortlistResponse>(
+      `/sector-rotation/shortlist?${params.sector
+        ? `sector=${encodeURIComponent(params.sector)}`
+        : `subIndustry=${encodeURIComponent(params.subIndustry || "")}`}`,
+    ),
+
   // ── Top Movers (Dashboard tab) ──
   topMoversAll: (count = 10) =>
     fetchApi<TopMoversAllResponse>(`/dashboard/top-movers/all?count=${count}`),
@@ -1697,6 +1712,73 @@ export interface TopMoversResponse {
 export interface TopMoversAllResponse {
   fetchedAt: string;
   segments:  Record<"large" | "mid" | "small" | "micro", TopMoversResponse>;
+}
+
+// ── Sector Rotation cockpit ──────────────────────────────────────────────────
+export interface RrgPoint { date: string; rsRatio: number; rsMomentum: number; quadrant: string; }
+export interface RrgEntity {
+  name: string;
+  rsRatio: number;
+  rsMomentum: number;
+  quadrant: "Leading" | "Improving" | "Weakening" | "Lagging" | string;
+  tail: RrgPoint[];
+  rsPct?: number | null;        // relative strength vs Nifty over the selected timeframe
+  strengthScore?: number | null; // composite strength (the 'Strength' logic)
+  tier?: "DEEP_GREEN" | "LIGHT_GREEN" | "YELLOW" | "ORANGE" | "DEEP_RED" | string | null;
+  // sub-industry extras
+  deliveryBuildup?: boolean | null;
+  breadth50emaPct?: number | null;
+  rs30d?: number | null;
+  // sector extras (from funnel)
+  delivRatio?: number | null;
+  topSymbol?: string | null;
+  topDelivPct?: number | null;
+}
+export interface RrgResponse {
+  level: "sector" | "subindustry" | string;
+  available: boolean;
+  benchmark?: string;
+  asOf?: string | null;
+  entities: RrgEntity[];
+  note?: string | null;     // why empty (e.g. not enough history yet)
+  diag?: Record<string, unknown>;
+}
+export interface SubIndustryGridRow {
+  subIndustry: string;
+  rs30d?: number | null;
+  avgDeliveryPct?: number | null;
+  deliveryBuildup?: boolean | null;
+  breadth50emaPct?: number | null;
+  constituentCount?: number | null;
+}
+export interface FunnelResponse {
+  sectors: RrgEntity[];
+  subIndustries: SubIndustryGridRow[];
+  asOf?: string | null;
+  deliveryDate?: string | null;
+}
+export interface ShortlistStock {
+  symbol: string;
+  name?: string | null;
+  rs: number | null;
+  delivPct: number | null;
+  delivTrend?: number[];          // recent delivery % series (sparkline)
+  aboveTrend: boolean | null;
+  marketCapWeight: number | null;
+  score: number;
+}
+export interface DeliveryHistoryResponse {
+  symbol: string;
+  available: boolean;
+  series: { date: string; delivPct: number }[];
+}
+export interface ShortlistResponse {
+  group?: string;
+  kind?: "sector" | "subindustry" | string;
+  subIndustry?: string;
+  available: boolean;
+  benchmark?: string;
+  stocks: ShortlistStock[];
 }
 
 // ── User broker API key metadata ────────────────────────────────────────────
