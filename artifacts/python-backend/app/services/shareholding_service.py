@@ -59,6 +59,7 @@ quarter to keep refreshes cheap.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -129,29 +130,46 @@ _BROWSER_HEADERS = {
 
 def _row(
     *,
-    as_on_date:       date,
-    promoter_pct:     Optional[float] = None,
-    fii_pct:          Optional[float] = None,
-    dii_pct:          Optional[float] = None,
-    public_pct:       Optional[float] = None,
-    num_shareholders: Optional[int]   = None,
-    source:           str = "",
+    as_on_date:          date,
+    promoter_pct:        Optional[float] = None,
+    fii_pct:             Optional[float] = None,
+    dii_pct:             Optional[float] = None,
+    public_pct:          Optional[float] = None,
+    govt_pct:            Optional[float] = None,
+    num_shareholders:    Optional[int]   = None,
+    promoter_pledge_pct: Optional[float] = None,
+    pledged_shares:      Optional[int]   = None,
+    demat_pct:           Optional[float] = None,
+    locked_in_pct:       Optional[float] = None,
+    details:             Optional[dict]  = None,
+    source:              str = "",
 ) -> dict:
     """Build one normalized shareholding row. Centralised so every
     source produces the same dict shape — easier upserts, easier UI.
+
+    Only the XBRL source populates the enrichment fields (govt_pct,
+    pledge, demat/locked-in, details); the NSE/Yahoo/Screener fallbacks
+    leave them None and the COALESCE upsert preserves whatever XBRL
+    filled in.
 
     The `as_on_date` is snapped to the nearest standard quarter-end
     here, so any interim/corrigendum filing dates (e.g. OCT 2024 for a
     TCS re-filing) collapse into the matching quarter row instead of
     appearing as a phantom extra column."""
     return {
-        "as_on_date":       _snap_to_quarter_end(as_on_date),
-        "promoter_pct":     _round(promoter_pct),
-        "fii_pct":          _round(fii_pct),
-        "dii_pct":          _round(dii_pct),
-        "public_pct":       _round(public_pct),
-        "num_shareholders": int(num_shareholders) if num_shareholders else None,
-        "source":           source,
+        "as_on_date":          _snap_to_quarter_end(as_on_date),
+        "promoter_pct":        _round(promoter_pct),
+        "fii_pct":             _round(fii_pct),
+        "dii_pct":             _round(dii_pct),
+        "public_pct":          _round(public_pct),
+        "govt_pct":            _round(govt_pct),
+        "num_shareholders":    int(num_shareholders) if num_shareholders else None,
+        "promoter_pledge_pct": _round(promoter_pledge_pct),
+        "pledged_shares":      int(pledged_shares) if pledged_shares else None,
+        "demat_pct":           _round(demat_pct),
+        "locked_in_pct":       _round(locked_in_pct),
+        "details":             details or None,
+        "source":              source,
     }
 
 
@@ -346,6 +364,13 @@ _XBRL_BUCKETS_BY_AGGREGATE = {
     "institutionsdomestic":                    "dii",      # 2022-09-30 onwards
     # Public (non-institutional retail) rollup — every taxonomy.
     "noninstitutions":                         "public",
+    # Government rollup. In the SEBI category tree, Government (Central +
+    # State + President of India) sits under "Public" alongside
+    # Institutions and Non-Institutions, but it is NOT part of the
+    # NonInstitutions aggregate above. Surfacing it as its own bucket is
+    # what makes Promoter+FII+DII+Public+Govt sum to ~100 for PSUs and
+    # any company with sovereign holding (else the 4 buckets under-sum).
+    "governments":                             "govt",     # GovernmentsMember rollup
 }
 
 # Pre-2022 "Institutions" total — used to derive DII as
@@ -384,8 +409,10 @@ _XBRL_COMPONENT_PATTERNS = {
     "public": (
         "individualsorhindu", "individualshareholder",
         "bodiescorporate", "bodycorporate",
-        "centralgovernment", "stategovernment", "presidentofindia",
-        "governments", "goverments",     # "Goverments" typo seen in 2019/2020
+        # NOTE: government members (centralgovernment, stategovernment,
+        # presidentofindia, governments) are deliberately NOT here — they
+        # belong to the dedicated "govt" bucket below. Keeping them in
+        # public would double-count once the govt aggregate is resolved.
         "nonresidentindi",                # NRI variants
         "trust",
         "clearing",
@@ -398,6 +425,11 @@ _XBRL_COMPONENT_PATTERNS = {
         "shareholdingbycompaniesorbodiescorporate",
         "employeebenefitstrust", "employeetrust",
     ),
+    "govt": (
+        "centralgovernmentorpresidentofindia",   # 2022+ combined member
+        "centralgovernment", "stategovernment", "presidentofindia",
+        "governments", "goverments",      # "Goverments" typo seen in 2019/2020
+    ),
 }
 
 # Parent / supercategory members to skip during the component-sum
@@ -409,6 +441,49 @@ _XBRL_PARENT_MEMBERS = frozenset({
     "sharesheldbynonpromotnonpublicshareholders",
     "sharesheldbynonpromoternonpublicshareholders",
 })
+
+
+# ── Named-shareholder extraction (Tier 2) ───────────────────────────────────
+#
+# Individual holders disclosed above the SEBI threshold (all promoters,
+# every public holder >1%) live in TYPED-dimension contexts, NOT the
+# explicit-member category contexts used for the rollup percentages.
+# Each holder has two contexts joined by a typed-domain value:
+#   * a duration context (period startDate/endDate, id usually prefixed
+#     "D_") carrying the string attributes — name, PAN, sub-category;
+#   * an instant context carrying the numeric values — shares, holding %.
+# The join key is the <xbrldi:typedMember> domain text (e.g.
+# "MutualFundsOrUTI_Context15"), identical on both contexts.
+#
+# Map each typed axis to a coarse display group so the UI can bucket
+# "which mutual funds / FIIs hold this" the way Tickertape/Trendlyne do.
+_XBRL_NAMED_AXIS_GROUP = {
+    "detailsofsharesheldbymutualfundsoruti":                          "Mutual Fund",
+    "detailsofsharesheldbyinsurancecompanies":                        "Insurance",
+    "detailsofsharesheldbyinstitutionsforeignportfolioinvestorone":   "FII / FPI",
+    "detailsofsharesheldbyinstitutionsforeignportfolioinvestortwo":   "FII / FPI",
+    "detailsofsharesheldbyfpi":                                       "FII / FPI",
+    "detailsofsharesheldbyothernoninstitutions":                      "Public",
+    "detailsofsharesheldbyothersindianshareholders":                  "Other Indian",
+    "detailsoftheshareholdersactingaspersonsinconcertforpublic":      "PAC",
+    "detailsofshareswhichremainunclaimedforpublicshareholders":       "Unclaimed",
+}
+
+# Entity-level Yes/No disclosure flags (Tier 3.8). Keyed by the exact
+# lowercased element local-name read from the main (no-category) context.
+# These describe the capital structure — useful context for whether the
+# plain % understates dilution (warrants/ESOPs/convertibles outstanding).
+_XBRL_STRUCTURE_FLAGS = {
+    "whetherthelistedentityhasanysharesagainstwhichdepositoryreceiptsareissued": "hasDepositoryReceipts",
+    "whetherthelistedentityhasgrantedanyesopwhichareoutstanding":                "hasOutstandingEsop",
+    "whetherthelistedentityhasissuedanywarrants":                                "hasWarrants",
+    "whetherthelistedentityhasissuedanyconvertiblesecurities":                   "hasConvertibles",
+    "whetherthelistedentityhasissuedanypartlypaidupshares":                      "hasPartlyPaidShares",
+    "whetherthelistedentityhasanysignificantbeneficialowner":                    "hasSignificantBeneficialOwner",
+    "whetherthelistedentityispublicsectorundertaking":                           "isPsu",
+    "whethercompanyissme":                                                       "isSme",
+    "whethercompanyhasequityshareswithdifferentialvotingrights":                 "hasDifferentialVotingRights",
+}
 
 
 # XBRL files are immutable per quarter — once a filing is published,
@@ -469,7 +544,13 @@ async def _fetch_xbrl_file(url: str) -> Optional[bytes]:
 
 
 def _parse_xbrl(xml_bytes: bytes) -> Optional[dict]:
-    """Parse a SEBI XBRL shareholding pattern filing into the 4 UI buckets.
+    """Parse a SEBI XBRL shareholding pattern filing.
+
+    Returns the 5 headline buckets (Promoter / FII / DII / Public / Govt)
+    plus the enrichments mined from the same file: promoter pledge,
+    demat / locked-in %, per-category shareholder counts, the named-holder
+    list (typed-dimension rows), FPI limits, voting, and capital-structure
+    flags. See the return dict at the bottom for the exact shape.
 
     Multi-taxonomy strategy:
       1. Walk every <xbrli:context> and build `ctx_id → member` (lowercased,
@@ -513,34 +594,86 @@ def _parse_xbrl(xml_bytes: bytes) -> Optional[dict]:
             taxo_version = m.group(1)
             break
 
-    # Step 1: context_id → member name (lowercased, "Member" stripped).
+    def _f(text: Optional[str]) -> Optional[float]:
+        """float() that swallows None / junk — used all over the new
+        numeric extractions below."""
+        if text is None:
+            return None
+        try:
+            return float(text)
+        except (ValueError, TypeError):
+            return None
+
+    # Step 1: walk every <context> ONCE, building two indexes:
+    #   context_to_member : ctx_id → last explicit member (lowercased,
+    #                       "Member" stripped) — drives bucket resolution.
+    #   ctx_index         : ctx_id → {members, typed, period} — the richer
+    #                       view the Tier-2/3 extractions need (typed
+    #                       dimensions carry the named-holder rows; period
+    #                       distinguishes the duration context that holds a
+    #                       holder's name/PAN from the instant context that
+    #                       holds its share count / %).
     context_to_member: dict[str, str] = {}
+    ctx_index: dict[str, dict] = {}
     for ctx in root.iter():
         if etree.QName(ctx).localname != "context":
             continue
         ctx_id = ctx.get("id", "").strip()
         if not ctx_id:
             continue
+        members: list[tuple[str, str]] = []
+        typed: Optional[tuple[str, Optional[str]]] = None
+        period = "?"
         for descendant in ctx.iter():
-            if etree.QName(descendant).localname == "explicitMember":
+            ln = etree.QName(descendant).localname
+            if ln == "explicitMember":
                 member = (descendant.text or "").strip()
                 if ":" in member:
                     member = member.split(":", 1)[1]
                 if member.endswith("Member"):
                     member = member[:-6]
-                context_to_member[ctx_id] = member.lower()
-                break
+                dim = (descendant.get("dimension") or "").split(":")[-1].lower()
+                members.append((dim, member.lower()))
+            elif ln == "typedMember":
+                axis = (descendant.get("dimension") or "").split(":")[-1].lower()
+                dom = None
+                for child in descendant:
+                    dom = (child.text or "").strip()
+                if axis:
+                    typed = (axis, dom)
+            elif ln == "instant":
+                period = "I"
+            elif ln == "endDate":
+                period = "D"
+        ctx_index[ctx_id] = {"members": members, "typed": typed, "period": period}
+        if members:
+            # Last explicit member = the most specific category on this
+            # context (the bucket logic only ever wants the leaf member).
+            context_to_member[ctx_id] = members[-1][1]
 
     # Step 2: collect MAX % per member. SEBI filings sometimes emit
     # the same member across multiple contexts with one zero placeholder
     # and one real value (varies by filer). Max-per-member picks the
     # real value while still producing 0 for genuinely-empty categories.
     member_pct: dict[str, float] = {}
+    # vals: ctx_id → {element_localname_lower: text}. A flat per-context
+    # view of every value-carrying element, used by the Tier-2/3
+    # extractions (named holders, pledge, demat, counts, flags). Element
+    # local-names are unique within a context in these filings, so a
+    # first-write-wins dict is correct.
+    vals: dict[str, dict[str, str]] = {}
     for el in root.iter():
         localname = etree.QName(el).localname
         if not localname:
             continue
         ln_lower = localname.lower()
+        text = (el.text or "").strip()
+        ctx_ref = el.get("contextRef", "")
+        if ctx_ref and text:
+            bag = vals.get(ctx_ref)
+            if bag is None:
+                bag = vals[ctx_ref] = {}
+            bag.setdefault(ln_lower, text)
         # Skip elements that report locked-in / pledged status, not the
         # bucket breakdown.
         if "lockedinshares" in ln_lower or "pledgedorencumbered" in ln_lower:
@@ -553,10 +686,8 @@ def _parse_xbrl(xml_bytes: bytes) -> Optional[dict]:
             continue
         # Skip elements with no text — empty placeholders read as 0 and
         # would wrongly populate a member entry.
-        text = (el.text or "").strip()
         if not text:
             continue
-        ctx_ref = el.get("contextRef", "")
         member = context_to_member.get(ctx_ref, "")
         if not member:
             continue
@@ -584,6 +715,7 @@ def _parse_xbrl(xml_bytes: bytes) -> Optional[dict]:
     # fallback patterns defined here).
     buckets: dict[str, Optional[float]] = {
         "promoter": None, "fii": None, "dii": None, "public": None,
+        "govt": None,
     }
     bucket_strategy: dict[str, str] = {}    # diagnostic trail
 
@@ -649,11 +781,14 @@ def _parse_xbrl(xml_bytes: bytes) -> Optional[dict]:
     # gives it away. Real percentage breakdowns always sum to ~100; if
     # the total is below 5, treat the file as fraction-encoded.
     total_all = sum(v for v in buckets.values() if v is not None)
-    if 0 < total_all < 5:
+    # `scale` is reused by the Tier-2/3 extractions below so named-holder
+    # %, pledge %, etc. land in the same units as the headline buckets.
+    scale = 100.0 if (0 < total_all < 5) else 1.0
+    if scale != 1.0:
         for k in list(buckets.keys()):
             if buckets[k] is not None:
-                buckets[k] *= 100
-        total_all *= 100
+                buckets[k] *= scale
+        total_all *= scale
         bucket_strategy["_scale"] = "x100_fractions"
 
     # Infer Promoter = 0 for companies with no promoter holding (e.g.
@@ -687,13 +822,14 @@ def _parse_xbrl(xml_bytes: bytes) -> Optional[dict]:
     # Diagnostic — emitted at DEBUG so it's visible when
     # SHAREHOLDING_DISABLE_CACHE=1 + LOG_LEVEL=DEBUG is set.
     logger.debug(
-        "XBRL parse (taxo=%s) promoter=%s fii=%s dii=%s public=%s strategies=%s",
+        "XBRL parse (taxo=%s) promoter=%s fii=%s dii=%s public=%s govt=%s strategies=%s",
         taxo_version,
         buckets["promoter"], buckets["fii"], buckets["dii"], buckets["public"],
-        bucket_strategy,
+        buckets["govt"], bucket_strategy,
     )
 
-    # Step 4: total shareholder count (unchanged).
+    # Step 4: total shareholder count. The grand total is the max across
+    # every context (the company-wide "Total" row ≥ any single category).
     num_shareholders: Optional[int] = None
     for el in root.iter():
         ln = etree.QName(el).localname or ""
@@ -710,12 +846,187 @@ def _parse_xbrl(xml_bytes: bytes) -> Optional[dict]:
             except (ValueError, TypeError):
                 continue
 
+    # ── Helpers shared by the Tier-2/3 extractions ───────────────────────
+    def _num(cid: Optional[str], *names: str) -> Optional[float]:
+        """First parseable numeric among `names` in context `cid`."""
+        if not cid:
+            return None
+        bag = vals.get(cid, {})
+        for n in names:
+            f = _f(bag.get(n))
+            if f is not None:
+                return f
+        return None
+
+    def _cat_ctx(target_member: str) -> Optional[str]:
+        """ctx_id of the single-category INSTANT context for `target_member`
+        (e.g. the promoter aggregate). Single-member so we don't match a
+        named-holder typed context that happens to share the category."""
+        for cid, info in ctx_index.items():
+            if (info["period"] == "I" and len(info["members"]) == 1
+                    and info["members"][0][1] == target_member):
+                return cid
+        return None
+
+    # ── Tier 1.3: per-category shareholder counts ────────────────────────
+    # Iterate single-member instant contexts; whenever the member maps to
+    # one of our buckets, record its NumberOfShareholders. First-write-wins
+    # keeps the aggregate (FII rollup) over any stray duplicate.
+    category_counts: dict[str, int] = {}
+    for cid, info in ctx_index.items():
+        if info["period"] != "I" or len(info["members"]) != 1:
+            continue
+        bucket = _XBRL_BUCKETS_BY_AGGREGATE.get(info["members"][0][1])
+        if not bucket or bucket in category_counts:
+            continue
+        n = _num(cid, "numberofshareholders")
+        if n is not None:
+            category_counts[bucket] = int(n)
+
+    # ── Tier 1.1: promoter pledge / encumbrance ──────────────────────────
+    # Pledge % is reported in Screener's convention as a fraction of the
+    # PROMOTER holding (not of total shares), so we derive it from the
+    # pledged-share count over the promoter group's share count.
+    promoter_cid = _cat_ctx("shareholdingofpromoterandpromotergroup")
+    promoter_shares = _num(promoter_cid, "numberofshares",
+                           "numberoffullypaidupequityshares")
+    pledged_shares = _num(promoter_cid, "pledgedorencumberednumberofshares")
+    promoter_pledge_pct: Optional[float] = None
+    if pledged_shares is not None and promoter_shares and promoter_shares > 0:
+        promoter_pledge_pct = round(pledged_shares / promoter_shares * 100, 2)
+
+    # ── Tier 2.5: demat % and locked-in % (company-wide) ─────────────────
+    # The grand-total context = the one carrying the largest "total nos.
+    # of shares held" count; its demat / locked-in totals are the
+    # company-wide figures. The denominator MUST be NumberOfShares (the
+    # total incl. partly-paid + DR-underlying), NOT NumberOfFullyPaidUp:
+    # demat / locked-in are reported against the total, so dividing by
+    # fully-paid alone overshoots 100% whenever a company has partly-paid
+    # shares (e.g. a rights issue) or large ADR/GDR underlying (e.g.
+    # HDFCBANK). Count ratios are already true % — no fraction-scaling.
+    grand_cid: Optional[str] = None
+    grand_shares = -1.0
+    for cid, bag in vals.items():
+        f = _f(bag.get("numberofshares")) or _f(bag.get("numberoffullypaidupequityshares"))
+        if f is not None and f > grand_shares:
+            grand_shares, grand_cid = f, cid
+    total_shares = grand_shares if grand_shares >= 0 else None
+    demat_pct: Optional[float] = None
+    locked_in_pct: Optional[float] = None
+    if total_shares and total_shares > 0 and grand_cid:
+        dm = _num(grand_cid, "numberofequitysharesheldindematerializedform")
+        lk = _num(grand_cid, "numberofthelockedinshares")
+        if dm is not None:
+            demat_pct = round(min(dm / total_shares * 100, 100.0), 2)
+        if lk is not None:
+            locked_in_pct = round(lk / total_shares * 100, 2)
+
+    # ── Tier 2.4: named shareholders (typed-dimension join) ──────────────
+    # Index instant contexts by their typed (axis, domain) key, then walk
+    # the duration contexts (which carry name/PAN/category) and join to the
+    # matching instant context (which carries shares / %).
+    inst_by_typed: dict[tuple, str] = {}
+    for cid, info in ctx_index.items():
+        if info["typed"] and info["period"] == "I":
+            inst_by_typed[info["typed"]] = cid
+
+    named_holders: list[dict] = []
+    for cid, info in ctx_index.items():
+        if not info["typed"] or info["period"] != "D":
+            continue
+        bag = vals.get(cid, {})
+        name = bag.get("nameoftheshareholder")
+        if not name:
+            continue
+        axis, dom = info["typed"]
+        ibag = vals.get(inst_by_typed.get((axis, dom), ""), {})
+        shares = _f(ibag.get("numberofshares")
+                    or ibag.get("numberoffullypaidupequityshares"))
+        pct = _f(ibag.get("shareholdingasapercentageoftotalnumberofshares"))
+        if pct is not None:
+            pct = round(pct * scale, 4)
+        group = "Other"
+        for key, label in _XBRL_NAMED_AXIS_GROUP.items():
+            if key in axis:
+                group = label
+                break
+        pan = bag.get("permanentaccountnumberofshareholder")
+        if pan and set(pan) <= {"*"}:        # masked PAN ("******") → drop
+            pan = None
+        named_holders.append({
+            "name":     name.strip(),
+            "pan":      pan,
+            "group":    group,
+            "category": bag.get("categoryofotherindianshareholders")
+                        or bag.get("categoryofothernoninstitutions"),
+            "shares":   int(shares) if shares is not None else None,
+            "pct":      pct,
+        })
+    # Most-significant holders first; nulls (PAC/unclaimed rows w/o %) last.
+    named_holders.sort(key=lambda h: (h["pct"] is None, -(h["pct"] or 0.0)))
+
+    # ── Tier 3.6/3.7/3.8: FPI limits, voting, capital-structure flags ────
+    # Entity-level disclosures are tagged against a single no-dimension
+    # context — but its id/shape varies by taxonomy (2025 filings use a
+    # member-less "MainI"; 2022 filings reference a "OneI" context that
+    # isn't even separately defined). Rather than guess the context, look
+    # each entity-level element up across every context's bag. These
+    # names are unique and unscoped — the per-category variants carry a
+    # "...ForPromoterAndPromoterGroup"-style suffix (a different local
+    # name) — so the first occurrence is the entity-level value.
+    def _any_val(name: str) -> Optional[str]:
+        for bag in vals.values():
+            v = bag.get(name)
+            if v is not None:
+                return v
+        return None
+
+    flags: dict[str, bool] = {}
+    for elem_name, key in _XBRL_STRUCTURE_FLAGS.items():
+        raw = _any_val(elem_name)
+        if raw is not None:
+            flags[key] = raw.strip().lower() in ("true", "1", "yes")
+
+    fpi_limits: dict[str, float] = {}
+    # Same fraction-vs-percent encoding as the holdings, so apply `scale`.
+    bl = _f(_any_val("percentageofboardapprovedlimits"))
+    lu = _f(_any_val("percentageoflimitsutilized"))
+    if bl is not None:
+        fpi_limits["boardApprovedPct"] = round(bl * scale, 2)
+    if lu is not None:
+        fpi_limits["limitsUtilizedPct"] = round(lu * scale, 2)
+
+    voting: dict = {}
+    if flags.get("hasDifferentialVotingRights"):
+        voting["hasDifferentialVotingRights"] = True
+    frozen = _num(grand_cid, "votingrightswhicharefrozen") if grand_cid else None
+    if frozen:
+        voting["frozenVotingRights"] = int(frozen)
+
+    details: dict = {}
+    if named_holders:
+        details["namedHolders"] = named_holders[:200]
+    if category_counts:
+        details["categoryCounts"] = category_counts
+    if voting:
+        details["voting"] = voting
+    if fpi_limits:
+        details["fpiLimits"] = fpi_limits
+    if flags:
+        details["flags"] = flags
+
     return {
-        "promoter_pct": _round(buckets["promoter"]),
-        "fii_pct":      _round(buckets["fii"]),
-        "dii_pct":      _round(buckets["dii"]),
-        "public_pct":   _round(buckets["public"]),
-        "num_shareholders": num_shareholders,
+        "promoter_pct":        _round(buckets["promoter"]),
+        "fii_pct":             _round(buckets["fii"]),
+        "dii_pct":             _round(buckets["dii"]),
+        "public_pct":          _round(buckets["public"]),
+        "govt_pct":            _round(buckets["govt"]),
+        "num_shareholders":    num_shareholders,
+        "promoter_pledge_pct": promoter_pledge_pct,
+        "pledged_shares":      int(pledged_shares) if pledged_shares else None,
+        "demat_pct":           demat_pct,
+        "locked_in_pct":       locked_in_pct,
+        "details":             details or None,
     }
 
 
@@ -732,13 +1043,19 @@ async def _enrich_with_xbrl(symbol: str, xbrl_url: str, as_on: date) -> Optional
     if not parsed:
         return None
     return _row(
-        as_on_date       = as_on,
-        promoter_pct     = parsed.get("promoter_pct"),
-        fii_pct          = parsed.get("fii_pct"),
-        dii_pct          = parsed.get("dii_pct"),
-        public_pct       = parsed.get("public_pct"),
-        num_shareholders = parsed.get("num_shareholders"),
-        source           = "XBRL",
+        as_on_date          = as_on,
+        promoter_pct        = parsed.get("promoter_pct"),
+        fii_pct             = parsed.get("fii_pct"),
+        dii_pct             = parsed.get("dii_pct"),
+        public_pct          = parsed.get("public_pct"),
+        govt_pct            = parsed.get("govt_pct"),
+        num_shareholders    = parsed.get("num_shareholders"),
+        promoter_pledge_pct = parsed.get("promoter_pledge_pct"),
+        pledged_shares      = parsed.get("pledged_shares"),
+        demat_pct           = parsed.get("demat_pct"),
+        locked_in_pct       = parsed.get("locked_in_pct"),
+        details             = parsed.get("details"),
+        source              = "XBRL",
     )
 
 
@@ -840,8 +1157,8 @@ def _parse_screener_html(html: str) -> list[dict]:
       3. <thead><th> values are quarter labels (e.g. "Jun 2023").
       4. <tbody><tr>: first cell is the category label, remaining
          cells are per-quarter percentages.
-      5. Aggregate Government holding into Public so buckets sum to
-         ~100.
+      5. Government maps to its own govt_pct column (matching the XBRL
+         path), so the five buckets sum to ~100.
     """
     try:
         from lxml import html as _html  # noqa: PLC0415
@@ -895,6 +1212,7 @@ def _parse_screener_html(html: str) -> list[dict]:
         "fii":                "fii_pct",
         "diis":               "dii_pct",
         "dii":                "dii_pct",
+        "government":         "govt_pct",
         "public":             "public_pct",
         "no of shareholders": "num_shareholders",
         "no. of shareholders":"num_shareholders",
@@ -913,8 +1231,7 @@ def _parse_screener_html(html: str) -> list[dict]:
             continue
         label_raw = cells[0].text_content().strip().rstrip("+").strip().lower()
         col = label_map.get(label_raw)
-        is_government = label_raw == "government"
-        if col is None and not is_government:
+        if col is None:
             continue
         for i, cell in enumerate(cells[1:]):
             if i >= len(quarter_dates):
@@ -930,13 +1247,8 @@ def _parse_screener_html(html: str) -> list[dict]:
             b = _bucket(qd)
             if col == "num_shareholders":
                 b["num_shareholders"] = int(val)
-            elif col:
+            else:
                 b[col] = _round(val)
-            elif is_government:
-                # Fold Government holding into Public so the 4 buckets
-                # sum to ~100.
-                existing = b["public_pct"] or 0
-                b["public_pct"] = _round(existing + val)
 
     return list(out.values())
 
@@ -1029,20 +1341,33 @@ def _upsert_rows(symbol: str, rows: list[dict]) -> int:
     with get_conn() as conn:
         with conn.cursor() as cur:
             for r in rows:
+                details_json = (
+                    json.dumps(r.get("details"))
+                    if r.get("details") is not None else None
+                )
                 cur.execute(
                     """
                     INSERT INTO shareholding_history
                         (symbol, as_on_date, promoter_pct, fii_pct, dii_pct,
-                         public_pct, num_shareholders, source, fetched_at_ms)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         public_pct, govt_pct, num_shareholders,
+                         promoter_pledge_pct, pledged_shares, demat_pct,
+                         locked_in_pct, details, source, fetched_at_ms)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s::jsonb, %s, %s)
                     ON CONFLICT (symbol, as_on_date) DO UPDATE SET
-                        promoter_pct     = COALESCE(EXCLUDED.promoter_pct,     shareholding_history.promoter_pct),
-                        fii_pct          = COALESCE(EXCLUDED.fii_pct,          shareholding_history.fii_pct),
-                        dii_pct          = COALESCE(EXCLUDED.dii_pct,          shareholding_history.dii_pct),
-                        public_pct       = COALESCE(EXCLUDED.public_pct,       shareholding_history.public_pct),
-                        num_shareholders = COALESCE(EXCLUDED.num_shareholders, shareholding_history.num_shareholders),
-                        source           = EXCLUDED.source,
-                        fetched_at_ms    = EXCLUDED.fetched_at_ms
+                        promoter_pct        = COALESCE(EXCLUDED.promoter_pct,        shareholding_history.promoter_pct),
+                        fii_pct             = COALESCE(EXCLUDED.fii_pct,             shareholding_history.fii_pct),
+                        dii_pct             = COALESCE(EXCLUDED.dii_pct,             shareholding_history.dii_pct),
+                        public_pct          = COALESCE(EXCLUDED.public_pct,          shareholding_history.public_pct),
+                        govt_pct            = COALESCE(EXCLUDED.govt_pct,            shareholding_history.govt_pct),
+                        num_shareholders    = COALESCE(EXCLUDED.num_shareholders,    shareholding_history.num_shareholders),
+                        promoter_pledge_pct = COALESCE(EXCLUDED.promoter_pledge_pct, shareholding_history.promoter_pledge_pct),
+                        pledged_shares      = COALESCE(EXCLUDED.pledged_shares,      shareholding_history.pledged_shares),
+                        demat_pct           = COALESCE(EXCLUDED.demat_pct,           shareholding_history.demat_pct),
+                        locked_in_pct       = COALESCE(EXCLUDED.locked_in_pct,       shareholding_history.locked_in_pct),
+                        details             = COALESCE(EXCLUDED.details,             shareholding_history.details),
+                        source              = EXCLUDED.source,
+                        fetched_at_ms       = EXCLUDED.fetched_at_ms
                     """,
                     (
                         symbol,
@@ -1051,7 +1376,13 @@ def _upsert_rows(symbol: str, rows: list[dict]) -> int:
                         r["fii_pct"],
                         r["dii_pct"],
                         r["public_pct"],
+                        r.get("govt_pct"),
                         r["num_shareholders"],
+                        r.get("promoter_pledge_pct"),
+                        r.get("pledged_shares"),
+                        r.get("demat_pct"),
+                        r.get("locked_in_pct"),
+                        details_json,
                         r["source"],
                         ts,
                     ),
@@ -1069,7 +1400,9 @@ def _read_history(symbol: str) -> list[dict]:
             cur.execute(
                 """
                 SELECT as_on_date, promoter_pct, fii_pct, dii_pct,
-                       public_pct, num_shareholders, source, fetched_at_ms
+                       public_pct, govt_pct, num_shareholders,
+                       promoter_pledge_pct, pledged_shares, demat_pct,
+                       locked_in_pct, details, source, fetched_at_ms
                   FROM shareholding_history
                  WHERE symbol = %s
               ORDER BY as_on_date DESC
@@ -1161,16 +1494,29 @@ async def get_shareholding(
 
 def _to_api_row(r: dict) -> dict:
     """Convert a PG dict-row to the camelCased API shape the frontend
-    expects."""
+    expects. `details` (JSONB) round-trips as a dict from psycopg3; we
+    defensively json.loads it in case a driver hands it back as text."""
     d = r["as_on_date"]
+    details = r.get("details")
+    if isinstance(details, str):
+        try:
+            details = json.loads(details)
+        except (ValueError, TypeError):
+            details = None
     return {
-        "asOnDate":        d.isoformat() if hasattr(d, "isoformat") else str(d),
-        "promoterPct":     r.get("promoter_pct"),
-        "fiiPct":          r.get("fii_pct"),
-        "diiPct":          r.get("dii_pct"),
-        "publicPct":       r.get("public_pct"),
-        "numShareholders": r.get("num_shareholders"),
-        "source":          r.get("source"),
+        "asOnDate":          d.isoformat() if hasattr(d, "isoformat") else str(d),
+        "promoterPct":       r.get("promoter_pct"),
+        "fiiPct":            r.get("fii_pct"),
+        "diiPct":            r.get("dii_pct"),
+        "publicPct":         r.get("public_pct"),
+        "govtPct":           r.get("govt_pct"),
+        "numShareholders":   r.get("num_shareholders"),
+        "promoterPledgePct": r.get("promoter_pledge_pct"),
+        "pledgedShares":     r.get("pledged_shares"),
+        "dematPct":          r.get("demat_pct"),
+        "lockedInPct":       r.get("locked_in_pct"),
+        "details":           details,
+        "source":            r.get("source"),
     }
 
 

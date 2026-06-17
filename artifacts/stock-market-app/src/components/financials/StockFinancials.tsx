@@ -8,6 +8,7 @@ import { api } from "@/lib/api";
 import type { IncomeRow, BalanceSheetRow, CashFlowRow, DividendRow, EpsRow } from "@/lib/api";
 import { TrendingUp, TrendingDown, Minus } from "lucide-react";
 import DataFreshness from "@/components/DataFreshness";
+import QuarterlyResults from "./QuarterlyResults";
 import type { MarketDataMeta } from "@/lib/marketData";
 
 // ── Formatters ────────────────────────────────────────────────────────────────
@@ -313,6 +314,147 @@ function IncomeStatementTab({ annual, quarterly }: { annual: IncomeRow[]; quarte
   );
 }
 
+function BalanceSheetTab({ rows }: { rows: BalanceSheetRow[] }) {
+  // Annual only — the backend serves balanceSheet.annual (Yahoo statements
+  // carry no quarterly basis here). Cash & Equivalents + a derived
+  // Debt/Equity ratio round out the four Yahoo line items.
+  if (!rows.length) {
+    return <div className="py-6 text-center text-sm text-gray-400">No balance-sheet data available.</div>;
+  }
+  const chartData = rows.map(r => ({
+    date: yrDate(r.date), totalAssets: r.totalAssets, totalDebt: r.totalDebt, equity: r.equity,
+  }));
+
+  return (
+    <div className="space-y-5">
+      <SectionHeader title="Balance Sheet" sub="All values in ₹ Crores · annual" />
+
+      <div className="bg-white rounded-xl border border-gray-100 p-4">
+        <p className="text-xs text-gray-500 mb-3 font-medium">Total Assets vs Debt vs Equity</p>
+        <ResponsiveContainer width="100%" height={260}>
+          <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+            <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
+            <YAxis tickFormatter={v => fCr(v, true)} tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={70} />
+            <Tooltip content={<CustomTooltip />} />
+            <Bar dataKey="totalAssets" name="Total Assets" fill={CHART_COLORS.assets} radius={[3, 3, 0, 0]} />
+            <Bar dataKey="totalDebt"   name="Total Debt"   fill={CHART_COLORS.debt}   radius={[3, 3, 0, 0]} />
+            <Bar dataKey="equity"      name="Equity"       fill={CHART_COLORS.equity} radius={[3, 3, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b-2 border-gray-100">
+              <th className="text-left py-2.5 text-xs text-gray-500 font-semibold uppercase pr-4">Metric</th>
+              {rows.slice().reverse().map(r => (
+                <th key={r.date} className="text-right py-2.5 text-xs text-gray-500 font-semibold px-2">{yrDate(r.date)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {([
+              ["Total Assets",       "totalAssets"],
+              ["Total Debt",         "totalDebt"],
+              ["Shareholder Equity", "equity"],
+              ["Cash & Equivalents", "cash"],
+            ] as [string, keyof BalanceSheetRow][]).map(([label, key]) => (
+              <tr key={key} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+                <td className="py-2.5 text-gray-600 font-medium pr-4">{label}</td>
+                {rows.slice().reverse().map(r => (
+                  <td key={r.date} className="py-2.5 text-right text-gray-900 font-medium px-2">
+                    {fCr(r[key] as number | null)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            {/* Derived Debt / Equity — leverage at a glance. */}
+            <tr className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+              <td className="py-2.5 text-gray-600 font-medium pr-4">Debt / Equity</td>
+              {rows.slice().reverse().map(r => {
+                const de = r.totalDebt != null && r.equity ? r.totalDebt / r.equity : null;
+                return (
+                  <td key={r.date} className="py-2.5 text-right text-gray-700 px-2">
+                    {de != null ? `${de.toFixed(2)}x` : "—"}
+                  </td>
+                );
+              })}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function CashFlowTab({ rows }: { rows: CashFlowRow[] }) {
+  // Annual only (backend serves cashFlow.annual). Free Cash Flow is drawn
+  // as a line over the three cash-flow bars so users can sanity-check that
+  // reported profit converts to cash.
+  if (!rows.length) {
+    return <div className="py-6 text-center text-sm text-gray-400">No cash-flow data available.</div>;
+  }
+  const chartData = rows.map(r => ({
+    date: yrDate(r.date), operatingCF: r.operatingCF, investingCF: r.investingCF,
+    financingCF: r.financingCF, freeCF: r.freeCF,
+  }));
+
+  return (
+    <div className="space-y-5">
+      <SectionHeader title="Cash Flow" sub="All values in ₹ Crores · annual" />
+
+      <div className="bg-white rounded-xl border border-gray-100 p-4">
+        <p className="text-xs text-gray-500 mb-3 font-medium">Operating / Investing / Financing + Free Cash Flow</p>
+        <ResponsiveContainer width="100%" height={260}>
+          <ComposedChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+            <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
+            <YAxis tickFormatter={v => fCr(v, true)} tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} width={70} />
+            <Tooltip content={<CustomTooltip />} />
+            <Bar dataKey="operatingCF" name="Operating CF" fill={CHART_COLORS.opCF}     radius={[3, 3, 0, 0]} />
+            <Bar dataKey="investingCF" name="Investing CF" fill={CHART_COLORS.opIncome} radius={[3, 3, 0, 0]} />
+            <Bar dataKey="financingCF" name="Financing CF" fill={CHART_COLORS.div}      radius={[3, 3, 0, 0]} />
+            <Line type="monotone" dataKey="freeCF" name="Free Cash Flow" stroke={CHART_COLORS.freeCF} strokeWidth={2} dot={{ fill: CHART_COLORS.freeCF, r: 3 }} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b-2 border-gray-100">
+              <th className="text-left py-2.5 text-xs text-gray-500 font-semibold uppercase pr-4">Metric</th>
+              {rows.slice().reverse().map(r => (
+                <th key={r.date} className="text-right py-2.5 text-xs text-gray-500 font-semibold px-2">{yrDate(r.date)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {([
+              ["Operating Cash Flow", "operatingCF"],
+              ["Investing Cash Flow", "investingCF"],
+              ["Financing Cash Flow", "financingCF"],
+              ["Free Cash Flow",      "freeCF"],
+              ["Capex",               "capex"],
+            ] as [string, keyof CashFlowRow][]).map(([label, key]) => (
+              <tr key={key} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+                <td className="py-2.5 text-gray-600 font-medium pr-4">{label}</td>
+                {rows.slice().reverse().map(r => (
+                  <td key={r.date} className="py-2.5 text-right text-gray-900 font-medium px-2">
+                    {fCr(r[key] as number | null)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function StatisticsTab({ ov }: { ov: any }) {
   const sections = [
     {
@@ -577,6 +719,9 @@ function RevenueTab({ annual, quarterly }: { annual: IncomeRow[]; quarterly: Inc
 const TABS = [
   { key: "overview",   label: "Overview" },
   { key: "income",     label: "Income Statement" },
+  { key: "results",    label: "Quarterly Results" },
+  { key: "balance",    label: "Balance Sheet" },
+  { key: "cashflow",   label: "Cash Flow" },
   { key: "statistics", label: "Statistics & Ratios" },
   { key: "dividends",  label: "Dividends" },
   { key: "earnings",   label: "Earnings" },
@@ -614,7 +759,7 @@ export default function StockFinancials({ symbol }: { symbol: string }) {
     );
   }
 
-  const { overview: ov, incomeStatement, balanceSheet: _bs, cashFlow: _cf, dividends, eps } = data;
+  const { overview: ov, incomeStatement, balanceSheet, cashFlow, dividends, eps } = data;
   const freshnessMeta: MarketDataMeta | null = data.meta
     ? {
         source:      data.meta.source,
@@ -658,6 +803,9 @@ export default function StockFinancials({ symbol }: { symbol: string }) {
       <div>
         {tab === "overview"   && <OverviewTab ov={ov} income={incomeStatement.annual} />}
         {tab === "income"     && <IncomeStatementTab annual={incomeStatement.annual} quarterly={incomeStatement.quarterly} />}
+        {tab === "results"    && <QuarterlyResults symbol={symbol} />}
+        {tab === "balance"    && <BalanceSheetTab rows={balanceSheet.annual} />}
+        {tab === "cashflow"   && <CashFlowTab rows={cashFlow.annual} />}
         {tab === "statistics" && <StatisticsTab ov={ov} />}
         {tab === "dividends"  && <DividendsTab dividends={dividends} ov={ov} />}
         {tab === "earnings"   && <EarningsTab annual={eps.annual} quarterly={eps.quarterly} />}

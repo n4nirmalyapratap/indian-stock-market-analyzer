@@ -17,8 +17,8 @@
  */
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, type ShareholdingRow } from "@/lib/api";
-import { AlertCircle, Users, Loader2 } from "lucide-react";
+import { api, type ShareholdingRow, type ShareholdingNamedHolder } from "@/lib/api";
+import { AlertCircle, Users, Loader2, ShieldAlert, Lock } from "lucide-react";
 
 
 interface Props {
@@ -30,23 +30,51 @@ interface Props {
 //
 // Centralised so the row order, label text, and per-bucket color stay
 // in lock-step between header and body. Adding a bucket = one line here.
+// `core` rows always render; non-core rows (Government) only render when
+// at least one quarter actually reports a value, so the vast majority of
+// companies (zero government holding) don't get an all-"—" row.
 
-type BucketKey = "promoterPct" | "fiiPct" | "diiPct" | "publicPct";
+type BucketKey = "promoterPct" | "fiiPct" | "diiPct" | "govtPct" | "publicPct";
 
 interface Bucket {
-  key:        BucketKey;
-  label:      string;
-  /** Hex/Tailwind class for the small color dot next to the label.
+  key:      BucketKey;
+  label:    string;
+  /** Tailwind class for the small color dot next to the label.
    *  Same palette Screener uses for visual consistency. */
-  dotClass:   string;
+  dotClass: string;
+  core:     boolean;
 }
 
 const BUCKETS: Bucket[] = [
-  { key: "promoterPct", label: "Promoters", dotClass: "bg-indigo-500" },
-  { key: "fiiPct",      label: "FIIs",      dotClass: "bg-emerald-500" },
-  { key: "diiPct",      label: "DIIs",      dotClass: "bg-amber-500" },
-  { key: "publicPct",   label: "Public",    dotClass: "bg-sky-500" },
+  { key: "promoterPct", label: "Promoters",  dotClass: "bg-indigo-500",  core: true  },
+  { key: "fiiPct",      label: "FIIs",       dotClass: "bg-emerald-500", core: true  },
+  { key: "diiPct",      label: "DIIs",       dotClass: "bg-amber-500",   core: true  },
+  { key: "govtPct",     label: "Government", dotClass: "bg-rose-400",    core: false },
+  { key: "publicPct",   label: "Public",     dotClass: "bg-sky-500",     core: true  },
 ];
+
+// Capital-structure flags worth surfacing as badges (a "true" here means
+// the plain % can understate eventual dilution / divergence from economic
+// ownership). Keyed by the backend `details.flags` keys.
+const FLAG_LABELS: Record<string, string> = {
+  hasOutstandingEsop:          "ESOP outstanding",
+  hasWarrants:                 "Warrants",
+  hasConvertibles:             "Convertibles",
+  hasDifferentialVotingRights: "DVR",
+  hasDepositoryReceipts:       "ADR/GDR",
+  hasPartlyPaidShares:         "Partly-paid",
+  isPsu:                       "PSU",
+  isSme:                       "SME",
+};
+
+// Color chip per named-holder group.
+const GROUP_CLASS: Record<string, string> = {
+  "FII / FPI":   "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
+  "Mutual Fund": "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+  "Insurance":   "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+  "Public":      "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300",
+  "Other Indian":"bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300",
+};
 
 
 // ── Cell renderers ────────────────────────────────────────────────────────
@@ -85,6 +113,121 @@ function quarterLabel(iso: string): string {
   const [y, m] = iso.split("-");
   const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   return `${months[parseInt(m, 10) - 1]} ${y}`;
+}
+
+
+// ── Top named holders panel ───────────────────────────────────────────────
+//
+// Same "which funds / FIIs hold this, and did they add or trim" view that
+// Tickertape/Trendlyne lead with. Built from the latest quarter's
+// `details.namedHolders`, with a quarter-on-quarter delta computed by
+// matching holder names against the previous quarter.
+
+function holderDelta(
+  holder: ShareholdingNamedHolder,
+  prevByName: Map<string, number>,
+): { text: string; cls: string } | null {
+  if (holder.pct == null) return null;
+  const prev = prevByName.get(holder.name.trim().toLowerCase());
+  if (prev === undefined) return { text: "NEW", cls: "text-indigo-600 dark:text-indigo-400" };
+  const d = holder.pct - prev;
+  if (Math.abs(d) < 0.01) return { text: "—", cls: "text-gray-400" };
+  const sign = d > 0 ? "+" : "";
+  return {
+    text: `${sign}${d.toFixed(2)}`,
+    cls: d > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400",
+  };
+}
+
+function TopHolders({ rows }: { rows: ShareholdingRow[] }) {
+  const latest = rows[0];
+  const holders = (latest?.details?.namedHolders ?? []).filter((h) => h.pct != null);
+  if (!holders.length) return null;
+
+  const prevByName = new Map<string, number>();
+  for (const h of rows[1]?.details?.namedHolders ?? []) {
+    if (h.pct != null) prevByName.set(h.name.trim().toLowerCase(), h.pct);
+  }
+
+  const top = holders.slice(0, 12);
+  return (
+    <div className="px-5 py-4 border-t border-gray-100 dark:border-gray-700">
+      <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-0.5">
+        Top Disclosed Holders
+      </h4>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+        Largest named holders as of {quarterLabel(latest.asOnDate)}. Δ vs previous quarter.
+      </p>
+      <div className="space-y-1">
+        {top.map((h) => {
+          const delta = holderDelta(h, prevByName);
+          return (
+            <div key={`${h.name}-${h.shares}`} className="flex items-center gap-2 text-sm">
+              <span
+                className={`text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 ${
+                  GROUP_CLASS[h.group] ?? "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+                }`}
+              >
+                {h.group}
+              </span>
+              <span className="flex-1 truncate text-gray-700 dark:text-gray-200" title={h.name}>
+                {h.name}
+              </span>
+              <span className="tabular-nums font-medium text-gray-900 dark:text-gray-100">
+                {h.pct!.toFixed(2)}%
+              </span>
+              {delta && (
+                <span className={`tabular-nums text-xs w-12 text-right ${delta.cls}`}>
+                  {delta.text}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+
+// ── Latest-quarter structure strip ────────────────────────────────────────
+//
+// Compact "current state" facts that aren't quarter-on-quarter trends:
+// demat %, lock-in overhang, FII headroom, and capital-structure flags.
+
+function StructureStrip({ row }: { row: ShareholdingRow }) {
+  const stats: { label: string; value: string }[] = [];
+  if (row.dematPct != null) stats.push({ label: "Demat", value: `${row.dematPct.toFixed(1)}%` });
+  if (row.lockedInPct != null && row.lockedInPct > 0.01)
+    stats.push({ label: "Locked-in", value: `${row.lockedInPct.toFixed(1)}%` });
+  const fpi = row.details?.fpiLimits;
+  if (fpi?.limitsUtilizedPct != null && fpi?.boardApprovedPct != null)
+    stats.push({ label: "FII limit used", value: `${fpi.limitsUtilizedPct.toFixed(1)}% / ${fpi.boardApprovedPct.toFixed(0)}%` });
+
+  const flags = Object.entries(row.details?.flags ?? {})
+    .filter(([k, v]) => v && FLAG_LABELS[k])
+    .map(([k]) => FLAG_LABELS[k]);
+
+  if (!stats.length && !flags.length) return null;
+
+  return (
+    <div className="px-5 py-3 border-t border-gray-100 dark:border-gray-700 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
+      {stats.map((s) => (
+        <span key={s.label} className="text-gray-500 dark:text-gray-400">
+          {s.label}: <span className="font-medium text-gray-800 dark:text-gray-200 tabular-nums">{s.value}</span>
+        </span>
+      ))}
+      {flags.length > 0 && (
+        <span className="flex flex-wrap items-center gap-1.5">
+          {flags.map((f) => (
+            <span key={f} className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
+              {f}
+            </span>
+          ))}
+        </span>
+      )}
+    </div>
+  );
 }
 
 
@@ -137,6 +280,19 @@ export default function ShareholdingPattern({ symbol }: Props) {
     if (!data?.rows) return [];
     return data.rows;
   }, [data]);
+
+  // Core buckets always show; Government only when some quarter reports
+  // it (avoids an all-"—" row for the ~99% of companies with none).
+  const visibleBuckets = useMemo(
+    () => BUCKETS.filter((b) => b.core || ordered.some((r) => r[b.key] != null)),
+    [ordered],
+  );
+  // The pledge row only renders when at least one quarter has a pledge
+  // figure (XBRL-sourced). A rising trend here is the distress signal.
+  const showPledge = useMemo(
+    () => ordered.some((r) => r.promoterPledgePct != null),
+    [ordered],
+  );
 
   // ── render branches ──
   if (isLoading) {
@@ -246,7 +402,7 @@ export default function ShareholdingPattern({ symbol }: Props) {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-            {BUCKETS.map((b, i) => {
+            {visibleBuckets.map((b, i) => {
               // Solid (non-transparent) backgrounds for both row stripes.
               // The sticky left column inherits from this — if the row
               // is semi-transparent (was `bg-gray-50/50`), the sticky
@@ -270,6 +426,32 @@ export default function ShareholdingPattern({ symbol }: Props) {
                 </tr>
               );
             })}
+            {/* Promoter pledge row — XBRL-sourced, % of promoter holding
+                that is pledged/encumbered. Highlighted because a rising
+                pledge is the classic promoter-distress signal. Only shown
+                when some quarter reports it. */}
+            {showPledge && (
+              <tr className="bg-rose-50/60 dark:bg-rose-900/10">
+                <td className="sticky left-0 z-10 bg-rose-50/60 dark:bg-rose-900/10 px-3 py-2 font-medium text-rose-700 dark:text-rose-300">
+                  <span className="inline-flex items-center gap-2">
+                    <ShieldAlert className="w-3.5 h-3.5" />
+                    Promoter Pledge
+                  </span>
+                </td>
+                {ordered.map((r) => {
+                  const v = r.promoterPledgePct;
+                  return (
+                    <td key={r.asOnDate}
+                        className={`px-3 py-2 text-right tabular-nums ${
+                          v && v > 0 ? "text-rose-600 dark:text-rose-400 font-semibold"
+                                     : "text-gray-500 dark:text-gray-400"
+                        }`}>
+                      {v == null ? "—" : `${v.toFixed(2)}%`}
+                    </td>
+                  );
+                })}
+              </tr>
+            )}
             {/* Number-of-shareholders row — same structure but integers,
                 not percentages. Hidden when every cell is null. */}
             {ordered.some((r) => r.numShareholders != null) && (
@@ -289,10 +471,14 @@ export default function ShareholdingPattern({ symbol }: Props) {
         </table>
       </div>
 
+      {/* Latest-quarter structure facts + top named holders (XBRL only). */}
+      {ordered[0] && <StructureStrip row={ordered[0]} />}
+      <TopHolders rows={ordered} />
+
       {/* Footer note — same SEBI caveat Screener shows; reassures
           users that classifications can shift over time. */}
       <div className="px-5 py-2 text-[11px] text-gray-400 dark:text-gray-500 border-t border-gray-100 dark:border-gray-700">
-        * Categories follow SEBI LODR filings. Classifications may have changed across periods.
+        * Categories follow SEBI LODR filings. Pledge / demat / holder details are from the XBRL filing; classifications may shift across periods.
       </div>
     </div>
   );

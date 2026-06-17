@@ -44,10 +44,11 @@ def main() -> int:
         return 1
 
     # Header
-    print(f"{'period':<12} {'taxo':<12} {'sym':<10} "
-          f"{'promoter':>9} {'fii':>7} {'dii':>7} {'public':>7} "
-          f"{'sum':>7}  result")
-    print("-" * 90)
+    print(f"{'period':<12} {'taxo':<12} {'sym':<9} "
+          f"{'prom':>6} {'fii':>6} {'dii':>6} {'pub':>6} {'gov':>5} "
+          f"{'sum':>7} {'pldg':>5} {'demat':>6} {'lock':>5} "
+          f"{'#named':>6} {'flags':>5}  result")
+    print("-" * 125)
 
     by_taxo: dict[str, list[bool]] = {}
     for f in files:
@@ -60,23 +61,31 @@ def main() -> int:
         parsed = _parse_xbrl(xml)
 
         if parsed is None:
-            row = (f"{period:<12} {taxo:<12} {sym:<10} "
-                   f"{'-':>9} {'-':>7} {'-':>7} {'-':>7} "
-                   f"{'-':>7}  PARSE_FAILED")
+            row = (f"{period:<12} {taxo:<12} {sym:<9} "
+                   f"{'PARSE_FAILED':>6}")
             by_taxo.setdefault(taxo, []).append(False)
         else:
             p = parsed.get("promoter_pct")
             fi = parsed.get("fii_pct")
             di = parsed.get("dii_pct")
             pu = parsed.get("public_pct")
-            tot = sum(v for v in (p, fi, di, pu) if v is not None)
+            gv = parsed.get("govt_pct")
+            tot = sum(v for v in (p, fi, di, pu, gv) if v is not None)
+            det = parsed.get("details") or {}
+            n_named = len(det.get("namedHolders") or [])
+            n_flags = len(det.get("flags") or {})
+            pldg = parsed.get("promoter_pledge_pct")
+            dmt = parsed.get("demat_pct")
+            lck = parsed.get("locked_in_pct")
+
+            def _c(v, w, dp=2):
+                return (f"{v:>{w}.{dp}f}" if isinstance(v, (int, float))
+                        else f"{'-':>{w}}")
             status = "OK" if (fi is not None and di is not None) else "FII/DII_MISSING"
-            row = (f"{period:<12} {taxo:<12} {sym:<10} "
-                   f"{p if p is not None else '-':>9} "
-                   f"{fi if fi is not None else '-':>7} "
-                   f"{di if di is not None else '-':>7} "
-                   f"{pu if pu is not None else '-':>7} "
-                   f"{tot:>7.2f}  {status}")
+            row = (f"{period:<12} {taxo:<12} {sym:<9} "
+                   f"{_c(p,6)} {_c(fi,6)} {_c(di,6)} {_c(pu,6)} {_c(gv,5)} "
+                   f"{tot:>7.2f} {_c(pldg,5,1)} {_c(dmt,6,1)} {_c(lck,5,1)} "
+                   f"{n_named:>6} {n_flags:>5}  {status}")
             by_taxo.setdefault(taxo, []).append(fi is not None and di is not None)
 
         print(row)
