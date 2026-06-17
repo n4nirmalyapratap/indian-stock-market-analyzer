@@ -48,6 +48,15 @@ export default function StockLookup() {
     enabled: !!symbol,
   });
 
+  // Company profile (what it does + canonical sector) — independent of the
+  // quote so a slow first-time Yahoo profile fetch never blocks price/analysis.
+  const { data: profile } = useQuery({
+    queryKey: ["stock-profile", symbol],
+    queryFn: () => api.stockProfile(symbol),
+    enabled: !!symbol,
+    staleTime: 24 * 60 * 60 * 1000,
+  });
+
   // Push symbol into the URL so back-navigation always restores the looked-up stock
   function handleSearch(sym?: string) {
     const s = (sym || input).toUpperCase().trim();
@@ -129,7 +138,7 @@ export default function StockLookup() {
                   {data.companyName || data.symbol}
                   <ChartButton symbol={data.symbol} />
                 </h2>
-                <p className="text-sm text-gray-500">{data.symbol} • {data.industry || data.sector || "NSE"}</p>
+                <p className="text-sm text-gray-500">{data.symbol} • {profile?.sector || data.industry || data.sector || "NSE"}</p>
                 </div>
               </div>
               <div className="text-right">
@@ -141,6 +150,31 @@ export default function StockLookup() {
               </div>
             </div>
             <p className="mt-3 text-sm text-gray-600 leading-relaxed">{data.insight}</p>
+
+            {/* About — what the company does + its canonical sector (centralised
+                classification, resolved & cached server-side). */}
+            {profile && (profile.description || profile.sector) && (
+              <div className="mt-3 rounded-lg bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-white/5 p-3">
+                <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">About</span>
+                  {profile.sector && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300">
+                      <Layers className="w-3 h-3" /> {profile.sector}
+                    </span>
+                  )}
+                  {profile.industry && profile.industry !== profile.sector && (
+                    <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700/50 text-gray-600 dark:text-gray-300">
+                      {profile.industry}
+                    </span>
+                  )}
+                </div>
+                {profile.description && (
+                  <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed line-clamp-3">
+                    {profile.description}
+                  </p>
+                )}
+              </div>
+            )}
 
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <Link

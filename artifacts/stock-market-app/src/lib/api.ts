@@ -582,6 +582,15 @@ export interface StockQuote {
   [key: string]: unknown;
 }
 
+/** Company business profile — what the company does + its canonical sector. */
+export interface StockProfile {
+  symbol: string;
+  sector: string | null;
+  industry: string | null;
+  description: string | null;
+  source: string;
+}
+
 export interface WhatsAppMessage {
   from: string;
   text: string;
@@ -696,6 +705,9 @@ export const api = {
   stockDetail: (symbol: string) =>
     fetchApi<StockQuote>(`/stocks/${encodeURIComponent(symbol)}`),
 
+  stockProfile: (symbol: string) =>
+    fetchApi<StockProfile>(`/stocks/${encodeURIComponent(symbol)}/profile`),
+
   stockFinancials: (symbol: string) =>
     fetchApi<StockFinancials>(`/stocks/${encodeURIComponent(symbol)}/financials`),
 
@@ -723,6 +735,24 @@ export const api = {
     const qs = p.toString();
     return fetchApi<ShareholdingResponse>(
       `/stocks/${encodeURIComponent(symbol)}/shareholding${qs ? `?${qs}` : ""}`,
+    );
+  },
+
+  /** Quarterly financial results parsed from the SEBI Reg-33 (in-bse-fin)
+   *  XBRL — the full P&L (revenue, expense breakdown, tax split, PAT,
+   *  basic+diluted EPS, segments) for the standalone or consolidated basis.
+   *  This is filed-results data, distinct from the Yahoo-sourced /financials. */
+  stockQuarterlyResults: (
+    symbol: string,
+    opts: { basis?: "consolidated" | "standalone"; quarters?: number; force?: boolean } = {},
+  ) => {
+    const p = new URLSearchParams();
+    if (opts.basis)    p.set("basis", opts.basis);
+    if (opts.quarters) p.set("quarters", String(opts.quarters));
+    if (opts.force)    p.set("force", "1");
+    const qs = p.toString();
+    return fetchApi<QuarterlyResultsResponse>(
+      `/stocks/${encodeURIComponent(symbol)}/quarterly-results${qs ? `?${qs}` : ""}`,
     );
   },
 
@@ -1545,18 +1575,47 @@ export interface EpsRow {
   eps:  number | null;
 }
 
-/** One quarter of shareholding pattern. Any of the four % buckets may
- *  be null when the contributing source didn't supply that breakdown
- *  (e.g. NSE summary-only fetches give Promoter + Public but no
- *  FII/DII split). UI should treat null as "no data" not "0%". */
+/** A single named shareholder disclosed in the SEBI XBRL filing (all
+ *  promoters + every public holder above the disclosure threshold). */
+export interface ShareholdingNamedHolder {
+  name:     string;
+  pan:      string | null;                // masked ("******") → null
+  group:    string;                       // "FII / FPI" | "Mutual Fund" | "Insurance" | "Public" | …
+  category: string | null;                // filer's free-text sub-category
+  shares:   number | null;
+  pct:      number | null;                // % of total shares
+}
+
+/** Per-quarter enrichment mined from the XBRL filing beyond the headline
+ *  buckets. Only the XBRL source populates this; null for quarters that
+ *  only had NSE/Yahoo/Screener coverage. */
+export interface ShareholdingDetails {
+  namedHolders?:   ShareholdingNamedHolder[];
+  categoryCounts?: Partial<Record<"promoter" | "fii" | "dii" | "public" | "govt", number>>;
+  voting?:         { hasDifferentialVotingRights?: boolean; frozenVotingRights?: number };
+  fpiLimits?:      { boardApprovedPct?: number; limitsUtilizedPct?: number };
+  flags?:          Record<string, boolean>;   // hasOutstandingEsop, hasWarrants, isPsu, …
+}
+
+/** One quarter of shareholding pattern. Any of the % buckets may be null
+ *  when the contributing source didn't supply that breakdown (e.g. NSE
+ *  summary-only fetches give Promoter + Public but no FII/DII split).
+ *  UI should treat null as "no data" not "0%". The pledge / demat /
+ *  locked-in / details fields are only filled from the XBRL source. */
 export interface ShareholdingRow {
-  asOnDate:        string;               // ISO YYYY-MM-DD (quarter-end)
-  promoterPct:     number | null;
-  fiiPct:          number | null;
-  diiPct:          number | null;
-  publicPct:       number | null;
-  numShareholders: number | null;
-  source:          string;                // last writer ("NSE","BSE","YAHOO","SCREENER")
+  asOnDate:          string;             // ISO YYYY-MM-DD (quarter-end)
+  promoterPct:       number | null;
+  fiiPct:            number | null;
+  diiPct:            number | null;
+  publicPct:         number | null;
+  govtPct:           number | null;
+  numShareholders:   number | null;
+  promoterPledgePct: number | null;      // % of PROMOTER holding pledged/encumbered
+  pledgedShares:     number | null;
+  dematPct:          number | null;      // % of total shares held in demat form
+  lockedInPct:       number | null;      // % of total shares under lock-in
+  details:           ShareholdingDetails | null;
+  source:            string;              // last writer ("NSE","XBRL","YAHOO","SCREENER")
 }
 
 export interface ShareholdingResponse {
@@ -1564,6 +1623,28 @@ export interface ShareholdingResponse {
   view:    "quarterly" | "yearly";
   sources: string[];                      // distinct sources contributing rows
   rows:    ShareholdingRow[];             // newest quarter first
+}
+
+/** One quarter of SEBI Reg-33 filed results. `lineItems` keys depend on
+ *  `format`: standard companies expose revenueFromOperations + the Ind-AS
+ *  expense breakdown; banks expose interestEarned/interestExpended etc.
+ *  All monetary values are in ₹ Crores; EPS/ratios are as reported. */
+export interface QuarterlyResultRow {
+  periodEnd:    string;                   // ISO quarter-end
+  basis:        string | null;            // "standalone" | "consolidated"
+  audited:      boolean | null;
+  relatingTo:   string | null;            // e.g. "Third quarter"
+  multiSegment: boolean | null;
+  format:       "standard" | "banking" | null;
+  lineItems:    Record<string, number>;
+  segments:     Array<{ name: string; revenue?: number; result?: number }> | null;
+}
+
+export interface QuarterlyResultsResponse {
+  symbol:    string;
+  basis:     string;                      // basis actually returned
+  available: string[];                    // bases the company files
+  rows:      QuarterlyResultRow[];        // newest quarter first
 }
 
 export interface StockFinancials {

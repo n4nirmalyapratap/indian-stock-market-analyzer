@@ -289,10 +289,17 @@ async def get_stock_financials(symbol: str):
         "capex":       ("Capital Expenditure",  _cr),
     }
 
-    annual_income    = _df_to_list(fs,  INCOME_MAP)
-    quarterly_income = _df_to_list(qfs, INCOME_MAP)
-    annual_bs        = _df_to_list(bs,  BS_MAP)
-    annual_cf        = _df_to_list(cf,  CF_MAP)
+    # Yahoo often returns one extra period at the oldest edge (e.g. FY22)
+    # with every value NaN → null. Drop any period where all metrics are
+    # null so the UI doesn't render an empty column of dashes; a row with
+    # even one real value is kept.
+    def _has_values(row: dict) -> bool:
+        return any(v is not None for k, v in row.items() if k != "date")
+
+    annual_income    = [r for r in _df_to_list(fs,  INCOME_MAP) if _has_values(r)]
+    quarterly_income = [r for r in _df_to_list(qfs, INCOME_MAP) if _has_values(r)]
+    annual_bs        = [r for r in _df_to_list(bs,  BS_MAP) if _has_values(r)]
+    annual_cf        = [r for r in _df_to_list(cf,  CF_MAP) if _has_values(r)]
 
     eps_annual    = [r for r in _df_to_list(fs,  {"eps": ("Diluted EPS", _f)}) if r["eps"] is not None]
     eps_quarterly = [r for r in _df_to_list(qfs, {"eps": ("Diluted EPS", _f)}) if r["eps"] is not None]
@@ -685,8 +692,11 @@ async def get_technical_summary(symbol: str, interval: str = "1d"):
 @router.get("/{symbol}/tri-factor")
 async def get_tri_factor_score(symbol: str):
     """
-    Tri-Factor Composite Scoring Model.
-    Returns scores in [-1, +1] for Technical, Fundamental, and Sentiment factors.
+    Composite Scoring Model.
+    Returns scores in [-1, +1] for Technical, Fundamental, Sentiment, and
+    Ownership factors. The Ownership factor is derived from the SEBI
+    shareholding XBRL (promoter pledge as a risk penalty; promoter and
+    institutional FII+DII stake trends QoQ as conviction signals).
     """
     import math
     import pandas as pd
@@ -929,12 +939,90 @@ async def get_tri_factor_score(symbol: str):
         if a.get("title")
     ]
 
+    # ── 4. OWNERSHIP SCORE ───────────────────────────────────────────────
+    # Conviction / risk signal mined from the SEBI shareholding XBRL we
+    # already parse (no new fetch infra). Three components, summed & clamped:
+    #   (a) promoter pledge — a pure risk penalty (rising pledge = distress);
+    #   (b) promoter stake trend QoQ — promoters adding = skin in the game;
+    #   (c) institutional (FII+DII) stake trend QoQ — smart-money accumulation.
+    from ..services.shareholding_service import get_shareholding as _get_shp  # noqa: PLC0415
+
+    own_factor: dict = {
+        "promoter_pct": None, "promoter_pledge_pct": None,
+        "promoter_change": None, "institutional_change": None,
+        "fii_pct": None, "dii_pct": None,
+        "pledge_score": 0.0, "promoter_trend_score": 0.0, "institutional_trend_score": 0.0,
+        "as_on": None, "data_note": None,
+    }
+    s_o = 0.0
+    try:
+        shp = await _get_shp(sym, quarters=8)
+        rows = shp.get("rows") or []          # newest quarter first
+        if not rows:
+            own_factor["data_note"] = "No shareholding data available"
+        else:
+            latest = rows[0]
+            own_factor["as_on"]               = latest.get("asOnDate")
+            own_factor["promoter_pct"]        = latest.get("promoterPct")
+            own_factor["fii_pct"]             = latest.get("fiiPct")
+            own_factor["dii_pct"]             = latest.get("diiPct")
+            pledge = latest.get("promoterPledgePct")
+            own_factor["promoter_pledge_pct"] = pledge
+
+            # (a) pledge penalty — only ever negative; pledge is a red flag.
+            pledge_score = 0.0
+            if pledge is not None and pledge > 0:
+                if   pledge > 50: pledge_score = -0.6
+                elif pledge > 25: pledge_score = -0.45
+                elif pledge > 10: pledge_score = -0.30
+                else:             pledge_score = -0.15
+            own_factor["pledge_score"] = pledge_score
+
+            def _trend(delta: float) -> float:
+                if delta >=  0.5: return  0.25
+                if delta >  0.0:  return  0.10
+                if delta <= -0.5: return -0.25
+                if delta <  0.0:  return -0.10
+                return 0.0
+
+            # (b) promoter stake trend vs the most recent prior quarter.
+            prom_trend = 0.0
+            if latest.get("promoterPct") is not None:
+                prev = next((r for r in rows[1:] if r.get("promoterPct") is not None), None)
+                if prev is not None:
+                    d = latest["promoterPct"] - prev["promoterPct"]
+                    own_factor["promoter_change"] = round(d, 2)
+                    prom_trend = _trend(d)
+            own_factor["promoter_trend_score"] = prom_trend
+
+            # (c) institutional (FII+DII) stake trend.
+            def _inst(r: dict):
+                f, dd = r.get("fiiPct"), r.get("diiPct")
+                if f is None and dd is None:
+                    return None
+                return (f or 0.0) + (dd or 0.0)
+
+            inst_trend = 0.0
+            latest_inst = _inst(latest)
+            if latest_inst is not None:
+                prev_inst = next((pi for pi in (_inst(r) for r in rows[1:]) if pi is not None), None)
+                if prev_inst is not None:
+                    d = latest_inst - prev_inst
+                    own_factor["institutional_change"] = round(d, 2)
+                    inst_trend = _trend(d)
+            own_factor["institutional_trend_score"] = inst_trend
+
+            s_o = round(max(-1.0, min(1.0, pledge_score + prom_trend + inst_trend)), 2)
+    except Exception as exc:
+        own_factor["data_note"] = f"Ownership computation error: {exc}"
+
     return {
         "symbol": sym,
         "scores": {
             "technical":   s_t,
             "fundamental": s_f,
             "sentiment":   s_s,
+            "ownership":   s_o,
         },
         "factors": {
             "technical": tech,
@@ -954,6 +1042,7 @@ async def get_tri_factor_score(symbol: str):
                 "total":     total,
                 "headlines": headlines,
             },
+            "ownership": own_factor,
         },
     }
 
@@ -978,6 +1067,38 @@ async def get_shareholding(
     from ..services.shareholding_service import get_shareholding as _svc  # noqa: PLC0415
     data = await _svc(symbol, view=view, quarters=quarters, force=force)
     return data
+
+
+@router.get("/{symbol}/quarterly-results")
+async def get_quarterly_results(
+    symbol: str,
+    basis:    str  = Query("consolidated", pattern="^(consolidated|standalone)$"),
+    quarters: int  = Query(12, ge=1, le=24),
+    force:    bool = Query(False),
+):
+    """Quarterly financial results parsed from the SEBI Reg-33 (in-bse-fin)
+    XBRL filing — the full P&L that Yahoo collapses: revenue, the complete
+    expense breakdown, current/deferred tax, PAT, basic + diluted EPS, and
+    segment results, for the standalone or consolidated basis.
+
+    Query params:
+      basis     `consolidated` (default) or `standalone`. Falls back to
+                whichever basis the company actually files.
+      quarters  Max quarters to return (1..24). Default 12 = 3 years.
+      force     Skip the staleness check and force a refresh fetch.
+    """
+    from ..services.financial_results_service import get_financial_results as _svc  # noqa: PLC0415
+    return await _svc(symbol, basis=basis, quarters=quarters, force=force)
+
+
+@router.get("/{symbol}/profile")
+async def get_stock_profile(symbol: str):
+    """Company business profile — what the company does (description) and its
+    canonical sector / industry. Sector is resolved through the centralised
+    classifier (sector_utils) and persisted for future lookups.
+    """
+    from ..services import stock_profile_service
+    return await stock_profile_service.get_profile(symbol)
 
 
 @router.get("/{symbol}")

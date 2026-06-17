@@ -587,22 +587,82 @@ def ensure_primary_schema() -> None:
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS shareholding_history (
-                        symbol            TEXT NOT NULL,
-                        as_on_date        DATE NOT NULL,
-                        promoter_pct      DOUBLE PRECISION,
-                        fii_pct           DOUBLE PRECISION,
-                        dii_pct           DOUBLE PRECISION,
-                        public_pct        DOUBLE PRECISION,
-                        num_shareholders  BIGINT,
-                        source            TEXT NOT NULL,
-                        fetched_at_ms     BIGINT NOT NULL,
+                        symbol              TEXT NOT NULL,
+                        as_on_date          DATE NOT NULL,
+                        promoter_pct        DOUBLE PRECISION,
+                        fii_pct             DOUBLE PRECISION,
+                        dii_pct             DOUBLE PRECISION,
+                        public_pct          DOUBLE PRECISION,
+                        govt_pct            DOUBLE PRECISION,
+                        num_shareholders    BIGINT,
+                        promoter_pledge_pct DOUBLE PRECISION,
+                        pledged_shares      BIGINT,
+                        demat_pct           DOUBLE PRECISION,
+                        locked_in_pct       DOUBLE PRECISION,
+                        details             JSONB,
+                        source              TEXT NOT NULL,
+                        fetched_at_ms       BIGINT NOT NULL,
                         PRIMARY KEY (symbol, as_on_date)
                     )
                     """
                 )
+                # Migrate pre-existing tables — CREATE TABLE IF NOT EXISTS
+                # is a no-op once the table exists, so the XBRL-enrichment
+                # columns (govt %, promoter pledge, demat/locked-in, the
+                # named-holder/flags JSONB) are added idempotently here.
+                for _col, _type in (
+                    ("govt_pct",            "DOUBLE PRECISION"),
+                    ("promoter_pledge_pct", "DOUBLE PRECISION"),
+                    ("pledged_shares",      "BIGINT"),
+                    ("demat_pct",           "DOUBLE PRECISION"),
+                    ("locked_in_pct",       "DOUBLE PRECISION"),
+                    ("details",             "JSONB"),
+                ):
+                    cur.execute(
+                        f"ALTER TABLE shareholding_history "
+                        f"ADD COLUMN IF NOT EXISTS {_col} {_type}"
+                    )
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS idx_shareholding_symbol_date "
                     "ON shareholding_history (symbol, as_on_date DESC)"
+                )
+
+                # ── Quarterly financial results (SEBI Reg-33 XBRL) ────────
+                # The full P&L per quarter that Yahoo collapses: revenue,
+                # the complete expense breakdown, tax split, PAT, basic +
+                # diluted EPS, and segment results — for each filed basis
+                # (standalone / consolidated). One row per
+                # (symbol, period_end, basis). line_items/segments are JSONB
+                # because the set of reported lines varies by company/sector.
+                # Immutable once filed, so cached like the shareholding data.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS financial_results (
+                        symbol         TEXT NOT NULL,
+                        period_end     DATE NOT NULL,
+                        basis          TEXT NOT NULL,
+                        period_type    TEXT,
+                        audited        BOOLEAN,
+                        relating_to    TEXT,
+                        multi_segment  BOOLEAN,
+                        report_format  TEXT,
+                        line_items     JSONB NOT NULL,
+                        segments       JSONB,
+                        source         TEXT NOT NULL,
+                        fetched_at_ms  BIGINT NOT NULL,
+                        PRIMARY KEY (symbol, period_end, basis)
+                    )
+                    """
+                )
+                # Migrate pre-existing tables (CREATE IF NOT EXISTS is a
+                # no-op once the table exists) — keeps the schema additive.
+                cur.execute(
+                    "ALTER TABLE financial_results "
+                    "ADD COLUMN IF NOT EXISTS report_format TEXT"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_finresults_symbol_date "
+                    "ON financial_results (symbol, period_end DESC)"
                 )
 
                 # ── Symbol quarantine ─────────────────────────────────────
