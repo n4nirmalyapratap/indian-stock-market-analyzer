@@ -14,7 +14,6 @@ Tests for the P1 data-honesty fixes from the Dashboard / ChartView audit:
 from __future__ import annotations
 
 import asyncio
-import time
 from unittest.mock import AsyncMock
 
 import pytest
@@ -81,76 +80,75 @@ def test_advance_decline_ratio_normal_division_otherwise():
     assert ratio == 1.00
 
 
-# ── 3. PatternsService cache TTL ─────────────────────────────────────────────
+# ── 3. PatternsService cache-first scan (ScanJob) ────────────────────────────
+# The old in-memory _cached_patterns + TTL + asyncio.Lock singleflight design
+# was replaced by services.scan_runner.ScanJob: a cache-first background scan.
+# These tests validate the new contract — kick-once-while-stale, serve-cache-
+# while-fresh, and no overlapping scans under concurrent callers.
 
 
-@pytest.fixture(autouse=True)
-def _reset_pattern_cache():
-    ps._cached_patterns = []
-    ps._last_scan_time = ""
-    ps._last_scan_monotonic = 0.0
-    ps._scan_lock = None  # force re-creation on the active loop
-    yield
-    ps._cached_patterns = []
-    ps._last_scan_time = ""
-    ps._last_scan_monotonic = 0.0
-    ps._scan_lock = None
-
-
-def test_patterns_cache_re_scans_after_ttl_expires(monkeypatch):
-    """A scan should be re-run when the cached results are older than
-    `_PATTERN_CACHE_TTL`. Previously the cache had no TTL and stale data
-    persisted until the process restarted."""
+def _make_patterns_svc():
+    """A PatternsService whose ScanJob is driven by a tiny deterministic
+    universe + instant scan_one, with the cache reset to a STALE state."""
     svc = ps.PatternsService(yahoo=AsyncMock(), nse=AsyncMock(), price=AsyncMock())
-    scan_calls: list[float] = []
-
-    async def fake_scan(self):
-        scan_calls.append(time.monotonic())
-        ps._cached_patterns = [{"signal": "CALL", "universe": "NIFTY100", "category": "x"}]
-        ps._last_scan_monotonic = time.monotonic()
-        return ps._cached_patterns
-
-    monkeypatch.setattr(ps.PatternsService, "run_scan", fake_scan)
-
-    # First call: empty cache → scan runs.
-    asyncio.run(svc.get_patterns())
-    assert len(scan_calls) == 1
-
-    # Second call moments later: cache is fresh → no rescan.
-    asyncio.run(svc.get_patterns())
-    assert len(scan_calls) == 1
-
-    # Force the cache age past the TTL by rewinding the last-scan timestamp.
-    ps._last_scan_monotonic = time.monotonic() - (ps._PATTERN_CACHE_TTL + 1)
-    asyncio.run(svc.get_patterns())
-    assert len(scan_calls) == 2, "Expired cache must trigger a rescan"
+    svc._job._results = {}
+    svc._job._meta_set("last_scan_at", "")   # empty → last_scan_at() is None → stale
+    return svc
 
 
-def test_patterns_cache_singleflight_under_concurrent_callers(monkeypatch):
-    """N concurrent callers hitting an empty cache must coalesce into a
-    SINGLE run_scan() invocation — not a stampede. Verifies the
-    asyncio.Lock + double-checked TTL guard around the refresh."""
-    svc = ps.PatternsService(yahoo=AsyncMock(), nse=AsyncMock(), price=AsyncMock())
-    scan_calls: list[float] = []
+def test_patterns_scan_kicks_when_stale_then_serves_cache(monkeypatch):
+    """A stale cache kicks exactly one background scan; once it completes the
+    results are served from cache and a follow-up call does NOT re-scan."""
+    svc = _make_patterns_svc()
+    calls: list[str] = []
 
-    async def slow_scan(self):
-        scan_calls.append(time.monotonic())
-        # Yield long enough for every other waiter to queue on the lock.
-        await asyncio.sleep(0.05)
-        ps._cached_patterns = [{"signal": "CALL", "universe": "NIFTY100", "category": "x"}]
-        ps._last_scan_monotonic = time.monotonic()
-        return ps._cached_patterns
+    async def fake_scan_one(sym):
+        calls.append(sym)
+        return {"symbol": sym, "universe": "NIFTY100",
+                "patterns": [{"symbol": sym, "pattern": "p", "signal": "CALL",
+                              "universe": "NIFTY100", "category": "x", "confidence": 80}]}
 
-    monkeypatch.setattr(ps.PatternsService, "run_scan", slow_scan)
+    svc._job.scan_one = fake_scan_one
+    svc._job.universe_fn = lambda: ["AAA", "BBB"]
 
-    async def fire_ten():
-        return await asyncio.gather(*(svc.get_patterns() for _ in range(10)))
+    async def scenario():
+        await svc.get_patterns()                 # cold → kicks scan
+        if svc._job._task:
+            await svc._job._task                 # let the background scan finish
+        first = len(calls)
+        d = await svc.get_patterns()             # fresh → must not re-scan
+        return first, len(calls), d
 
-    results = asyncio.run(fire_ten())
-    assert len(results) == 10
-    assert len(scan_calls) == 1, (
-        f"Singleflight failed — expected 1 scan, got {len(scan_calls)} "
-        "(N concurrent callers should coalesce into one run_scan call)"
+    first, after_second, d = asyncio.run(scenario())
+    assert first == 2, "stale cache should scan the whole (2-symbol) universe once"
+    assert after_second == 2, "fresh cache must NOT trigger a re-scan"
+    assert d["totalPatterns"] == 2
+
+
+def test_patterns_no_overlapping_scans_under_concurrent_callers():
+    """N concurrent get_patterns() callers hitting a stale cache must start a
+    SINGLE scan (the in_progress guard), not one per caller."""
+    svc = _make_patterns_svc()
+    calls: list[str] = []
+
+    async def slow_scan_one(sym):
+        await asyncio.sleep(0.02)
+        calls.append(sym)
+        return {"symbol": sym, "universe": "NIFTY100", "patterns": []}
+
+    svc._job.scan_one = slow_scan_one
+    svc._job.universe_fn = lambda: ["AAA", "BBB", "CCC"]
+
+    async def scenario():
+        await asyncio.gather(*(svc.get_patterns() for _ in range(10)))
+        if svc._job._task:
+            await svc._job._task
+        return len(calls)
+
+    n = asyncio.run(scenario())
+    assert n == 3, (
+        f"Expected one scan over 3 symbols, got {n} scan_one calls "
+        "(concurrent callers should coalesce via the in_progress guard)"
     )
 
 

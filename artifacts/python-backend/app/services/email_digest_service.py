@@ -348,7 +348,7 @@ async def _gather_rows(symbols: list[str], price_service) -> list[dict]:
     async def _one(sym: str) -> dict:
         try:
             qm = await asyncio.wait_for(
-                price_service.get_quote_with_meta(sym),
+                price_service.get_quote_with_meta(sym, cross_check=False),
                 timeout=_PER_QUOTE_TIMEOUT_SEC,
             )
             q = (qm or {}).get("quote") or {}

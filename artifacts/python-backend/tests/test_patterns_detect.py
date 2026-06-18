@@ -37,7 +37,6 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.patterns_service import PatternsService, _mk
-import app.services.patterns_service as _ps_mod
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -117,6 +116,22 @@ class _FakeNse:
 
 
 SVC = PatternsService(_FakeYahoo(), _FakeNse())
+
+
+def _seed_job(patterns):
+    """Seed the patterns ScanJob's in-memory cache with a flat pattern list
+    (grouped per symbol) and mark it fresh, so SVC.get_patterns() serves it
+    without kicking a real background scan. Replaces the old approach of
+    patching the removed module-global `_cached_patterns`."""
+    import time as _t
+    by_sym: dict = {}
+    for p in patterns:
+        row = by_sym.setdefault(
+            p["symbol"], {"symbol": p["symbol"], "universe": p.get("universe"), "patterns": []}
+        )
+        row["patterns"].append(p)
+    SVC._job._results = by_sym
+    SVC._job._meta_set("last_scan_at", _t.time())
 
 # Convenience constants
 NIFTY100 = "NIFTY100"
@@ -1562,10 +1577,8 @@ class TestGetPatternsFiltering:
     MOCK_PATTERNS = _make_mock_patterns()
 
     def _run_with_cache(self, universe=None, signal=None, category=None):
-        import time as _time
-        with patch.object(_ps_mod, "_cached_patterns", self.MOCK_PATTERNS), \
-             patch.object(_ps_mod, "_last_scan_monotonic", _time.monotonic()):
-            return _run(SVC.get_patterns(universe, signal, category))
+        _seed_job(self.MOCK_PATTERNS)
+        return _run(SVC.get_patterns(universe, signal, category))
 
     # ── No filter ─────────────────────────────────────────────────────────────
 
@@ -1724,8 +1737,8 @@ class TestUniverseCategorySignalMatrix:
     MOCK = _make_mock_patterns()
 
     def _filter(self, universe=None, signal=None, category=None):
-        with patch.object(_ps_mod, "_cached_patterns", self.MOCK):
-            return _run(SVC.get_patterns(universe, signal, category))["patterns"]
+        _seed_job(self.MOCK)
+        return _run(SVC.get_patterns(universe, signal, category))["patterns"]
 
     def test_all_universe_filters_are_disjoint(self):
         """Patterns from NIFTY100, MIDCAP, SMALLCAP should not overlap."""

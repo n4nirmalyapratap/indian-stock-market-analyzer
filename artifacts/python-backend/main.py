@@ -24,6 +24,7 @@ from app.routes.options import router as options_router
 from app.routes.chat import router as chat_router
 from app.routes.assistant import router as assistant_router
 from app.routes.sector_analytics import router as sector_analytics_router
+from app.routes.sector_rotation import router as sector_rotation_router
 from app.routes.news import router as news_router
 from app.routes.admin import router as admin_router
 from app.routes.auth import router as auth_router
@@ -154,6 +155,20 @@ async def _market_state_transition_loop() -> None:
                     logger.info("EOD seal after transition: %s", result)
                 except Exception as e:
                     logger.warning("Post-transition EOD seal failed: %s", e)
+                # Aggressive post-close warm: pull the FULL universe's EOD bars
+                # onto disk now, so the day's cache-first scans (screener /
+                # patterns / scanners) read from disk and run fast instead of
+                # hitting the network per symbol. Bounded + gentle inside
+                # warmup_cache; non-fatal on failure.
+                try:
+                    warm = await _mcs.warmup_cache(price_service)
+                    logger.info(
+                        "Post-close full-universe warm: %d/%d cached, %d errors",
+                        warm.get("filesSaved", 0), warm.get("totalSymbols", 0),
+                        warm.get("errors", 0),
+                    )
+                except Exception as e:
+                    logger.warning("Post-close full-universe warm failed: %s", e)
 
             last_state = state
         except asyncio.CancelledError:
@@ -258,13 +273,22 @@ async def lifespan(app: FastAPI):
     fii_dii_task    = asyncio.create_task(_fii_dii_scheduler())
     dhan_task       = asyncio.create_task(_dhan_scrip_master_preload())
     pcr_task        = asyncio.create_task(_pcr_snapshot_scheduler())
+    synth_class_task = asyncio.create_task(_synthetic_classifier_scheduler())
+    synth_metrics_task = asyncio.create_task(_synthetic_metrics_scheduler())
+    synth_bootstrap_task = asyncio.create_task(_synth_bootstrap_task())
+    # Security registry — populates from NSE + Zerodha so every other
+    # symbol-aware path (price chain, scanners, search) sees the live
+    # NSE master list with multi-source fallback. Run on startup +
+    # once a day at 06:00 IST (after the overnight CSV refresh).
+    registry_task   = asyncio.create_task(_security_registry_scheduler())
     try:
         yield
     finally:
         for t in (poll_task, universe_task, warmup_task, transition_task,
                   fixer_task, rfr_task, bhav_task, alerts_task, backtest_task,
                   digest_sched_task, digest_worker_task, fii_dii_task, dhan_task,
-                  pcr_task):
+                  pcr_task, synth_class_task, synth_metrics_task,
+                  synth_bootstrap_task, registry_task):
             t.cancel()
             try:
                 await t
@@ -339,6 +363,45 @@ async def _bot_alerts_tick_loop() -> None:
             await asyncio.sleep(5 * 60)
         except asyncio.CancelledError:
             logger.info("Bot alerts scheduler stopped.")
+            break
+
+
+async def _security_registry_scheduler() -> None:
+    """Keep the SecurityRegistry fresh.
+
+    Strategy:
+      * On startup → brief settle delay, then one fire-and-forget
+        refresh. Until this completes we serve from the disk cache /
+        baseline (so the app never blocks on the network for startup).
+      * Subsequent ticks → once every 24 h. NSE EQUITY_L.csv is the
+        canonical source; if NSE direct fails the registry falls back
+        to Zerodha's public instruments dump, then disk cache, then
+        the bundled baseline (in that priority).
+
+    Never raises out of the loop — the registry's `refresh()` already
+    catches every fetch failure internally. We log + continue here so
+    one bad day doesn't kill the scheduler for the rest of the process'
+    lifetime.
+    """
+    from app.services.security_registry_service import refresh_registry
+    # ~10 s settle delay so the rest of startup logs land first and we
+    # don't compete with `_universe_scheduler` for the network on
+    # cold boot.
+    await asyncio.sleep(10)
+    while True:
+        try:
+            await refresh_registry()
+        except Exception as exc:
+            logger.warning("Security registry scheduler tick failed: %s", exc)
+        try:
+            # 24h refresh — NSE updates EQUITY_L overnight, so a daily
+            # tick is more than enough. We don't try to align to 06:00
+            # IST precisely; the startup tick already covers freshness
+            # for new launches, and a 24h re-tick from boot is simpler
+            # than wall-clock alignment and just as good for this use.
+            await asyncio.sleep(24 * 3600)
+        except asyncio.CancelledError:
+            logger.info("Security registry scheduler stopped.")
             break
 
 
@@ -565,11 +628,15 @@ async def _universe_scheduler() -> None:
     — just after NSE market close (15:30 IST).
     On first startup, load from cache if it exists; only fetch live if cache is stale.
     """
-    from app.lib.universe_builder import load_cache, get_or_refresh
+    from app.lib.universe_builder import (
+        load_cache, cache_age_seconds, CACHE_TTL, fetch_universe, save_cache,
+    )
     from app.lib.universe import _apply_live_data
 
-    # Apply whatever is already cached so the server starts with live data
-    cached = load_cache()
+    # Apply whatever is already cached so the server starts with live data —
+    # even if stale (ignore_ttl). A months-old list of real NSE symbols beats
+    # the hardcoded fallback; staleness is surfaced to the UI separately.
+    cached = load_cache(ignore_ttl=True)
     if cached:
         _apply_live_data(cached)
         logger.info(
@@ -577,6 +644,24 @@ async def _universe_scheduler() -> None:
             len(cached.get("all_symbols", [])),
             cached.get("generated_at", "?"),
         )
+
+    # Self-heal: if the cache is missing or stale (>TTL), attempt one refresh
+    # now instead of waiting until the daily 16:05 IST window. Failures are
+    # non-fatal — we keep serving the cache we already applied above.
+    age = cache_age_seconds()
+    if age is None or age > CACHE_TTL:
+        try:
+            data = await fetch_universe()
+            if data and data.get("all_symbols"):
+                save_cache(data)
+                _apply_live_data(data)
+                logger.info(
+                    "Universe self-heal refresh ok — %d symbols, %d sectors",
+                    len(data.get("all_symbols", [])),
+                    len(data.get("sector_symbols", {})),
+                )
+        except Exception as e:
+            logger.warning("Universe self-heal refresh failed (keeping cache): %s", e)
 
     while True:
         try:
@@ -610,6 +695,138 @@ async def _universe_scheduler() -> None:
         except Exception as e:
             logger.warning("Universe scheduler error: %s — retrying tomorrow", e)
             await asyncio.sleep(3600)   # back-off 1 h on unexpected error
+
+
+async def _synth_bootstrap_task() -> None:
+    """One-shot startup task: seed sub_industry_overrides from SUBSECTOR_TAXONOMY
+    and immediately rebuild today's metrics grid when the grid is sparse.
+
+    This runs 30 s after startup — long enough for the DB schema to be ready
+    and all import paths to be warm, but short enough that the grid is
+    populated before the first user opens /sector-analytics.
+
+    Why overrides instead of re-classifying stocks:
+      2 000+ stocks are already in `stocks` with real market_cap data from Yahoo.
+      But Yahoo uses its own generic industry labels (e.g. "Banks - Regional"),
+      and only 3 of those clusters reached the 3-constituent minimum required by
+      the synthetic index — so the grid shows 3 rows.  SUBSECTOR_TAXONOMY maps
+      each stock to a curated Indian sub-industry name.  Seeding those mappings
+      into sub_industry_overrides lets _load_classified_stocks() pick them up
+      immediately at the next metrics run, without waiting for the weekly Yahoo
+      re-classifier.  The stocks already have market_cap → they contribute to
+      the cap-weighted index straight away.
+    """
+    from app.services import synthetic_sectors_service as synth  # noqa: PLC0415
+    from app.services.yahoo_service import YahooService as _YS  # noqa: PLC0415
+
+    await asyncio.sleep(30)          # let schema + pool initialise
+    try:
+        seed = await asyncio.to_thread(synth.seed_overrides_from_taxonomy)
+        logger.info("synth bootstrap: taxonomy seed complete — %s", seed)
+
+        # Only re-run metrics when the grid is thin (first-time or after taxonomy added).
+        latest_date = await asyncio.to_thread(synth._latest_metric_date)
+        n_subs = 0
+        if latest_date is not None:
+            from app.lib import auth_store as _as  # noqa: PLC0415
+            with _as.get_conn() as _conn:
+                with _conn.cursor() as _cur:
+                    _cur.execute(
+                        "SELECT COUNT(DISTINCT sub_industry) AS n FROM synthetic_sector_daily_metrics "
+                        "WHERE metric_date = %s AND sub_industry <> '__NIFTY50__'",
+                        (latest_date,),
+                    )
+                    row = _cur.fetchone()
+                    n_subs = dict(row)["n"] if row else 0
+
+        if n_subs < 10:
+            logger.info(
+                "synth bootstrap: grid has %d sub-industries — running metrics now …", n_subs
+            )
+            yahoo = _YS()
+            result = await synth.run_nightly_metrics(yahoo)
+            logger.info("synth bootstrap: metrics complete — %s", result)
+        else:
+            logger.info("synth bootstrap: grid already has %d sub-industries — skipping metrics run", n_subs)
+    except asyncio.CancelledError:
+        logger.info("synth bootstrap task cancelled.")
+        raise
+    except Exception as exc:
+        logger.warning("synth bootstrap task error: %s", exc)
+
+
+async def _synthetic_classifier_scheduler() -> None:
+    """Classify the curated universe into the `stocks` table for the synthetic
+    sub-industry rotation engine. Runs once shortly after startup (only stale /
+    missing rows are fetched) then weekly. Bounded Yahoo concurrency lives
+    inside the service — this just paces the cadence.
+    """
+    from app.services import synthetic_sectors_service as synth
+    await asyncio.sleep(120)  # let startup + universe cache settle first
+    while True:
+        try:
+            result = await synth.refresh_classifications()
+            logger.info("synthetic classifier scheduler: %s", result)
+        except asyncio.CancelledError:
+            logger.info("Synthetic classifier scheduler stopped.")
+            break
+        except Exception as exc:
+            logger.warning("synthetic classifier scheduler error: %s", exc)
+        try:
+            await asyncio.sleep(7 * 24 * 3600)   # weekly
+        except asyncio.CancelledError:
+            logger.info("Synthetic classifier scheduler stopped.")
+            break
+
+
+async def _synthetic_metrics_scheduler() -> None:
+    """Nightly synthetic sub-industry index build. Fires at 16:30 IST
+    (11:00 UTC) — 30 min after the 16:00 IST EOD-data grace window so Yahoo's
+    sealed close and the NSE delivery archive are both available. Idempotent
+    per date, so a missed/duplicated run is harmless.
+    """
+    from app.services import synthetic_sectors_service as synth
+    from app.services.yahoo_service import YahooService as _YahooService
+    yahoo = _YahooService()
+
+    # Opportunistic catch-up: if the latest stored metrics are older than the
+    # latest trading day, run once on startup (after the classifier has had
+    # time to populate `stocks`) so the grid has real data immediately rather
+    # than waiting for the next nightly tick. Gated so we never re-run an
+    # already-current day.
+    try:
+        await asyncio.sleep(300)  # land after the classifier's first pass
+        latest = await asyncio.to_thread(synth._latest_metric_date)
+        if latest is None or latest < synth._latest_trading_day():
+            logger.info("Synthetic metrics: startup catch-up run starting…")
+            result = await synth.run_nightly_metrics(yahoo)
+            logger.info("synthetic metrics catch-up: %s", result)
+    except asyncio.CancelledError:
+        logger.info("Synthetic metrics scheduler stopped.")
+        return
+    except Exception as exc:
+        logger.warning("synthetic metrics catch-up error: %s", exc)
+
+    while True:
+        try:
+            now_utc = dt.datetime.utcnow()
+            target = now_utc.replace(hour=11, minute=0, second=0, microsecond=0)
+            if now_utc >= target:
+                target += dt.timedelta(days=1)
+            wait_s = (target - now_utc).total_seconds()
+            logger.info(
+                "Synthetic metrics scheduler: next run in %.0f s (at %s UTC)",
+                wait_s, target.strftime("%Y-%m-%d %H:%M"),
+            )
+            await asyncio.sleep(wait_s)
+            result = await synth.run_nightly_metrics(yahoo)
+            logger.info("synthetic metrics scheduler: %s", result)
+        except asyncio.CancelledError:
+            logger.info("Synthetic metrics scheduler stopped.")
+            break
+        except Exception as exc:
+            logger.warning("synthetic metrics scheduler error: %s — retry tomorrow", exc)
+            await asyncio.sleep(3600)
 
 
 async def _dhan_scrip_master_preload() -> None:
@@ -704,6 +921,7 @@ app.include_router(options_router,   prefix="/api")
 app.include_router(chat_router,      prefix="/api")
 app.include_router(assistant_router,        prefix="/api")
 app.include_router(sector_analytics_router, prefix="/api")
+app.include_router(sector_rotation_router,  prefix="/api")
 app.include_router(news_router,             prefix="/api")
 app.include_router(admin_router,            prefix="/api")
 app.include_router(auth_router,             prefix="/api")

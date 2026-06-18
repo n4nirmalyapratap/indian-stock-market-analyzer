@@ -36,8 +36,15 @@ function fmtINR(n: any) {
   return `${sign}₹${v.toLocaleString("en-IN")}`;
 }
 
+// Known signal types. Backend may add more; the `|| fallback` below
+// gracefully handles unknown values. Compiler still catches typos
+// in the keys/values inside this map at build time.
+type KnownSignal =
+  | "LONG_SPREAD" | "SHORT_SPREAD" | "EXIT" | "HOLD" | "NO_TRADE"
+  | "BULLISH" | "BEARISH" | "NEUTRAL";
+
 function SignalBadge({ signal }: { signal: string }) {
-  const cfg: Record<string, { color: string; label: string }> = {
+  const cfg: Record<KnownSignal, { color: string; label: string }> = {
     LONG_SPREAD:    { color: "bg-green-600 text-white", label: "↑ LONG SPREAD" },
     SHORT_SPREAD:   { color: "bg-red-600 text-white",   label: "↓ SHORT SPREAD" },
     EXIT:           { color: "bg-yellow-500 text-white", label: "↩ EXIT" },
@@ -47,7 +54,7 @@ function SignalBadge({ signal }: { signal: string }) {
     BEARISH:        { color: "bg-red-600 text-white",   label: "↓ BEARISH" },
     NEUTRAL:        { color: "bg-gray-400 text-white",  label: "→ NEUTRAL" },
   };
-  const c = cfg[signal] || { color: "bg-gray-300 text-gray-700", label: signal };
+  const c = cfg[signal as KnownSignal] || { color: "bg-gray-300 text-gray-700", label: signal };
   return <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${c.color}`}>{c.label}</span>;
 }
 

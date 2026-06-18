@@ -3268,6 +3268,17 @@ async def get_top_deliveries(
     sort_key = _SORT_KEYS.get(sort, _SORT_KEYS["delivPct"])
     filtered.sort(key=sort_key, reverse=True)
 
+    # Tag each row with the NSE sector indices it belongs to, so the sector
+    # chips (which use NSE index names like "NIFTY BANK") can filter the
+    # per-stock list. A stock can belong to several indices.
+    from ..lib import universe as _univ_tag  # noqa: PLC0415
+    _rev: dict[str, list[str]] = {}
+    for _sec, _syms in _univ_tag.SECTOR_SYMBOLS.items():
+        for _s in _syms:
+            _rev.setdefault((_s or "").upper(), []).append(_sec)
+    for r in filtered:
+        r["sectors"] = _rev.get((r.get("symbol") or "").upper(), [])
+
     items = filtered[:limit]
     highlights = filtered[:5]
 
@@ -3279,44 +3290,21 @@ async def get_top_deliveries(
     avg_deliv_pct  = (sum((r.get("delivPct") or 0.0) for r in filtered) / len(filtered)
                       if filtered else 0.0)
 
-    # Sector-wise rollup over the filtered slice.
-    sector_buckets: dict[str, dict] = {}
-    for r in filtered:
-        sec = (r.get("sector") or "Unclassified").strip() or "Unclassified"
-        b = sector_buckets.setdefault(sec, {
-            "sector": sec, "count": 0,
-            "totalTraded": 0, "totalDeliv": 0,
-            "totalTurnover": 0.0, "totalDelivValue": 0.0,
-            "_pctSum": 0.0, "topSymbol": None, "topDelivPct": -1.0,
-        })
-        b["count"] += 1
-        b["totalTraded"]    += r.get("tradedQty") or 0
-        b["totalDeliv"]     += r.get("delivQty") or 0
-        b["totalTurnover"]  += r.get("turnover") or 0.0
-        b["totalDelivValue"] += r.get("delivValue") or 0.0
-        b["_pctSum"]        += r.get("delivPct") or 0.0
-        dp = r.get("delivPct") or 0.0
-        if dp > b["topDelivPct"]:
-            b["topDelivPct"] = dp
-            b["topSymbol"]   = r.get("symbol")
-
-    sectors = []
-    for b in sector_buckets.values():
-        cnt = b["count"] or 1
-        tt  = b["totalTraded"] or 0
-        sectors.append({
-            "sector": b["sector"],
-            "count": b["count"],
-            "totalTraded": b["totalTraded"],
-            "totalDeliv":  b["totalDeliv"],
-            "totalTurnover":   round(b["totalTurnover"], 2),
-            "totalDelivValue": round(b["totalDelivValue"], 2),
-            "avgDelivPct": round(b["_pctSum"] / cnt, 2),
-            "delivRatio": round((b["totalDeliv"] / tt * 100), 2) if tt else 0.0,
-            "topSymbol": b["topSymbol"],
-            "topDelivPct": round(b["topDelivPct"], 2) if b["topDelivPct"] >= 0 else 0.0,
-        })
-    sectors.sort(key=lambda s: s["totalDelivValue"], reverse=True)
+    # Sector-wise rollup — ACCURATE: quantity-weighted, over each NSE sector
+    # index's FULL membership (not the on-screen filtered slice), classified via
+    # our own SECTOR_SYMBOLS map. This is independent of the index/minDelivPct
+    # filters (those bias the per-stock list, not the sector picture) and matches
+    # the Sector-Rotation cockpit. Reuses the already-fetched full `nse_rows`.
+    # Aggregate over the SAME `filtered` set the stock list uses, so a chip's
+    # count matches the stocks shown when you click it. Grouping is by NSE
+    # sector-index membership (SECTOR_SYMBOLS) — quantity-weighted, accurate —
+    # not the old patchy per-stock label. Pick a wider Index (e.g. "All") to see
+    # every sector; Nifty 50 naturally shows only the sectors present in it.
+    from ..services import delivery_service as _delivery   # noqa: PLC0415
+    _sector_groups = {sec: syms for sec, syms in _univ_tag.SECTOR_SYMBOLS.items() if syms}
+    sectors = _delivery.aggregate_delivery(_sector_groups, filtered)
+    for _s in sectors:
+        _s["sector"] = _s["group"]
 
     return {
         "available": True,
@@ -3339,6 +3327,18 @@ async def get_top_deliveries(
             "sectorCount":  len(sectors),
         },
     }
+
+
+@router.get("/delivery-history")
+async def get_delivery_history(symbol: str = Query(..., min_length=1), days: int = Query(40, ge=5, le=120)):
+    """Per-stock delivery % over the last `days` trading sessions, reconstructed
+    from recent NSE bhavcopies (cached). Powers the Chart Studio delivery pane
+    and the rotation cockpit sparklines."""
+    from app.services import delivery_service as _delivery   # noqa: PLC0415
+    from app.lib.symbol_map import canonical_symbol          # noqa: PLC0415
+    sym = canonical_symbol(symbol)
+    series = await _delivery.get_symbol_delivery_history(sym, days=days)
+    return {"symbol": sym, "available": bool(series), "series": series}
 
 
 @router.get("/fii-dii")

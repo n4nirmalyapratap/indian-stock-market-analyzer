@@ -103,6 +103,94 @@ async def search_stocks(q: str = Query(default="")):
     }
 
 
+@router.get("/quotes")
+async def get_quotes(symbols: str = Query(default="", description="Comma-separated NSE symbols")):
+    """Lightweight batch quotes for watchlist-style consumers — company
+    name, last price and %change only.
+
+    `/stocks/{symbol}` pulls 500 days of history, computes the full
+    technical-analysis stack, and (closed-market) runs an NSE-vs-Yahoo
+    divergence cross-check — all wasted on a watchlist row that shows
+    only price + %change. This endpoint skips every one of those.
+
+    Closed market: served straight from the sealed EOD bars on disk
+    (zero network) — see below. Open market: a plain quote per symbol
+    with the divergence cross-check disabled, concurrency bounded.
+    """
+    syms = [s.strip().upper() for s in symbols.split(",") if s.strip()][:100]
+    if not syms:
+        return {"quotes": []}
+
+    # ── Closed-market fast path ──────────────────────────────────────────────
+    # The official closes are sealed on disk by the post-close warmup, so serve
+    # price + %change straight from the last two sealed bars: zero network,
+    # instant, and identical to the EOD overlay the detail panel shows (the row
+    # and the detail panel never disagree). Without this, every symbol walks the
+    # live chain whose NSE provider is tried FIRST — and while NSE is IP-blocked
+    # that serialises on the cookie lock and burns the retry+sleep loop per
+    # symbol (the watchlist "stuck on Loading…"). Symbols not yet sealed (cold
+    # start before the warmup runs) fall through to the live quote below.
+    disk_hits: dict[str, dict] = {}
+    if not _disk.is_market_open():
+        from ..lib.universe import COMPANY_MAP  # noqa: PLC0415 — bars carry no name
+
+        def _disk_quote(sym):
+            payload = _disk.load_with_meta(sym, 5)
+            if not (payload and payload.get("eodSealed") and payload.get("data")):
+                return None
+            bars = payload["data"]
+            if len(bars) < 2:
+                return None
+            last, prev = bars[-1], bars[-2]
+            lc, pc = last.get("close"), prev.get("close")
+            if lc is None or pc is None or not pc:
+                return None
+            try:
+                lc, pc = float(lc), float(pc)
+            except (TypeError, ValueError):
+                return None
+            return {
+                "symbol":      sym,
+                "companyName": COMPANY_MAP.get(sym) or sym,
+                "lastPrice":   round(lc, 2),
+                "pChange":     round((lc - pc) / pc * 100, 2),
+            }
+
+        def _read_all():
+            out: dict[str, dict] = {}
+            for s in syms:
+                q = _disk_quote(s)
+                if q is not None:
+                    out[s] = q
+            return out
+
+        # Off the event loop — up to 100 small file reads.
+        disk_hits = await asyncio.to_thread(_read_all)
+
+    sem = asyncio.Semaphore(8)
+
+    async def _one(sym: str) -> dict:
+        if sym in disk_hits:
+            return disk_hits[sym]
+        async with sem:
+            try:
+                snap = await svc.price.get_quote_with_meta(sym, cross_check=False)
+            except Exception:
+                snap = None
+        if not snap:
+            return {"symbol": sym, "error": "not found"}
+        q = snap["quote"]
+        return {
+            "symbol":      sym,
+            "companyName": q.get("companyName") or sym,
+            "lastPrice":   q.get("lastPrice"),
+            "pChange":     q.get("pChange"),
+        }
+
+    quotes = await asyncio.gather(*[_one(s) for s in syms])
+    return {"quotes": quotes}
+
+
 @router.get("/{symbol}/history")
 async def get_stock_history(
     symbol: str,
@@ -289,10 +377,17 @@ async def get_stock_financials(symbol: str):
         "capex":       ("Capital Expenditure",  _cr),
     }
 
-    annual_income    = _df_to_list(fs,  INCOME_MAP)
-    quarterly_income = _df_to_list(qfs, INCOME_MAP)
-    annual_bs        = _df_to_list(bs,  BS_MAP)
-    annual_cf        = _df_to_list(cf,  CF_MAP)
+    # Yahoo often returns one extra period at the oldest edge (e.g. FY22)
+    # with every value NaN → null. Drop any period where all metrics are
+    # null so the UI doesn't render an empty column of dashes; a row with
+    # even one real value is kept.
+    def _has_values(row: dict) -> bool:
+        return any(v is not None for k, v in row.items() if k != "date")
+
+    annual_income    = [r for r in _df_to_list(fs,  INCOME_MAP) if _has_values(r)]
+    quarterly_income = [r for r in _df_to_list(qfs, INCOME_MAP) if _has_values(r)]
+    annual_bs        = [r for r in _df_to_list(bs,  BS_MAP) if _has_values(r)]
+    annual_cf        = [r for r in _df_to_list(cf,  CF_MAP) if _has_values(r)]
 
     eps_annual    = [r for r in _df_to_list(fs,  {"eps": ("Diluted EPS", _f)}) if r["eps"] is not None]
     eps_quarterly = [r for r in _df_to_list(qfs, {"eps": ("Diluted EPS", _f)}) if r["eps"] is not None]
@@ -641,31 +736,68 @@ async def get_technical_summary(symbol: str, interval: str = "1d"):
         as_of      = meta.get("savedAt")
 
     if df is None or df.empty:
-        # Sub-daily, or NSE empty → PriceService (Yahoo intraday under the hood)
+        # Sub-daily / weekly / monthly → Yahoo intraday (NSE only exposes EOD).
         chart = await svc.price.get_intraday_history(symbol_upper, period=period, interval=yf_interval)
-        if not chart.get("candles"):
-            return JSONResponse(
-                status_code=404,
-                content={"error": f"No price data for {symbol_upper} (interval={interval})"},
-            )
-        # Reconstruct a DataFrame the indicator library can consume
-        rows = chart["candles"]
-        df = pd.DataFrame({
-            "Open":   [r["open"]   for r in rows],
-            "High":   [r["high"]   for r in rows],
-            "Low":    [r["low"]    for r in rows],
-            "Close":  [r["close"]  for r in rows],
-            "Volume": [r.get("volume", 0) for r in rows],
-        }, index=pd.to_datetime([r["time"] for r in rows], unit="s"))
-        source     = chart.get("source") or "YAHOO"
-        eod_sealed = bool(chart.get("eodSealed"))
-        eod_date   = chart.get("eodDate")
-        as_of      = chart.get("asOf") or _disk._now_ist().isoformat()
+        rows = chart.get("candles") or []
+        if rows:
+            # Reconstruct a DataFrame the indicator library can consume
+            df = pd.DataFrame({
+                "Open":   [r["open"]   for r in rows],
+                "High":   [r["high"]   for r in rows],
+                "Low":    [r["low"]    for r in rows],
+                "Close":  [r["close"]  for r in rows],
+                "Volume": [r.get("volume", 0) for r in rows],
+            }, index=pd.to_datetime([r["time"] for r in rows], unit="s"))
+            source     = chart.get("source") or "YAHOO"
+            eod_sealed = bool(chart.get("eodSealed"))
+            eod_date   = chart.get("eodDate")
+            as_of      = chart.get("asOf") or _disk._now_ist().isoformat()
+        elif interval in ("1w", "1mo"):
+            # Yahoo had no weekly/monthly bars — common for recently-listed
+            # names (e.g. ENRIN) whose monthly feed Yahoo hasn't built yet.
+            # Resample from the daily disk series instead: the same reliable
+            # source the 1D view uses, so the tab works for any symbol we hold
+            # daily bars for.
+            daily = await svc.price.get_history_dataframe(symbol_upper, days=3660)
+            if daily is not None and not daily.empty:
+                rule = "W" if interval == "1w" else "ME"
+                df = daily.resample(rule).agg({
+                    "Open": "first", "High": "max", "Low": "min",
+                    "Close": "last", "Volume": "sum",
+                }).dropna()
+                meta = _disk.load_with_meta(symbol_upper, 3660) or _disk.load_with_meta(symbol_upper, 300) or {}
+                source     = meta.get("source") or "NSE"
+                eod_sealed = bool(meta.get("eodSealed"))
+                eod_date   = meta.get("eodDate")
+                as_of      = meta.get("savedAt")
 
+    if df is None or df.empty:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"No price data for {symbol_upper} (interval={interval})"},
+        )
+
+    # Graceful degradation: a recently-listed name on a long timeframe has only
+    # a handful of bars, which can yield mostly-empty indicators (or, rarely, a
+    # library error). Return a valid NEUTRAL structure rather than failing the
+    # whole tab — the UI then renders an empty summary instead of an error.
     try:
         result = await asyncio.to_thread(_compute, df)
+        if not isinstance(result, dict):
+            raise ValueError("compute did not return a result dict")
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": f"Could not compute technical summary: {e}"})
+        import logging as _lg
+        _lg.getLogger(__name__).warning(
+            "technical-summary compute failed for %s (interval=%s, bars=%d): %s",
+            symbol_upper, interval, len(df), e,
+        )
+        _neutral = {"signal": "NEUTRAL", "buy": 0, "sell": 0, "neutral": 0, "indicators": []}
+        result = {
+            "oscillators":    dict(_neutral),
+            "movingAverages": dict(_neutral),
+            "pivots": {"classic": {}, "fibonacci": {}, "camarilla": {}, "woodie": {}, "dm": {}},
+            "summary": {"signal": "NEUTRAL", "buy": 0, "sell": 0, "neutral": 0},
+        }
 
     return {
         "symbol":   symbol_upper,
@@ -685,8 +817,11 @@ async def get_technical_summary(symbol: str, interval: str = "1d"):
 @router.get("/{symbol}/tri-factor")
 async def get_tri_factor_score(symbol: str):
     """
-    Tri-Factor Composite Scoring Model.
-    Returns scores in [-1, +1] for Technical, Fundamental, and Sentiment factors.
+    Composite Scoring Model.
+    Returns scores in [-1, +1] for Technical, Fundamental, Sentiment, and
+    Ownership factors. The Ownership factor is derived from the SEBI
+    shareholding XBRL (promoter pledge as a risk penalty; promoter and
+    institutional FII+DII stake trends QoQ as conviction signals).
     """
     import math
     import pandas as pd
@@ -929,12 +1064,90 @@ async def get_tri_factor_score(symbol: str):
         if a.get("title")
     ]
 
+    # ── 4. OWNERSHIP SCORE ───────────────────────────────────────────────
+    # Conviction / risk signal mined from the SEBI shareholding XBRL we
+    # already parse (no new fetch infra). Three components, summed & clamped:
+    #   (a) promoter pledge — a pure risk penalty (rising pledge = distress);
+    #   (b) promoter stake trend QoQ — promoters adding = skin in the game;
+    #   (c) institutional (FII+DII) stake trend QoQ — smart-money accumulation.
+    from ..services.shareholding_service import get_shareholding as _get_shp  # noqa: PLC0415
+
+    own_factor: dict = {
+        "promoter_pct": None, "promoter_pledge_pct": None,
+        "promoter_change": None, "institutional_change": None,
+        "fii_pct": None, "dii_pct": None,
+        "pledge_score": 0.0, "promoter_trend_score": 0.0, "institutional_trend_score": 0.0,
+        "as_on": None, "data_note": None,
+    }
+    s_o = 0.0
+    try:
+        shp = await _get_shp(sym, quarters=8)
+        rows = shp.get("rows") or []          # newest quarter first
+        if not rows:
+            own_factor["data_note"] = "No shareholding data available"
+        else:
+            latest = rows[0]
+            own_factor["as_on"]               = latest.get("asOnDate")
+            own_factor["promoter_pct"]        = latest.get("promoterPct")
+            own_factor["fii_pct"]             = latest.get("fiiPct")
+            own_factor["dii_pct"]             = latest.get("diiPct")
+            pledge = latest.get("promoterPledgePct")
+            own_factor["promoter_pledge_pct"] = pledge
+
+            # (a) pledge penalty — only ever negative; pledge is a red flag.
+            pledge_score = 0.0
+            if pledge is not None and pledge > 0:
+                if   pledge > 50: pledge_score = -0.6
+                elif pledge > 25: pledge_score = -0.45
+                elif pledge > 10: pledge_score = -0.30
+                else:             pledge_score = -0.15
+            own_factor["pledge_score"] = pledge_score
+
+            def _trend(delta: float) -> float:
+                if delta >=  0.5: return  0.25
+                if delta >  0.0:  return  0.10
+                if delta <= -0.5: return -0.25
+                if delta <  0.0:  return -0.10
+                return 0.0
+
+            # (b) promoter stake trend vs the most recent prior quarter.
+            prom_trend = 0.0
+            if latest.get("promoterPct") is not None:
+                prev = next((r for r in rows[1:] if r.get("promoterPct") is not None), None)
+                if prev is not None:
+                    d = latest["promoterPct"] - prev["promoterPct"]
+                    own_factor["promoter_change"] = round(d, 2)
+                    prom_trend = _trend(d)
+            own_factor["promoter_trend_score"] = prom_trend
+
+            # (c) institutional (FII+DII) stake trend.
+            def _inst(r: dict):
+                f, dd = r.get("fiiPct"), r.get("diiPct")
+                if f is None and dd is None:
+                    return None
+                return (f or 0.0) + (dd or 0.0)
+
+            inst_trend = 0.0
+            latest_inst = _inst(latest)
+            if latest_inst is not None:
+                prev_inst = next((pi for pi in (_inst(r) for r in rows[1:]) if pi is not None), None)
+                if prev_inst is not None:
+                    d = latest_inst - prev_inst
+                    own_factor["institutional_change"] = round(d, 2)
+                    inst_trend = _trend(d)
+            own_factor["institutional_trend_score"] = inst_trend
+
+            s_o = round(max(-1.0, min(1.0, pledge_score + prom_trend + inst_trend)), 2)
+    except Exception as exc:
+        own_factor["data_note"] = f"Ownership computation error: {exc}"
+
     return {
         "symbol": sym,
         "scores": {
             "technical":   s_t,
             "fundamental": s_f,
             "sentiment":   s_s,
+            "ownership":   s_o,
         },
         "factors": {
             "technical": tech,
@@ -954,7 +1167,133 @@ async def get_tri_factor_score(symbol: str):
                 "total":     total,
                 "headlines": headlines,
             },
+            "ownership": own_factor,
         },
+    }
+
+
+@router.get("/{symbol}/shareholding")
+async def get_shareholding(
+    symbol: str,
+    view:   str = Query("quarterly", pattern="^(quarterly|yearly)$"),
+    quarters: int = Query(32, ge=1, le=40),
+    force:  bool = Query(False),
+):
+    """Quarterly shareholding-pattern history (Promoter / FII / DII /
+    Public %) for the requested symbol. Data merged from NSE, BSE,
+    Yahoo and (last-resort) Screener.in, cached in PG.
+
+    Query params:
+      view      `quarterly` (default) or `yearly` (only March quarters).
+      quarters  Max rows to return (1..40). Default 16 = 4 years.
+      force     Skip the staleness check and force a refresh fetch.
+                Helpful for the "Refresh" button on the UI.
+    """
+    from ..services.shareholding_service import get_shareholding as _svc  # noqa: PLC0415
+    data = await _svc(symbol, view=view, quarters=quarters, force=force)
+    return data
+
+
+@router.get("/{symbol}/quarterly-results")
+async def get_quarterly_results(
+    symbol: str,
+    basis:    str  = Query("consolidated", pattern="^(consolidated|standalone)$"),
+    quarters: int  = Query(12, ge=1, le=24),
+    force:    bool = Query(False),
+):
+    """Quarterly financial results parsed from the SEBI Reg-33 (in-bse-fin)
+    XBRL filing — the full P&L that Yahoo collapses: revenue, the complete
+    expense breakdown, current/deferred tax, PAT, basic + diluted EPS, and
+    segment results, for the standalone or consolidated basis.
+
+    Query params:
+      basis     `consolidated` (default) or `standalone`. Falls back to
+                whichever basis the company actually files.
+      quarters  Max quarters to return (1..24). Default 12 = 3 years.
+      force     Skip the staleness check and force a refresh fetch.
+    """
+    from ..services.financial_results_service import get_financial_results as _svc  # noqa: PLC0415
+    return await _svc(symbol, basis=basis, quarters=quarters, force=force)
+
+
+@router.get("/{symbol}/profile")
+async def get_stock_profile(symbol: str):
+    """Company business profile — what the company does (description) and its
+    canonical sector / industry. Sector is resolved through the centralised
+    classifier (sector_utils) and persisted for future lookups.
+    """
+    from ..services import stock_profile_service
+    return await stock_profile_service.get_profile(symbol)
+
+
+@router.get("/{symbol}/quote")
+async def get_stock_quote_lite(symbol: str):
+    """Lightweight single-symbol quote for the chart-studio detail panel:
+    price, %change, OHLC, prev close and volume — WITHOUT the 500-day history
+    fetch + technical-analysis stack that `/stocks/{symbol}` runs (the detail
+    panel discards those). Closed market: served straight from the sealed EOD
+    bars on disk — zero network, no doomed NSE call. 52-week range and
+    fundamentals come from the separate `/key-stats` call so the slow yfinance
+    lookup never blocks the price. Falls back to a live quote (no divergence
+    cross-check) when the symbol isn't sealed yet."""
+    sym = symbol.upper()
+
+    if not _disk.is_market_open():
+        payload = _disk.load_with_meta(sym, 5)
+        if payload and payload.get("eodSealed") and payload.get("data"):
+            bars = payload["data"]
+            if len(bars) >= 2 and bars[-1].get("close") is not None:
+                from ..lib.universe import COMPANY_MAP  # noqa: PLC0415
+                last, prev = bars[-1], bars[-2]
+                lc = round(float(last["close"]), 2)
+                pc = round(float(prev["close"]), 2) if prev.get("close") is not None else None
+                return {
+                    "symbol":        sym,
+                    "companyName":   COMPANY_MAP.get(sym) or sym,
+                    "lastPrice":     lc,
+                    "previousClose": pc,
+                    "pChange":       (round((lc - pc) / pc * 100, 2) if pc else None),
+                    "open":          round(float(last["open"]), 2) if last.get("open")   is not None else None,
+                    "dayHigh":       round(float(last["high"]), 2) if last.get("high")   is not None else None,
+                    "dayLow":        round(float(last["low"]), 2)  if last.get("low")    is not None else None,
+                    "volume":        int(last["volume"])           if last.get("volume") is not None else None,
+                    "servedFrom":    "DISK_EOD",
+                }
+
+    # Open market, or no sealed snapshot yet → live quote (no divergence call).
+    snap = await svc.price.get_quote_with_meta(sym, cross_check=False)
+    if not snap:
+        return JSONResponse(status_code=404, content={"error": f"Stock {sym} not found"})
+    q = snap["quote"]
+    return {
+        "symbol":           sym,
+        "companyName":      q.get("companyName") or sym,
+        "lastPrice":        q.get("lastPrice"),
+        "pChange":          q.get("pChange"),
+        "open":             q.get("open"),
+        "dayHigh":          q.get("dayHigh"),
+        "dayLow":           q.get("dayLow"),
+        "previousClose":    q.get("previousClose"),
+        "volume":           q.get("volume"),
+        "fiftyTwoWeekHigh": q.get("fiftyTwoWeekHigh"),
+        "fiftyTwoWeekLow":  q.get("fiftyTwoWeekLow"),
+        "marketCap":        q.get("marketCap"),
+        "servedFrom":       snap.get("servedFrom"),
+    }
+
+
+@router.get("/{symbol}/key-stats")
+async def get_stock_key_stats(symbol: str):
+    """marketCap / trailing P/E / dividend yield / 52-week range from cached
+    yfinance `.info`. Separate from the quote so this (often slow, 2-10s)
+    lookup fills in progressively and never blocks the price display."""
+    stats = await svc.stocks.get_key_stats(symbol.upper())
+    return {
+        "marketCap":        stats.get("marketCap"),
+        "trailingPE":       stats.get("trailingPE"),
+        "dividendYield":    stats.get("dividendYield"),
+        "fiftyTwoWeekHigh": stats.get("fiftyTwoWeekHigh"),
+        "fiftyTwoWeekLow":  stats.get("fiftyTwoWeekLow"),
     }
 
 

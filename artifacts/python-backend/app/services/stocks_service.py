@@ -1,4 +1,7 @@
+import asyncio
 import logging
+import math
+import time as _time
 from typing import Optional
 
 from .nse_service import NseService
@@ -10,6 +13,15 @@ from .indicators import (
 )
 
 logger = logging.getLogger(__name__)
+
+# marketCap / trailing P/E / dividend yield aren't on Yahoo's chart-API quote
+# (same limitation that made `open` 0), and P/E + div yield aren't on the Quote
+# model at all — so enrich the detail payload from yfinance `.info`. These move
+# daily at most → cache a few hours. Best-effort: a miss leaves the fields
+# absent (the UI hides those rows). dividendYield is kept as the raw fraction to
+# match the Financials tab (both multiply ×100 at display, so they agree).
+_KEYSTATS_CACHE: dict[str, tuple[float, dict]] = {}
+_KEYSTATS_TTL = 6 * 3600
 
 
 class StocksService:
@@ -99,6 +111,56 @@ class StocksService:
                 "historyEodDate":   hist_meta.get("eodDate"),
             },
         }
+
+    async def get_key_stats(self, symbol: str) -> dict:
+        """Best-effort fundamentals from yfinance `.info` that the chart-API
+        quote can't supply: marketCap, trailing P/E, dividend yield and the
+        52-week range. Cached a few hours; returns {} on any failure so the
+        detail panel simply hides those rows. Served via its own endpoint so
+        this (often slow, 2-10s) lookup never blocks the price display.
+        dividendYield is the raw fraction to match the Financials tab (both
+        ×100 at display time)."""
+        sym = symbol.upper()
+        cached = _KEYSTATS_CACHE.get(sym)
+        if cached and (_time.time() - cached[0]) < _KEYSTATS_TTL:
+            return cached[1]
+
+        def _clean(v):
+            try:
+                if v is None:
+                    return None
+                if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                    return None
+                return v
+            except Exception:
+                return None
+
+        def _fetch() -> dict:
+            import yfinance as yf
+            from ..lib.symbol_map import yahoo_candidates
+            for tick in yahoo_candidates(sym):
+                try:
+                    info = yf.Ticker(tick).info or {}
+                except Exception:
+                    continue
+                out = {
+                    "marketCap":        _clean(info.get("marketCap")),
+                    "trailingPE":       _clean(info.get("trailingPE")),
+                    "dividendYield":    _clean(info.get("dividendYield")),
+                    "fiftyTwoWeekHigh": _clean(info.get("fiftyTwoWeekHigh")),
+                    "fiftyTwoWeekLow":  _clean(info.get("fiftyTwoWeekLow")),
+                }
+                if any(v is not None for v in out.values()):
+                    return out
+            return {}
+
+        try:
+            stats = await asyncio.to_thread(_fetch)
+        except Exception:
+            stats = {}
+        if stats:
+            _KEYSTATS_CACHE[sym] = (_time.time(), stats)
+        return stats
 
     def _analyze(self, ohlcv: list[dict], closes: list[float]) -> dict:
         ema9   = calculate_ema(closes, 9)

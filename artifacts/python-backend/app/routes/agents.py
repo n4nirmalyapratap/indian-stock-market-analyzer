@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse
 from ..services import agents_service
 from ..services import registry as svc
 from ..lib.symbol_map import yahoo_candidates
-from ..lib.universe import NIFTY100, MIDCAP, SMALLCAP
+from ..lib.universe import get_scan_universe
 
 logger = logging.getLogger(__name__)
 
@@ -107,18 +107,18 @@ async def list_agents():
 # ── Consensus screener (SQLite-backed, background scan) ──────────────────────
 #
 # Architecture:
-#   * Universe spans large + mid + top small-cap (~350 symbols) from
-#     app/lib/universe.py. Scanning all 2 449 NSE listings would take 15+ min
-#     of yfinance round-trips, so we cap intelligently to keep scans under 2 min.
+#   * Universe = the FULL tradeable NSE equity list (~2,000 main-board symbols)
+#     from get_scan_universe() (security-registry backed). Snapshotted at import;
+#     a restart picks up the daily registry refresh. The scan is cache-first:
+#     results persist in SQLite and a background scan streams updates in, so the
+#     large universe never blocks a request.
 #   * Results persist in market_cache/agents_screener.db (WAL SQLite) so they
-#     survive backend restarts and only one full scan happens per 24 h.
+#     survive backend restarts and only one full scan happens per NSE session.
 #   * GET returns cached rows IMMEDIATELY and kicks off a background scan if
 #     the cache is empty or stale. The response includes a progress block so the
-#     UI can poll and show a live "scanning 120/350" indicator.
+#     UI can poll and show a live "scanning 412 / 2000" indicator.
 
-_SCREENER_UNIVERSE: list[str] = list(dict.fromkeys(
-    [s for s in (NIFTY100 + MIDCAP + SMALLCAP[:100]) if s and isinstance(s, str)]
-))
+_SCREENER_UNIVERSE: list[str] = get_scan_universe()
 _SCREENER_THRESHOLD   = 14          # of 16 personas — 87.5%
 _SCREENER_CONCURRENCY = 8           # parallel yfinance requests (rate-limit safe)
 _SCREENER_DB          = Path(__file__).parent.parent.parent / "market_cache" / "agents_screener.db"

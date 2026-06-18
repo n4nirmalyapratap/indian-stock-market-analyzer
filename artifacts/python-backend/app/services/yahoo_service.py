@@ -184,10 +184,10 @@ class YahooService:
                     return None
                 if True:
                     result = resp.json()
-                    meta = result.get("chart", {}).get("result", [None])[0]
-                    if not meta:
+                    chart_result = result.get("chart", {}).get("result", [None])[0]
+                    if not chart_result:
                         return None
-                    meta = meta.get("meta", {})
+                    meta = chart_result.get("meta", {})
                     # Yahoo misidentifies some post-merger / BSE-only equities as
                     # MUTUALFUND and returns regularMarketPrice: None.  Treat a
                     # missing price as a failed quote so the caller can fall
@@ -197,13 +197,21 @@ class YahooService:
                         return None
                     price = float(raw_price) or 0
                     prev_close = float(meta.get("chartPreviousClose") or 0)
+                    # Yahoo's chart `meta` block carries regularMarketDayHigh/Low/
+                    # Volume but NOT regularMarketOpen — reading `open` from meta
+                    # returned 0 for every symbol. Pull the day's open from the
+                    # OHLC candle itself (indicators.quote[0].open), taking the
+                    # latest non-null value.
+                    quote_ind = (chart_result.get("indicators", {}) or {}).get("quote", [{}])[0] or {}
+                    opens = quote_ind.get("open") or []
+                    day_open = next((float(o) for o in reversed(opens) if o is not None), None)
                     data = {
                         "symbol": symbol,
                         "companyName": meta.get("longName", symbol),
                         "lastPrice": price,
                         "change": price - prev_close,
                         "pChange": ((price - prev_close) / prev_close * 100) if prev_close else 0,
-                        "open": meta.get("regularMarketOpen") or 0,
+                        "open": day_open if day_open is not None else (meta.get("regularMarketOpen") or 0),
                         "dayHigh": meta.get("regularMarketDayHigh") or 0,
                         "dayLow": meta.get("regularMarketDayLow") or 0,
                         "previousClose": prev_close,

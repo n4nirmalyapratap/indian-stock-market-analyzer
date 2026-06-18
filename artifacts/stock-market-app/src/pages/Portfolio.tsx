@@ -23,6 +23,7 @@ import {
 } from "recharts";
 import { StockCombobox } from "@/components/StockCombobox";
 import RiskVisuals from "@/components/portfolio/RiskVisuals";
+import { isMarketOpenIST } from "@/lib/marketData";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -216,7 +217,10 @@ function useValuation(pid: string) {
   return useQuery({
     queryKey: ["portfolio-valuation", pid],
     queryFn:  () => api.portfolioValuation(pid),
-    refetchInterval: 60_000,
+    // Prices are frozen when the market is closed, so don't poll — still
+    // fetches on mount/focus, and the root market-state boundary invalidation
+    // resumes polling the moment the market reopens.
+    refetchInterval: () => (isMarketOpenIST() ? 60_000 : false),
   });
 }
 

@@ -480,6 +480,242 @@ def ensure_primary_schema() -> None:
                 # anymore. If a legacy table still exists in your DB it
                 # can be manually dropped with `DROP TABLE IF EXISTS
                 # macro_scraped_data;` — leaving it does no harm.
+
+                # ── Hyper-granular sector rotation ───────────────────────
+                # `stocks` is the classification store for the synthetic
+                # sub-industry rotation engine. One row per NSE symbol in
+                # the curated universe, enriched with Yahoo profile data
+                # (sector / industry / sub_industry / market_cap). Refreshed
+                # weekly by the classifier. `classified_ok` is FALSE when the
+                # Yahoo profile fetch failed — those rows are excluded from
+                # synthetic-index aggregation so we never fake a sector tag.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS stocks (
+                        symbol         TEXT PRIMARY KEY,
+                        name           TEXT NOT NULL DEFAULT '',
+                        yahoo_ticker   TEXT NOT NULL DEFAULT '',
+                        sector         TEXT,
+                        industry       TEXT,
+                        sub_industry   TEXT,
+                        market_cap     DOUBLE PRECISION,
+                        cap_category   TEXT,
+                        active         BOOLEAN NOT NULL DEFAULT TRUE,
+                        classified_ok  BOOLEAN NOT NULL DEFAULT FALSE,
+                        classify_error TEXT NOT NULL DEFAULT '',
+                        updated_at_ms  BIGINT NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_stocks_sub_industry "
+                    "ON stocks (sub_industry) WHERE active AND classified_ok"
+                )
+                # One dated row per synthetic sub-industry index. The nightly
+                # worker writes the market-cap-weighted daily return, the
+                # chained synthetic index level (base 1000 at inception), the
+                # average NSE delivery % across constituents and its 20-DMA,
+                # and the 50-EMA breadth (% of constituents above their own
+                # 50-day EMA). Scanner endpoints derive RS / build-up flags
+                # from this series at read time.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS synthetic_sector_daily_metrics (
+                        sub_industry      TEXT NOT NULL,
+                        metric_date       DATE NOT NULL,
+                        index_value       DOUBLE PRECISION,
+                        daily_return_pct  DOUBLE PRECISION,
+                        avg_delivery_pct  DOUBLE PRECISION,
+                        delivery_20dma    DOUBLE PRECISION,
+                        breadth_50ema_pct DOUBLE PRECISION,
+                        constituent_count INTEGER NOT NULL DEFAULT 0,
+                        total_market_cap  DOUBLE PRECISION,
+                        created_at_ms     BIGINT NOT NULL,
+                        PRIMARY KEY (sub_industry, metric_date)
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_synth_metrics_date "
+                    "ON synthetic_sector_daily_metrics (metric_date DESC)"
+                )
+                # Admin-managed sub-industry overrides: lets admins add any
+                # symbol to a sub-industry when Yahoo/NSE/BSE miss it.
+                # These rows are merged with the Yahoo-classified `stocks`
+                # rows at query time so the engine always uses both sources.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS sub_industry_overrides (
+                        id             TEXT PRIMARY KEY,
+                        symbol         TEXT NOT NULL,
+                        sub_industry   TEXT NOT NULL,
+                        industry       TEXT NOT NULL DEFAULT '',
+                        sector         TEXT NOT NULL DEFAULT '',
+                        note           TEXT NOT NULL DEFAULT '',
+                        set_by         TEXT NOT NULL DEFAULT '',
+                        created_at_ms  BIGINT NOT NULL,
+                        updated_at_ms  BIGINT NOT NULL,
+                        UNIQUE (symbol, sub_industry)
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_overrides_sub_industry "
+                    "ON sub_industry_overrides (sub_industry)"
+                )
+
+                # ── Shareholding pattern history ─────────────────────────
+                # Quarterly shareholding-pattern snapshots per security.
+                # One row per (symbol, as_on_date) combination — composite
+                # PK so re-fetches naturally upsert without duplicates.
+                #
+                # Why store rather than always-live-fetch:
+                #   1. SEBI LODR filings are immutable per quarter — once a
+                #      quarter is filed, the numbers never change. Cache it
+                #      forever; only the latest quarter ever needs refresh.
+                #   2. NSE/BSE shareholding endpoints are rate-limited and
+                #      Akamai-prone; serving from PG is ~1000x faster.
+                #   3. Multi-source merge: NSE may only give us summary
+                #      (Promoter/Public split), BSE gives the full FII/DII
+                #      breakdown. We upsert from whichever source had data,
+                #      and the most-detailed source wins per column.
+                #
+                # NULL is meaningful: when a source only provides
+                # Promoter/Public totals (no FII/DII split), the FII and
+                # DII columns are NULL. UI distinguishes "data not
+                # available" from "0%" using this.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS shareholding_history (
+                        symbol              TEXT NOT NULL,
+                        as_on_date          DATE NOT NULL,
+                        promoter_pct        DOUBLE PRECISION,
+                        fii_pct             DOUBLE PRECISION,
+                        dii_pct             DOUBLE PRECISION,
+                        public_pct          DOUBLE PRECISION,
+                        govt_pct            DOUBLE PRECISION,
+                        num_shareholders    BIGINT,
+                        promoter_pledge_pct DOUBLE PRECISION,
+                        pledged_shares      BIGINT,
+                        demat_pct           DOUBLE PRECISION,
+                        locked_in_pct       DOUBLE PRECISION,
+                        details             JSONB,
+                        source              TEXT NOT NULL,
+                        fetched_at_ms       BIGINT NOT NULL,
+                        PRIMARY KEY (symbol, as_on_date)
+                    )
+                    """
+                )
+                # Migrate pre-existing tables — CREATE TABLE IF NOT EXISTS
+                # is a no-op once the table exists, so the XBRL-enrichment
+                # columns (govt %, promoter pledge, demat/locked-in, the
+                # named-holder/flags JSONB) are added idempotently here.
+                for _col, _type in (
+                    ("govt_pct",            "DOUBLE PRECISION"),
+                    ("promoter_pledge_pct", "DOUBLE PRECISION"),
+                    ("pledged_shares",      "BIGINT"),
+                    ("demat_pct",           "DOUBLE PRECISION"),
+                    ("locked_in_pct",       "DOUBLE PRECISION"),
+                    ("details",             "JSONB"),
+                ):
+                    cur.execute(
+                        f"ALTER TABLE shareholding_history "
+                        f"ADD COLUMN IF NOT EXISTS {_col} {_type}"
+                    )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_shareholding_symbol_date "
+                    "ON shareholding_history (symbol, as_on_date DESC)"
+                )
+
+                # ── Quarterly financial results (SEBI Reg-33 XBRL) ────────
+                # The full P&L per quarter that Yahoo collapses: revenue,
+                # the complete expense breakdown, tax split, PAT, basic +
+                # diluted EPS, and segment results — for each filed basis
+                # (standalone / consolidated). One row per
+                # (symbol, period_end, basis). line_items/segments are JSONB
+                # because the set of reported lines varies by company/sector.
+                # Immutable once filed, so cached like the shareholding data.
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS financial_results (
+                        symbol         TEXT NOT NULL,
+                        period_end     DATE NOT NULL,
+                        basis          TEXT NOT NULL,
+                        period_type    TEXT,
+                        audited        BOOLEAN,
+                        relating_to    TEXT,
+                        multi_segment  BOOLEAN,
+                        report_format  TEXT,
+                        line_items     JSONB NOT NULL,
+                        segments       JSONB,
+                        source         TEXT NOT NULL,
+                        fetched_at_ms  BIGINT NOT NULL,
+                        PRIMARY KEY (symbol, period_end, basis)
+                    )
+                    """
+                )
+                # Migrate pre-existing tables (CREATE IF NOT EXISTS is a
+                # no-op once the table exists) — keeps the schema additive.
+                cur.execute(
+                    "ALTER TABLE financial_results "
+                    "ADD COLUMN IF NOT EXISTS report_format TEXT"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_finresults_symbol_date "
+                    "ON financial_results (symbol, period_end DESC)"
+                )
+
+                # ── Symbol quarantine ─────────────────────────────────────
+                # Tracks symbols where every provider in the price chain
+                # has returned empty results for multiple consecutive
+                # scans. After a configurable threshold of consecutive
+                # failures with zero successes recorded, the symbol is
+                # auto-quarantined and silently skipped by the scanner
+                # instead of cluttering the error panel.
+                #
+                # Why this exists:
+                #   Universe lists accumulate dead symbols over time —
+                #   genuinely delisted (JSWISPL merged into JSWSTEEL),
+                #   SME-only listings that aren't on the main board
+                #   (DRONEACHARYA), or low-volume names with no recent
+                #   trades (SAMEERA). Each one wastes a fetch attempt
+                #   per scan AND shows up as an "error" the user has to
+                #   visually filter through. The registry can't fix this
+                #   — these symbols ARE the canonical NSE ticker; the
+                #   underlying security just has no data anywhere.
+                #
+                #   The quarantine is empirical: if NSE + BSE + Yahoo +
+                #   TwelveData + Stooq all return zero bars across N
+                #   consecutive attempts (default 3), the system learns
+                #   "this symbol has no usable data" and stops surfacing
+                #   it as a scanner error. Quarantine auto-expires after
+                #   30 days so re-listings get rediscovered.
+                #
+                #   `manual_override = TRUE` means an admin forced the
+                #   release; we skip auto-quarantining it again for
+                #   that session (so an operator can investigate without
+                #   the system instantly re-quarantining behind them).
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS symbol_quarantine (
+                        symbol                 TEXT PRIMARY KEY,
+                        first_failed_at_ms     BIGINT NOT NULL,
+                        last_attempted_at_ms   BIGINT NOT NULL,
+                        last_success_at_ms     BIGINT,
+                        consecutive_failures   INTEGER NOT NULL DEFAULT 0,
+                        total_failures         INTEGER NOT NULL DEFAULT 0,
+                        total_successes        INTEGER NOT NULL DEFAULT 0,
+                        quarantined            BOOLEAN NOT NULL DEFAULT FALSE,
+                        quarantined_at_ms      BIGINT,
+                        reason                 TEXT NOT NULL DEFAULT '',
+                        manual_override        BOOLEAN NOT NULL DEFAULT FALSE
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_quarantine_active "
+                    "ON symbol_quarantine (quarantined) WHERE quarantined = TRUE"
+                )
         _SCHEMA_READY = True
 
 

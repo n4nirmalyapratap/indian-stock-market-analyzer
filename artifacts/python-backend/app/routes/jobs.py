@@ -131,11 +131,12 @@ class _HydraDBSyncJob(_Job):
 
 class _PatternScanJob(_Job):
     async def _execute(self) -> str:
-        from app.services.patterns_service import PatternsService
-        svc     = PatternsService()
-        results = await svc.run_scan()
-        n = len(results) if isinstance(results, list) else 0
-        return f"Scan complete — {n} patterns found across universe"
+        # Use the shared singleton so the background ScanJob (and its cache)
+        # persist; trigger a cache-first scan over the full universe.
+        from app.services import registry as svc
+        r = await svc.patterns.trigger_scan()
+        return (f"Pattern scan started across {r.get('universeScanned', 0)} "
+                f"stocks (runs in background)")
 
 
 class _CacheStatusJob(_Job):
@@ -192,26 +193,17 @@ class _ScannersRunAllJob(_Job):
 
 class _AnalyticsWarmupJob(_Job):
     async def _execute(self) -> str:
-        from app.services.analytics_service import AnalyticsService
-        from app.services.yahoo_service import YahooService
-        from app.services.nse_service import NseService
-        from app.services.sectors_service import SectorsService
-        from app.services.patterns_service import PatternsService
-        from app.services.sector_analytics_service import SectorAnalyticsService
-        yahoo   = YahooService()
-        nse     = NseService()
-        sectors = SectorsService(nse)
-        patterns = PatternsService()
-        svc     = AnalyticsService(yahoo, nse, sectors, patterns)
-        sa_svc  = SectorAnalyticsService(yahoo)
-        # warm all caches in parallel
-        sector_data = await sectors.get_sectors()
+        # Use the shared service singletons so we don't spin up duplicate
+        # services (a second PatternsService would build its own ScanJob +
+        # SQLite cache). Also fixes the old no-arg PatternsService() crash.
+        from app.services import registry as svc
+        sector_data = await svc.sectors.get_sectors()
         await asyncio.gather(
-            svc.get_sector_correlation(30),
-            svc.get_breadth_history(30),
-            svc.get_top_movers(),
-            svc.get_pattern_stats(),
-            sa_svc.get_heatmap(sector_data),
+            svc.analytics.get_sector_correlation(30),
+            svc.analytics.get_breadth_history(30),
+            svc.analytics.get_top_movers(),
+            svc.analytics.get_pattern_stats(),
+            svc.sector_analytics.get_heatmap(sector_data),
             return_exceptions=True,
         )
         return "Analytics caches warmed — sector correlation, breadth, movers, pattern stats, heatmap"

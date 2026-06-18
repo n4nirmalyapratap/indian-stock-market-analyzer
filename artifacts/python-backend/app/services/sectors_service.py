@@ -290,6 +290,19 @@ class SectorsService:
         state  = _disk.current_market_state()
         market_closed = not _disk.is_market_open()
 
+        # Closed-market: serve the assembled list straight from the trading-
+        # date disk snapshot if we sealed one earlier. Survives restarts and
+        # the 60-min in-memory TTL, so /sectors is instant after close without
+        # re-hitting Yahoo for all 15 indices.
+        if market_closed:
+            _disk_list = self._load_sectors_from_disk()
+            if _disk_list:
+                _SECTORS_LIST_CACHE["sectors"] = {
+                    "data": _disk_list,
+                    "expiry": _time.time() + _SECTORS_LIST_TTL_CLOSED_SEC,
+                }
+                return _disk_list
+
         sectors: list[dict] = []
         disk_by_symbol: dict[str, dict] = {}
 
@@ -368,6 +381,10 @@ class SectorsService:
         # ── Store in cache ─────────────────────────────────────────────────────
         _ttl = _SECTORS_LIST_TTL_CLOSED_SEC if market_closed else _SECTORS_LIST_TTL_OPEN_SEC
         _SECTORS_LIST_CACHE["sectors"] = {"data": sectors, "expiry": _time.time() + _ttl}
+        # Persist for instant, restart-proof closed-market loads — but only when
+        # we actually have usable data (don't cache an all-failed result).
+        if market_closed and any(s.get("pChange") is not None for s in sectors):
+            self._save_sectors_to_disk(sectors)
         return sectors
 
     async def _get_sectors_from_yahoo(self) -> list[dict]:
@@ -375,7 +392,7 @@ class SectorsService:
         so the EOD overlay still applies and provenance is uniform with the
         rest of the app (source=NSE/YAHOO, servedFrom=PRICE_SERVICE/DISK_EOD).
         """
-        tasks = [self.price.get_quote_with_meta(s["yahooTicker"]) for s in SECTOR_INDICES]
+        tasks = [self.price.get_quote_with_meta(s["yahooTicker"], cross_check=False) for s in SECTOR_INDICES]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         sectors = []
         for i, sector in enumerate(SECTOR_INDICES):
@@ -855,6 +872,44 @@ class SectorsService:
                 "yahooTicker":   s["yahooTicker"],
             }
         return out
+
+    # ── Closed-market sector-list display cache (disk-backed) ─────────────────
+    # Separate from the NSE-only per-symbol seal that `_build_sectors_from_disk`
+    # reads. This persists whatever the live path assembled (rows already carry
+    # their own honest source=NSE|YAHOO) so /sectors is instant after close even
+    # across restarts and the 60-min in-memory TTL. It never relabels Yahoo as
+    # NSE, so the official-close contract is untouched.
+
+    def _sectors_disk_path(self) -> Path:
+        return _disk._CACHE_ROOT / _disk.last_trading_date() / "_sectors_list.json"
+
+    def _save_sectors_to_disk(self, sectors: list[dict]) -> None:
+        try:
+            p = self._sectors_disk_path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with open(p, "w") as f:
+                json.dump({
+                    "eodDate": _disk._eod_date_for(_disk.current_market_state()),
+                    "savedAt": _disk._now_ist().isoformat(),
+                    "data":    sectors,
+                }, f)
+        except Exception as e:
+            logger.debug("Sector list disk save failed: %s", e)
+
+    def _load_sectors_from_disk(self) -> Optional[list[dict]]:
+        """Load the display cache iff it belongs to the current trading-date
+        EOD (guards against serving a prior session's snapshot)."""
+        try:
+            p = self._sectors_disk_path()
+            if not p.exists():
+                return None
+            with open(p) as f:
+                payload = json.load(f)
+            if payload.get("data") and payload.get("eodDate") == _disk._eod_date_for(_disk.current_market_state()):
+                return payload["data"]
+        except Exception as e:
+            logger.debug("Sector list disk load failed: %s", e)
+        return None
 
     # ── Phase 2: Technical Strength (async data fetching) ─────────────────────
 

@@ -159,7 +159,7 @@ function ViewAllModal({
           {rows.length === 0 ? (
             <EmptyColumn tone={tone} message="No data" />
           ) : (
-            rows.map(r => <MoverRow key={r.symbol} row={r} tone={tone} />)
+            rows.map((r, i) => <MoverRow key={`${r.symbol}-${i}`} row={r} tone={tone} />)
           )}
         </div>
       </div>
@@ -198,7 +198,13 @@ export default function TopMoversPanel() {
             </span>
           </div>
           <div className="flex items-center gap-1.5">
-            {segData?.servedFrom && segData.servedFrom !== "NSE" && (
+            {segData?.servedFrom === "DISK_EOD" && (
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 dark:bg-slate-500/10 dark:text-slate-300 dark:border-slate-500/20"
+                    title="Served from the sealed end-of-day close on disk — no network call.">
+                EOD close
+              </span>
+            )}
+            {segData?.servedFrom && segData.servedFrom !== "NSE" && segData.servedFrom !== "DISK_EOD" && (
               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:border-amber-500/20"
                     title={`NSE bulk index endpoint was unreachable; data fetched per-stock via ${segData.servedFrom}.`}>
                 {segData.servedFrom} fallback
@@ -260,8 +266,8 @@ export default function TopMoversPanel() {
             ) : (
               <>
                 <div className="divide-y divide-gray-100 dark:divide-gray-700/60">
-                  {inlineGainers.map(row => (
-                    <MoverRow key={row.symbol} row={row} tone="up" />
+                  {inlineGainers.map((row, i) => (
+                    <MoverRow key={`${row.symbol}-${i}`} row={row} tone="up" />
                   ))}
                 </div>
                 {gainers.length > INLINE_COUNT && (
@@ -285,8 +291,8 @@ export default function TopMoversPanel() {
             ) : (
               <>
                 <div className="divide-y divide-gray-100 dark:divide-gray-700/60">
-                  {inlineLosers.map(row => (
-                    <MoverRow key={row.symbol} row={row} tone="down" />
+                  {inlineLosers.map((row, i) => (
+                    <MoverRow key={`${row.symbol}-${i}`} row={row} tone="down" />
                   ))}
                 </div>
                 {losers.length > INLINE_COUNT && (

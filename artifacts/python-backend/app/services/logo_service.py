@@ -27,6 +27,66 @@ logger = logging.getLogger(__name__)
 
 DHAN_CDN = "https://images.dhan.co/symbol/{symbol}.png"
 _FETCH_TIMEOUT = 8.0
+# A cached miss (Dhan had no logo, or a transient fetch failure) is retried
+# after this long — so a newly-listed ticker whose logo Dhan adds later, and
+# one-off network failures, self-heal without an admin touching the cache.
+# Before this, a miss was cached permanently and never re-fetched.
+_MISS_RETRY_MS = 7 * 24 * 3600 * 1000  # 7 days
+
+# Brand/parent-logo fallback: when Dhan has no logo for a (often newly-demerged)
+# ticker, serve a sibling's logo that shares the company-name prefix — e.g.
+# VEDPOWER / VISL / VOGL → VEDL (Vedanta), TMPV → TMCV (Tata Motors). The exact
+# logo is always tried FIRST, so the real one wins automatically if Dhan adds
+# it later. Resolution is cached in-process (None = no parent found).
+_BRAND_PARENT: dict[str, Optional[str]] = {}
+_BRAND_STOPWORDS = {
+    "LIMITED", "LTD", "LTD.", "THE", "INDIA", "INDIAN", "COMPANY",
+    "CORPORATION", "CORP", "OF", "AND", "&",
+}
+
+
+def _brand_tokens(name: Optional[str]) -> list[str]:
+    """Significant words of a company name, upper-cased, stop-words dropped.
+    'Tata Motors Passenger Vehicles Limited' → ['TATA','MOTORS','PASSENGER','VEHICLES']."""
+    out: list[str] = []
+    for w in (name or "").upper().split():
+        w = w.strip(".,&-")
+        if w and w not in _BRAND_STOPWORDS:
+            out.append(w)
+    return out
+
+
+def _resolve_brand_parent(sym: str) -> Optional[str]:
+    """Find a sibling ticker that shares the brand prefix AND has a logo.
+    Prefers the most specific match (2-word brand, then 1-word) and, within
+    that, the shortest company name (the 'core' entity, e.g. 'Vedanta Limited'
+    over 'Vedanta Oil and Gas Limited'). Cached per symbol."""
+    if sym in _BRAND_PARENT:
+        return _BRAND_PARENT[sym]
+    parent: Optional[str] = None
+    try:
+        from app.lib.universe import COMPANY_MAP  # symbol → company name  # noqa: PLC0415
+        toks = _brand_tokens(COMPANY_MAP.get(sym))
+        if toks and len(toks[0]) >= 3:
+            for n in (2, 1):
+                if len(toks) < n:
+                    continue
+                prefix = toks[:n]
+                cands = [
+                    s for s, nm in COMPANY_MAP.items()
+                    if s != sym and nm and _brand_tokens(nm)[:n] == prefix
+                ]
+                cands.sort(key=lambda s: len(COMPANY_MAP.get(s) or ""))
+                for c in cands[:10]:
+                    if _get_exact_logo(c) is not None:
+                        parent = c
+                        break
+                if parent:
+                    break
+    except Exception as exc:
+        logger.debug("brand-parent resolution failed for %s: %s", sym, exc)
+    _BRAND_PARENT[sym] = parent
+    return parent
 
 
 def _normalise(sym: str) -> str:
@@ -58,12 +118,13 @@ def _fetch_from_dhan(fetch_symbol: str) -> tuple[Optional[bytes], str, bool]:
         return None, "image/png", False
 
 
-def get_logo(symbol: str) -> Optional[tuple[bytes, str]]:
-    """Return (image_bytes, content_type) from cache, fetching on first call.
+def _get_exact_logo(symbol: str) -> Optional[tuple[bytes, str]]:
+    """The symbol's OWN logo from cache → Dhan (with stale-miss retry). No
+    brand fallback — this is the source of truth for 'does this symbol have
+    its own logo', which `get_logo`'s fallback relies on without recursing.
 
-    Returns None when:
-    - Dhan has no logo for this symbol (fetch_ok=False row exists), OR
-    - The network call failed
+    Returns None when Dhan has no logo for this symbol (cached miss) or the
+    network call failed.
     """
     ensure_primary_schema()
     sym = _normalise(symbol)
@@ -73,26 +134,52 @@ def get_logo(symbol: str) -> Optional[tuple[bytes, str]]:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT image_data, content_type, fetch_ok, fetch_symbol "
+                "SELECT image_data, content_type, fetch_ok, fetch_symbol, updated_at_ms "
                 "FROM stock_logos WHERE symbol = %s",
                 (sym,),
             )
             row = cur.fetchone()
 
     if row is not None:
-        if not row["fetch_ok"]:
+        if row["fetch_ok"]:
+            data = row["image_data"]
+            return (bytes(data), row["content_type"]) if data is not None else None
+        # Cached miss — only re-fetch once it has gone stale, so we don't
+        # re-hammer Dhan for genuinely logo-less symbols on every page load.
+        age_ms = now_ms() - (row.get("updated_at_ms") or 0)
+        if age_ms < _MISS_RETRY_MS:
             return None
-        data = row["image_data"]
-        if data is None:
-            return None
-        return bytes(data), row["content_type"]
+        # Stale miss → re-fetch, preserving any admin-set fetch_symbol override.
+        fetch_sym = row.get("fetch_symbol") or sym
+        img, ct, ok = _fetch_from_dhan(fetch_sym)
+        _upsert_logo(sym, fetch_sym, img, ct, ok, updated_by="auto-retry")
+        return (img, ct) if (ok and img) else None
 
-    # Cache miss — fetch now and store
+    # Cache miss (no row) — fetch now and store
     fetch_sym = sym
     img, ct, ok = _fetch_from_dhan(fetch_sym)
     _upsert_logo(sym, fetch_sym, img, ct, ok, updated_by="auto")
     if ok and img:
         return img, ct
+    return None
+
+
+def get_logo(symbol: str) -> Optional[tuple[bytes, str]]:
+    """The symbol's own logo if available, else a brand/parent logo (a sibling
+    ticker that shares the company-name prefix and DOES have a logo — e.g.
+    VEDPOWER → VEDL, TMPV → TMCV).
+
+    The exact logo is always checked first, so when Dhan adds the symbol's real
+    logo later it wins automatically (the per-symbol miss is re-checked after
+    `_MISS_RETRY_MS`). The brand logo is served at request time and is NOT
+    stored under this symbol, keeping that upgrade path intact.
+    """
+    own = _get_exact_logo(symbol)
+    if own is not None:
+        return own
+    parent = _resolve_brand_parent(_normalise(symbol))
+    if parent:
+        return _get_exact_logo(parent)
     return None
 
 

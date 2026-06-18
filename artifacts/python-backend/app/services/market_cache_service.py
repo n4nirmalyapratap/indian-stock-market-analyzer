@@ -244,10 +244,32 @@ def save_to_disk(symbol: str, days: int, data: Any, source: str = "UNKNOWN") -> 
         # Don't clobber a sealed canonical with intraday during the live session
         if canon_sealed and intraday:
             return
-        # Otherwise prefer larger row count, or any sealed write (replaces stale)
-        if new_rows >= canon_rows or wrapped.get("eodSealed"):
+        # Prefer the LONGER series — never shrink the shared canonical. The old
+        # rule also wrote on ANY sealed payload (`or wrapped.eodSealed`), so a
+        # short EOD seal (e.g. 63 rows from a 90-day request) clobbered a longer
+        # 247-row canonical and shadowed that history from every reader
+        # (load_with_meta reads the canonical first). A sealed write of
+        # equal-or-greater length still wins, which is what upgrades the
+        # intraday canonical to the sealed EOD close.
+        if new_rows >= canon_rows:
             with open(canon_path, "w") as f:
                 json.dump(wrapped, f)
+        elif wrapped.get("eodSealed") and not canon_sealed and canon_existing:
+            # New sealed payload is SHORTER than an as-yet-unsealed canonical
+            # (e.g. a seal re-fetch returned a few fewer rows). Merge by date:
+            # keep the longer history, overlay the official sealed bars, and
+            # mark it sealed — so we neither shrink the canonical nor leave it
+            # unsealed (which would re-trigger sealing on every quote).
+            by_date = {
+                r["date"]: r for r in (canon_existing.get("data") or [])
+                if isinstance(r, dict) and r.get("date")
+            }
+            for r in data:
+                if isinstance(r, dict) and r.get("date"):
+                    by_date[r["date"]] = r
+            merged = sorted(by_date.values(), key=lambda r: r["date"])
+            with open(canon_path, "w") as f:
+                json.dump(_wrap(merged, source), f)
     except Exception:
         pass
 
@@ -320,7 +342,7 @@ async def seal_eod_for_today_if_overdue(price_service, symbols: Optional[list[st
     else:
         files_to_check = list(date_dir.glob("*.json"))
 
-    seen_syms: set[str] = set()
+    unsealed_max: dict[str, int] = {}  # sym → largest unsealed `days` bucket to seal
     for f in files_to_check:
         try:
             stem = f.stem  # "RELIANCE_90" (per-days bucket) or "RELIANCE" (canonical)
@@ -339,9 +361,12 @@ async def seal_eod_for_today_if_overdue(price_service, symbols: Optional[list[st
             if payload is None:
                 continue
             if not payload.get("eodSealed"):
-                if sym not in seen_syms:
-                    candidates.append((sym, days))
-                    seen_syms.add(sym)
+                # Seal the LONGEST unsealed bucket per symbol. Sealing only the
+                # first one found (often the shortest) sealed a short series
+                # which — combined with the canonical write rule — left the
+                # canonical truncated, shadowing the longer history on disk.
+                if days > unsealed_max.get(sym, -1):
+                    unsealed_max[sym] = days
                 continue
             # Already sealed — make sure the canonical snapshot exists so
             # quote/history/sectors all read the same close.
@@ -356,6 +381,7 @@ async def seal_eod_for_today_if_overdue(price_service, symbols: Optional[list[st
         except Exception:
             continue
 
+    candidates = list(unsealed_max.items())
     if not candidates:
         return {"sealed": 0, "checked": len(files_to_check), "promoted": promoted}
 
@@ -386,9 +412,13 @@ async def warmup_cache(price_service, batch_size: int = 10) -> dict:
     Runs in parallel batches of `batch_size` to avoid overwhelming APIs.
     Returns a summary dict.
     """
-    from ..lib.universe import build_universe
+    from ..lib.universe import get_scan_universe
 
-    all_symbols = list(set(build_universe(["NIFTY100", "MIDCAP", "SMALLCAP"])))
+    # Warm the FULL tradeable universe (~2,000) so the cache-first scans
+    # (screener / patterns / scanners) read EOD data from disk and run fast.
+    # Order-stable & deduped; gentle batch_size + per-fetch sleep keep providers
+    # happy across the larger set.
+    all_symbols = get_scan_universe()
     total = len(all_symbols)
     saved = 0
     errors = 0
