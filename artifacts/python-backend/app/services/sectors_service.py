@@ -392,7 +392,7 @@ class SectorsService:
         so the EOD overlay still applies and provenance is uniform with the
         rest of the app (source=NSE/YAHOO, servedFrom=PRICE_SERVICE/DISK_EOD).
         """
-        tasks = [self.price.get_quote_with_meta(s["yahooTicker"]) for s in SECTOR_INDICES]
+        tasks = [self.price.get_quote_with_meta(s["yahooTicker"], cross_check=False) for s in SECTOR_INDICES]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         sectors = []
         for i, sector in enumerate(SECTOR_INDICES):

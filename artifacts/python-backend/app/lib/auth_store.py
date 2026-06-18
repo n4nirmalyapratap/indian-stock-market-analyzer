@@ -546,7 +546,7 @@ def ensure_primary_schema() -> None:
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS sub_industry_overrides (
-                        id             TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+                        id             TEXT PRIMARY KEY,
                         symbol         TEXT NOT NULL,
                         sub_industry   TEXT NOT NULL,
                         industry       TEXT NOT NULL DEFAULT '',
