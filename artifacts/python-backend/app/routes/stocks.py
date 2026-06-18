@@ -253,6 +253,96 @@ async def get_stock_history(
     }
 
 
+@router.get("/{symbol}/smc")
+async def get_stock_smc(
+    symbol: str,
+    days: int = Query(default=250, description="Daily bars to analyse (clamped 20–500)"),
+    min_range_mult: float = Query(default=0.25, description="FVG significance gate (× avg bar range; 0 disables)"),
+    include_mitigated: bool = Query(default=True, description="Include zones price has traded back into"),
+):
+    """Smart Money Concepts overlays for the chart — Fair Value Gaps (Phase 1).
+
+    Computed on the SAME daily EOD bars the screener uses (app/lib/smc.py), so a
+    screener hit is always drawable here. Each zone carries the calendar date of
+    its anchor (and mitigation) bar so the frontend can map it onto the chart's
+    own candle array regardless of how many bars that array holds.
+
+    Daily bars only — ICT intraday/session concepts are intentionally out of
+    scope (see app/lib/smc.py for the rationale).
+    """
+    from ..lib import smc as _smc
+    symbol = symbol.upper()
+    days = max(20, min(int(days), 500))
+    bars = await svc.price.get_historical_data(symbol, days)
+    if not bars:
+        return JSONResponse(status_code=404, content={"error": f"No history data found for {symbol}"})
+
+    raw = _smc.find_fvgs(bars, min_range_mult=min_range_mult, include_mitigated=include_mitigated)
+
+    def _date(i):
+        return bars[i]["date"] if (i is not None and 0 <= i < len(bars)) else None
+
+    fvgs = [
+        {
+            "type":          f["type"],
+            "top":           f["top"],
+            "bottom":        f["bottom"],
+            "size":          f["size"],
+            "startDate":     _date(f["index"]),
+            "mitigated":     f["mitigated"],
+            "mitigatedDate": _date(f["mitigatedIndex"]),
+        }
+        for f in raw
+    ]
+    events = _smc.market_structure(bars)
+    structure = [
+        {
+            "type":      ev["type"],
+            "kind":      ev["kind"],
+            "level":     ev["level"],
+            "breakDate": _date(ev["index"]),
+            "swingDate": _date(ev["swingIndex"]),
+        }
+        for ev in events
+    ]
+    order_blocks = [
+        {
+            "type":          ob["type"],
+            "top":           ob["top"],
+            "bottom":        ob["bottom"],
+            "startDate":     _date(ob["index"]),
+            "mitigated":     ob["mitigated"],
+            "mitigatedDate": _date(ob["mitigatedIndex"]),
+        }
+        for ob in _smc.order_blocks(bars, events=events)
+    ]
+    last = len(bars) - 1
+    dr = _smc.dealing_range(bars, last)
+    dealing_range = None
+    if dr:
+        dealing_range = {
+            "high":      dr["high"],
+            "low":       dr["low"],
+            "eq":        dr["eq"],
+            "startDate": _date(min(dr["highIndex"], dr["lowIndex"])),
+        }
+    eq_highs, eq_lows = _smc.equal_levels(bars)
+    equal_highs = [{"price": c["price"], "count": c["count"], "startDate": _date(min(c["indices"]))} for c in eq_highs]
+    equal_lows  = [{"price": c["price"], "count": c["count"], "startDate": _date(min(c["indices"]))} for c in eq_lows]
+    return {
+        "symbol":      symbol,
+        "timeframe":   "1d",
+        "fvgs":        fvgs,
+        "structure":   structure,
+        "orderBlocks": order_blocks,
+        "dealingRange": dealing_range,
+        "equalHighs":  equal_highs,
+        "equalLows":   equal_lows,
+        "count":       len(fvgs),
+        "meta":        _provenance(),
+    }
+
+
 @router.get("/{symbol}/financials")
 async def get_stock_financials(symbol: str):
     """

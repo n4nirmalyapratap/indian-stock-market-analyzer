@@ -200,7 +200,7 @@ const LAYOUTS: { mode: LayoutMode; label: string; icon: React.ReactNode; panels:
 // ─── Indicators ──────────────────────────────────────────────────────────────
 // Group catalog entries for the menu (preserves catalog order within groups).
 const IND_GROUPS: { name: string; items: typeof INDICATOR_CATALOG }[] = (() => {
-  const order = ["Moving Averages", "Channels & Bands", "Trend / Volatility", "Oscillators", "Volume"] as const;
+  const order = ["Moving Averages", "Channels & Bands", "Trend / Volatility", "Oscillators", "Volume", "Smart Money"] as const;
   return order.map(name => ({ name, items: INDICATOR_CATALOG.filter(i => i.group === name) }))
     .filter(g => g.items.length > 0);
 })();
