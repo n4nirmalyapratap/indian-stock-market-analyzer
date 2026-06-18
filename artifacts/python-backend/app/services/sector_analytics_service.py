@@ -288,7 +288,13 @@ async def _yf_history(ticker: str, period: str = "1y") -> list[dict]:
             return []
 
     data = await asyncio.to_thread(_fetch)
-    _cache_set(f"yfh:{ticker}:{period}", data, 15 * 60)
+    # When the market is closed this fallback history is frozen until the next
+    # session, so cache it for hours instead of re-pulling Yahoo every 15 min
+    # (the in-memory cache is flushed on the next market-state transition, so
+    # this can't bleed into the open session). Keep the short TTL when open, or
+    # when the fetch came back empty so a transient Yahoo failure retries soon.
+    _ttl = (4 * 3600) if (data and not _disk.is_market_open()) else (15 * 60)
+    _cache_set(f"yfh:{ticker}:{period}", data, _ttl)
     return data
 
 
@@ -623,7 +629,11 @@ class SectorAnalyticsService:
             )[:5],
         }
 
-        _cache_set(cache_key, result, 15 * 60)
+        # Detail is frozen when the market is closed → cache 4h instead of
+        # 15 min (version-flush clears it at the next market-state transition,
+        # so the open session always recomputes). Same data, fewer recomputes.
+        from . import market_cache_service as _mcs  # noqa: PLC0415
+        _cache_set(cache_key, result, (15 * 60) if _mcs.is_market_open() else (4 * 3600))
         return result
 
     # ── Helper computation methods ────────────────────────────────────────────

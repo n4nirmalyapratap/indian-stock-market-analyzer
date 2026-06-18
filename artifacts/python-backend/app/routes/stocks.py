@@ -103,6 +103,94 @@ async def search_stocks(q: str = Query(default="")):
     }
 
 
+@router.get("/quotes")
+async def get_quotes(symbols: str = Query(default="", description="Comma-separated NSE symbols")):
+    """Lightweight batch quotes for watchlist-style consumers — company
+    name, last price and %change only.
+
+    `/stocks/{symbol}` pulls 500 days of history, computes the full
+    technical-analysis stack, and (closed-market) runs an NSE-vs-Yahoo
+    divergence cross-check — all wasted on a watchlist row that shows
+    only price + %change. This endpoint skips every one of those.
+
+    Closed market: served straight from the sealed EOD bars on disk
+    (zero network) — see below. Open market: a plain quote per symbol
+    with the divergence cross-check disabled, concurrency bounded.
+    """
+    syms = [s.strip().upper() for s in symbols.split(",") if s.strip()][:100]
+    if not syms:
+        return {"quotes": []}
+
+    # ── Closed-market fast path ──────────────────────────────────────────────
+    # The official closes are sealed on disk by the post-close warmup, so serve
+    # price + %change straight from the last two sealed bars: zero network,
+    # instant, and identical to the EOD overlay the detail panel shows (the row
+    # and the detail panel never disagree). Without this, every symbol walks the
+    # live chain whose NSE provider is tried FIRST — and while NSE is IP-blocked
+    # that serialises on the cookie lock and burns the retry+sleep loop per
+    # symbol (the watchlist "stuck on Loading…"). Symbols not yet sealed (cold
+    # start before the warmup runs) fall through to the live quote below.
+    disk_hits: dict[str, dict] = {}
+    if not _disk.is_market_open():
+        from ..lib.universe import COMPANY_MAP  # noqa: PLC0415 — bars carry no name
+
+        def _disk_quote(sym):
+            payload = _disk.load_with_meta(sym, 5)
+            if not (payload and payload.get("eodSealed") and payload.get("data")):
+                return None
+            bars = payload["data"]
+            if len(bars) < 2:
+                return None
+            last, prev = bars[-1], bars[-2]
+            lc, pc = last.get("close"), prev.get("close")
+            if lc is None or pc is None or not pc:
+                return None
+            try:
+                lc, pc = float(lc), float(pc)
+            except (TypeError, ValueError):
+                return None
+            return {
+                "symbol":      sym,
+                "companyName": COMPANY_MAP.get(sym) or sym,
+                "lastPrice":   round(lc, 2),
+                "pChange":     round((lc - pc) / pc * 100, 2),
+            }
+
+        def _read_all():
+            out: dict[str, dict] = {}
+            for s in syms:
+                q = _disk_quote(s)
+                if q is not None:
+                    out[s] = q
+            return out
+
+        # Off the event loop — up to 100 small file reads.
+        disk_hits = await asyncio.to_thread(_read_all)
+
+    sem = asyncio.Semaphore(8)
+
+    async def _one(sym: str) -> dict:
+        if sym in disk_hits:
+            return disk_hits[sym]
+        async with sem:
+            try:
+                snap = await svc.price.get_quote_with_meta(sym, cross_check=False)
+            except Exception:
+                snap = None
+        if not snap:
+            return {"symbol": sym, "error": "not found"}
+        q = snap["quote"]
+        return {
+            "symbol":      sym,
+            "companyName": q.get("companyName") or sym,
+            "lastPrice":   q.get("lastPrice"),
+            "pChange":     q.get("pChange"),
+        }
+
+    quotes = await asyncio.gather(*[_one(s) for s in syms])
+    return {"quotes": quotes}
+
+
 @router.get("/{symbol}/history")
 async def get_stock_history(
     symbol: str,
@@ -648,31 +736,68 @@ async def get_technical_summary(symbol: str, interval: str = "1d"):
         as_of      = meta.get("savedAt")
 
     if df is None or df.empty:
-        # Sub-daily, or NSE empty → PriceService (Yahoo intraday under the hood)
+        # Sub-daily / weekly / monthly → Yahoo intraday (NSE only exposes EOD).
         chart = await svc.price.get_intraday_history(symbol_upper, period=period, interval=yf_interval)
-        if not chart.get("candles"):
-            return JSONResponse(
-                status_code=404,
-                content={"error": f"No price data for {symbol_upper} (interval={interval})"},
-            )
-        # Reconstruct a DataFrame the indicator library can consume
-        rows = chart["candles"]
-        df = pd.DataFrame({
-            "Open":   [r["open"]   for r in rows],
-            "High":   [r["high"]   for r in rows],
-            "Low":    [r["low"]    for r in rows],
-            "Close":  [r["close"]  for r in rows],
-            "Volume": [r.get("volume", 0) for r in rows],
-        }, index=pd.to_datetime([r["time"] for r in rows], unit="s"))
-        source     = chart.get("source") or "YAHOO"
-        eod_sealed = bool(chart.get("eodSealed"))
-        eod_date   = chart.get("eodDate")
-        as_of      = chart.get("asOf") or _disk._now_ist().isoformat()
+        rows = chart.get("candles") or []
+        if rows:
+            # Reconstruct a DataFrame the indicator library can consume
+            df = pd.DataFrame({
+                "Open":   [r["open"]   for r in rows],
+                "High":   [r["high"]   for r in rows],
+                "Low":    [r["low"]    for r in rows],
+                "Close":  [r["close"]  for r in rows],
+                "Volume": [r.get("volume", 0) for r in rows],
+            }, index=pd.to_datetime([r["time"] for r in rows], unit="s"))
+            source     = chart.get("source") or "YAHOO"
+            eod_sealed = bool(chart.get("eodSealed"))
+            eod_date   = chart.get("eodDate")
+            as_of      = chart.get("asOf") or _disk._now_ist().isoformat()
+        elif interval in ("1w", "1mo"):
+            # Yahoo had no weekly/monthly bars — common for recently-listed
+            # names (e.g. ENRIN) whose monthly feed Yahoo hasn't built yet.
+            # Resample from the daily disk series instead: the same reliable
+            # source the 1D view uses, so the tab works for any symbol we hold
+            # daily bars for.
+            daily = await svc.price.get_history_dataframe(symbol_upper, days=3660)
+            if daily is not None and not daily.empty:
+                rule = "W" if interval == "1w" else "ME"
+                df = daily.resample(rule).agg({
+                    "Open": "first", "High": "max", "Low": "min",
+                    "Close": "last", "Volume": "sum",
+                }).dropna()
+                meta = _disk.load_with_meta(symbol_upper, 3660) or _disk.load_with_meta(symbol_upper, 300) or {}
+                source     = meta.get("source") or "NSE"
+                eod_sealed = bool(meta.get("eodSealed"))
+                eod_date   = meta.get("eodDate")
+                as_of      = meta.get("savedAt")
 
+    if df is None or df.empty:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"No price data for {symbol_upper} (interval={interval})"},
+        )
+
+    # Graceful degradation: a recently-listed name on a long timeframe has only
+    # a handful of bars, which can yield mostly-empty indicators (or, rarely, a
+    # library error). Return a valid NEUTRAL structure rather than failing the
+    # whole tab — the UI then renders an empty summary instead of an error.
     try:
         result = await asyncio.to_thread(_compute, df)
+        if not isinstance(result, dict):
+            raise ValueError("compute did not return a result dict")
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": f"Could not compute technical summary: {e}"})
+        import logging as _lg
+        _lg.getLogger(__name__).warning(
+            "technical-summary compute failed for %s (interval=%s, bars=%d): %s",
+            symbol_upper, interval, len(df), e,
+        )
+        _neutral = {"signal": "NEUTRAL", "buy": 0, "sell": 0, "neutral": 0, "indicators": []}
+        result = {
+            "oscillators":    dict(_neutral),
+            "movingAverages": dict(_neutral),
+            "pivots": {"classic": {}, "fibonacci": {}, "camarilla": {}, "woodie": {}, "dm": {}},
+            "summary": {"signal": "NEUTRAL", "buy": 0, "sell": 0, "neutral": 0},
+        }
 
     return {
         "symbol":   symbol_upper,
@@ -1099,6 +1224,77 @@ async def get_stock_profile(symbol: str):
     """
     from ..services import stock_profile_service
     return await stock_profile_service.get_profile(symbol)
+
+
+@router.get("/{symbol}/quote")
+async def get_stock_quote_lite(symbol: str):
+    """Lightweight single-symbol quote for the chart-studio detail panel:
+    price, %change, OHLC, prev close and volume — WITHOUT the 500-day history
+    fetch + technical-analysis stack that `/stocks/{symbol}` runs (the detail
+    panel discards those). Closed market: served straight from the sealed EOD
+    bars on disk — zero network, no doomed NSE call. 52-week range and
+    fundamentals come from the separate `/key-stats` call so the slow yfinance
+    lookup never blocks the price. Falls back to a live quote (no divergence
+    cross-check) when the symbol isn't sealed yet."""
+    sym = symbol.upper()
+
+    if not _disk.is_market_open():
+        payload = _disk.load_with_meta(sym, 5)
+        if payload and payload.get("eodSealed") and payload.get("data"):
+            bars = payload["data"]
+            if len(bars) >= 2 and bars[-1].get("close") is not None:
+                from ..lib.universe import COMPANY_MAP  # noqa: PLC0415
+                last, prev = bars[-1], bars[-2]
+                lc = round(float(last["close"]), 2)
+                pc = round(float(prev["close"]), 2) if prev.get("close") is not None else None
+                return {
+                    "symbol":        sym,
+                    "companyName":   COMPANY_MAP.get(sym) or sym,
+                    "lastPrice":     lc,
+                    "previousClose": pc,
+                    "pChange":       (round((lc - pc) / pc * 100, 2) if pc else None),
+                    "open":          round(float(last["open"]), 2) if last.get("open")   is not None else None,
+                    "dayHigh":       round(float(last["high"]), 2) if last.get("high")   is not None else None,
+                    "dayLow":        round(float(last["low"]), 2)  if last.get("low")    is not None else None,
+                    "volume":        int(last["volume"])           if last.get("volume") is not None else None,
+                    "servedFrom":    "DISK_EOD",
+                }
+
+    # Open market, or no sealed snapshot yet → live quote (no divergence call).
+    snap = await svc.price.get_quote_with_meta(sym, cross_check=False)
+    if not snap:
+        return JSONResponse(status_code=404, content={"error": f"Stock {sym} not found"})
+    q = snap["quote"]
+    return {
+        "symbol":           sym,
+        "companyName":      q.get("companyName") or sym,
+        "lastPrice":        q.get("lastPrice"),
+        "pChange":          q.get("pChange"),
+        "open":             q.get("open"),
+        "dayHigh":          q.get("dayHigh"),
+        "dayLow":           q.get("dayLow"),
+        "previousClose":    q.get("previousClose"),
+        "volume":           q.get("volume"),
+        "fiftyTwoWeekHigh": q.get("fiftyTwoWeekHigh"),
+        "fiftyTwoWeekLow":  q.get("fiftyTwoWeekLow"),
+        "marketCap":        q.get("marketCap"),
+        "servedFrom":       snap.get("servedFrom"),
+    }
+
+
+@router.get("/{symbol}/key-stats")
+async def get_stock_key_stats(symbol: str):
+    """marketCap / trailing P/E / dividend yield / 52-week range from cached
+    yfinance `.info`. Separate from the quote so this (often slow, 2-10s)
+    lookup fills in progressively and never blocks the price display."""
+    stats = await svc.stocks.get_key_stats(symbol.upper())
+    return {
+        "marketCap":        stats.get("marketCap"),
+        "trailingPE":       stats.get("trailingPE"),
+        "dividendYield":    stats.get("dividendYield"),
+        "fiftyTwoWeekHigh": stats.get("fiftyTwoWeekHigh"),
+        "fiftyTwoWeekLow":  stats.get("fiftyTwoWeekLow"),
+    }
 
 
 @router.get("/{symbol}")

@@ -37,6 +37,14 @@ interface StockDetail {
   dividendYield?: number;
 }
 
+interface KeyStats {
+  marketCap?: number;
+  trailingPE?: number;
+  dividendYield?: number;
+  fiftyTwoWeekHigh?: number;
+  fiftyTwoWeekLow?: number;
+}
+
 const STORAGE_KEY = "tv_watchlists_v3";
 
 function loadWatchlists(): Watchlist[] {
@@ -113,6 +121,7 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd, theme }, r
   const [newListMode, setNewListMode] = useState(false);
   const [newListName, setNewListName] = useState("");
   const [stockDetail, setStockDetail] = useState<StockDetail | null>(null);
+  const [keyStats, setKeyStats]       = useState<KeyStats | null>(null);
   const [addedFlash, setAddedFlash]   = useState<string | null>(null);
 
   const menuRef     = useRef<HTMLDivElement>(null);
@@ -136,7 +145,7 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd, theme }, r
       });
       if (!alreadyExists) {
         const gen = ++fetchGenRef.current;
-        fetchSingle(upper, gen);
+        fetchPrices([upper], gen);
       }
       // flash feedback
       setAddedFlash(upper);
@@ -158,28 +167,32 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd, theme }, r
     return () => document.removeEventListener("mousedown", handler);
   }, [showMenu]);
 
-  const fetchSingle = useCallback(async (sym: string, gen: number) => {
+  // Batch quote loader — one request for the whole list via the
+  // lightweight /stocks/quotes endpoint (price + %change only; no
+  // history, technical analysis, or divergence cross-check), so the
+  // watchlist stays fast even when the market is closed.
+  const fetchPrices = useCallback(async (symbols: string[], gen: number) => {
+    if (!symbols.length) return;
     try {
-      const data = await fetchApi<Partial<StockDetail> & { lastPrice?: number; currentPrice?: number; pChange?: number; companyName?: string }>(`/stocks/${encodeURIComponent(sym)}`);
+      const data = await fetchApi<{ quotes: { symbol: string; companyName?: string; lastPrice?: number; pChange?: number }[] }>(
+        `/stocks/quotes?symbols=${encodeURIComponent(symbols.join(","))}`
+      );
       if (fetchGenRef.current !== gen) return;
-      const price = data.lastPrice ?? data.currentPrice ?? 0;
-      const pChange = data.pChange ?? 0;
-      setPrices(prev => ({
-        ...prev,
-        [sym]: { symbol: sym, price, pChange, company: data.companyName ?? sym },
-      }));
+      setPrices(prev => {
+        const next = { ...prev };
+        for (const q of data.quotes ?? []) {
+          if (q.lastPrice == null) continue;
+          next[q.symbol] = {
+            symbol:  q.symbol,
+            price:   q.lastPrice,
+            pChange: q.pChange ?? 0,
+            company: q.companyName ?? q.symbol,
+          };
+        }
+        return next;
+      });
     } catch {}
   }, []);
-
-  // Parallel batch loader — 5 at a time, no artificial delay
-  const fetchPrices = useCallback(async (symbols: string[], gen: number) => {
-    const BATCH = 5;
-    for (let i = 0; i < symbols.length; i += BATCH) {
-      if (fetchGenRef.current !== gen) return;
-      const batch = symbols.slice(i, i + BATCH);
-      await Promise.all(batch.map(sym => fetchSingle(sym, gen)));
-    }
-  }, [fetchSingle]);
 
   useEffect(() => {
     if (!activeWL) return;
@@ -187,13 +200,21 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd, theme }, r
     fetchPrices(activeWL.symbols, gen);
   }, [activeWL?.id, activeWL?.symbols.join(",")]);
 
-  // Fetch stock details for the symbol currently on the chart
+  // Quote for the symbol on the chart. The lightweight /quote endpoint
+  // (price/OHLC, disk-served when the market is closed) renders immediately;
+  // the slower fundamentals (52w range, mkt cap, P/E, div yield) fill in
+  // progressively from /key-stats so the yfinance lookup never blocks price.
   useEffect(() => {
     if (!activeSymbol) return;
     let cancelled = false;
     setStockDetail(null);
-    fetchApi<StockDetail>(`/stocks/${encodeURIComponent(activeSymbol)}`)
+    setKeyStats(null);
+    const sym = encodeURIComponent(activeSymbol);
+    fetchApi<StockDetail>(`/stocks/${sym}/quote`)
       .then(data => { if (!cancelled && data) setStockDetail(data); })
+      .catch(() => {});
+    fetchApi<KeyStats>(`/stocks/${sym}/key-stats`)
+      .then(ks => { if (!cancelled && ks) setKeyStats(ks); })
       .catch(() => {});
     return () => { cancelled = true; };
   }, [activeSymbol]);
@@ -230,17 +251,26 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd, theme }, r
   const detailUp     = (detailChange ?? 0) >= 0;
   const detailColor  = detailUp ? "#26a69a" : "#ef5350";
 
+  // 52w range and mkt cap come from the quote when it carries them (open
+  // market), else from the progressive /key-stats fetch; P/E and div yield
+  // only ever come from /key-stats.
+  const w52h = stockDetail?.fiftyTwoWeekHigh ?? keyStats?.fiftyTwoWeekHigh;
+  const w52l = stockDetail?.fiftyTwoWeekLow  ?? keyStats?.fiftyTwoWeekLow;
+  const mcap = stockDetail?.marketCap        ?? keyStats?.marketCap;
+  const peR  = stockDetail?.trailingPE       ?? keyStats?.trailingPE;
+  const dy   = stockDetail?.dividendYield    ?? keyStats?.dividendYield;
+
   const detailRows: [string, string][] = ([
     ["Open",       stockDetail?.open != null ? `₹${stockDetail.open.toFixed(2)}` : undefined],
     ["High",       stockDetail?.dayHigh != null ? `₹${stockDetail.dayHigh.toFixed(2)}` : undefined],
     ["Low",        stockDetail?.dayLow != null ? `₹${stockDetail.dayLow.toFixed(2)}` : undefined],
     ["Prev Close", stockDetail?.previousClose != null ? `₹${stockDetail.previousClose.toFixed(2)}` : undefined],
-    ["52W High",   stockDetail?.fiftyTwoWeekHigh != null ? `₹${stockDetail.fiftyTwoWeekHigh.toFixed(2)}` : undefined],
-    ["52W Low",    stockDetail?.fiftyTwoWeekLow != null ? `₹${stockDetail.fiftyTwoWeekLow.toFixed(2)}` : undefined],
+    ["52W High",   w52h != null ? `₹${w52h.toFixed(2)}` : undefined],
+    ["52W Low",    w52l != null ? `₹${w52l.toFixed(2)}` : undefined],
     ["Volume",     stockDetail?.volume != null ? fmtVol(stockDetail.volume) : undefined],
-    ["Mkt Cap",    stockDetail?.marketCap != null ? fmtCrore(stockDetail.marketCap) : undefined],
-    ["P/E",        stockDetail?.trailingPE != null ? stockDetail.trailingPE.toFixed(2) : undefined],
-    ["Div Yield",  stockDetail?.dividendYield != null ? (stockDetail.dividendYield * 100).toFixed(2) + "%" : undefined],
+    ["Mkt Cap",    mcap != null ? fmtCrore(mcap) : undefined],
+    ["P/E",        peR != null ? peR.toFixed(2) : undefined],
+    ["Div Yield",  dy != null ? (dy * 100).toFixed(2) + "%" : undefined],
   ] as [string, string | undefined][]).filter(([, v]) => v !== undefined) as [string, string][];
 
   return (

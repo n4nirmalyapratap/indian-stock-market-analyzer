@@ -223,11 +223,17 @@ export default function SectorRotation() {
   const [tf, setTf] = useState<"short" | "mid" | "long">("short");
   const [selected, setSelected] = useState<string | null>(null);
 
+  // Each query is gated to the level it feeds, so the expensive sub-industry
+  // RRG build is never triggered for users who only look at sectors. React-Query
+  // keeps each level's result cached, so switching back is instant within the
+  // staleTime window.
   const funnelQ = useQuery(
-    marketDataQueryOptions(["sector-rotation", "funnel", tf], () => api.sectorRotationFunnel(tf)),
+    marketDataQueryOptions(["sector-rotation", "funnel", tf], () => api.sectorRotationFunnel(tf),
+      { enabled: level === "sector" }),
   );
   const subRrgQ = useQuery(
-    marketDataQueryOptions(["sector-rotation", "rrg", "subindustry", tf], () => api.sectorRotationRrg("subindustry", tf)),
+    marketDataQueryOptions(["sector-rotation", "rrg", "subindustry", tf], () => api.sectorRotationRrg("subindustry", tf),
+      { enabled: level === "subindustry" }),
   );
   const shortlistQ = useQuery(
     marketDataQueryOptions(

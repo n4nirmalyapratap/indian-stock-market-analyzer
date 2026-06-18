@@ -1150,7 +1150,52 @@ This is why experienced traders always check sector performance FIRST before pic
   • The **Dashboard** shows the current market phase and rotation signal
   • The **AI Analyzer** answers "where should I invest?" by showing rotation data
   • The **Market Sectors** page lets you track which sectors are gaining momentum`,
-    related: ["dashboard", "what-sector", "sectors-page", "market-phase"],
+    related: ["dashboard", "what-sector", "sectors-page", "market-phase", "sector-rotation-cockpit"],
+  },
+  {
+    id: "sector-rotation-cockpit",
+    title: "How does the Sector Rotation Cockpit (RRG) work?",
+    keywords: ["sector rotation cockpit", "cockpit", "rrg", "relative rotation graph", "rotation graph", "rs-ratio", "rs ratio", "rs-momentum", "rs momentum", "quadrant", "leading", "improving", "weakening", "lagging", "tail", "winning stocks", "rotation timing", "find winning stocks"],
+    answer: `The **Sector Rotation Cockpit** helps you find winning stocks top-down: pick a strong **sector** or **sub-industry** on the left → its strongest **stocks** appear on the right.
+
+It shows the same data two ways:
+
+📋 **Leaderboard** — a ranked, scannable list (the default)
+🎯 **RRG (Relative Rotation Graph)** — the scatter chart
+
+**Reading the RRG — two axes, one question:** *is this group beating Nifty, and is that lead growing or shrinking?*
+
+➡️ **RS-Ratio (left ↔ right)** = strength vs Nifty 50, re-centred so **100 = its own recent average**. Right of 100 = outperforming; left = lagging.
+⬆️ **RS-Momentum (down ↕ up)** = whether that strength is *accelerating*. Above 100 = the lead is still building; below = rolling over.
+
+**The four quadrants** (where the two axes cross):
+
+🟢 **Leading** (top-right) — strong AND still rising. The current winners.
+🔵 **Improving** (top-left) — still weak but turning up. Early movers to watch.
+🟠 **Weakening** (bottom-right) — strong but losing steam. Often where you take profit.
+🔴 **Lagging** (bottom-left) — weak and still sliding. Usually avoid.
+
+**What the dots and the "tail" mean:**
+  • Each **dot** is one group, plotted where it sits *today*. With sub-industries you'll see ~160 dots — the spread itself is the signal (different groups in different phases).
+  • The connected **line (a tail)** is just ONE group — the one you clicked — shown at about **10 weekly points**. It's that single group's *path* over recent weeks, not many groups at once. A tail sweeping up-and-right = gaining strength.
+
+🔄 **Why "rotation":** strength is cyclical, so groups tend to drift **clockwise** — Improving → Leading → Weakening → Lagging → back to Improving. The edge is catching something in **Improving** before it's obviously **Leading**.
+
+**Two lenses (top toggle):**
+  • **Strength** — broad, durable strength (trend + breadth). Same data as the Market Sectors page. Best for *what's solid*.
+  • **Rotation** — relative strength + momentum vs Nifty. Best for *timing / what's turning*.
+  The small coloured dot on each row shows the *other* lens — when both agree, that's confluence.
+
+⏱️ **Timeframes:** 1M = early rotation, 3M = medium, 6M = long-term strength.
+
+**How to use it:**
+1. Pick **Sectors** or **Sub-industries** (top-right)
+2. Click a strong group — top-right (Leading) for proven strength, top-left (Improving) for early entries
+3. The right pane ranks its **winning stocks** by relative strength, delivery %, and an above-50-EMA trend flag
+4. Click a stock's chart icon to open it in Chart Studio with the rotation indicators pre-applied
+
+**Good to know:** position is measured against each group's *own* recent history, not a head-to-head ranking — so "Leading" means "stronger than its own norm and accelerating," not necessarily the single strongest of all. For a straight ranking, use the Leaderboard / Strength view. Treat exact dot placement as **directional** — the quadrant and the tail's direction are what matter, not whether RS-Ratio is 100.3 or 101.1.`,
+    related: ["sector-rotation", "market-phase", "sectors-page", "rsi", "dashboard"],
   },
   {
     id: "market-phase",
@@ -2480,6 +2525,7 @@ export default function GlobalAssistant() {
                     { q: "How do I use Chart Studio?",       id: "chart-studio" },
                     { q: "What are candlestick patterns?",   id: "candlestick" },
                     { q: "What is sector rotation?",         id: "sector-rotation" },
+                    { q: "How does the Rotation Cockpit work?", id: "sector-rotation-cockpit" },
                   ].map(({ q, id }) => (
                     <button
                       key={id}
