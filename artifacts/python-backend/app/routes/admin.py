@@ -1063,9 +1063,9 @@ async def add_subsector_override(request: Request):
             cur.execute(
                 """
                 INSERT INTO sub_industry_overrides
-                    (symbol, sub_industry, industry, sector, note, set_by,
+                    (id, symbol, sub_industry, industry, sector, note, set_by,
                      created_at_ms, updated_at_ms)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (symbol, sub_industry) DO UPDATE SET
                     industry     = EXCLUDED.industry,
                     sector       = EXCLUDED.sector,
@@ -1074,7 +1074,7 @@ async def add_subsector_override(request: Request):
                     updated_at_ms = EXCLUDED.updated_at_ms
                 RETURNING id
                 """,
-                (symbol, sub_industry, industry, sector, note, set_by, now_ms, now_ms),
+                (str(uuid.uuid4()), symbol, sub_industry, industry, sector, note, set_by, now_ms, now_ms),
             )
             row = cur.fetchone()
     return {"ok": True, "id": row["id"] if row else None,

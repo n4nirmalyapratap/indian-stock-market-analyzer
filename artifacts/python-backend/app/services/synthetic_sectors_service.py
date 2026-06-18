@@ -44,6 +44,7 @@ import logging
 import math
 import os
 import time
+import uuid
 from typing import Any, Optional
 
 import httpx
@@ -327,12 +328,12 @@ def seed_overrides_from_taxonomy() -> dict[str, int]:
                     cur.execute(
                         """
                         INSERT INTO sub_industry_overrides
-                            (symbol, sub_industry, industry, sector, note,
+                            (id, symbol, sub_industry, industry, sector, note,
                              set_by, created_at_ms, updated_at_ms)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (symbol, sub_industry) DO NOTHING
                         """,
-                        (sym, sub_industry, industry, sector,
+                        (str(uuid.uuid4()), sym, sub_industry, industry, sector,
                          "auto-seeded from SUBSECTOR_TAXONOMY",
                          "system", now, now),
                     )

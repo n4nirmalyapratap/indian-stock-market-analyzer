@@ -548,7 +548,7 @@ class SectorAnalyticsService:
         stock_info_tasks = [_yf_info(s) for s in top_constituents]
         # Canonical NSE/EOD overlay — bare symbol (no .NS) for PriceService
         canonical_tasks = (
-            [self.price.get_quote_with_meta(s.replace(".NS", "")) for s in top_constituents]
+            [self.price.get_quote_with_meta(s.replace(".NS", ""), cross_check=False) for s in top_constituents]
             if self.price else []
         )
 
