@@ -631,8 +631,11 @@ class TestDefaultScanners:
                        "createdAt", "updatedAt"}
     REQUIRED_COND_FIELDS = {"id", "left", "operator", "right"}
 
-    def test_exactly_8_default_scanners_defined(self):
-        assert len(DEFAULT_SCANNERS_DEF) == 8
+    def test_expected_default_scanner_count(self):
+        # Grew well past the original 8 (volume, pattern+volume, hidden
+        # gems, and now SMC categories). Kept exact so an accidental
+        # duplicate/drop is caught.
+        assert len(DEFAULT_SCANNERS_DEF) == 37
 
     def test_all_initialized_scanners_have_required_fields(self):
         _init_defaults()
@@ -1338,6 +1341,158 @@ class TestComplexScannerCombinations:
 # ═══════════════════════════════════════════════════════════════════════════════
 #  9. VALID_OPERATORS constant
 # ═══════════════════════════════════════════════════════════════════════════════
+
+class TestSmcFvgIndicators:
+    """Phase 1 SMC: BULLISH_FVG / BEARISH_FVG boolean scanner indicators.
+
+    Verifies the scanner dispatch correctly maps the tail-relative index to
+    the absolute index app.lib.smc expects (the off-by-one-prone seam) and
+    returns 1.0/0.0 like the candle-pattern indicators.
+    """
+
+    def _bars_with_bullish_fvg(self) -> list[dict]:
+        # 37 calm bars, then a 3-candle bullish FVG: low[-1]=105 > high[-3]=100.
+        bars = _flat(37, 100.0)
+        bars += [
+            {"open": 99,  "high": 100, "low": 98,  "close": 99,  "volume": 10_000},
+            {"open": 100, "high": 112, "low": 99,  "close": 110, "volume": 30_000},
+            {"open": 111, "high": 114, "low": 105, "close": 113, "volume": 20_000},
+        ]
+        return bars
+
+    def _bars_with_bearish_fvg(self) -> list[dict]:
+        # Mirror: high[-1]=95 < low[-3]=100.
+        bars = _flat(37, 100.0)
+        bars += [
+            {"open": 101, "high": 102, "low": 100, "close": 101, "volume": 10_000},
+            {"open": 100, "high": 101, "low": 88,  "close": 90,  "volume": 30_000},
+            {"open": 89,  "high": 95,  "low": 86,  "close": 87,  "volume": 20_000},
+        ]
+        return bars
+
+    def test_bullish_fvg_fires(self):
+        v = _compute_value(self._bars_with_bullish_fvg(),
+                           {"type": "indicator", "indicator": "BULLISH_FVG"})
+        assert v == 1.0
+
+    def test_bearish_not_fired_on_bullish(self):
+        v = _compute_value(self._bars_with_bullish_fvg(),
+                           {"type": "indicator", "indicator": "BEARISH_FVG"})
+        assert v == 0.0
+
+    def test_bearish_fvg_fires(self):
+        v = _compute_value(self._bars_with_bearish_fvg(),
+                           {"type": "indicator", "indicator": "BEARISH_FVG"})
+        assert v == 1.0
+
+    def test_no_fvg_on_flat_series(self):
+        bars = _flat(40, 100.0)
+        assert _compute_value(bars, {"type": "indicator", "indicator": "BULLISH_FVG"}) == 0.0
+        assert _compute_value(bars, {"type": "indicator", "indicator": "BEARISH_FVG"}) == 0.0
+
+    def test_fvg_in_scanner_condition(self):
+        cond = {"left": {"type": "indicator", "indicator": "BULLISH_FVG"},
+                "operator": "eq", "right": {"type": "number", "value": 1}}
+        res = _eval_condition(self._bars_with_bullish_fvg(), cond)
+        assert res["met"] is True
+
+    def test_default_smc_scanners_present(self):
+        names = {d["name"] for d in DEFAULT_SCANNERS_DEF}
+        assert {"Bullish FVG in Uptrend", "Bearish FVG in Downtrend",
+                "Bullish FVG + Volume"} <= names
+
+
+class TestSmcStructureIndicators:
+    """Phase 2 SMC: BOS / CHoCH boolean scanner indicators.
+
+    Padded with calm bars (tight range → no spurious swings), then a hand-built
+    zig-zag whose final bar is the structure break, so the last-bar dispatch is
+    deterministic.
+    """
+
+    @staticmethod
+    def _zz(closes: list[float]) -> list[dict]:
+        return [{"open": c, "high": c + 0.5, "low": c - 0.5, "close": c, "volume": 10_000}
+                for c in closes]
+
+    def _pad(self, n: int = 30, price: float = 100.0) -> list[dict]:
+        return self._zz([price] * n)
+
+    def test_bullish_bos_fires_on_last_bar(self):
+        bars = self._pad(30) + self._zz([100, 101, 104, 101, 100, 103, 106])
+        assert _compute_value(bars, {"type": "indicator", "indicator": "BULLISH_BOS"})   == 1.0
+        assert _compute_value(bars, {"type": "indicator", "indicator": "BEARISH_BOS"})   == 0.0
+        assert _compute_value(bars, {"type": "indicator", "indicator": "BULLISH_CHOCH"}) == 0.0
+
+    def test_bearish_choch_fires_on_last_bar(self):
+        bars = self._pad(30) + self._zz([100, 101, 104, 101, 100, 103, 106, 103, 101, 99])
+        assert _compute_value(bars, {"type": "indicator", "indicator": "BEARISH_CHOCH"}) == 1.0
+        assert _compute_value(bars, {"type": "indicator", "indicator": "BULLISH_BOS"})   == 0.0
+
+    def test_flat_series_has_no_structure(self):
+        bars = self._pad(40)
+        for ind in ("BULLISH_BOS", "BEARISH_BOS", "BULLISH_CHOCH", "BEARISH_CHOCH"):
+            assert _compute_value(bars, {"type": "indicator", "indicator": ind}) == 0.0
+
+    def test_structure_in_scanner_condition(self):
+        bars = self._pad(30) + self._zz([100, 101, 104, 101, 100, 103, 106])
+        cond = {"left": {"type": "indicator", "indicator": "BULLISH_BOS"},
+                "operator": "eq", "right": {"type": "number", "value": 1}}
+        assert _eval_condition(bars, cond)["met"] is True
+
+    def test_default_structure_scanners_present(self):
+        names = {d["name"] for d in DEFAULT_SCANNERS_DEF}
+        assert {"Bullish CHoCH (Reversal)", "Bullish BOS + Volume",
+                "Bearish CHoCH (Reversal Warning)"} <= names
+
+
+class TestSmcLiquidityIndicators:
+    """Phase 3 SMC: order-block / liquidity-sweep / premium-discount / equal-level
+    boolean scanner indicators. Each series ends on the bar that should fire."""
+
+    @staticmethod
+    def _b(o, h, l, c):
+        return {"open": o, "high": h, "low": l, "close": c, "volume": 10_000}
+
+    def test_at_bullish_ob_fires(self):
+        bars = [
+            self._b(100, 101, 99, 100.5), self._b(101, 103, 100, 102),
+            self._b(104, 106, 103, 105),  self._b(103, 104, 101, 102),
+            self._b(101, 102, 99, 100),   self._b(102, 104, 101, 103.5),
+            self._b(106, 108, 105, 107.5), self._b(102, 102.5, 100, 101),  # returns into OB
+        ]
+        assert _compute_value(bars, {"type": "indicator", "indicator": "AT_BULLISH_OB"}) == 1.0
+
+    def test_liquidity_sweep_high_fires(self):
+        bars = [
+            self._b(100, 100.5, 99.5, 100), self._b(101, 101.5, 100.5, 101),
+            self._b(104, 104.5, 103.5, 104), self._b(101, 101.5, 100.5, 101),
+            self._b(100, 100.5, 99.5, 100), self._b(101, 101.5, 100.5, 101),
+            self._b(102, 105.0, 101.5, 102),  # wick over swing high, closes back inside
+        ]
+        assert _compute_value(bars, {"type": "indicator", "indicator": "LIQUIDITY_SWEEP_HIGH"}) == 1.0
+        assert _compute_value(bars, {"type": "indicator", "indicator": "LIQUIDITY_SWEEP_LOW"})  == 0.0
+
+    def test_premium_vs_discount(self):
+        bars = [
+            self._b(100, 101, 99, 100), self._b(101, 102, 100, 101),
+            self._b(104, 105, 103, 104), self._b(101, 102, 100, 101),
+            self._b(98, 99, 97, 98),     self._b(100, 101, 99, 100),
+            self._b(102, 103, 101, 102),  # close 102 > eq 101 → premium
+        ]
+        assert _compute_value(bars, {"type": "indicator", "indicator": "IN_PREMIUM"})  == 1.0
+        assert _compute_value(bars, {"type": "indicator", "indicator": "IN_DISCOUNT"}) == 0.0
+
+    def test_equal_highs_above_price(self):
+        zz = [self._b(c, c + 0.5, c - 0.5, c) for c in
+              [100, 101, 104, 101, 100, 101, 104, 101, 100]]  # equal swing highs ≈104.5
+        assert _compute_value(zz, {"type": "indicator", "indicator": "EQUAL_HIGHS"}) == 1.0
+
+    def test_default_phase3_scanners_present(self):
+        names = {d["name"] for d in DEFAULT_SCANNERS_DEF}
+        assert {"Sell-side Sweep (Reversal Long)", "Bullish FVG in Discount",
+                "Discount + Bullish Order Block", "Premium + Bearish Order Block"} <= names
+
 
 class TestValidOperators:
     def test_valid_operators_set_contains_all_6(self):
