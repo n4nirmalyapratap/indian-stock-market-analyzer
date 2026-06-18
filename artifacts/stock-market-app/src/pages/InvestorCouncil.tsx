@@ -12,6 +12,7 @@ import {
 
 import type { AgentVerdict as Verdict, ChecklistItem, PersonaResult, CouncilResponse, PersonaRegion, ConsensusPick } from "@/lib/api";
 import { StockCombobox } from "@/components/StockCombobox";
+import ChartButton from "@/components/ChartButton";
 export type { Verdict, ChecklistItem, PersonaResult, CouncilResponse };
 
 // Fallback region map by persona id (backend already emits `region`, but this
@@ -324,14 +325,20 @@ function ConsensusCard({
         ) : (
           <div className="flex flex-col gap-2">
             {picks.map((p) => (
-              <button
+              <div
                 key={p.symbol}
+                role="button"
+                tabIndex={0}
                 onClick={() => onSelect(p.symbol)}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-all hover:shadow-sm active:scale-[0.99] ${chipClass}`}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(p.symbol); }
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left cursor-pointer transition-all hover:shadow-sm active:scale-[0.99] ${chipClass}`}
               >
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="font-black text-sm tracking-tight text-gray-900 dark:text-white">{p.symbol}</span>
+                    <ChartButton symbol={p.symbol} />
                     {p.name && (
                       <span className="text-[11px] text-gray-500 dark:text-gray-400 truncate max-w-[140px]">{p.name}</span>
                     )}
@@ -355,7 +362,7 @@ function ConsensusCard({
                   </span>
                   <ChevronRight className="w-3.5 h-3.5 text-gray-400" />
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         )}
@@ -706,10 +713,15 @@ function CouncilContent({ data, symbol, view, onChangeView, region, onChangeRegi
                 </span>
               )}
             </p>
-            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-              {data.name || symbol}{" "}
-              <span className="text-base font-normal text-gray-400">({symbol})</span>
-            </h1>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+                {data.name || symbol}{" "}
+                <span className="text-base font-normal text-gray-400">({symbol})</span>
+              </h1>
+              <span className="flex items-center gap-1">
+                <ChartButton symbol={symbol} />
+              </span>
+            </div>
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
               {data.sector || "—"} {data.lastPrice ? ` • ₹${data.lastPrice.toLocaleString()}` : ""}
             </p>

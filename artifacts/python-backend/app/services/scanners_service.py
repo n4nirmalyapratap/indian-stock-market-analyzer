@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import random
 import string
 from datetime import datetime
@@ -21,6 +22,11 @@ VALID_OPERATORS = {"gt", "gte", "lt", "lte", "eq", "crosses_above", "crosses_bel
 # ── Tunables (no longer magic — surfaced in /scanners metadata) ───────────────
 EQ_TOLERANCE_PCT       = 0.1      # "eq" operator: |a-b| / max(|b|,1) < 0.1%
 RATE_LIMIT_DELAY_S     = 0.35     # live-path delay between symbols
+# Bounded concurrency for the closed-market fast path. Scanning the full
+# ~2,000-symbol "ALL" universe with an unbounded gather would fire 2,000
+# simultaneous fetches at any cache-cold symbols and risk a provider ban, so
+# cap it. Disk-cached symbols still complete near-instantly. Env-tunable.
+SCANNER_SCAN_CONCURRENCY = int(os.environ.get("SCANNER_SCAN_CONCURRENCY", "16"))
 WINDOW_52W             = 252      # trading days that constitute "52 weeks"
 DEFAULT_FETCH_DAYS     = 90       # baseline bars when no big-period indicator used
 BUFFER_MULT            = 3        # indicator seeding buffer multiplier
@@ -34,6 +40,7 @@ def _cid() -> str:
 DEFAULT_SCANNERS_DEF = [
     {
         "name": "EMA Golden Cross (20/50)",
+        "category": "Trend",
         "description": "EMA20 just crossed above EMA50 — classic medium-term buy signal",
         "universe": ["NIFTY100", "MIDCAP"],
         "logic": "AND",
@@ -44,6 +51,7 @@ DEFAULT_SCANNERS_DEF = [
     },
     {
         "name": "RSI Oversold + EMA50 Support",
+        "category": "Oscillators",
         "description": "RSI below 35 while price is above EMA50 — dip buy setup",
         "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
         "logic": "AND",
@@ -54,6 +62,7 @@ DEFAULT_SCANNERS_DEF = [
     },
     {
         "name": "Momentum Breakout",
+        "category": "Momentum",
         "description": "Price above EMA200, RSI 55-72, volume spike ≥150%",
         "universe": ["NIFTY100"],
         "logic": "AND",
@@ -66,6 +75,7 @@ DEFAULT_SCANNERS_DEF = [
     },
     {
         "name": "Near 52-Week High (within 5%)",
+        "category": "Momentum",
         "description": "Price within 5% of true 52-week high — momentum continuation",
         "universe": ["NIFTY100", "MIDCAP"],
         "logic": "AND",
@@ -76,6 +86,7 @@ DEFAULT_SCANNERS_DEF = [
     },
     {
         "name": "Bollinger Band Lower Bounce",
+        "category": "Mean Reversion",
         "description": "Price near/below BB lower, RSI oversold — mean reversion buy",
         "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
         "logic": "AND",
@@ -86,6 +97,7 @@ DEFAULT_SCANNERS_DEF = [
     },
     {
         "name": "MACD Bullish Crossover",
+        "category": "Oscillators",
         "description": "MACD line just crossed above signal line — fresh buy signal",
         "universe": ["NIFTY100", "MIDCAP"],
         "logic": "AND",
@@ -95,6 +107,7 @@ DEFAULT_SCANNERS_DEF = [
     },
     {
         "name": "Superb Momentum (All EMAs aligned)",
+        "category": "Trend",
         "description": "Price > EMA9 > EMA20 > EMA50 > EMA200 — textbook bull trend",
         "universe": ["NIFTY100"],
         "logic": "AND",
@@ -107,12 +120,303 @@ DEFAULT_SCANNERS_DEF = [
     },
     {
         "name": "Volume Spike Breakout",
+        "category": "Volume",
         "description": "Volume ≥ 300% of 20-day average on a green candle",
         "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
         "logic": "AND",
         "conditions": [
             {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "gte", "right": {"type": "number", "value": 300}},
             {"left": {"type": "indicator", "indicator": "CHANGE_PCT"},   "operator": "gt",  "right": {"type": "number", "value": 0}},
+        ],
+    },
+
+    # ── Volume category ──────────────────────────────────────────────
+    # Nine new scanners powered by the volume helpers (HIGHEST_VOLUME,
+    # VOLUME_ZSCORE, WICK_RATIO, HIGHER_LOWS_COUNT, VOLUME_TREND_UP).
+    # All carry category="Volume" so the UI can group them in a tab
+    # separate from the indicator/pattern scanners.
+    #
+    # Three of the original 12 (Opening-Volume Blast, High-Vol Bullish
+    # Engulfing, Delivery % Spike) are deferred — they need intraday
+    # 15-min bars, a candlestick-pattern indicator framework, and per-
+    # symbol delivery data respectively. None of those exist today.
+
+    {
+        "name": "RVOL Spike (Bullish)",
+        "category": "Volume",
+        "description": "Today's volume > 2× 20-day average AND price up — classic intraday CALL signal",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "gt", "right": {"type": "number", "value": 200}},
+            {"left": {"type": "indicator", "indicator": "CHANGE_PCT"},   "operator": "gt", "right": {"type": "number", "value": 0}},
+        ],
+    },
+    {
+        "name": "RVOL Spike (Bearish)",
+        "category": "Volume",
+        "description": "Today's volume > 2× 20-day average AND price down — classic intraday PUT signal",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "gt", "right": {"type": "number", "value": 200}},
+            {"left": {"type": "indicator", "indicator": "CHANGE_PCT"},   "operator": "lt", "right": {"type": "number", "value": 0}},
+        ],
+    },
+    {
+        "name": "Volume Breakout Before Price",
+        "category": "Volume",
+        "description": "Volume > heaviest of last 10 days AND price still below 20-day high — early-warning signal",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "VOLUME"},
+             "operator": "gt",
+             "right": {"type": "indicator", "indicator": "HIGHEST_VOLUME", "period": 10}},
+            {"left": {"type": "indicator", "indicator": "CLOSE"},
+             "operator": "lt",
+             "right": {"type": "indicator", "indicator": "HIGHEST_HIGH", "period": 20}},
+        ],
+    },
+    {
+        "name": "Accumulation (Quiet Heavy Volume)",
+        "category": "Volume",
+        "description": "Price barely moves (|Δ| < 2%) but volume > 3× average — institutions absorbing supply",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "gt",  "right": {"type": "number", "value": 300}},
+            {"left": {"type": "indicator", "indicator": "CHANGE_PCT"},   "operator": "lt",  "right": {"type": "number", "value": 2}},
+            {"left": {"type": "indicator", "indicator": "CHANGE_PCT"},   "operator": "gt",  "right": {"type": "number", "value": -2}},
+        ],
+    },
+    {
+        "name": "Volume Dry-Up",
+        "category": "Volume",
+        "description": "Today's volume < 50% of 20-day average — often precedes strong breakouts after a correction",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "lt", "right": {"type": "number", "value": 50}},
+        ],
+    },
+    {
+        "name": "Hidden Accumulation (5-bar)",
+        "category": "Volume",
+        "description": "≥4 of last 5 bars had higher lows AND volume trend is rising — stealth accumulation",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "HIGHER_LOWS_COUNT", "period": 5},
+             "operator": "gte",
+             "right": {"type": "number", "value": 4}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_TREND_UP", "period": 5},
+             "operator": "eq",
+             "right": {"type": "number", "value": 1}},
+        ],
+    },
+    {
+        "name": "Breakout + Volume Confirmation",
+        "category": "Volume",
+        "description": "Close above 20-day high AND volume > 150% of average — the most reliable breakout filter",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "CLOSE"},
+             "operator": "gt",
+             "right": {"type": "indicator", "indicator": "HIGHEST_HIGH", "period": 20}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "gt", "right": {"type": "number", "value": 150}},
+        ],
+    },
+    {
+        "name": "VWAP Reclaim + Volume",
+        "category": "Volume",
+        "description": "Price crossed above VWAP today on volume > 2× average — strong intraday reversal",
+        "universe": ["NIFTY100", "MIDCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "CLOSE"}, "operator": "crosses_above", "right": {"type": "indicator", "indicator": "VWAP"}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "gt", "right": {"type": "number", "value": 200}},
+        ],
+    },
+    {
+        "name": "Unusual Volume (Z-Score ≥ 2)",
+        "category": "Volume",
+        "description": "Volume is ≥ 2 standard deviations above the 20-day mean — statistically abnormal activity",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "VOLUME_ZSCORE", "period": 20},
+             "operator": "gte",
+             "right": {"type": "number", "value": 2}},
+        ],
+    },
+    {
+        "name": "Volume Climax",
+        "category": "Volume",
+        "description": "Highest volume in 50 days + long wick (> 50% of range) — possible top/bottom reversal",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "VOLUME"},
+             "operator": "gt",
+             "right": {"type": "indicator", "indicator": "HIGHEST_VOLUME", "period": 50}},
+            {"left": {"type": "indicator", "indicator": "WICK_RATIO"},
+             "operator": "gt",
+             "right": {"type": "number", "value": 50}},
+        ],
+    },
+
+    # ── Pattern + Volume combinations ────────────────────────────────
+    # Centralised candle patterns from app/lib/candle_patterns.py are
+    # now first-class scanner indicators. These defaults pair the
+    # highest-confidence patterns with a volume-confirmation filter —
+    # the classic "real signal vs noise" combo most retail screeners
+    # bake in. Boolean pattern indicators take values 0.0 / 1.0; we
+    # compare with `eq 1` (also `gt 0` works).
+
+    {
+        "name": "High-Volume Bullish Engulfing",
+        "category": "Pattern + Volume",
+        "description": "Bullish Engulfing today AND volume > 150% of 20-day average — the classic confirmed reversal",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "BULLISH_ENGULFING"},
+             "operator": "eq",
+             "right": {"type": "number", "value": 1}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"},
+             "operator": "gt",
+             "right": {"type": "number", "value": 150}},
+        ],
+    },
+    {
+        "name": "High-Volume Bearish Engulfing",
+        "category": "Pattern + Volume",
+        "description": "Bearish Engulfing today AND volume > 150% — confirmed reversal short setup",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "BEARISH_ENGULFING"},
+             "operator": "eq",
+             "right": {"type": "number", "value": 1}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"},
+             "operator": "gt",
+             "right": {"type": "number", "value": 150}},
+        ],
+    },
+    {
+        "name": "Hammer at Support (Oversold)",
+        "category": "Pattern + Volume",
+        "description": "Hammer candle AND RSI < 35 AND volume > 120% — reversal at oversold support",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "HAMMER"},
+             "operator": "eq",
+             "right": {"type": "number", "value": 1}},
+            {"left": {"type": "indicator", "indicator": "RSI", "period": 14},
+             "operator": "lt",
+             "right": {"type": "number", "value": 35}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"},
+             "operator": "gt",
+             "right": {"type": "number", "value": 120}},
+        ],
+    },
+    {
+        "name": "Shooting Star at Resistance (Overbought)",
+        "category": "Pattern + Volume",
+        "description": "Shooting Star AND RSI > 70 AND volume > 120% — exhaustion top",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "SHOOTING_STAR"},
+             "operator": "eq",
+             "right": {"type": "number", "value": 1}},
+            {"left": {"type": "indicator", "indicator": "RSI", "period": 14},
+             "operator": "gt",
+             "right": {"type": "number", "value": 70}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"},
+             "operator": "gt",
+             "right": {"type": "number", "value": 120}},
+        ],
+    },
+    {
+        "name": "Inside Bar Squeeze",
+        "category": "Pattern + Volume",
+        "description": "Inside Bar (compression) AND today's volume < 70% of average — coiled spring before breakout",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "INSIDE_BAR"},
+             "operator": "eq",
+             "right": {"type": "number", "value": 1}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"},
+             "operator": "lt",
+             "right": {"type": "number", "value": 70}},
+        ],
+    },
+
+    # ── Hidden Gems category ────────────────────────────────────────
+    # Fundamental-driven screens for undervalued small/mid caps.
+    # Each scanner's RESULT rows are also enriched with `hiddenGemScore`
+    # (0-100) + `hiddenGemBreakdown` because of the `category` field —
+    # see _evaluate() in run_scanner. Note: these scanners trigger a
+    # Yahoo `info` prefetch for the entire universe on first run within
+    # any 12h window. First run on a fresh deploy is slow (~30-90s for
+    # NIFTY100); subsequent runs are instant.
+
+    {
+        "name": "Small-Cap Multibagger Setup",
+        "category": "Hidden Gems",
+        "description": "Small/mid cap (₹500-5000 Cr) + low PE + high ROE + low debt — the classic hidden-gem profile",
+        "universe": ["MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "MARKET_CAP_CR"}, "operator": "gte", "right": {"type": "number", "value": 500}},
+            {"left": {"type": "indicator", "indicator": "MARKET_CAP_CR"}, "operator": "lte", "right": {"type": "number", "value": 5000}},
+            {"left": {"type": "indicator", "indicator": "PE_RATIO"},      "operator": "lt",  "right": {"type": "number", "value": 20}},
+            {"left": {"type": "indicator", "indicator": "ROE"},           "operator": "gt",  "right": {"type": "number", "value": 15}},
+            {"left": {"type": "indicator", "indicator": "DEBT_TO_EQUITY"},"operator": "lt",  "right": {"type": "number", "value": 0.5}},
+        ],
+    },
+    {
+        "name": "Quality Compounder",
+        "category": "Hidden Gems",
+        "description": "High ROE (>18%) + strong margin (>12%) + revenue growth (>15%) + low debt — the buy-and-hold profile",
+        "universe": ["NIFTY100", "MIDCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "ROE"},               "operator": "gt", "right": {"type": "number", "value": 18}},
+            {"left": {"type": "indicator", "indicator": "PROFIT_MARGIN"},     "operator": "gt", "right": {"type": "number", "value": 12}},
+            {"left": {"type": "indicator", "indicator": "REVENUE_GROWTH_YOY"},"operator": "gt", "right": {"type": "number", "value": 15}},
+            {"left": {"type": "indicator", "indicator": "DEBT_TO_EQUITY"},    "operator": "lt", "right": {"type": "number", "value": 0.4}},
+        ],
+    },
+    {
+        "name": "Deep Value + Momentum",
+        "category": "Hidden Gems",
+        "description": "PE < 12 AND P/B < 2 AND price above 50-DMA AND volume > 120% — cheap stocks that are starting to move",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "PE_RATIO"},   "operator": "lt", "right": {"type": "number", "value": 12}},
+            {"left": {"type": "indicator", "indicator": "PB_RATIO"},   "operator": "lt", "right": {"type": "number", "value": 2}},
+            {"left": {"type": "indicator", "indicator": "CLOSE"},      "operator": "gt", "right": {"type": "indicator", "indicator": "EMA", "period": 50}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "gt", "right": {"type": "number", "value": 120}},
+        ],
+    },
+    {
+        "name": "Conservative Hidden Gem (Debt-Free Compounder)",
+        "category": "Hidden Gems",
+        "description": "Essentially debt-free (D/E < 0.2) + high ROE + positive FCF yield — capital-light businesses",
+        "universe": ["MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "DEBT_TO_EQUITY"}, "operator": "lt", "right": {"type": "number", "value": 0.2}},
+            {"left": {"type": "indicator", "indicator": "ROE"},            "operator": "gt", "right": {"type": "number", "value": 15}},
+            {"left": {"type": "indicator", "indicator": "FCF_YIELD"},      "operator": "gt", "right": {"type": "number", "value": 4}},
+            {"left": {"type": "indicator", "indicator": "PE_RATIO"},       "operator": "lt", "right": {"type": "number", "value": 25}},
         ],
     },
 ]
@@ -123,11 +427,43 @@ DEFAULT_SCANNERS_DEF = [
 _PERIOD_INDS = {
     "EMA", "SMA", "RSI", "BB_UPPER", "BB_MID", "BB_LOWER", "ATR",
     "AVG_VOLUME",
+    # Volume-scanner helpers — bars needed = period * BUFFER_MULT for
+    # stable rolling-window stats.
+    "HIGHEST_VOLUME", "HIGHEST_HIGH", "LOWEST_LOW", "VOLUME_ZSCORE",
+    "HIGHER_LOWS_COUNT", "VOLUME_TREND_UP",
 }
 # Fixed-window indicators: bars needed = WINDOW_52W
 _WINDOW_52W_INDS = {"HIGH_52W", "LOW_52W", "PCT_52W_HIGH", "PCT_52W_LOW"}
 # MACD: 26 + 9 = 35 bars minimum, * BUFFER_MULT for stable seeding
 _MACD_INDS = {"MACD", "MACD_SIGNAL", "MACD_HIST"}
+
+# Fundamental indicators (Yahoo Finance `info` dict, normalised + cached
+# by app.services.fundamentals_service). Need no historical bars beyond
+# whatever the scanner's technical conditions require, so they don't
+# inflate the lookback window. Pre-fetched in run_scanner() via
+# fundamentals.prefetch() when any condition uses one of these.
+_FUNDAMENTAL_INDS = {
+    "PE_RATIO", "PB_RATIO", "PEG_RATIO",
+    "ROE", "ROCE", "DEBT_TO_EQUITY",
+    "MARKET_CAP_CR", "PROFIT_MARGIN", "REVENUE_GROWTH_YOY",
+    "EARNINGS_GROWTH_YOY", "FCF_YIELD",
+}
+
+# Candle-pattern indicators (boolean). Defined by name explicitly rather
+# than implicitly to avoid accidentally accepting typos. Two-candle
+# patterns need ≥ 2 bars of history; the default 90-day fetch is plenty.
+_PATTERN_INDS = {
+    # Single-candle
+    "DOJI", "DRAGONFLY_DOJI", "GRAVESTONE_DOJI",
+    "HAMMER", "INVERTED_HAMMER", "SHOOTING_STAR", "HANGING_MAN",
+    "BULLISH_MARUBOZU", "BEARISH_MARUBOZU", "SPINNING_TOP",
+    # Two-candle
+    "BULLISH_ENGULFING", "BEARISH_ENGULFING",
+    "BULLISH_HARAMI",    "BEARISH_HARAMI",
+    "INSIDE_BAR", "OUTSIDE_BAR",
+    "PIERCING_LINE", "DARK_CLOUD_COVER",
+    "TWEEZER_BOTTOM", "TWEEZER_TOP",
+}
 
 
 def _required_bars_for(scanner: dict) -> int:
@@ -181,12 +517,32 @@ class _SymbolEvaluator:
     phantom crossovers in low-volatility names.
     """
 
-    def __init__(self, ohlcv: list[dict]):
+    def __init__(self, ohlcv: list[dict], symbol: Optional[str] = None):
         self.ohlcv  = ohlcv
         self.n      = len(ohlcv)
+        # Symbol is optional so existing test-only constructions still
+        # work. It's required ONLY when the scanner condition references
+        # a fundamental indicator (PE_RATIO etc.) — those look up the
+        # symbol's cached fundamentals via fundamentals_service.
+        self.symbol = (symbol or "").upper().strip() or None
         # Filter once; downstream indicator helpers expect non-null closes.
         self.closes = [d["close"] for d in ohlcv if d.get("close") is not None]
         self._series_cache: dict = {}
+        # Lazy: fundamentals are only read on demand. `None` means "not
+        # looked up yet"; the property does the cache check on first access.
+        self._fundamentals: Optional[dict] = None
+        self._fundamentals_loaded: bool = False
+
+    def _get_fundamentals(self) -> Optional[dict]:
+        """Lazy fetch from the in-process fundamentals cache. Returns
+        None when the symbol wasn't prefetched (the run_scanner caller
+        warms the cache for any universe that needs them)."""
+        if not self._fundamentals_loaded:
+            self._fundamentals_loaded = True
+            if self.symbol:
+                from . import fundamentals_service as _fs  # noqa: PLC0415
+                self._fundamentals = _fs.get_cached(self.symbol)
+        return self._fundamentals
 
     # ── Series builders (cached) ────────────────────────────────────────
     def _series(self, ind: str, period: Optional[int]) -> list[float]:
@@ -257,6 +613,187 @@ class _SymbolEvaluator:
             if not avg or cur_vol is None:
                 return None
             return cur_vol / avg * 100
+
+        # ── Volume scanners (new — backs the "Volume" scanner category) ─
+        # HIGHEST_VOLUME(p): max single-bar volume in the last `p` bars
+        # *excluding* the current bar — so the comparison "current volume
+        # > HIGHEST_VOLUME(10)" means "today is the heaviest of the last
+        # 10 trading days". Without the exclusion the condition would
+        # never fire (current volume is always ≤ itself).
+        if ind == "HIGHEST_VOLUME":
+            p = period or 10
+            end = self.n + idx   # excludes the current bar
+            window = [d.get("volume") or 0 for d in self.ohlcv[max(0, end - p):end]]
+            return max(window) if window else None
+
+        # HIGHEST_HIGH(p) / LOWEST_LOW(p): rolling-window extremes
+        # (also excluding the current bar) — used to detect price breakouts.
+        if ind == "HIGHEST_HIGH":
+            p = period or 20
+            end = self.n + idx
+            window = [d.get("high") or 0 for d in self.ohlcv[max(0, end - p):end]]
+            return max(window) if window else None
+        if ind == "LOWEST_LOW":
+            p = period or 20
+            end = self.n + idx
+            window = [d.get("low") or 0 for d in self.ohlcv[max(0, end - p):end]]
+            return min(window) if window else None
+
+        # VOLUME_ZSCORE(p): (current_volume - mean) / stdev over the last
+        # `p` bars (excluding current). Catches statistical outliers that
+        # simple ratio thresholds miss when a stock's normal volume is
+        # already volatile. > 2 = "abnormal", > 3 = "extreme".
+        if ind == "VOLUME_ZSCORE":
+            p = period or 20
+            cur_vol = _safe_idx([d.get("volume") for d in self.ohlcv], idx)
+            end = self.n + idx
+            window = [d.get("volume") or 0 for d in self.ohlcv[max(0, end - p):end]]
+            if not window or cur_vol is None or len(window) < 3:
+                return None
+            mu = sum(window) / len(window)
+            var = sum((v - mu) ** 2 for v in window) / len(window)
+            sd = var ** 0.5
+            if sd == 0:
+                return None
+            return (cur_vol - mu) / sd
+
+        # WICK_RATIO: combined upper+lower wick length / total range, in
+        # percent. 0 = marubozu (no wicks), 100 = doji (all wick).
+        # > 60 with high volume often marks reversals / climaxes.
+        if ind == "WICK_RATIO":
+            o = _safe_idx([d.get("open")  for d in self.ohlcv], idx)
+            h = _safe_idx([d.get("high")  for d in self.ohlcv], idx)
+            l = _safe_idx([d.get("low")   for d in self.ohlcv], idx)
+            c = _safe_idx([d.get("close") for d in self.ohlcv], idx)
+            if None in (o, h, l, c):
+                return None
+            total_range = h - l
+            if total_range <= 0:
+                return None
+            body_top  = max(o, c)
+            body_bot  = min(o, c)
+            upper     = max(0, h - body_top)
+            lower     = max(0, body_bot - l)
+            return (upper + lower) / total_range * 100
+
+        # HIGHER_LOWS_COUNT(p): how many of the last `p` consecutive
+        # bars have a low strictly greater than the previous bar's low.
+        # Used for accumulation patterns ("last 5 candles higher lows").
+        # Returns int [0, p].
+        if ind == "HIGHER_LOWS_COUNT":
+            p = period or 5
+            end = self.n + idx + 1
+            window = [d.get("low") or 0 for d in self.ohlcv[max(0, end - p - 1):end]]
+            if len(window) < 2:
+                return None
+            return float(sum(
+                1 for i in range(1, len(window)) if window[i] > window[i-1]
+            ))
+
+        # VOLUME_TREND_UP(p): 1.0 when the second half of the last `p`
+        # bars has higher average volume than the first half, else 0.0.
+        # Boolean-style — operators "gt 0" / "eq 1" express "volume is
+        # rising over the period".
+        if ind == "VOLUME_TREND_UP":
+            p = period or 5
+            end = self.n + idx + 1
+            window = [d.get("volume") or 0 for d in self.ohlcv[max(0, end - p):end]]
+            if len(window) < 2:
+                return None
+            half = len(window) // 2
+            if half == 0:
+                return None
+            first_half  = window[:half]
+            second_half = window[half:]
+            avg_first  = sum(first_half)  / len(first_half)
+            avg_second = sum(second_half) / len(second_half)
+            return 1.0 if avg_second > avg_first else 0.0
+
+        # ── Fundamentals (Yahoo info dict, cached 12h) ──────────────────
+        # Read from in-process cache populated by fundamentals.prefetch()
+        # at scan-start. If the symbol's fundamentals aren't available
+        # (None — Yahoo had no data, or prefetch was skipped), every
+        # fundamental indicator returns None which makes the surrounding
+        # condition fail. That's the correct behavior: "data unavailable"
+        # MUST exclude the row rather than silently pass.
+        if ind in _FUNDAMENTAL_INDS:
+            f = self._get_fundamentals()
+            if f is None:
+                return None
+            if ind == "PE_RATIO":            return f.get("pe")
+            if ind == "PB_RATIO":            return f.get("pb")
+            if ind == "PEG_RATIO":
+                # PEG = PE / earnings-growth (in %). yahoo_norm gives
+                # earningsGrowth as a percent (e.g. 18.0). PEG only makes
+                # sense for positive growth — return None for the rest so
+                # conditions like `PEG < 1` exclude unprofitable growers.
+                pe = f.get("pe")
+                eg = f.get("earningsGrowth")
+                if pe and eg and eg > 0:
+                    return pe / eg
+                return None
+            if ind == "ROE":                 return f.get("roe")
+            if ind == "ROCE":
+                # yfinance doesn't ship ROCE directly. ROA is the closest
+                # proxy from Yahoo's free dataset; we expose both names
+                # so screener authors familiar with Indian retail
+                # terminology can use either.
+                return f.get("roa")
+            if ind == "DEBT_TO_EQUITY":      return f.get("debtToEquityRatio")
+            if ind == "MARKET_CAP_CR":       return f.get("marketCapCr")
+            if ind == "PROFIT_MARGIN":       return f.get("netMargin")
+            if ind == "REVENUE_GROWTH_YOY":  return f.get("revenueGrowth")
+            if ind == "EARNINGS_GROWTH_YOY": return f.get("earningsGrowth")
+            if ind == "FCF_YIELD":
+                fcf = f.get("freeCashflow")
+                mc  = f.get("marketCap")
+                if fcf and mc and mc > 0:
+                    return (fcf / mc) * 100
+                return None
+
+        # ── Candle patterns (centralised in app/lib/candle_patterns) ───
+        # Boolean indicators — return 1.0 if today's candle (and the
+        # prior candle, for two-bar patterns) matches the shape, else
+        # 0.0. Pair with operator `eq 1` in conditions, or `gt 0` —
+        # both work. Single source of truth with patterns_service.py.
+        if ind.startswith("PATTERN_") or ind in _PATTERN_INDS:
+            from ..lib import candle_patterns as _cp  # noqa: PLC0415
+            if self.n < 1:
+                return None
+            c0 = self.ohlcv[idx]
+            c1 = self.ohlcv[idx - 1] if abs(idx - 1) <= self.n else None
+            try:
+                # Single-candle patterns
+                if ind == "DOJI":             return 1.0 if _cp.is_doji(c0) else 0.0
+                if ind == "DRAGONFLY_DOJI":   return 1.0 if _cp.is_dragonfly_doji(c0) else 0.0
+                if ind == "GRAVESTONE_DOJI":  return 1.0 if _cp.is_gravestone_doji(c0) else 0.0
+                if ind == "HAMMER":           return 1.0 if _cp.is_hammer(c0) else 0.0
+                if ind == "INVERTED_HAMMER":  return 1.0 if _cp.is_inverted_hammer(c0) else 0.0
+                if ind == "SHOOTING_STAR":    return 1.0 if _cp.is_shooting_star(c0) else 0.0
+                if ind == "HANGING_MAN":      return 1.0 if _cp.is_hanging_man(c0) else 0.0
+                if ind == "BULLISH_MARUBOZU": return 1.0 if _cp.is_bullish_marubozu(c0) else 0.0
+                if ind == "BEARISH_MARUBOZU": return 1.0 if _cp.is_bearish_marubozu(c0) else 0.0
+                if ind == "SPINNING_TOP":     return 1.0 if _cp.is_spinning_top(c0) else 0.0
+                # Two-candle patterns — return 0 (not None) if we don't
+                # have a prior bar, so AND-chained conditions reject
+                # the row instead of erroring out.
+                if c1 is None:
+                    return 0.0
+                if ind == "BULLISH_ENGULFING": return 1.0 if _cp.is_bullish_engulfing(c0, c1) else 0.0
+                if ind == "BEARISH_ENGULFING": return 1.0 if _cp.is_bearish_engulfing(c0, c1) else 0.0
+                if ind == "BULLISH_HARAMI":    return 1.0 if _cp.is_bullish_harami(c0, c1) else 0.0
+                if ind == "BEARISH_HARAMI":    return 1.0 if _cp.is_bearish_harami(c0, c1) else 0.0
+                if ind == "INSIDE_BAR":        return 1.0 if _cp.is_inside_bar(c0, c1) else 0.0
+                if ind == "OUTSIDE_BAR":       return 1.0 if _cp.is_outside_bar(c0, c1) else 0.0
+                if ind == "PIERCING_LINE":     return 1.0 if _cp.is_piercing_line(c0, c1) else 0.0
+                if ind == "DARK_CLOUD_COVER":  return 1.0 if _cp.is_dark_cloud_cover(c0, c1) else 0.0
+                if ind == "TWEEZER_BOTTOM":    return 1.0 if _cp.is_tweezer_bottom(c0, c1) else 0.0
+                if ind == "TWEEZER_TOP":       return 1.0 if _cp.is_tweezer_top(c0, c1) else 0.0
+            except (KeyError, TypeError, ZeroDivisionError):
+                # Malformed bar (None close, missing high) — treat as
+                # "no pattern" rather than crash the whole scan.
+                return 0.0
+            return None  # Unknown pattern name — let comparison fail loudly
 
         # ── 52-week aggregations (true 252-day window) ─────────────────
         if ind in _WINDOW_52W_INDS:
@@ -433,12 +970,56 @@ class ScannersService:
             return True
         return False
 
-    async def run_scanner(self, sid: str) -> dict:
+    async def run_scanner(
+        self,
+        sid: str,
+        progress_cb=None,
+    ) -> dict:
+        """Execute a scanner.
+
+        `progress_cb` is an optional callable invoked at key phases so
+        the async-job wrapper can stream live updates to the UI. It's
+        called with kwargs:
+          * stage="prefetch_fundamentals" | "scanning" | "done"
+          * scanned=int, matched=int, failed=int, errors=int
+            (sent after each symbol completes, scanning stage only)
+          * total=int (sent once at start so the wrapper knows the universe size)
+
+        When `progress_cb` is None (legacy sync path) the function
+        behaves exactly as before — no overhead, no protocol change.
+        """
+        def _emit(**kwargs):
+            """Local no-op-aware progress emitter. Centralises the
+            None-check so the call sites stay clean."""
+            if progress_cb is None:
+                return
+            try:
+                progress_cb(**kwargs)
+            except Exception as exc:
+                logger.debug("progress_cb failed (continuing): %s", exc)
+
         scanner = _scanners.get(sid)
         if not scanner:
             return {"error": "Scanner not found"}
 
         symbols      = build_universe(scanner["universe"])
+        # ── Quarantine pre-filter ──────────────────────────────────────────
+        # Drop symbols that have been empirically flagged as "no usable
+        # data in any provider" (delisted, SME-only, suspended, etc.).
+        # These don't get surfaced as scanner errors anymore — they're
+        # reported separately in the response envelope as
+        # `quarantinedCount` so the user knows the scanner is aware of
+        # them, rather than appearing to silently miss them.
+        from . import symbol_quarantine_service as _qsvc  # noqa: PLC0415
+        symbols, quarantined_symbols = _qsvc.filter_quarantined(symbols)
+        if quarantined_symbols:
+            logger.info(
+                "scanner %s: skipping %d quarantined symbols (auto-detected dead): %s%s",
+                sid, len(quarantined_symbols),
+                ", ".join(quarantined_symbols[:5]),
+                "…" if len(quarantined_symbols) > 5 else "",
+            )
+
         conditions   = scanner["conditions"]
         logic        = scanner["logic"]
         market_open_at_start = _mcs.is_market_open()
@@ -446,6 +1027,29 @@ class ScannersService:
         # Minimum bars for any meaningful eval — at least 2 closes for
         # CHANGE_PCT, plus the largest period across conditions.
         min_eval_bars = max(2, min(bars_needed // 2, 35))
+
+        _emit(total=len(symbols), stage="starting")
+
+        # Fundamentals prefetch — only triggers when at least one
+        # condition uses a fundamental indicator (PE_RATIO etc.). Warms
+        # the in-process cache for the entire universe in parallel
+        # BEFORE the per-symbol evaluation loop, so the actual
+        # `_SymbolEvaluator.value()` reads hit a warm cache in O(1).
+        # Cost is paid once per 12h per universe (the cache TTL).
+        needs_fundamentals = any(
+            (side or {}).get("indicator") in _FUNDAMENTAL_INDS
+            for c in conditions
+            for side in (c.get("left"), c.get("right"))
+        )
+        if needs_fundamentals:
+            _emit(stage="prefetch_fundamentals")
+            try:
+                from . import fundamentals_service as _fs  # noqa: PLC0415
+                await _fs.prefetch(symbols)
+            except Exception as exc:
+                logger.warning("Fundamentals prefetch failed (continuing without): %s", exc)
+
+        _emit(stage="scanning")
 
         scan_errors: list[dict] = []
 
@@ -458,8 +1062,26 @@ class ScannersService:
                     "got":    len(h),
                     "needed": min_eval_bars,
                 })
+                # Record failure ONLY for the zero-bars case. >0 bars but
+                # below `min_eval_bars` is a genuine "thin history" /
+                # "new listing" case — not a dead symbol, don't quarantine.
+                if len(h) == 0:
+                    try:
+                        _qsvc.record_failure(sym, reason="no-data")
+                    except Exception:
+                        pass   # never let bookkeeping break the scan
                 return None
-            ev = _SymbolEvaluator(h)
+            # >= min_eval_bars means the chain returned usable data.
+            # Wipe any prior failure state so a previously-quarantined
+            # symbol that's come back online gets re-enabled. Only fire
+            # the write when the symbol is in the active quarantine set
+            # — avoids a PG round-trip per healthy symbol on every scan.
+            if _qsvc.is_quarantined(sym):
+                try:
+                    _qsvc.record_success(sym)
+                except Exception:
+                    pass
+            ev = _SymbolEvaluator(h, symbol=sym)
             closes = ev.closes
             if len(closes) < 2:
                 scan_errors.append({"symbol": sym, "reason": "insufficient-closes"})
@@ -488,7 +1110,7 @@ class ScannersService:
             # match's data was sealed (avoids the "single runAt" lie when a
             # 100-symbol scan takes 3 minutes).
             row_as_of = h[-1].get("date") if h else None
-            return {
+            row = {
                 "symbol":             None,  # filled by caller
                 "lastPrice":          lc,
                 "change":             round(change, 2),
@@ -501,27 +1123,93 @@ class ScannersService:
                 "score":              score,
                 "asOf":               row_as_of,
             }
+            # Hidden Gem Score — only attached for scanners in the
+            # "Hidden Gems" category. Avoids paying the (cheap, pure
+            # Python) score computation on every result row of every
+            # scanner. Two extra fields: `hiddenGemScore` (0-100) and
+            # `hiddenGemBreakdown` (array of strings explaining the
+            # score) so the UI can render a tooltip without re-deriving.
+            if scanner.get("category") == "Hidden Gems":
+                f = ev._get_fundamentals()
+                if f:
+                    from . import fundamentals_service as _fs  # noqa: PLC0415
+                    hg_score, hg_breakdown = _fs.compute_hidden_gem_score(f)
+                    row["hiddenGemScore"]     = hg_score
+                    row["hiddenGemBreakdown"] = hg_breakdown
+                else:
+                    row["hiddenGemScore"]     = None
+                    row["hiddenGemBreakdown"] = ["fundamentals unavailable"]
+            return row
 
         results: list[dict] = []
         market_state_changed = False
 
+        # Live counters — closed over by _scan_one in the fast path
+        # and incremented in-line in the live path. Both paths emit
+        # progress through these so the polling client sees a unified
+        # scanned/matched/failed/errors trio regardless of which mode
+        # the scan is running in.
+        scanned_n = 0
+        matched_n = 0
+        errors_n  = 0
+
+        def _push_progress() -> None:
+            # `failed` is the residual: we scanned it, didn't error, but
+            # it didn't pass the conditions. Computed rather than tracked
+            # so the three numbers can't disagree.
+            failed_n = max(0, scanned_n - matched_n - errors_n)
+            _emit(
+                scanned=scanned_n, matched=matched_n,
+                failed=failed_n,   errors=errors_n,
+            )
+
         if not market_open_at_start:
-            # ── FAST PATH: market closed → all data from disk → run fully parallel ──
+            # ── FAST PATH: market closed → all data from disk → run parallel ──
             async def _scan_one(sym: str):
+                nonlocal scanned_n, matched_n, errors_n
                 try:
                     h = await self.price.get_historical_data(sym, bars_needed)
-                    return _evaluate(sym, h or []), sym
+                    row = _evaluate(sym, h or [])
+                    scanned_n += 1
+                    if row:
+                        matched_n += 1
+                        # Stamp `symbol` BEFORE emitting so the live
+                        # stream shipping to the UI carries the same
+                        # field layout as the final sorted result.
+                        # Without this, the partial-matches list would
+                        # have `symbol: None` until the collection
+                        # phase below mutates it.
+                        row["symbol"] = sym
+                        _emit(match=row)
+                    _push_progress()
+                    return row, sym
                 except Exception as e:
                     scan_errors.append({
                         "symbol": sym,
                         "reason": "fetch-failed",
                         "error":  f"{type(e).__name__}: {e}",
                     })
+                    scanned_n += 1
+                    errors_n  += 1
+                    _push_progress()
                     return None, sym
 
-            scanned = await asyncio.gather(*[_scan_one(s) for s in symbols])
+            # Bounded so a full-universe ("ALL") scan can't fire thousands of
+            # simultaneous fetches at cache-cold symbols and trip a provider
+            # ban; disk-cached symbols still complete near-instantly.
+            _sem = asyncio.Semaphore(SCANNER_SCAN_CONCURRENCY)
+
+            async def _bounded(sym: str):
+                async with _sem:
+                    return await _scan_one(sym)
+
+            scanned = await asyncio.gather(*[_bounded(s) for s in symbols])
             for row, sym in scanned:
                 if row:
+                    # `row["symbol"]` was already set inside _scan_one
+                    # for the live emit; this is now a no-op assignment
+                    # kept for clarity (and as a safety net if a future
+                    # refactor moves emit logic elsewhere).
                     row["symbol"] = sym
                     results.append(row)
 
@@ -531,9 +1219,13 @@ class ScannersService:
                 try:
                     h = await self.price.get_historical_data(sym, bars_needed)
                     row = _evaluate(sym, h or [])
+                    scanned_n += 1
                     if row:
+                        matched_n += 1
                         row["symbol"] = sym
                         results.append(row)
+                        _emit(match=row)
+                    _push_progress()
                     await asyncio.sleep(RATE_LIMIT_DELAY_S)
                 except Exception as e:
                     scan_errors.append({
@@ -541,11 +1233,16 @@ class ScannersService:
                         "reason": "fetch-failed",
                         "error":  f"{type(e).__name__}: {e}",
                     })
+                    scanned_n += 1
+                    errors_n  += 1
+                    _push_progress()
                 # Detect intra-scan market-state transition so the response
                 # can warn the user that early symbols ran on live data and
                 # later symbols ran on freshly-sealed EOD.
                 if not market_state_changed and not _mcs.is_market_open():
                     market_state_changed = True
+
+        _emit(stage="done")
 
         results.sort(key=lambda r: r["score"], reverse=True)
         _scanners[sid] = {
@@ -570,6 +1267,14 @@ class ScannersService:
             "totalMatched":       len(results),
             "results":            results,
             "scanErrors":         scan_errors,
+            # Quarantined symbols are NOT scan errors — they're known
+            # dead/unreachable names that the system has empirically
+            # learned to skip. Surface them separately so the UI can
+            # show "N symbols auto-skipped (delisted/no data)" without
+            # cluttering the per-symbol error list. `quarantinedCount`
+            # plus `totalScanned` equals the original universe size.
+            "quarantinedCount":   len(quarantined_symbols),
+            "quarantinedSymbols": quarantined_symbols,
             "barsRequested":      bars_needed,
             "marketOpenAtStart":  market_open_at_start,
             "marketStateChanged": market_state_changed,

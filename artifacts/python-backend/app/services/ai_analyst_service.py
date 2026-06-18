@@ -919,6 +919,7 @@ async def _run_analyst(role_key: str, role_label: str, summary: dict) -> tuple[s
         system=_SYSTEM_BASE,
         max_tokens=600,
         temperature=0.4,
+        prefer_kimchi=True,
     )
     return role_key, _scrub_advice(note or "").strip(), model_label
 
@@ -1037,9 +1038,11 @@ async def _run_analysis_impl(ticker: str, user_id: str,
       yield _ev("debate", agent="bull", status="running")
       yield _ev("debate", agent="bear", status="running")
       bull_task = ai_client.ask_with_meta(_debate_prompt("BULL", notes),
-                                          system=_SYSTEM_BASE, max_tokens=500, temperature=0.5)
+                                          system=_SYSTEM_BASE, max_tokens=500, temperature=0.5,
+                                          prefer_kimchi=True)
       bear_task = ai_client.ask_with_meta(_debate_prompt("BEAR", notes),
-                                          system=_SYSTEM_BASE, max_tokens=500, temperature=0.5)
+                                          system=_SYSTEM_BASE, max_tokens=500, temperature=0.5,
+                                          prefer_kimchi=True)
       debate_results = await asyncio.gather(bull_task, bear_task, return_exceptions=True)
       bull_raw, bear_raw = debate_results
       if isinstance(bull_raw, tuple):
@@ -1064,6 +1067,7 @@ async def _run_analysis_impl(ticker: str, user_id: str,
           system=_SYSTEM_BASE + " Reply with strict JSON only.",
           max_tokens=400,
           temperature=0.2,
+          prefer_kimchi=True,
       )
       models_used.append(trader_model)
       verdict_obj = await _safe_json(trader_raw)

@@ -10,7 +10,14 @@ const QUICK_SYMBOLS = [
   "ITC", "SBIN", "BHARTIARTL", "KOTAKBANK", "MARUTI", "HCLTECH",
 ];
 
-const VERDICT_STYLE: Record<string, { label: string; bg: string; text: string; Icon: typeof TrendingUp }> = {
+// DcfResponse.verdict is a literal-union from api.ts — reusing it here
+// means: (a) adding a new verdict value in api.ts breaks compilation
+// here until we add a matching style row, and (b) any typo in the keys
+// below is rejected by the compiler. The runtime fallback at the
+// consumer site stays as a paranoid backstop for malformed responses.
+type DcfVerdict = DcfResponse["verdict"];
+interface VerdictStyle { label: string; bg: string; text: string; Icon: typeof TrendingUp }
+const VERDICT_STYLE: Record<DcfVerdict, VerdictStyle> = {
   UNDERVALUED: { label: "Undervalued", bg: "bg-green-50 dark:bg-green-500/10",  text: "text-green-700 dark:text-green-400",  Icon: TrendingUp },
   FAIR:        { label: "Fair value",  bg: "bg-amber-50 dark:bg-amber-500/10",  text: "text-amber-700 dark:text-amber-400",  Icon: Minus },
   OVERVALUED:  { label: "Overvalued",  bg: "bg-red-50 dark:bg-red-500/10",      text: "text-red-700 dark:text-red-400",      Icon: TrendingDown },

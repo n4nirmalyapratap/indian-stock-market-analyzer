@@ -674,16 +674,12 @@ class BotDispatcher:
         ])
 
     async def _h_scan(self, *_a, **_k) -> BotResponse:
-        try:
-            r = await self.patterns.run_scan()
-        except Exception:
-            r = await self.patterns.trigger_scan()
+        # Scans now run cache-first in the background over the full universe.
+        # Kick it and return immediately; results stream into /patterns.
+        r = await self.patterns.trigger_scan()
         return BotResponse(
-            f"🔍 *Scan complete*\n"
-            f"Total: *{r.get('totalFound', 0)}* · "
-            f"CALL: *{r.get('callSignals', 0)}* · "
-            f"PUT: *{r.get('putSignals', 0)}*\n\n"
-            "Use /patterns to see details.",
+            f"🔍 *Scan started* across *{r.get('universeScanned', 0)}* stocks.\n"
+            "It runs in the background — use /patterns in a minute for results.",
             actions=[BotAction("View patterns", "/patterns")],
         )
 

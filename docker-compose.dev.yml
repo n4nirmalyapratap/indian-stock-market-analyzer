@@ -38,10 +38,27 @@ services:
       AI_INTEGRATIONS_OPENAI_BASE_URL: "${AI_INTEGRATIONS_OPENAI_BASE_URL:-}"
       AI_MODEL: "${AI_MODEL:-}"
       AI_FALLBACK_MODEL: "${AI_FALLBACK_MODEL:-}"
+      KIMCHI_API_KEY: "${KIMCHI_API_KEY:-}"
+      KIMCHI_BASE_URL: "${KIMCHI_BASE_URL:-https://llm.kimchi.dev/openai/v1}"
+      KIMCHI_MODEL: "${KIMCHI_MODEL:-}"
       FEATURE_AI_ANALYST: "${FEATURE_AI_ANALYST:-on}"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
       TWILIO_ACCOUNT_SID: "${TWILIO_ACCOUNT_SID:-}"
       TWILIO_AUTH_TOKEN: "${TWILIO_AUTH_TOKEN:-}"
+      # ── Dev debugging flags ──────────────────────────────────────
+      # SHAREHOLDING_DISABLE_CACHE=1 forces every /stocks/{sym}/shareholding
+      # request to re-run the NSE→XBRL→Yahoo→Screener chain instead of
+      # serving from the PG cache. Use while triaging which source is
+      # failing — comment this line out (or set to 0) before merging to
+      # production. Logs emit a WARNING line at startup when it's active.
+      SHAREHOLDING_DISABLE_CACHE: "${SHAREHOLDING_DISABLE_CACHE:-1}"
+      # LOG_LEVEL — overrides the root logger level. Defaults to INFO if
+      # unset. Bump to DEBUG temporarily for noisy network traces.
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      # Forces Python to line-buffer stdout so `docker logs -f` shows
+      # application INFO lines in real time (without this, output may
+      # be batched in 4KB chunks and appear delayed/missing).
+      PYTHONUNBUFFERED: "1"
     volumes:
       - ./artifacts/python-backend:/app
     ports:

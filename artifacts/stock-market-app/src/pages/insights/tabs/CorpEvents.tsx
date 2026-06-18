@@ -7,7 +7,15 @@ import {
 import { CalendarClock, Search, X } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
 
-const EVENT_TYPE_META: Record<string, { label: string; dot: string }> = {
+// Backend emits NewsEvent.type as an open string (new event types can
+// be added without breaking the frontend), so we keep the runtime
+// fallback in `eventMeta()`. BUT typing the map against a known union
+// means typos / duplicate rows inside this file are still caught at
+// compile time — half the bug class is eliminated, the other half
+// is gracefully degraded at runtime.
+type KnownEventType = "dividend" | "results" | "split" | "meeting" | "merger" | "announcement";
+interface EventTypeMeta { label: string; dot: string }
+const EVENT_TYPE_META: Record<KnownEventType, EventTypeMeta> = {
   dividend:     { label: "Dividend",     dot: "bg-violet-500" },
   results:      { label: "Results",      dot: "bg-cyan-500" },
   split:        { label: "Split",        dot: "bg-orange-500" },
@@ -16,8 +24,8 @@ const EVENT_TYPE_META: Record<string, { label: string; dot: string }> = {
   announcement: { label: "Announcement", dot: "bg-indigo-500" },
 };
 
-function eventMeta(t: string) {
-  return EVENT_TYPE_META[t] ?? { label: t.toUpperCase(), dot: "bg-indigo-500" };
+function eventMeta(t: string): EventTypeMeta {
+  return EVENT_TYPE_META[t as KnownEventType] ?? { label: t.toUpperCase(), dot: "bg-indigo-500" };
 }
 
 const FILTERS = [

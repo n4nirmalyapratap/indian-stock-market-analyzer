@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { Scan, TrendingUp, TrendingDown, Filter, Activity } from "lucide-react";
+import { Scan, TrendingUp, TrendingDown, Filter, Activity, Loader2 } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
 import DataFreshness from "@/components/DataFreshness";
 import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
 
-const UNIVERSES  = ["ALL", "NIFTY100", "MIDCAP", "SMALLCAP"];
+const UNIVERSES  = ["ALL", "NIFTY100", "MIDCAP", "SMALLCAP", "MICROCAP"];
 const SIGNALS    = ["ALL", "CALL", "PUT", "WAIT"];
 const CATEGORIES = ["ALL", "Candlestick", "Two-Candle", "Three-Candle", "Indicator", "Structure"];
 
@@ -44,6 +44,9 @@ export default function Patterns() {
         signal:   signal   !== "ALL" ? signal   : undefined,
         category: category !== "ALL" ? category : undefined,
       }),
+      // Poll quickly while a background scan streams results in; fall back to
+      // the normal cadence once it's done.
+      { refetchInterval: (q: any) => (q?.state?.data?.scanInProgress ? 2500 : 60_000) },
     ),
   );
 
@@ -73,10 +76,21 @@ export default function Patterns() {
             className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-60 transition"
           >
             <Scan className="w-4 h-4" />
-            {scanMut.isPending ? "Scanning… (~2 min)" : "Run Scan Now"}
+            {scanMut.isPending ? "Starting…" : "Run Scan Now"}
           </button>
         </div>
       </div>
+
+      {/* Live scan progress — cache-first background scan over the full market */}
+      {data?.scanInProgress && data.scanProgress && (
+        <div className="flex items-center gap-3 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-xl px-4 py-3 text-sm">
+          <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
+          <span className="font-semibold">
+            Scanning {data.scanProgress.done} / {data.scanProgress.total} ({Math.round((data.scanProgress.done / Math.max(1, data.scanProgress.total)) * 100)}%)
+          </span>
+          <span className="opacity-70">— full-market scan running; results stream in below.</span>
+        </div>
+      )}
 
       {/* Stats */}
       {data && (

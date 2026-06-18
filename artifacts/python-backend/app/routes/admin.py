@@ -80,6 +80,211 @@ async def admin_google_login(request: Request):
 
 # ── App status ────────────────────────────────────────────────────────────────
 
+@router.get("/admin/registry/stats")
+async def admin_registry_stats(request: Request):
+    """Inspect the Security Registry's current state. Use this to
+    triage "symbol not found" issues in scanners — if `count` is small
+    (~150) the live NSE refresh hasn't succeeded yet and the registry
+    is running from baseline. Pass ?resolve=LTFH (etc.) to test how a
+    specific symbol would resolve."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.services.security_registry_service import get_registry  # noqa: PLC0415
+    reg = get_registry()
+    stats = reg.stats()
+    # Optional resolution probe — let the admin test arbitrary inputs.
+    probe = (request.query_params.get("resolve") or "").strip()
+    probe_result = None
+    if probe:
+        sec = reg.resolve(probe)
+        probe_result = (
+            {"input": probe, "nse_symbol": sec.nse_symbol, "name": sec.name,
+             "aliases": list(sec.aliases), "isin": sec.isin}
+            if sec else
+            {"input": probe, "resolved": False}
+        )
+    return {**stats, "probe": probe_result}
+
+
+@router.get("/admin/shareholding/diagnose/{symbol}")
+async def admin_shareholding_diagnose(symbol: str, request: Request):
+    """Per-source diagnostic for the shareholding chain.
+
+    Walks NSE → XBRL (first available URL only) → Screener → Yahoo
+    INDEPENDENTLY (no upserts, no caching), and reports what each
+    source returned. Use this to triage "Shareholding tab shows 1
+    column with YAHOO badge" — the response tells you exactly which
+    source is failing and why.
+
+    Example: GET /admin/shareholding/diagnose/TCS
+    Returns: {
+      "input": "TCS",
+      "canonical": "TCS",
+      "sources": {
+        "nse":      { "ok": true,  "rows_count": 80, "first_row": {...}, "xbrl_urls": 80 },
+        "xbrl":     { "ok": true,  "xml_size": 23456, "parsed": {...} },
+        "screener": { "ok": false, "error": "..."  },
+        "yahoo":    { "ok": true,  "rows_count": 1 }
+      }
+    }
+    """
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+
+    from app.services import shareholding_service as _sh  # noqa: PLC0415
+    from app.lib.symbol_map import canonical_symbol       # noqa: PLC0415
+
+    canon = canonical_symbol(symbol)
+    result: dict = {
+        "input": symbol,
+        "canonical": canon,
+        "sources": {},
+    }
+
+    # NSE — primary index source.
+    nse_rows: list = []
+    try:
+        nse_rows = await _sh._fetch_nse(canon)
+        result["sources"]["nse"] = {
+            "ok":          True,
+            "rows_count":  len(nse_rows),
+            "xbrl_urls":   sum(1 for r in nse_rows if r.get("_xbrl_url")),
+            "first_row":   _sanitize_row_for_debug(nse_rows[0]) if nse_rows else None,
+            "first_xbrl_url": next(
+                (r["_xbrl_url"] for r in nse_rows if r.get("_xbrl_url")),
+                None,
+            ),
+        }
+    except Exception as e:
+        result["sources"]["nse"] = {
+            "ok": False,
+            "error": f"{type(e).__name__}: {str(e)[:200]}",
+        }
+
+    # XBRL — only if NSE gave us a URL.
+    xbrl_url = result["sources"]["nse"].get("first_xbrl_url") if isinstance(result["sources"]["nse"], dict) else None
+    if xbrl_url:
+        try:
+            xml = await _sh._fetch_xbrl_file(xbrl_url)
+            if xml:
+                parsed = _sh._parse_xbrl(xml)
+                result["sources"]["xbrl"] = {
+                    "ok":       True,
+                    "url":      xbrl_url,
+                    "xml_size": len(xml),
+                    "parsed":   parsed,
+                }
+            else:
+                result["sources"]["xbrl"] = {
+                    "ok": False, "url": xbrl_url, "reason": "fetch returned empty bytes",
+                }
+        except Exception as e:
+            result["sources"]["xbrl"] = {
+                "ok": False, "url": xbrl_url,
+                "error": f"{type(e).__name__}: {str(e)[:200]}",
+            }
+    else:
+        result["sources"]["xbrl"] = {"ok": False, "reason": "no XBRL URL from NSE"}
+
+    # Screener — independent HTML scrape.
+    try:
+        s_rows = await _sh._fetch_screener(canon)
+        result["sources"]["screener"] = {
+            "ok":         True,
+            "rows_count": len(s_rows),
+            "first_row":  _sanitize_row_for_debug(s_rows[0]) if s_rows else None,
+            "url":        f"https://www.screener.in/company/{canon}/",
+        }
+    except Exception as e:
+        result["sources"]["screener"] = {
+            "ok": False,
+            "error": f"{type(e).__name__}: {str(e)[:200]}",
+        }
+
+    # Yahoo — the conflated last-resort.
+    try:
+        y_rows = await _sh._fetch_yahoo(canon)
+        result["sources"]["yahoo"] = {
+            "ok":         True,
+            "rows_count": len(y_rows),
+            "first_row":  _sanitize_row_for_debug(y_rows[0]) if y_rows else None,
+        }
+    except Exception as e:
+        result["sources"]["yahoo"] = {
+            "ok": False,
+            "error": f"{type(e).__name__}: {str(e)[:200]}",
+        }
+
+    return result
+
+
+def _sanitize_row_for_debug(row: dict) -> dict:
+    """Strip the internal `_xbrl_url` field and ISO-format dates so
+    the diagnostic JSON is paste-safe."""
+    if not isinstance(row, dict):
+        return {}
+    out = {k: v for k, v in row.items() if not k.startswith("_")}
+    if "as_on_date" in out and hasattr(out["as_on_date"], "isoformat"):
+        out["as_on_date"] = out["as_on_date"].isoformat()
+    return out
+
+
+@router.get("/admin/quarantine")
+async def admin_list_quarantine(request: Request):
+    """List every symbol currently quarantined by the scanner. These
+    are symbols where every provider returned 0 bars enough times to
+    trip the auto-quarantine threshold — typically delisted, SME-only,
+    or genuinely no-data tickers that scanners would otherwise show as
+    errors on every run."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.services import symbol_quarantine_service as _qsvc  # noqa: PLC0415
+    rows  = _qsvc.list_quarantined()
+    stats = _qsvc.stats()
+    return {"stats": stats, "quarantined": rows}
+
+
+@router.delete("/admin/quarantine/{symbol}")
+async def admin_release_quarantine(symbol: str, request: Request):
+    """Release one symbol from quarantine. Useful when manual
+    investigation confirms a flagged symbol is actually valid (e.g. a
+    transient NSE outage caused the auto-quarantine).
+
+    The released symbol carries a `manual_override` flag so the
+    auto-quarantine logic won't immediately re-fire on the next scan
+    — gives operators room to investigate without the system fighting
+    them."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.services import symbol_quarantine_service as _qsvc  # noqa: PLC0415
+    released = _qsvc.release(symbol)
+    return {"symbol": symbol.upper(), "released": released}
+
+
+@router.post("/admin/quarantine/release-all")
+async def admin_release_all_quarantine(request: Request):
+    """Nuclear option — release every quarantined symbol. Use after a
+    sustained upstream outage that over-flagged a large batch."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.services import symbol_quarantine_service as _qsvc  # noqa: PLC0415
+    count = _qsvc.release_all()
+    return {"released": count}
+
+
+@router.post("/admin/registry/refresh")
+async def admin_registry_refresh(request: Request):
+    """Force an immediate registry refresh (fetches NSE EQUITY_L + the
+    symbol-change history). Returns the new stats. Useful after a
+    rename ships in production and you don't want to wait 24h for the
+    scheduler's next tick."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.services.security_registry_service import get_registry, refresh_registry  # noqa: PLC0415
+    await refresh_registry()
+    return get_registry().stats()
+
+
 @router.get("/admin/status")
 async def admin_status(request: Request):
     if not _require_admin(request):
@@ -777,6 +982,143 @@ async def fii_dii_refresh(request: Request):
     except Exception as exc:
         return JSONResponse(status_code=500, content={
             "ok": False, "error": f"FII/DII refresh failed: {exc}"})
+
+
+@router.get("/admin/subsectors")
+async def list_subsectors(request: Request):
+    """Return the full taxonomy (from universe.py) merged with all DB overrides,
+    showing which sub-industries exist, how many curated symbols they have, and
+    every admin-added override row."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.lib.auth_store import ensure_primary_schema  # noqa: PLC0415
+    from app.lib.universe import SUBSECTOR_TAXONOMY  # noqa: PLC0415
+    ensure_primary_schema()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT o.id, o.symbol, o.sub_industry, o.industry, o.sector,
+                       o.note, o.set_by, o.created_at_ms, o.updated_at_ms,
+                       s.name AS stock_name, s.market_cap, s.cap_category,
+                       s.classified_ok
+                  FROM sub_industry_overrides o
+                  LEFT JOIN stocks s ON s.symbol = o.symbol
+                 ORDER BY o.sub_industry, o.symbol
+                """
+            )
+            overrides = [dict(r) for r in cur.fetchall()]
+
+    taxonomy_out = [
+        {
+            "subIndustry": k,
+            "industry": v.get("industry", ""),
+            "sector": v.get("sector", ""),
+            "curatedCount": len(v.get("symbols", [])),
+            "curatedSymbols": v.get("symbols", []),
+        }
+        for k, v in sorted(SUBSECTOR_TAXONOMY.items())
+    ]
+    return {
+        "taxonomy": taxonomy_out,
+        "overrides": overrides,
+        "totalSubIndustries": len(taxonomy_out),
+        "totalOverrides": len(overrides),
+    }
+
+
+@router.post("/admin/subsectors/overrides")
+async def add_subsector_override(request: Request):
+    """Add a symbol to a sub-industry. If the sub-industry doesn't exist in
+    the taxonomy it is created as a new group. The symbol will be picked up by
+    the next classifier run and included in the rotation grid once it has
+    market-cap data."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON"})
+    symbol      = (str(body.get("symbol") or "")).strip().upper()
+    sub_industry = (str(body.get("subIndustry") or "")).strip()
+    industry    = (str(body.get("industry") or "")).strip()
+    sector      = (str(body.get("sector") or "")).strip()
+    note        = (str(body.get("note") or "")).strip()[:300]
+    if not symbol or not sub_industry:
+        return JSONResponse(status_code=400, content={"error": "symbol and subIndustry are required"})
+
+    set_by = ""
+    try:
+        from app.lib.auth_tokens import verify_token  # noqa: PLC0415
+        payload = verify_token(request.headers.get("X-Admin-Token", ""), required_scope="admin")
+        set_by  = str(payload.get("email") or payload.get("sub") or "")[:120]
+    except Exception:
+        pass
+
+    from app.lib.auth_store import ensure_primary_schema  # noqa: PLC0415
+    ensure_primary_schema()
+    now_ms = int(time.time() * 1000)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO sub_industry_overrides
+                    (id, symbol, sub_industry, industry, sector, note, set_by,
+                     created_at_ms, updated_at_ms)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (symbol, sub_industry) DO UPDATE SET
+                    industry     = EXCLUDED.industry,
+                    sector       = EXCLUDED.sector,
+                    note         = EXCLUDED.note,
+                    set_by       = EXCLUDED.set_by,
+                    updated_at_ms = EXCLUDED.updated_at_ms
+                RETURNING id
+                """,
+                (str(uuid.uuid4()), symbol, sub_industry, industry, sector, note, set_by, now_ms, now_ms),
+            )
+            row = cur.fetchone()
+    return {"ok": True, "id": row["id"] if row else None,
+            "symbol": symbol, "subIndustry": sub_industry}
+
+
+@router.delete("/admin/subsectors/overrides/{override_id}")
+async def delete_subsector_override(override_id: str, request: Request):
+    """Remove an admin override by its ID."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.lib.auth_store import ensure_primary_schema  # noqa: PLC0415
+    ensure_primary_schema()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM sub_industry_overrides WHERE id = %s RETURNING symbol, sub_industry",
+                (override_id,),
+            )
+            row = cur.fetchone()
+    if not row:
+        return JSONResponse(status_code=404, content={"error": "Override not found"})
+    return {"ok": True, "removed": dict(row)}
+
+
+@router.post("/admin/subsectors/reclassify")
+async def trigger_reclassify(request: Request):
+    """Trigger an immediate classifier run for all taxonomy symbols, then
+    re-seed overrides from the taxonomy and rebuild today's metrics grid so
+    the /sector-analytics page shows all sub-industries immediately."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    try:
+        import asyncio  # noqa: PLC0415
+        from app.services import synthetic_sectors_service as synth  # noqa: PLC0415
+        from app.services.yahoo_service import YahooService as _YS  # noqa: PLC0415
+
+        classify_result = await synth.refresh_classifications(force=False)
+        seed_result = await asyncio.to_thread(synth.seed_overrides_from_taxonomy)
+        yahoo = _YS()
+        metrics_result = await synth.run_nightly_metrics(yahoo)
+        return {"ok": True, "classify": classify_result, "seed": seed_result, "metrics": metrics_result}
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
 
 @router.delete("/admin/macro/overrides/{indicator}")

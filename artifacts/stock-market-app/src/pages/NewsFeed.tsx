@@ -56,7 +56,12 @@ function sentimentConfig(s: string, isDark: boolean) {
   };
 }
 
-const CATEGORY_META: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
+// Keyed on the same Tab union used by TABS so the compiler refuses
+// any new tab without a matching meta row (TS2741) and any meta key
+// not in Tab (TS2353). Crashes from "unknown tab" → undefined .color
+// are now impossible to ship.
+interface CategoryMeta { label: string; icon: React.ReactNode; color: string }
+const CATEGORY_META: Record<Tab, CategoryMeta> = {
   all:       { label: "All News",  icon: <Newspaper className="w-3.5 h-3.5" />,  color: "#6366f1" },
   market:    { label: "Market",    icon: <BarChart2 className="w-3.5 h-3.5" />,  color: "#0891b2" },
   corporate: { label: "Companies", icon: <Building2 className="w-3.5 h-3.5" />,  color: "#7c3aed" },

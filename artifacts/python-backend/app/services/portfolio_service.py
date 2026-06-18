@@ -522,7 +522,7 @@ async def value_portfolio(user_id: str, portfolio_id: str,
     # Fetch all quotes concurrently via PriceService
     async def _q(sym: str) -> tuple[str, dict]:
         try:
-            qm = await price_service.get_quote_with_meta(sym)
+            qm = await price_service.get_quote_with_meta(sym, cross_check=False)
             return sym, (qm or {}).get("quote") or {}
         except Exception as exc:
             logger.warning("portfolio: quote failed for %s: %s", sym, exc)

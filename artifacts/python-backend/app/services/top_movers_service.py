@@ -63,6 +63,20 @@ def _ttl() -> int:
     return _OPEN_TTL if _disk.is_market_open() else _CLOSED_TTL
 
 
+def _name_for(sym: str, provided: Optional[str]) -> str:
+    """Best available company name: provider's name → universe COMPANY_MAP → symbol.
+
+    Brand-new tickers (e.g. TMCV after the Tata Motors demerger) often have no
+    company name from Yahoo / NSE index meta yet, but our universe cache does —
+    so fall back to it instead of showing a bare symbol (which the UI then
+    renders as just a price)."""
+    p = (provided or "").strip()
+    if p and p.upper() != sym.upper():
+        return p
+    from ..lib import universe as _u  # noqa: PLC0415
+    return _u.COMPANY_MAP.get(sym) or p or sym
+
+
 def _row(stock: dict) -> Optional[dict]:
     """Flatten one NSE constituent into the shape the frontend expects.
 
@@ -86,9 +100,10 @@ def _row(stock: dict) -> Optional[dict]:
         pchange = float(pchange)
     except (TypeError, ValueError):
         return None
+    _nse_name = stock.get("meta", {}).get("companyName") if isinstance(stock.get("meta"), dict) else None
     return {
         "symbol":      sym,
-        "name":        stock.get("meta", {}).get("companyName") if isinstance(stock.get("meta"), dict) else sym,
+        "name":        _name_for(sym, _nse_name),
         "lastPrice":   stock.get("lastPrice"),
         "change":      stock.get("change"),
         "pChange":     round(pchange, 2),
@@ -124,6 +139,89 @@ class TopMoversService:
             self._price = YahooService()
         return self._price
 
+    def _disk_movers(self, segment: str, count: int) -> Optional[dict]:
+        """Closed-market fast path: rank gainers/losers straight from the
+        EOD-sealed bars already on disk — zero network, instant.
+
+        `pChange = (last_close - prev_close) / prev_close` from each symbol's
+        sealed canonical snapshot is the same number the session produced, and
+        it's the SAME sealed bar the chart/quote endpoints serve — so this is a
+        consistency improvement, not a data-quality compromise.
+
+        Returns None when too few of the segment's symbols are sealed yet (cold
+        start before the post-close warmup has run), so the caller falls
+        through to the live NSE/Yahoo path.
+        """
+        from ..lib import universe  # noqa: PLC0415
+        universe_map = {
+            "large": universe.NIFTY100,
+            "mid":   universe.MIDCAP,
+            "small": universe.SMALLCAP,
+            "micro": universe.MICROCAP,
+        }
+        symbols = list(dict.fromkeys(universe_map.get(segment, [])))
+        if not symbols:
+            return None
+
+        rows: list[dict] = []
+        as_of: Optional[str] = None
+        for sym in symbols:
+            payload = _disk.load_with_meta(sym, 5)
+            if not (payload and payload.get("eodSealed") and payload.get("data")):
+                continue
+            bars = payload["data"]
+            if len(bars) < 2:
+                continue
+            last, prev = bars[-1], bars[-2]
+            lc, pc = last.get("close"), prev.get("close")
+            if lc is None or pc is None:
+                continue
+            try:
+                lc, pc = float(lc), float(pc)
+            except (TypeError, ValueError):
+                continue
+            if pc == 0:
+                continue
+            as_of = as_of or payload.get("savedAt") or payload.get("eodDate")
+            rows.append({
+                "symbol":        sym,
+                "name":          _name_for(sym, None),
+                "lastPrice":     round(lc, 2),
+                "change":        round(lc - pc, 2),
+                "pChange":       round((lc - pc) / pc * 100, 2),
+                "open":          last.get("open"),
+                "dayHigh":       last.get("high"),
+                "dayLow":        last.get("low"),
+                "previousClose": round(pc, 2),
+                "volume":        last.get("volume"),
+                "valueLakhs":    None,
+                "yearHigh":      None,
+                "yearLow":       None,
+            })
+
+        # Trust the disk ranking only when a solid majority of the segment is
+        # sealed — otherwise the leaderboard is biased toward whichever symbols
+        # happen to be on disk. Below the floor, signal a miss so the caller
+        # falls back to the live path.
+        if len(rows) < min(20, max(1, len(symbols) // 2)):
+            return None
+
+        gainers = sorted(rows, key=lambda r: r["pChange"], reverse=True)[:count]
+        losers  = sorted(rows, key=lambda r: r["pChange"])[:count]
+        label = SEGMENT_INDEX[segment][0]
+        return {
+            "available":    True,
+            "segment":      segment,
+            "label":        label,
+            "indexSlug":    SEGMENT_INDEX[segment][1],
+            "asOf":         as_of or _disk._now_ist().isoformat(),
+            "marketState":  _disk.current_market_state(),
+            "totalScanned": len(rows),
+            "gainers":      gainers,
+            "losers":       losers,
+            "servedFrom":   "DISK_EOD",
+        }
+
     async def _yahoo_fallback_scan(self, segment: str, count: int) -> Optional[dict]:
         """Per-stock Yahoo-backed fallback when the NSE bulk index endpoint
         is unreachable.
@@ -156,7 +254,10 @@ class TopMoversService:
             "small": universe.SMALLCAP,
             "micro": universe.MICROCAP,
         }
-        symbols = list(universe_map.get(segment, []))
+        # dict.fromkeys dedups while preserving order — the universe lists are
+        # hand-maintained and occasionally carry a repeated symbol, which would
+        # otherwise surface as the same stock twice in a gainers/losers column.
+        symbols = list(dict.fromkeys(universe_map.get(segment, [])))
         if not symbols:
             return None
 
@@ -190,7 +291,7 @@ class TopMoversService:
                     return None
                 return {
                     "symbol":         sym,
-                    "name":           q.get("companyName") or sym,
+                    "name":           _name_for(sym, q.get("companyName")),
                     "lastPrice":      q.get("lastPrice"),
                     "change":         q.get("change"),
                     "pChange":        round(pchange_f, 2),
@@ -243,6 +344,19 @@ class TopMoversService:
                              f"Allowed: {sorted(SEGMENT_INDEX)}",
                 "gainers":   [], "losers": [],
             }
+
+        # Closed-market fast path: the session's closes are frozen and already
+        # sealed to disk by the post-close warmup. Rank from those bars
+        # directly — instant, zero network, consistent with the chart/quote
+        # endpoints. Falls through to the live path if the snapshot isn't ready
+        # yet (cold start before warmup completes).
+        if not _disk.is_market_open():
+            # Offload the per-symbol disk reads to a thread so the event loop
+            # stays free (get_all_segments runs four of these concurrently).
+            disk = await asyncio.to_thread(self._disk_movers, segment, count)
+            if disk is not None:
+                return disk
+
         label, index_slug, cache_key = SEGMENT_INDEX[segment]
         # URL-encode the spaces in the NSE index name. fetch_nse handles
         # cookie bootstrap + retries + per-cache-version invalidation.

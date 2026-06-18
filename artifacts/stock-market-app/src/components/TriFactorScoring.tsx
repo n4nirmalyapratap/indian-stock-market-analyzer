@@ -1,19 +1,21 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { useTheme } from "@/context/ThemeContext";
 import {
   Activity, BarChart2, Newspaper, TrendingUp, TrendingDown,
-  Minus, RefreshCw, AlertCircle, ChevronDown, ChevronRight, Info,
+  Minus, RefreshCw, AlertCircle, ChevronDown, ChevronRight, Info, Users,
 } from "lucide-react";
 
 interface TriFactorData {
   symbol: string;
-  scores: { technical: number; fundamental: number; sentiment: number };
+  scores: { technical: number; fundamental: number; sentiment: number; ownership: number };
   factors: {
     technical: {
       price: number | null; ema50: number | null; ema200: number | null;
       rsi14: number | null; trend_score: number; momentum_score: number; score: number;
+      // Optional diagnostics the backend includes (adaptive long-EMA window,
+      // bar count, and a human-readable data-completeness note).
+      ema_long_window?: number; bars?: number; data_note?: string | null;
     };
     fundamental: {
       pe: number | null; sector_pe: number; sector: string | null;
@@ -23,6 +25,13 @@ interface TriFactorData {
     sentiment: {
       bullish: number; bearish: number; neutral: number;
       total: number; headlines: Array<{ title: string; sentiment: string }>;
+    };
+    ownership: {
+      promoter_pct: number | null; promoter_pledge_pct: number | null;
+      promoter_change: number | null; institutional_change: number | null;
+      fii_pct: number | null; dii_pct: number | null;
+      pledge_score: number; promoter_trend_score: number; institutional_trend_score: number;
+      as_on: string | null; data_note: string | null;
     };
   };
 }
@@ -220,8 +229,6 @@ function SentimentIcon({ s }: { s: string }) {
 interface Props { symbol: string }
 
 export default function TriFactorScoring({ symbol }: Props) {
-  const { isDark } = useTheme();
-
   const { data, isLoading, error, refetch, isFetching } = useQuery<TriFactorData>({
     queryKey: ["tri-factor", symbol],
     queryFn: () => api.stockTriFactor(symbol),
@@ -229,29 +236,28 @@ export default function TriFactorScoring({ symbol }: Props) {
     enabled: !!symbol,
   });
 
-  const [weights, setWeights] = useState({ t: 1 / 3, f: 1 / 3, s: 1 / 3 });
+  const [weights, setWeights] = useState({ t: 0.25, f: 0.25, s: 0.25, o: 0.25 });
 
-  function handleWeight(key: "t" | "f" | "s", val: number) {
+  function handleWeight(key: "t" | "f" | "s" | "o", val: number) {
     const clamped = Math.max(0, Math.min(1, val));
-    const others = (["t", "f", "s"] as const).filter(k => k !== key);
+    const others = (["t", "f", "s", "o"] as const).filter(k => k !== key);
     const rem = 1 - clamped;
-    const sum = weights[others[0]] + weights[others[1]];
+    const sum = others.reduce((a, k) => a + weights[k], 0);
     const newWeights = { ...weights, [key]: clamped };
     if (sum > 0) {
-      newWeights[others[0]] = (weights[others[0]] / sum) * rem;
-      newWeights[others[1]] = (weights[others[1]] / sum) * rem;
+      for (const k of others) newWeights[k] = (weights[k] / sum) * rem;
     } else {
-      newWeights[others[0]] = rem / 2;
-      newWeights[others[1]] = rem / 2;
+      for (const k of others) newWeights[k] = rem / others.length;
     }
     setWeights(newWeights);
   }
 
   const composite = useMemo(() => {
     if (!data) return 0;
-    const { technical, fundamental, sentiment } = data.scores;
+    const { technical, fundamental, sentiment, ownership } = data.scores;
     return Math.max(-1, Math.min(1,
-      technical * weights.t + fundamental * weights.f + sentiment * weights.s
+      technical * weights.t + fundamental * weights.f
+        + sentiment * weights.s + (ownership ?? 0) * weights.o
     ));
   }, [data, weights]);
 
@@ -261,7 +267,7 @@ export default function TriFactorScoring({ symbol }: Props) {
   if (isLoading) {
     return (
       <div className="space-y-3">
-        {[...Array(4)].map((_, i) => (
+        {[...Array(5)].map((_, i) => (
           <div key={i} className="h-16 bg-gray-100 dark:bg-slate-800 animate-pulse rounded-xl" />
         ))}
       </div>
@@ -282,6 +288,7 @@ export default function TriFactorScoring({ symbol }: Props) {
   const tech = factors.technical;
   const fund = factors.fundamental;
   const sent = factors.sentiment;
+  const own  = factors.ownership;
 
   return (
     <div className="space-y-4">
@@ -290,10 +297,10 @@ export default function TriFactorScoring({ symbol }: Props) {
         <div className="flex items-start justify-between mb-1">
           <div>
             <h3 className="text-sm font-semibold text-gray-800 dark:text-slate-200">
-              Tri-Factor Composite Score
+              Composite Score
             </h3>
             <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-0.5">
-              Technical × Fundamental × Sentiment — adjust weights below
+              Technical × Fundamental × Sentiment × Ownership — adjust weights below
             </p>
           </div>
           <button
@@ -325,6 +332,11 @@ export default function TriFactorScoring({ symbol }: Props) {
               label="Sentiment" icon={Newspaper} value={weights.s}
               onChange={v => handleWeight("s", v)}
               color="bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400"
+            />
+            <WeightSlider
+              label="Ownership" icon={Users} value={weights.o}
+              onChange={v => handleWeight("o", v)}
+              color="bg-rose-100 text-rose-600 dark:bg-rose-900/40 dark:text-rose-400"
             />
             <div className="text-[10px] text-gray-400 dark:text-slate-600 flex items-center gap-1">
               <Info className="w-2.5 h-2.5" />
@@ -455,6 +467,43 @@ export default function TriFactorScoring({ symbol }: Props) {
           )}
           <p className="text-[10px] text-gray-400 dark:text-slate-600 mt-1">
             Score = (Bullish − Bearish) ÷ Total — powered by VADER NLP
+          </p>
+        </div>
+      </FactorCard>
+
+      <FactorCard
+        icon={Users} label="Ownership & Conviction" score={data.scores.ownership ?? 0}
+        color="bg-rose-100 text-rose-600 dark:bg-rose-900/40 dark:text-rose-400"
+      >
+        <div className="space-y-2">
+          {own.data_note && (
+            <div className="flex items-start gap-1.5 text-[10px] text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-900/20 rounded-lg px-2.5 py-1.5">
+              <span className="mt-px shrink-0">ℹ</span>
+              <span>{own.data_note}</span>
+            </div>
+          )}
+          <SubScore label="Promoter pledge (risk)" score={own.pledge_score ?? null} />
+          <SubScore label="Promoter stake trend (QoQ)" score={own.promoter_trend_score ?? null} />
+          <SubScore label="Institutional FII+DII trend (QoQ)" score={own.institutional_trend_score ?? null} />
+          <div className="border-t border-gray-100 dark:border-slate-700 pt-2 mt-1 grid grid-cols-2 gap-x-6 gap-y-1.5">
+            {[
+              ["Promoter holding", own.promoter_pct != null ? `${own.promoter_pct.toFixed(2)}%` : "—"],
+              ["Promoter pledge",  own.promoter_pledge_pct != null ? `${own.promoter_pledge_pct.toFixed(2)}%` : "—"],
+              ["Promoter Δ QoQ",   own.promoter_change != null ? `${own.promoter_change >= 0 ? "+" : ""}${own.promoter_change}%` : "—"],
+              ["FII+DII Δ QoQ",    own.institutional_change != null ? `${own.institutional_change >= 0 ? "+" : ""}${own.institutional_change}%` : "—"],
+              ["FII / DII",        (own.fii_pct != null || own.dii_pct != null)
+                                     ? `${own.fii_pct != null ? own.fii_pct.toFixed(1) : "—"} / ${own.dii_pct != null ? own.dii_pct.toFixed(1) : "—"}%`
+                                     : "—"],
+              ...(own.as_on ? [["As of", own.as_on]] : []),
+            ].map(([k, v]) => (
+              <div key={k as string} className="flex justify-between text-[11px]">
+                <span className="text-gray-400 dark:text-slate-500 truncate mr-1">{k}</span>
+                <span className="font-mono text-gray-700 dark:text-slate-300 shrink-0">{v}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-[10px] text-gray-400 dark:text-slate-600 mt-1">
+            Pledge penalty (−0.15 to −0.6) · promoter &amp; institutional stake trend (±0.25 QoQ) — from SEBI shareholding filings
           </p>
         </div>
       </FactorCard>

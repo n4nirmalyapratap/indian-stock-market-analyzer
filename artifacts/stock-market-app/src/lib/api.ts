@@ -176,6 +176,9 @@ export interface Scanner {
   id: string;
   name: string;
   description?: string;
+  /** Optional UI grouping label (e.g. "Volume", "Trend", "Pattern + Volume").
+   *  Missing on legacy scanners — frontend buckets those as "Uncategorized". */
+  category?: string;
   universe: string[];
   logic: "AND" | "OR";
   conditions: Condition[];
@@ -188,6 +191,10 @@ export interface Scanner {
 export interface ScannerCreateInput {
   name: string;
   description?: string;
+  /** Optional UI grouping label. Free-text by design (so power users can
+   *  introduce new categories without a code change). Drives which
+   *  filter-pill bucket the scanner shows up under on the list page. */
+  category?: string;
   universe: string[];
   logic: "AND" | "OR";
   conditions: Condition[];
@@ -214,6 +221,14 @@ export interface ScanResult {
   totalScanned: number;
   totalMatched: number;
   results: MatchedStock[];
+  /** Symbols silently dropped from the universe because the system has
+   *  empirically learned they have no usable data anywhere (delisted,
+   *  SME-only, etc.). NOT errors — surfaced separately so the UI can
+   *  show a "N symbols auto-skipped" badge instead of polluting the
+   *  per-symbol error list. */
+  quarantinedCount?:   number;
+  quarantinedSymbols?: string[];
+  scanErrors?:         Array<{ symbol: string; reason?: string; got?: number; needed?: number; error?: string }>;
   error?: string;
 }
 
@@ -242,6 +257,12 @@ export interface PatternsResponse {
   patterns: ChartPattern[];
   topCalls: ChartPattern[];
   topPuts: ChartPattern[];
+  // Cache-first background scan status (full ~2,000-symbol universe).
+  scanInProgress?: boolean;
+  scanProgress?: { done: number; total: number } | null;
+  universeScanned?: number;
+  symbolsScanned?: number;
+  cacheAgeSeconds?: number;
 }
 
 // ── Famous-Investor AI Council types ─────────────────────────────────────────
@@ -561,6 +582,15 @@ export interface StockQuote {
   [key: string]: unknown;
 }
 
+/** Company business profile — what the company does + its canonical sector. */
+export interface StockProfile {
+  symbol: string;
+  sector: string | null;
+  industry: string | null;
+  description: string | null;
+  source: string;
+}
+
 export interface WhatsAppMessage {
   from: string;
   text: string;
@@ -675,6 +705,9 @@ export const api = {
   stockDetail: (symbol: string) =>
     fetchApi<StockQuote>(`/stocks/${encodeURIComponent(symbol)}`),
 
+  stockProfile: (symbol: string) =>
+    fetchApi<StockProfile>(`/stocks/${encodeURIComponent(symbol)}/profile`),
+
   stockFinancials: (symbol: string) =>
     fetchApi<StockFinancials>(`/stocks/${encodeURIComponent(symbol)}/financials`),
 
@@ -686,6 +719,42 @@ export const api = {
 
   stockTriFactor: (symbol: string) =>
     fetchApi<any>(`/stocks/${encodeURIComponent(symbol)}/tri-factor`),
+
+  /** Quarterly shareholding pattern history (Promoter/FII/DII/Public %)
+   *  for a single security. Backend aggregates NSE + BSE + Yahoo and
+   *  caches each quarter in PG, so this is a fast lookup on warm cache.
+   *  Pass `view="yearly"` to filter to March-quarter snapshots only. */
+  stockShareholding: (
+    symbol: string,
+    opts: { view?: "quarterly" | "yearly"; quarters?: number; force?: boolean } = {},
+  ) => {
+    const p = new URLSearchParams();
+    if (opts.view)     p.set("view",     opts.view);
+    if (opts.quarters) p.set("quarters", String(opts.quarters));
+    if (opts.force)    p.set("force",    "1");
+    const qs = p.toString();
+    return fetchApi<ShareholdingResponse>(
+      `/stocks/${encodeURIComponent(symbol)}/shareholding${qs ? `?${qs}` : ""}`,
+    );
+  },
+
+  /** Quarterly financial results parsed from the SEBI Reg-33 (in-bse-fin)
+   *  XBRL — the full P&L (revenue, expense breakdown, tax split, PAT,
+   *  basic+diluted EPS, segments) for the standalone or consolidated basis.
+   *  This is filed-results data, distinct from the Yahoo-sourced /financials. */
+  stockQuarterlyResults: (
+    symbol: string,
+    opts: { basis?: "consolidated" | "standalone"; quarters?: number; force?: boolean } = {},
+  ) => {
+    const p = new URLSearchParams();
+    if (opts.basis)    p.set("basis", opts.basis);
+    if (opts.quarters) p.set("quarters", String(opts.quarters));
+    if (opts.force)    p.set("force", "1");
+    const qs = p.toString();
+    return fetchApi<QuarterlyResultsResponse>(
+      `/stocks/${encodeURIComponent(symbol)}/quarterly-results${qs ? `?${qs}` : ""}`,
+    );
+  },
 
   // ── Famous-Investor AI Council ──
   agentsList: () =>
@@ -725,6 +794,21 @@ export const api = {
         headers: { "Content-Type": "application/json", "X-Admin-Token": token },
         body:    JSON.stringify(body),
       },
+    ),
+
+  // ── Sector Rotation cockpit ──
+  sectorRotationRrg: (level: "sector" | "subindustry", timeframe: "short" | "mid" | "long" = "short") =>
+    fetchApi<RrgResponse>(`/sector-rotation/rrg?level=${level}&timeframe=${timeframe}`),
+  sectorRotationFunnel: (timeframe: "short" | "mid" | "long" = "short") =>
+    fetchApi<FunnelResponse>(`/sector-rotation/funnel?timeframe=${timeframe}`),
+  deliveryHistory: (symbol: string, days = 40) =>
+    fetchApi<DeliveryHistoryResponse>(`/insights/delivery-history?symbol=${encodeURIComponent(symbol)}&days=${days}`),
+
+  sectorRotationShortlist: (params: { subIndustry?: string; sector?: string }) =>
+    fetchApi<ShortlistResponse>(
+      `/sector-rotation/shortlist?${params.sector
+        ? `sector=${encodeURIComponent(params.sector)}`
+        : `subIndustry=${encodeURIComponent(params.subIndustry || "")}`}`,
     ),
 
   // ── Top Movers (Dashboard tab) ──
@@ -774,7 +858,7 @@ export const api = {
   },
 
   triggerScan: () =>
-    fetchApi<{ message: string; totalFound: number; callSignals: number; putSignals: number; patterns: ChartPattern[] }>(
+    fetchApi<{ message: string; scanInProgress?: boolean; scanProgress?: { done: number; total: number } | null; universeScanned?: number }>(
       "/patterns/scan",
       { method: "POST" },
     ),
@@ -794,6 +878,49 @@ export const api = {
     fetchApi<ScanResult>(`/scanners/${id}/run`, { method: "POST" }),
   runAdHoc:      (data: ScannerCreateInput) =>
     fetchApi<ScanResult>("/scanners/adhoc/run", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(data) }),
+
+  /** Async scan — kicks off a background job and returns its id
+   *  immediately. Poll `getScanJob(jobId)` every ~1s for progress.
+   *  Survives the user navigating away — the scan keeps running
+   *  on the backend and the result is available when they return. */
+  runScannerAsync: (id: string) =>
+    fetchApi<{
+      jobId:        string;
+      scannerId:    string;
+      scannerName:  string;
+      universeSize: number;
+      status:       "queued" | "running" | "completed" | "failed";
+    }>(`/scanners/${id}/run-job`, { method: "POST" }),
+
+  /** Poll a scan job's current state. While `status === "running"` the
+   *  `progress` field updates after each symbol and `partialMatches`
+   *  carries matches in ARRIVAL order. When status flips to "completed"
+   *  the `result` field carries the same shape as `runScanner` would
+   *  have returned (with results re-sorted by score). */
+  getScanJob: (jobId: string) =>
+    fetchApi<{
+      jobId:       string;
+      scannerId:   string;
+      scannerName: string;
+      status:      "queued" | "running" | "completed" | "failed" | "cancelled";
+      startedAt:   number;
+      completedAt: number | null;
+      progress: {
+        total:   number;
+        scanned: number;
+        matched: number;
+        failed:  number;
+        errors:  number;
+        stage:   string;
+      };
+      /** Live stream of matches in arrival order, capped at 500.
+       *  Frontend uses this to populate the results panel while the
+       *  scan is still running. Once status flips to "completed", use
+       *  `result.results` instead (full, sorted by score). */
+      partialMatches: any[];
+      result:      ScanResult | null;
+      error:       string | null;
+    }>(`/scanners/jobs/${encodeURIComponent(jobId)}`),
 
   whatsappStatus:   () => fetchApi<BotStatus>("/whatsapp/status"),
   whatsappMessages: () => fetchApi<WhatsAppMessage[]>("/whatsapp/messages"),
@@ -827,6 +954,12 @@ export const api = {
 
   sectorDetail: (sector: string, period: "3mo" | "6mo" | "1y" | "5y" = "1y") =>
     fetchApi<SectorDetailData>(`/sector-analytics/${encodeURIComponent(sector)}/detail?period=${period}`),
+
+  syntheticGrid: () =>
+    fetchApi<SyntheticGrid>("/sector-analytics/synthetic/grid"),
+
+  syntheticDrilldown: (subIndustry: string) =>
+    fetchApi<SyntheticDrilldown>(`/sector-analytics/synthetic/${encodeURIComponent(subIndustry)}/drilldown`),
 
   newsFeed: (params?: { category?: string; search?: string; limit?: number; offset?: number }) => {
     const q = new URLSearchParams(
@@ -1204,6 +1337,43 @@ export interface SectorTopMovers {
   losers:  SectorHeatmapItem[];
 }
 
+// ─── Synthetic sub-industry rotation engine ───────────────────────────────────
+
+export interface SyntheticGridRow {
+  subIndustry:      string;
+  indexValue:       number | null;
+  dailyReturnPct:   number | null;
+  rs30d:            number | null;   // 30D relative strength vs Nifty 50 (pp)
+  avgDeliveryPct:   number | null;
+  delivery20dma:    number | null;
+  deliveryBuildup:  boolean | null;  // avg delivery ≥15% above 20-DMA
+  breadth50emaPct:  number | null;   // % constituents above their 50-EMA
+  constituentCount: number;
+}
+
+export interface SyntheticGrid {
+  asOf:      string | null;
+  available: boolean;
+  rows:      SyntheticGridRow[];
+  note?:     string;
+}
+
+export interface SyntheticConstituent {
+  symbol:      string;
+  name:        string;
+  sector:      string | null;
+  industry:    string | null;
+  marketCap:   number | null;
+  capCategory: string | null;
+  weightPct:   number | null;
+}
+
+export interface SyntheticDrilldown {
+  subIndustry:  string;
+  available:    boolean;
+  constituents: SyntheticConstituent[];
+}
+
 export interface RSPoint {
   date:   string;
   ratio:  number;
@@ -1405,6 +1575,78 @@ export interface EpsRow {
   eps:  number | null;
 }
 
+/** A single named shareholder disclosed in the SEBI XBRL filing (all
+ *  promoters + every public holder above the disclosure threshold). */
+export interface ShareholdingNamedHolder {
+  name:     string;
+  pan:      string | null;                // masked ("******") → null
+  group:    string;                       // "FII / FPI" | "Mutual Fund" | "Insurance" | "Public" | …
+  category: string | null;                // filer's free-text sub-category
+  shares:   number | null;
+  pct:      number | null;                // % of total shares
+}
+
+/** Per-quarter enrichment mined from the XBRL filing beyond the headline
+ *  buckets. Only the XBRL source populates this; null for quarters that
+ *  only had NSE/Yahoo/Screener coverage. */
+export interface ShareholdingDetails {
+  namedHolders?:   ShareholdingNamedHolder[];
+  categoryCounts?: Partial<Record<"promoter" | "fii" | "dii" | "public" | "govt", number>>;
+  voting?:         { hasDifferentialVotingRights?: boolean; frozenVotingRights?: number };
+  fpiLimits?:      { boardApprovedPct?: number; limitsUtilizedPct?: number };
+  flags?:          Record<string, boolean>;   // hasOutstandingEsop, hasWarrants, isPsu, …
+}
+
+/** One quarter of shareholding pattern. Any of the % buckets may be null
+ *  when the contributing source didn't supply that breakdown (e.g. NSE
+ *  summary-only fetches give Promoter + Public but no FII/DII split).
+ *  UI should treat null as "no data" not "0%". The pledge / demat /
+ *  locked-in / details fields are only filled from the XBRL source. */
+export interface ShareholdingRow {
+  asOnDate:          string;             // ISO YYYY-MM-DD (quarter-end)
+  promoterPct:       number | null;
+  fiiPct:            number | null;
+  diiPct:            number | null;
+  publicPct:         number | null;
+  govtPct:           number | null;
+  numShareholders:   number | null;
+  promoterPledgePct: number | null;      // % of PROMOTER holding pledged/encumbered
+  pledgedShares:     number | null;
+  dematPct:          number | null;      // % of total shares held in demat form
+  lockedInPct:       number | null;      // % of total shares under lock-in
+  details:           ShareholdingDetails | null;
+  source:            string;              // last writer ("NSE","XBRL","YAHOO","SCREENER")
+}
+
+export interface ShareholdingResponse {
+  symbol:  string;
+  view:    "quarterly" | "yearly";
+  sources: string[];                      // distinct sources contributing rows
+  rows:    ShareholdingRow[];             // newest quarter first
+}
+
+/** One quarter of SEBI Reg-33 filed results. `lineItems` keys depend on
+ *  `format`: standard companies expose revenueFromOperations + the Ind-AS
+ *  expense breakdown; banks expose interestEarned/interestExpended etc.
+ *  All monetary values are in ₹ Crores; EPS/ratios are as reported. */
+export interface QuarterlyResultRow {
+  periodEnd:    string;                   // ISO quarter-end
+  basis:        string | null;            // "standalone" | "consolidated"
+  audited:      boolean | null;
+  relatingTo:   string | null;            // e.g. "Third quarter"
+  multiSegment: boolean | null;
+  format:       "standard" | "banking" | null;
+  lineItems:    Record<string, number>;
+  segments:     Array<{ name: string; revenue?: number; result?: number }> | null;
+}
+
+export interface QuarterlyResultsResponse {
+  symbol:    string;
+  basis:     string;                      // basis actually returned
+  available: string[];                    // bases the company files
+  rows:      QuarterlyResultRow[];        // newest quarter first
+}
+
 export interface StockFinancials {
   symbol:          string;
   companyName:     string;
@@ -1551,6 +1793,73 @@ export interface TopMoversResponse {
 export interface TopMoversAllResponse {
   fetchedAt: string;
   segments:  Record<"large" | "mid" | "small" | "micro", TopMoversResponse>;
+}
+
+// ── Sector Rotation cockpit ──────────────────────────────────────────────────
+export interface RrgPoint { date: string; rsRatio: number; rsMomentum: number; quadrant: string; }
+export interface RrgEntity {
+  name: string;
+  rsRatio: number;
+  rsMomentum: number;
+  quadrant: "Leading" | "Improving" | "Weakening" | "Lagging" | string;
+  tail: RrgPoint[];
+  rsPct?: number | null;        // relative strength vs Nifty over the selected timeframe
+  strengthScore?: number | null; // composite strength (the 'Strength' logic)
+  tier?: "DEEP_GREEN" | "LIGHT_GREEN" | "YELLOW" | "ORANGE" | "DEEP_RED" | string | null;
+  // sub-industry extras
+  deliveryBuildup?: boolean | null;
+  breadth50emaPct?: number | null;
+  rs30d?: number | null;
+  // sector extras (from funnel)
+  delivRatio?: number | null;
+  topSymbol?: string | null;
+  topDelivPct?: number | null;
+}
+export interface RrgResponse {
+  level: "sector" | "subindustry" | string;
+  available: boolean;
+  benchmark?: string;
+  asOf?: string | null;
+  entities: RrgEntity[];
+  note?: string | null;     // why empty (e.g. not enough history yet)
+  diag?: Record<string, unknown>;
+}
+export interface SubIndustryGridRow {
+  subIndustry: string;
+  rs30d?: number | null;
+  avgDeliveryPct?: number | null;
+  deliveryBuildup?: boolean | null;
+  breadth50emaPct?: number | null;
+  constituentCount?: number | null;
+}
+export interface FunnelResponse {
+  sectors: RrgEntity[];
+  subIndustries: SubIndustryGridRow[];
+  asOf?: string | null;
+  deliveryDate?: string | null;
+}
+export interface ShortlistStock {
+  symbol: string;
+  name?: string | null;
+  rs: number | null;
+  delivPct: number | null;
+  delivTrend?: number[];          // recent delivery % series (sparkline)
+  aboveTrend: boolean | null;
+  marketCapWeight: number | null;
+  score: number;
+}
+export interface DeliveryHistoryResponse {
+  symbol: string;
+  available: boolean;
+  series: { date: string; delivPct: number }[];
+}
+export interface ShortlistResponse {
+  group?: string;
+  kind?: "sector" | "subindustry" | string;
+  subIndustry?: string;
+  available: boolean;
+  benchmark?: string;
+  stocks: ShortlistStock[];
 }
 
 // ── User broker API key metadata ────────────────────────────────────────────

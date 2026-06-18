@@ -1,6 +1,7 @@
-import asyncio
+import os
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 from .yahoo_service import YahooService
 from .nse_service import NseService
@@ -9,59 +10,35 @@ from .indicators import (
     calculate_ema, calculate_sma, calculate_rsi,
     calculate_macd, calculate_bollinger_bands, calculate_atr,
 )
-from ..lib.universe import NIFTY100, MIDCAP, SMALLCAP
+from ..lib.universe import get_scan_universe, cap_label
+from .scan_runner import ScanJob
+# Candle-pattern primitives — centralised in app/lib so the scanner DSL
+# can use the same definitions (BULLISH_ENGULFING etc. as boolean
+# indicators). The underscore-prefixed locals below are kept as thin
+# aliases so the rest of this module's detection logic doesn't need
+# to be rewritten.
+from ..lib import candle_patterns as _cp
 
-# Pattern scans are expensive (~65 symbols × ~400ms each ≈ 26s) and entirely
-# derived from daily OHLCV, so a 30-minute TTL is plenty during market
-# hours and avoids the previous behaviour where a single scan would
-# pin stale results until process restart.
-_PATTERN_CACHE_TTL = 30 * 60  # seconds
-
-_cached_patterns: list[dict] = []
-_last_scan_time: str = ""
-_last_scan_monotonic: float = 0.0
-_last_scan_errors: list[dict] = []
-_last_scan_universe_size: int = 0
-_last_scan_symbols_scanned: int = 0
-
-# Singleflight lock — prevents N concurrent get_patterns() callers from
-# all firing run_scan() simultaneously when the cache is empty/expired.
-# Lazy-initialised inside the running event loop to avoid binding to the
-# wrong loop at import time.
-_scan_lock: Optional[asyncio.Lock] = None
+# Pattern scans now cover the FULL ~2,000-symbol NSE universe and are entirely
+# derived from daily OHLCV. They run cache-first in the background via ScanJob:
+# per-symbol pattern lists persist in SQLite, stream in as the scan progresses,
+# and report live {done,total} progress — so the large universe never blocks a
+# request. The TTL below is only echoed to the UI for display.
+_PATTERN_CACHE_TTL = 30 * 60  # seconds (informational)
+_PATTERNS_CONCURRENCY = int(os.environ.get("PATTERNS_SCAN_CONCURRENCY", "12"))
+_PATTERNS_DB = Path(__file__).parent.parent.parent / "market_cache" / "patterns_scan.db"
 
 
-def _get_scan_lock() -> asyncio.Lock:
-    global _scan_lock
-    if _scan_lock is None:
-        _scan_lock = asyncio.Lock()
-    return _scan_lock
-
-
-def _body(c: dict) -> float:
-    return abs(c["close"] - c["open"])
-
-def _upper(c: dict) -> float:
-    return c["high"] - max(c["open"], c["close"])
-
-def _lower(c: dict) -> float:
-    return min(c["open"], c["close"]) - c["low"]
-
-def _range(c: dict) -> float:
-    return c["high"] - c["low"]
-
-def _is_bull(c: dict) -> bool:
-    return c["close"] > c["open"]
-
-def _is_bear(c: dict) -> bool:
-    return c["close"] < c["open"]
-
-def _is_doji(c: dict) -> bool:
-    rng = _range(c)
-    return rng > 0 and _body(c) <= rng * 0.1
-
-def _mid(c: dict) -> float:
-    return (c["open"] + c["close"]) / 2
+# Aliases for backward compat with the inline detection blocks below.
+# Real definitions live in `app/lib/candle_patterns.py`.
+_body   = _cp.body
+_upper  = _cp.upper_wick
+_lower  = _cp.lower_wick
+_range  = _cp.candle_range
+_is_bull = _cp.is_bull
+_is_bear = _cp.is_bear
+_is_doji = _cp.is_doji
+_mid    = _cp.midpoint
 
 
 def _adj_conf(
@@ -109,41 +86,45 @@ class PatternsService:
         self.yahoo = yahoo
         self.nse = nse
         self.price = price or PriceService(nse, yahoo)
+        # Cache-first background scan over the full equity universe.
+        self._job = ScanJob(
+            name="patterns",
+            db_path=_PATTERNS_DB,
+            scan_one=self._scan_symbol,
+            universe_fn=get_scan_universe,
+            concurrency=_PATTERNS_CONCURRENCY,
+        )
 
     async def get_patterns(self, universe: Optional[str] = None, signal: Optional[str] = None, category: Optional[str] = None) -> dict:
-        # Re-scan if cache is empty OR has expired. Without the TTL check
-        # the first scan would pin its results until the process restarts.
-        # Singleflight: serialise refreshes so concurrent callers share
-        # one scan. The cheap TTL check is done outside the lock to avoid
-        # serialising the hot path when the cache is fresh.
-        if self._cache_is_fresh():
-            patterns = _cached_patterns
-        else:
-            async with _get_scan_lock():
-                # Double-checked: another waiter may have refreshed it
-                # while we were queued behind the lock.
-                if self._cache_is_fresh():
-                    patterns = _cached_patterns
-                else:
-                    patterns = await self.run_scan()
+        # Cache-first: kick a background scan if stale, then serve whatever is
+        # cached right now (results stream in during a scan). Never blocks.
+        self._job.maybe_kick()
+        rows = self._job.read_all()              # one read; reused below
+        all_patterns = self._collect(rows)
+        symbols_scanned = len(rows)
+
+        patterns = all_patterns
         if universe:
-            patterns = [p for p in patterns if p["universe"] == universe.upper()]
+            patterns = [p for p in patterns if p.get("universe") == universe.upper()]
         if signal:
-            patterns = [p for p in patterns if p["signal"] == signal.upper()]
+            patterns = [p for p in patterns if p.get("signal") == signal.upper()]
         if category:
             patterns = [p for p in patterns if category.lower() in (p.get("category") or "").lower()]
-        calls = [p for p in patterns if p["signal"] == "CALL"]
-        puts  = [p for p in patterns if p["signal"] == "PUT"]
-        categories = list({p.get("category") for p in _cached_patterns})
-        cache_age = max(0, int(time.monotonic() - _last_scan_monotonic)) if _last_scan_monotonic else 0
+        calls = [p for p in patterns if p.get("signal") == "CALL"]
+        puts  = [p for p in patterns if p.get("signal") == "PUT"]
+        categories = sorted({p.get("category") for p in all_patterns if p.get("category")})
+
+        st = self._job.status()
+        last = self._job.last_scan_at()
+        cache_age = max(0, int(time.time() - last)) if last else 0
         return {
-            "lastScanTime": _last_scan_time or datetime.utcnow().isoformat() + "Z",
-            "scannedAt":    _last_scan_time or datetime.utcnow().isoformat() + "Z",
+            "lastScanTime": st["cachedAt"] or datetime.utcnow().isoformat() + "Z",
+            "scannedAt":    st["cachedAt"] or datetime.utcnow().isoformat() + "Z",
             "cacheAgeSeconds": cache_age,
             "cacheTtlSeconds": _PATTERN_CACHE_TTL,
-            "universeScanned": _last_scan_universe_size,
-            "symbolsScanned":  _last_scan_symbols_scanned,
-            "scanErrors":      list(_last_scan_errors),
+            "universeScanned": st["universeSize"],
+            "symbolsScanned":  symbols_scanned,
+            "scanErrors":      [],
             "totalPatterns": len(patterns),
             "callSignals": len(calls),
             "putSignals": len(puts),
@@ -151,78 +132,61 @@ class PatternsService:
             "patterns": patterns[:100],
             "topCalls": calls[:15],
             "topPuts": puts[:15],
+            "scanInProgress": st["scanInProgress"],
+            "scanProgress":   st["scanProgress"],
         }
+
+    def all_patterns(self) -> list[dict]:
+        """Full flat list of currently-cached patterns (sorted by confidence).
+
+        Kicks a background scan if the cache is stale. Used by AnalyticsService's
+        pattern-stats — non-blocking, returns whatever is cached now.
+        """
+        self._job.maybe_kick()
+        return self._collect()
 
     async def trigger_scan(self) -> dict:
-        patterns = await self.run_scan()
-        calls = [p for p in patterns if p["signal"] == "CALL"]
-        puts  = [p for p in patterns if p["signal"] == "PUT"]
+        # Fire-and-forget: force a background re-scan and return immediately.
+        # The UI polls get_patterns() for streaming results + live progress.
+        self._job.maybe_kick(force=True)
+        st = self._job.status()
         return {
-            "message": "Scan complete",
-            "totalFound": len(patterns),
-            "callSignals": len(calls),
-            "putSignals": len(puts),
-            "universeScanned": _last_scan_universe_size,
-            "symbolsScanned":  _last_scan_symbols_scanned,
-            "scanErrors":      list(_last_scan_errors),
-            "patterns": patterns[:30],
+            "message": "Scan started",
+            "scanInProgress": st["scanInProgress"],
+            "scanProgress":   st["scanProgress"],
+            "universeScanned": st["universeSize"],
         }
 
-    @staticmethod
-    def _cache_is_fresh() -> bool:
-        # Freshness is timestamp-based, not list-based. A legitimate scan that
-        # yields zero patterns (or all-symbol errors) must still be honoured —
-        # otherwise every request would re-trigger a full 65-symbol rescan.
-        return _last_scan_monotonic > 0 and (
-            time.monotonic() - _last_scan_monotonic <= _PATTERN_CACHE_TTL
-        )
+    def _collect(self, rows: Optional[list[dict]] = None) -> list[dict]:
+        """Flatten all cached per-symbol pattern lists, sorted by confidence.
 
-    async def run_scan(self) -> list[dict]:
-        global _cached_patterns, _last_scan_time, _last_scan_monotonic
-        global _last_scan_errors, _last_scan_universe_size, _last_scan_symbols_scanned
-        all_patterns: list[dict] = []
-        errors: list[dict] = []
+        Pass `rows` (from a prior read_all) to avoid a second read; otherwise
+        reads the in-memory mirror itself.
+        """
+        if rows is None:
+            rows = self._job.read_all()
+        out: list[dict] = []
+        for row in rows:
+            out.extend(row.get("patterns") or [])
+        return sorted(out, key=lambda p: p.get("confidence", 0), reverse=True)
 
-        # Honest universe — meaningful sample of each cap segment. With ~0.4s
-        # per symbol this is ~26s per scan, comfortably inside the 30-minute
-        # cache TTL. The previous 28-symbol slice was misleadingly tiny.
-        universe_map = [
-            (NIFTY100[:40], "NIFTY100"),
-            (MIDCAP[:15],   "MIDCAP"),
-            (SMALLCAP[:10], "SMALLCAP"),
-        ]
-        universe_size = sum(len(syms) for syms, _ in universe_map)
-        scanned = 0
+    async def _scan_symbol(self, sym: str) -> Optional[dict]:
+        """ScanJob worker: fetch one symbol's history and detect its patterns.
+
+        Returns {"symbol","universe","patterns"} (patterns may be empty, so the
+        row is still cached and counts as scanned); None when history is
+        insufficient so the symbol is dropped from the cache.
+        """
+        try:
+            h = await self.price.get_historical_data(sym, 180)
+        except Exception:
+            return None
+        if not h or len(h) < 30:
+            return None
+        cap = cap_label(sym)
         scanned_at_iso = datetime.utcnow().isoformat() + "Z"
-
-        for syms, u in universe_map:
-            for sym in syms:
-                try:
-                    # Single-source: PriceService (NSE-first daily, EOD-aware
-                    # disk overlay when market is closed).
-                    h = await self.price.get_historical_data(sym, 180)
-                    if len(h) < 30:
-                        errors.append({"symbol": sym, "universe": u, "error": f"insufficient history ({len(h)} bars)"})
-                        scanned += 1
-                        continue
-                    all_patterns.extend(self._detect(sym, h, u, scanned_at_iso))
-                    scanned += 1
-                    await asyncio.sleep(0.4)
-                except Exception as e:
-                    # Track per-symbol errors so the API can surface them — the
-                    # previous bare `pass` made silent failures invisible.
-                    errors.append({"symbol": sym, "universe": u, "error": f"{type(e).__name__}: {e}"})
-                    # Count attempted symbols (success + insufficient + error)
-                    # so symbolsScanned reconciles with universeScanned + scanErrors.
-                    scanned += 1
-
-        _cached_patterns = sorted(all_patterns, key=lambda p: p["confidence"], reverse=True)
-        _last_scan_time = scanned_at_iso
-        _last_scan_monotonic = time.monotonic()
-        _last_scan_errors = errors
-        _last_scan_universe_size = universe_size
-        _last_scan_symbols_scanned = scanned
-        return _cached_patterns
+        pats = self._detect(sym, h, cap, scanned_at_iso)
+        return {"symbol": sym, "universe": cap, "patterns": pats}
 
     def _detect(self, symbol: str, history: list[dict], universe: str, scanned_at_iso: Optional[str] = None) -> list[dict]:
         if scanned_at_iso is None:
