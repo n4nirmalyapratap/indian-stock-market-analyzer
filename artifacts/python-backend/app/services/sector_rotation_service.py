@@ -23,21 +23,40 @@ from typing import Any, Optional
 
 logger = logging.getLogger("sector_rotation")
 
-# Small TTL cache for the expensive RRG/funnel builds (yf + DB). Market-state
-# changes aren't critical here; 10 min keeps it cheap and fresh enough.
-_CACHE_TTL = 600
+# In-memory cache for the expensive RRG/funnel builds (yf + DB). Market-state
+# aware, mirroring sector_analytics_service: when the market is CLOSED the
+# underlying closes/metrics are frozen until the next session, so we hold for
+# hours; when OPEN we keep it short. The whole cache is flushed the moment the
+# market state transitions (via market_cache_service.cache_version), so a
+# closed-state build can never bleed into the open session.
 _cache: dict[str, dict] = {}
+_cache_version = 0
+
+
+def _flush_if_state_changed() -> None:
+    """Drop in-memory entries when market state has just transitioned (open↔closed)."""
+    global _cache_version, _cache
+    from . import market_cache_service as _disk  # noqa: PLC0415
+    v = _disk.cache_version()
+    if v != _cache_version:
+        _cache.clear()
+        _cache_version = v
 
 
 def _cache_get(key: str) -> Optional[Any]:
+    _flush_if_state_changed()
     e = _cache.get(key)
     if e and time.time() < e["expiry"]:
         return e["data"]
     return None
 
 
-def _cache_set(key: str, data: Any) -> None:
-    _cache[key] = {"data": data, "expiry": time.time() + _CACHE_TTL}
+def _cache_set(key: str, data: Any, ttl: Optional[int] = None) -> None:
+    _flush_if_state_changed()
+    from . import market_cache_service as _disk  # noqa: PLC0415
+    if ttl is None:
+        ttl = 600 if _disk.is_market_open() else 4 * 3600
+    _cache[key] = {"data": data, "expiry": time.time() + ttl}
 
 # ── RRG math (pure) ──────────────────────────────────────────────────────────
 
@@ -333,6 +352,7 @@ async def subindustry_rrg(timeframe: str = "short") -> dict:
         return cached
     from . import synthetic_sectors_service as _syn  # noqa: PLC0415
 
+    t0 = time.perf_counter()
     latest = await asyncio.to_thread(_syn._latest_metric_date)
     if latest is None:
         return {"level": "subindustry", "available": False, "entities": [],
@@ -343,30 +363,33 @@ async def subindustry_rrg(timeframe: str = "short") -> dict:
     grid_rows = grid.get("rows", [])
     row_by_sub = {r["subIndustry"]: r for r in grid_rows}
 
-    # Each sub-industry's stored index series.
-    series_by_sub: dict[str, list] = {}
-    for row in grid_rows:
-        sub = row["subIndustry"]
-        s = await asyncio.to_thread(_syn._index_series_since, sub, since)
-        if s:
-            series_by_sub[sub] = s
+    # Each sub-industry's stored index series + the Nifty benchmark in ONE query
+    # (was 1 + N sequential round-trips, one pooled connection per sub-industry).
+    all_series = await asyncio.to_thread(_syn._all_index_series_since, since)
+    series_by_sub: dict[str, list] = {
+        row["subIndustry"]: all_series[row["subIndustry"]]
+        for row in grid_rows if all_series.get(row["subIndustry"])
+    }
 
     # Benchmark: prefer stored Nifty 50; else equal-weight sub-industry average.
-    nifty = await asyncio.to_thread(_syn._nifty_series_since, since)
+    nifty = all_series.get("__NIFTY50__") or []
     bench_label = "NIFTY 50"
     if not nifty:
         nifty = _equal_weight_benchmark(series_by_sub)
         bench_label = "Sub-industry average"
     bench_iso = [(d.isoformat(), v) for d, v in nifty]
 
-    # Light path: use the stored synthetic series when the table has matured
-    # enough for a good-quality RRG (smooth=10 needs ~22 sessions). For a young
-    # table we instead reconstruct from months of constituent price history.
+    # Light path: use the stored synthetic series. The z-score window is adapted
+    # DOWN to the history actually stored, so a still-maturing table renders on
+    # this FAST path (a shorter smooth = slightly noisier RRG) instead of bailing
+    # to the slow per-request deep-history reconstruction. The full tf window is
+    # used once enough sessions accrue; on-the-fly only runs for a near-empty table.
+    eff_smooth = min(tf["smooth"], (len(bench_iso) - 2) // 2)
     entities: list[dict] = []
-    if len(bench_iso) >= tf["smooth"] * 2 + 2:
+    if eff_smooth >= 8:
         for sub, s in series_by_sub.items():
             ent_iso = [(d.isoformat(), v) for d, v in s]
-            rrg = compute_rrg(ent_iso, bench_iso, smooth=tf["smooth"])
+            rrg = compute_rrg(ent_iso, bench_iso, smooth=eff_smooth)
             if rrg:
                 r = row_by_sub.get(sub, {})
                 _sc, _ti = _subind_strength(r.get("rs30d"), r.get("breadth50emaPct"))
@@ -405,9 +428,11 @@ async def subindustry_rrg(timeframe: str = "short") -> dict:
         "entities": entities,
         "note": note,
         "diag": {"latest": str(latest), "subs": len(grid_rows),
-                 "benchPoints": len(bench_iso), "rendered": len(entities),
-                 "source": source},
+                 "benchPoints": len(bench_iso), "effSmooth": eff_smooth,
+                 "rendered": len(entities), "source": source},
     }
+    logger.info("subindustry_rrg tf=%s source=%s subs=%d rendered=%d in %.2fs",
+                timeframe, source, len(grid_rows), len(entities), time.perf_counter() - t0)
     _cache_set(cache_key, out)
     return out
 
@@ -418,13 +443,19 @@ async def _deep_history(symbol: str, days: int, needed: int, sem) -> list[tuple]
     the thin EOD cache, fetches ~`days` from the provider chain, and re-caches it
     deep so every later read (any timeframe, anywhere in the app) is fast.
     Returns [(date_iso, close)]. No fabrication — empty on genuine failure."""
-    from . import registry as svc  # noqa: PLC0415
+    from . import registry as svc                    # noqa: PLC0415
+    from . import market_cache_service as _disk       # noqa: PLC0415
     async with sem:
         good: list = []
         try:
             h = await svc.price.get_historical_data(symbol, days)
             good = [b for b in (h or []) if b.get("close")]
-            if len(good) < needed:                    # shallow cache → force deep
+            # Force a live deepen ONLY while the market is open. When closed the
+            # sealed disk EOD cache is authoritative and complete, so a
+            # force_refresh would just storm the (NSE-blocked / slow-Yahoo)
+            # providers for every constituent inside the request — the cause of
+            # the cold-build hang. Serve what's on disk instead.
+            if len(good) < needed and _disk.is_market_open():
                 h2 = await svc.price.get_historical_data(symbol, days, force_refresh=True)
                 g2 = [b for b in (h2 or []) if b.get("close")]
                 if len(g2) > len(good):

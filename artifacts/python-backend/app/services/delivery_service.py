@@ -86,7 +86,16 @@ async def get_delivery_rows() -> tuple[list[dict], Optional[str]]:
     Returns ``(rows, trade_date_iso)``; ``rows`` is ``[]`` when unavailable.
     """
     now = time.time()
-    if _cache["rows"] is not None and (now - _cache["ts"]) < _TTL_SEC:
+    from . import market_cache_service as _mcs  # noqa: PLC0415 — lazy, avoid import cycle
+    # Once we already hold the FINAL bhavcopy for the latest trading session it
+    # is frozen until the next session — cache it hard so we don't re-parse the
+    # full CSV every 4h overnight. Until then (intraday, or the pre-publication
+    # evening window before NSE posts today's file) keep the short TTL so we
+    # pick up the new bhavcopy promptly. This only lengthens the TTL when the
+    # cached date IS the latest session, so it can never serve a stale session.
+    have_final = _cache["date"] == _mcs.last_trading_date()
+    ttl = (12 * 3600) if (have_final and not _mcs.is_market_open()) else _TTL_SEC
+    if _cache["rows"] is not None and (now - _cache["ts"]) < ttl:
         return _cache["rows"], _cache["date"]
 
     from ..services import registry as svc  # noqa: PLC0415 — lazy, avoid import cycle

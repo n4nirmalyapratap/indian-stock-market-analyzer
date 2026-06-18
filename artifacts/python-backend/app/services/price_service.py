@@ -176,13 +176,24 @@ class PriceService:
         snap = await self.get_quote_with_meta(symbol, user_id=user_id)
         return snap.get("quote") if snap else None
 
-    async def get_quote_with_meta(self, symbol: str, user_id: Optional[str] = None) -> Optional[dict]:
+    async def get_quote_with_meta(
+        self,
+        symbol: str,
+        user_id: Optional[str] = None,
+        *,
+        cross_check: bool = True,
+    ) -> Optional[dict]:
         """Returns `{quote, source, asOf, marketState}` or None.
 
         Crucially — when the market is closed and we have an EOD-sealed
         snapshot on disk, `lastPrice` is overlaid from the last sealed
         candle so the quote, history, and sector pages all show the
         same official close.
+
+        `cross_check=False` skips the closed-market NSE-vs-Yahoo
+        divergence sanity check — a second provider call per symbol that
+        batch/watchlist callers don't need and that dominates their
+        latency (see the divergence block below).
         """
         sym = symbol.upper()
         market_state = _disk.current_market_state()
@@ -271,35 +282,42 @@ class PriceService:
             # Both providers should agree on the official close. If they don't,
             # log a warning and surface the divergence in the response so the
             # admin audit endpoint and the UI freshness pill can flag it.
-            try:
-                second_q = None
-                # NSE-vs-Yahoo cross-check: pull the OTHER provider's number.
-                # `source` is now always the originating provider (NSE/YAHOO),
-                # never the cache layer, so this comparison is well-defined.
-                if snap["source"] == "NSE":
-                    yq = await self.yahoo.get_quote(sym)
-                    second_q = yq.get("lastPrice") if yq else None
-                else:
-                    nq = await self.nse.get_stock_quote(sym)
-                    if nq and nq.get("priceInfo"):
-                        second_q = nq["priceInfo"].get("lastPrice")
-                primary = snap["quote"].get("lastPrice")
-                if primary is not None and second_q is not None and primary > 0:
-                    diff     = round(abs(primary - second_q), 4)
-                    diff_pct = round(diff / primary * 100, 4)
-                    snap["divergence"] = {
-                        "otherClose": second_q,
-                        "diff":       diff,
-                        "diffPct":    diff_pct,
-                        "preferred":  "NSE",
-                    }
-                    if diff > 0.05 and diff_pct > 0.1:
-                        logger.warning(
-                            "Quote divergence for %s: primary=%s other=%s diff=%s%% (preferring NSE)",
-                            sym, primary, second_q, diff_pct,
-                        )
-            except Exception as _e:
-                logger.debug("Divergence check failed for %s: %s", sym, _e)
+            #
+            # Skipped when cross_check=False: this fires a SECOND provider call
+            # per symbol, and while NSE is IP-blocked that call grinds through
+            # the retry-with-sleep loop in fetch_nse. For batch/watchlist
+            # callers fetching many symbols at once, that is the dominant
+            # latency — and they don't surface the divergence anyway.
+            if cross_check:
+                try:
+                    second_q = None
+                    # NSE-vs-Yahoo cross-check: pull the OTHER provider's number.
+                    # `source` is now always the originating provider (NSE/YAHOO),
+                    # never the cache layer, so this comparison is well-defined.
+                    if snap["source"] == "NSE":
+                        yq = await self.yahoo.get_quote(sym)
+                        second_q = yq.get("lastPrice") if yq else None
+                    else:
+                        nq = await self.nse.get_stock_quote(sym)
+                        if nq and nq.get("priceInfo"):
+                            second_q = nq["priceInfo"].get("lastPrice")
+                    primary = snap["quote"].get("lastPrice")
+                    if primary is not None and second_q is not None and primary > 0:
+                        diff     = round(abs(primary - second_q), 4)
+                        diff_pct = round(diff / primary * 100, 4)
+                        snap["divergence"] = {
+                            "otherClose": second_q,
+                            "diff":       diff,
+                            "diffPct":    diff_pct,
+                            "preferred":  "NSE",
+                        }
+                        if diff > 0.05 and diff_pct > 0.1:
+                            logger.warning(
+                                "Quote divergence for %s: primary=%s other=%s diff=%s%% (preferring NSE)",
+                                sym, primary, second_q, diff_pct,
+                            )
+                except Exception as _e:
+                    logger.debug("Divergence check failed for %s: %s", sym, _e)
 
         return snap
 

@@ -829,19 +829,27 @@ def _latest_metric_date() -> Optional[dt.date]:
     return row["d"] if row and row["d"] else None
 
 
-def _index_series_since(sub_industry: str, since: dt.date) -> list[tuple[dt.date, float]]:
+def _all_index_series_since(since: dt.date) -> dict[str, list[tuple[dt.date, float]]]:
+    """Every sub-industry's (and ``__NIFTY50__``'s) index series since ``since`` in
+    ONE query — replaces N per-sub-industry round-trips. Keyed by sub_industry,
+    each value ascending by date. Used by get_grid and the rotation cockpit."""
+    out: dict[str, list[tuple[dt.date, float]]] = {}
     with auth_store.get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT metric_date, index_value FROM synthetic_sector_daily_metrics
-                 WHERE sub_industry = %s AND metric_date >= %s
-                       AND index_value IS NOT NULL
-                 ORDER BY metric_date ASC
+                SELECT sub_industry, metric_date, index_value
+                  FROM synthetic_sector_daily_metrics
+                 WHERE metric_date >= %s AND index_value IS NOT NULL
+                 ORDER BY sub_industry ASC, metric_date ASC
                 """,
-                (sub_industry, since),
+                (since,),
             )
-            return [(r["metric_date"], float(r["index_value"])) for r in cur.fetchall()]
+            for r in cur.fetchall():
+                out.setdefault(r["sub_industry"], []).append(
+                    (r["metric_date"], float(r["index_value"]))
+                )
+    return out
 
 
 def get_grid() -> dict[str, Any]:
@@ -854,8 +862,10 @@ def get_grid() -> dict[str, Any]:
         return {"asOf": None, "available": False, "rows": [], "note": "No synthetic metrics computed yet."}
 
     since = latest - dt.timedelta(days=45)  # buffer ≥30 trading days
-    # Nifty 50 series over the same window for RS.
-    nifty_series = _nifty_series_since(since)
+    # All sub-industry series + the Nifty 50 benchmark in ONE query (was 1 + N
+    # sequential round-trips). Sliced per sub-industry below.
+    series = _all_index_series_since(since)
+    nifty_series = series.get("__NIFTY50__", [])
 
     with auth_store.get_conn() as conn:
         with conn.cursor() as cur:
@@ -875,7 +885,7 @@ def get_grid() -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     for r in latest_rows:
         sub = r["sub_industry"]
-        idx_series = _index_series_since(sub, since)
+        idx_series = series.get(sub, [])
         rs = relative_strength_30d(idx_series, nifty_series) if nifty_series else None
         rows.append(
             {
@@ -891,25 +901,6 @@ def get_grid() -> dict[str, Any]:
             }
         )
     return {"asOf": str(latest), "available": True, "rows": rows}
-
-
-def _nifty_series_since(since: dt.date) -> list[tuple[dt.date, float]]:
-    """Nifty 50 close series via the synthetic engine's own benchmark rows if
-    present; falls back to an empty list (RS becomes None) when unavailable."""
-    # We piggy-back on the same metrics table using a reserved key so RS is
-    # computed against a benchmark stored in lockstep with the indices.
-    with auth_store.get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT metric_date, index_value FROM synthetic_sector_daily_metrics
-                 WHERE sub_industry = %s AND metric_date >= %s
-                       AND index_value IS NOT NULL
-                 ORDER BY metric_date ASC
-                """,
-                ("__NIFTY50__", since),
-            )
-            return [(r["metric_date"], float(r["index_value"])) for r in cur.fetchall()]
 
 
 def get_drilldown(sub_industry: str, yahoo) -> dict[str, Any]:

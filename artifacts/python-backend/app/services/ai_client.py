@@ -2,6 +2,11 @@
 Centralized AI client for the Indian Stock Market Analyzer.
 
 Provider priority:
+  0. Kimchi (KIMCHI_API_KEY secret) — PREMIUM, OpenAI-compatible deep-reasoning
+                                      provider (kimi-k2.6 / minimax-m3). Opt-in
+                                      via ask_with_meta(prefer_kimchi=True) — the
+                                      deep AI Analyst only — then falls back to
+                                      Groq → OpenRouter. Pay-per-token.
   1. Groq  (GROQ_API_KEY secret)   — cycles through fast free models:
                                        1. llama-3.3-70b-versatile (primary)
                                        2. mixtral-8x7b-32768
@@ -72,6 +77,13 @@ GROQ_MODELS  = [
     "llama-3.1-8b-instant",     # fallback 3 — fastest, smallest, free
 ]
 
+# Kimchi — PREMIUM, OpenAI-compatible deep-reasoning provider. Opt-in via
+# ask_with_meta(prefer_kimchi=True) — the deep AI Analyst only. Open-model proxy
+# → uses the classic `max_tokens` param.
+_KIMCHI_BASE  = "https://llm.kimchi.dev/openai/v1"
+KIMCHI_MODEL  = "kimi-k2.6"                    # primary; override via KIMCHI_MODEL
+KIMCHI_MODELS = ["kimi-k2.6", "minimax-m3"]    # primary + paid fallback
+
 
 # OpenRouter cascade — fallback when GROQ_API_KEY absent or Groq unavailable
 AI_MODEL    = "x-ai/grok-4-fast:free"
@@ -130,6 +142,35 @@ def _groq() -> Optional[AsyncOpenAI]:
     return _groq_client
 
 
+# ── Lazy Kimchi client (premium, tried first) ──────────────────────────────────
+
+_kimchi_client: Optional[AsyncOpenAI] = None
+_kimchi_key_seen: str = ""
+
+
+def _kimchi() -> Optional[AsyncOpenAI]:
+    """Return (or lazily create) the Kimchi client. Returns None if no key."""
+    global _kimchi_client, _kimchi_key_seen
+    key = _s("KIMCHI_API_KEY", "")
+    if not key:
+        return None
+    if key != _kimchi_key_seen:
+        _kimchi_client = AsyncOpenAI(base_url=_s("KIMCHI_BASE_URL", _KIMCHI_BASE), api_key=key)
+        _kimchi_key_seen = key
+    return _kimchi_client
+
+
+def _kimchi_models() -> list[str]:
+    """Ordered Kimchi models to try (env override first, then defaults).
+
+    Blanks are dropped: compose sets ``KIMCHI_MODEL`` to "" when the user hasn't
+    chosen one, and an empty model id is sent as a real request → a spurious
+    ``400 no registered providers found for the requested model``."""
+    primary = _s("KIMCHI_MODEL", KIMCHI_MODEL).strip()
+    candidates = [primary, *KIMCHI_MODELS] if primary else list(KIMCHI_MODELS)
+    return list(dict.fromkeys(m for m in candidates if m))
+
+
 # ── Lazy OpenRouter client ─────────────────────────────────────────────────────
 
 _or_creds: tuple[str, str] = ("", "")
@@ -148,8 +189,8 @@ def _or() -> Optional[AsyncOpenAI]:
 
 
 def is_available() -> bool:
-    """Return True if at least one AI provider (Groq or OpenRouter) is configured."""
-    return _groq() is not None or _or() is not None
+    """Return True if at least one AI provider (Kimchi, Groq or OpenRouter) is configured."""
+    return _kimchi() is not None or _groq() is not None or _or() is not None
 
 
 # ── Groq fast call ─────────────────────────────────────────────────────────────
@@ -186,6 +227,43 @@ async def _groq_call(
                 "Groq model %s failed, trying next: %s", groq_model, str(exc)[:120]
             )
     log.warning("All Groq models exhausted, falling back to OpenRouter")
+    return None
+
+
+# ── Kimchi premium call (tried first) ──────────────────────────────────────────
+
+async def _kimchi_call(
+    messages: list[dict],
+    max_tokens: int,
+    temperature: float,
+) -> Optional[tuple[str, str]]:
+    """
+    Try each Kimchi model in order with a 30 s timeout per model. Returns
+    ``(response_text, model_name)`` for the first model that returns non-empty
+    text, or ``None`` (caller falls through to Groq → OpenRouter). Uses the
+    classic ``max_tokens`` param — Kimchi proxies open models, not OpenAI's.
+    """
+    client = _kimchi()
+    if not client:
+        return None
+    for km in _kimchi_models():
+        try:
+            resp = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=km,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                ),
+                timeout=30,
+            )
+            text = resp.choices[0].message.content or ""
+            if text.strip():
+                log.info("AI: answered by kimchi/%s", km)
+                return text, km
+        except Exception as exc:
+            log.warning("Kimchi model %s failed, trying next: %s", km, str(exc)[:120])
+    log.warning("All Kimchi models exhausted, falling back to Groq/OpenRouter")
     return None
 
 
@@ -292,6 +370,7 @@ async def ask_with_meta(
     model: str  = "",
     max_tokens: int = 4096,
     temperature: float = 0.3,
+    prefer_kimchi: bool = False,
 ) -> tuple[str, str]:
     """
     Like ask() but also returns the provider/model label that answered.
@@ -308,6 +387,13 @@ async def ask_with_meta(
         {"role": "system", "content": system},
         {"role": "user",   "content": prompt},
     ]
+
+    # 0. Kimchi premium path — opt-in via prefer_kimchi (deep AI Analyst only).
+    if prefer_kimchi and not model:
+        kimchi_result = await _kimchi_call(messages, max_tokens, temperature)
+        if kimchi_result is not None:
+            text, km = kimchi_result
+            return text, f"kimchi/{km}"
 
     # 1. Groq fast path
     if not model:
