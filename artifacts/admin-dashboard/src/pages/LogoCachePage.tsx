@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchAdmin } from "@/lib/api";
 import {
-  RefreshCw, Trash2, Search, ImageOff, CheckCircle2, XCircle, Plus,
+  RefreshCw, Trash2, Search, ImageOff, CheckCircle2, XCircle, Plus, Upload,
 } from "lucide-react";
 
 type LogoRow = {
@@ -195,9 +195,55 @@ function AddLogoForm({ onDone }: { onDone: () => void }) {
   );
 }
 
+const ACCEPT_TYPES = "image/png,image/jpeg,image/webp,image/svg+xml,image/gif,image/x-icon";
+
+function UploadButton({ symbol, onDone }: { symbol: string; onDone: () => void }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const upload = useMutation({
+    mutationFn: (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return fetchAdmin(`/admin/logos/${symbol}/upload`, { method: "POST", body: fd });
+    },
+    onSuccess: onDone,
+  });
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={ACCEPT_TYPES}
+        className="hidden"
+        onChange={e => {
+          const f = e.target.files?.[0];
+          if (f) upload.mutate(f);
+          e.target.value = "";
+        }}
+      />
+      <button
+        onClick={() => inputRef.current?.click()}
+        disabled={upload.isPending}
+        title={upload.isError ? "Upload failed — try again" : "Upload logo image"}
+        className={`p-1.5 rounded-lg transition hover:bg-green-50 disabled:opacity-50 ${
+          upload.isError ? "text-red-500" : "text-gray-400 hover:text-green-600"
+        }`}
+      >
+        {upload.isPending
+          ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+          : <Upload className="w-3.5 h-3.5" />}
+      </button>
+    </>
+  );
+}
+
+type StatusFilter = "all" | "cached" | "missing";
+
 export default function LogoCachePage() {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
+  const [status, setStatus] = useState<StatusFilter>("all");
   const [refreshing, setRefreshing] = useState<string | null>(null);
 
   const { data, isLoading, error } = useQuery({
@@ -212,9 +258,15 @@ export default function LogoCachePage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-logos"] }),
   });
 
-  const logos = (data?.logos ?? []).filter(r =>
-    !search || r.symbol.includes(search.toUpperCase()) || r.fetch_symbol.includes(search.toUpperCase()),
-  );
+  const all = data?.logos ?? [];
+  const missingCount = all.filter(r => !r.fetch_ok).length;
+  const logos = all.filter(r => {
+    if (status === "cached" && !r.fetch_ok) return false;
+    if (status === "missing" && r.fetch_ok) return false;
+    if (!search) return true;
+    const q = search.toUpperCase();
+    return r.symbol.includes(q) || r.fetch_symbol.includes(q);
+  });
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -237,6 +289,25 @@ export default function LogoCachePage() {
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
+        </div>
+        <div className="flex items-center rounded-lg border border-gray-200 p-0.5 bg-gray-50">
+          {([
+            ["all", "All"],
+            ["cached", "Cached"],
+            ["missing", `No logo${missingCount ? ` (${missingCount})` : ""}`],
+          ] as [StatusFilter, string][]).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setStatus(key)}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${
+                status === key
+                  ? "bg-white text-indigo-600 shadow-sm"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
         <span className="text-sm text-gray-500">
           {data?.total ?? "…"} cached
@@ -269,14 +340,16 @@ export default function LogoCachePage() {
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Size</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Updated</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">By</th>
-                <th className="px-4 py-3 w-24"></th>
+                <th className="px-4 py-3 w-32"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
               {logos.length === 0 && (
                 <tr>
                   <td colSpan={8} className="text-center py-10 text-gray-400 text-sm">
-                    {search ? "No logos match that filter." : "No logos cached yet. Use the form above to add one."}
+                    {search || status !== "all"
+                      ? "No logos match that filter."
+                      : "No logos cached yet. Use the form above to add one."}
                   </td>
                 </tr>
               )}
@@ -313,6 +386,10 @@ export default function LogoCachePage() {
                   <td className="px-4 py-2.5 text-xs text-gray-400 max-w-[120px] truncate">{row.updated_by || "—"}</td>
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-1.5 justify-end">
+                      <UploadButton
+                        symbol={row.symbol}
+                        onDone={() => qc.invalidateQueries({ queryKey: ["admin-logos"] })}
+                      />
                       <button
                         onClick={() => setRefreshing(row.symbol)}
                         title="Re-fetch from Dhan"
