@@ -419,6 +419,122 @@ DEFAULT_SCANNERS_DEF = [
             {"left": {"type": "indicator", "indicator": "PE_RATIO"},       "operator": "lt", "right": {"type": "number", "value": 25}},
         ],
     },
+
+    # ── Smart Money Concepts (SMC) category ──────────────────────────
+    # Daily-bar structural SMC. Phase 1 = Fair Value Gaps (3-candle
+    # imbalances). Detection in app/lib/smc.py is the single source of
+    # truth shared with the chart's /smc overlay, so a screener hit is
+    # always visible on the chart. NOTE: an FVG is a structural pattern,
+    # not a buy/sell signal — these defaults pair it with a trend or
+    # volume filter, the same "signal vs noise" combo the Pattern+Volume
+    # scanners use.
+    {
+        "name": "Bullish FVG in Uptrend",
+        "category": "Smart Money (SMC)",
+        "description": "Fresh bullish Fair Value Gap while price holds above EMA50 — imbalance support inside an uptrend",
+        "universe": ["NIFTY100", "MIDCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "BULLISH_FVG"}, "operator": "eq", "right": {"type": "number", "value": 1}},
+            {"left": {"type": "indicator", "indicator": "CLOSE"},       "operator": "gt", "right": {"type": "indicator", "indicator": "EMA", "period": 50}},
+        ],
+    },
+    {
+        "name": "Bearish FVG in Downtrend",
+        "category": "Smart Money (SMC)",
+        "description": "Fresh bearish Fair Value Gap while price is below EMA50 — imbalance resistance inside a downtrend",
+        "universe": ["NIFTY100", "MIDCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "BEARISH_FVG"}, "operator": "eq", "right": {"type": "number", "value": 1}},
+            {"left": {"type": "indicator", "indicator": "CLOSE"},       "operator": "lt", "right": {"type": "indicator", "indicator": "EMA", "period": 50}},
+        ],
+    },
+    {
+        "name": "Bullish FVG + Volume",
+        "category": "Smart Money (SMC)",
+        "description": "Fresh bullish Fair Value Gap on volume > 150% of average — institutional displacement leaving an imbalance",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "BULLISH_FVG"},  "operator": "eq", "right": {"type": "number", "value": 1}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "gt", "right": {"type": "number", "value": 150}},
+        ],
+    },
+    {
+        "name": "Bullish CHoCH (Reversal)",
+        "category": "Smart Money (SMC)",
+        "description": "Change of Character up — first close back above structure after a downtrend; earliest reversal signal",
+        "universe": ["NIFTY100", "MIDCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "BULLISH_CHOCH"}, "operator": "eq", "right": {"type": "number", "value": 1}},
+        ],
+    },
+    {
+        "name": "Bullish BOS + Volume",
+        "category": "Smart Money (SMC)",
+        "description": "Break of Structure up confirmed by volume > 130% of average — trend continuation with participation",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "BULLISH_BOS"},  "operator": "eq", "right": {"type": "number", "value": 1}},
+            {"left": {"type": "indicator", "indicator": "VOLUME_RATIO"}, "operator": "gt", "right": {"type": "number", "value": 130}},
+        ],
+    },
+    {
+        "name": "Bearish CHoCH (Reversal Warning)",
+        "category": "Smart Money (SMC)",
+        "description": "Change of Character down — first close below structure after an uptrend; early distribution warning",
+        "universe": ["NIFTY100", "MIDCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "BEARISH_CHOCH"}, "operator": "eq", "right": {"type": "number", "value": 1}},
+        ],
+    },
+    {
+        "name": "Sell-side Sweep (Reversal Long)",
+        "category": "Smart Money (SMC)",
+        "description": "Today's low pierced a prior swing low but closed back above it — stop-hunt then rejection, a bullish reversal cue",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "LIQUIDITY_SWEEP_LOW"}, "operator": "eq", "right": {"type": "number", "value": 1}},
+        ],
+    },
+    {
+        "name": "Bullish FVG in Discount",
+        "category": "Smart Money (SMC)",
+        "description": "Fresh bullish Fair Value Gap while price is in the discount half of its dealing range — buy-low imbalance",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "BULLISH_FVG"}, "operator": "eq", "right": {"type": "number", "value": 1}},
+            {"left": {"type": "indicator", "indicator": "IN_DISCOUNT"}, "operator": "eq", "right": {"type": "number", "value": 1}},
+        ],
+    },
+    {
+        "name": "Discount + Bullish Order Block",
+        "category": "Smart Money (SMC)",
+        "description": "Price testing an unmitigated bullish order block while in discount — institutional demand zone in the buy region",
+        "universe": ["NIFTY100", "MIDCAP", "SMALLCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "AT_BULLISH_OB"}, "operator": "eq", "right": {"type": "number", "value": 1}},
+            {"left": {"type": "indicator", "indicator": "IN_DISCOUNT"},   "operator": "eq", "right": {"type": "number", "value": 1}},
+        ],
+    },
+    {
+        "name": "Premium + Bearish Order Block",
+        "category": "Smart Money (SMC)",
+        "description": "Price testing an unmitigated bearish order block while in premium — institutional supply zone in the sell region",
+        "universe": ["NIFTY100", "MIDCAP"],
+        "logic": "AND",
+        "conditions": [
+            {"left": {"type": "indicator", "indicator": "AT_BEARISH_OB"}, "operator": "eq", "right": {"type": "number", "value": 1}},
+            {"left": {"type": "indicator", "indicator": "IN_PREMIUM"},    "operator": "eq", "right": {"type": "number", "value": 1}},
+        ],
+    },
 ]
 
 
@@ -463,6 +579,29 @@ _PATTERN_INDS = {
     "INSIDE_BAR", "OUTSIDE_BAR",
     "PIERCING_LINE", "DARK_CLOUD_COVER",
     "TWEEZER_BOTTOM", "TWEEZER_TOP",
+}
+
+# Smart Money Concepts (SMC) boolean indicators — structural, daily-bar
+# detectors centralised in app/lib/smc.py (single source of truth shared
+# with the chart's /smc overlay endpoint, so screener and chart agree).
+# Like candle patterns they're boolean (1.0/0.0). Phase 1: Fair Value Gaps.
+# Need only ~3 bars + a short range window, so DEFAULT_FETCH_DAYS covers
+# them — no entry in _PERIOD_INDS / _required_bars_for needed.
+_SMC_BOOL_INDS = {"BULLISH_FVG", "BEARISH_FVG"}
+
+# SMC market-structure boolean indicators (Phase 2) — BOS / CHoCH events from
+# swing structure. Computed once per symbol and cached on the evaluator (see
+# _SymbolEvaluator._smc_events) since several conditions may reference them.
+_SMC_STRUCT_INDS = {"BULLISH_BOS", "BEARISH_BOS", "BULLISH_CHOCH", "BEARISH_CHOCH"}
+
+# SMC liquidity / order-block / premium-discount indicators (Phase 3).
+# Order blocks + equal-level clusters are computed once per symbol and cached
+# on the evaluator; swings are shared with the sweep/dealing-range helpers.
+_SMC_LIQ_INDS = {
+    "AT_BULLISH_OB", "AT_BEARISH_OB",
+    "LIQUIDITY_SWEEP_HIGH", "LIQUIDITY_SWEEP_LOW",
+    "IN_PREMIUM", "IN_DISCOUNT",
+    "EQUAL_HIGHS", "EQUAL_LOWS",
 }
 
 
@@ -528,6 +667,14 @@ class _SymbolEvaluator:
         # Filter once; downstream indicator helpers expect non-null closes.
         self.closes = [d["close"] for d in ohlcv if d.get("close") is not None]
         self._series_cache: dict = {}
+        # SMC market-structure events, computed lazily once per symbol (several
+        # BOS/CHoCH conditions can share the one walk).
+        self._smc_events: Optional[list] = None
+        # Phase-3 SMC caches — swings shared by sweep / dealing-range / equal
+        # levels; order blocks and equal-level clusters computed once.
+        self._smc_swings: Optional[tuple] = None
+        self._smc_obs: Optional[list] = None
+        self._smc_equal: Optional[tuple] = None
         # Lazy: fundamentals are only read on demand. `None` means "not
         # looked up yet"; the property does the cache check on first access.
         self._fundamentals: Optional[dict] = None
@@ -794,6 +941,77 @@ class _SymbolEvaluator:
                 # "no pattern" rather than crash the whole scan.
                 return 0.0
             return None  # Unknown pattern name — let comparison fail loudly
+
+        # ── Smart Money Concepts (centralised in app/lib/smc) ──────────
+        # Boolean structural detectors over daily bars. Like candle
+        # patterns they return 1.0/0.0 (never None) so AND-chained
+        # conditions reject cleanly instead of erroring. `shift` is
+        # honoured via idx so previous-bar semantics match every other
+        # indicator. Detection is shared verbatim with the /smc chart
+        # overlay endpoint, so a screener hit is always drawable.
+        if ind in _SMC_BOOL_INDS:
+            from ..lib import smc as _smc  # noqa: PLC0415
+            pos = self.n + idx  # tail-relative idx (-1-shift) → absolute
+            f = _smc.fvg_at(self.ohlcv, pos)
+            if ind == "BULLISH_FVG":
+                return 1.0 if (f and f["type"] == "bullish") else 0.0
+            if ind == "BEARISH_FVG":
+                return 1.0 if (f and f["type"] == "bearish") else 0.0
+            return 0.0
+
+        if ind in _SMC_STRUCT_INDS:
+            from ..lib import smc as _smc  # noqa: PLC0415
+            pos = self.n + idx
+            if self._smc_events is None:
+                self._smc_events = _smc.market_structure(self.ohlcv)
+            ev = _smc.structure_at(self.ohlcv, pos, events=self._smc_events)
+            if ev is None:
+                return 0.0
+            t, k = ev["type"], ev["kind"]
+            if ind == "BULLISH_BOS":   return 1.0 if (t == "bullish" and k == "BOS")   else 0.0
+            if ind == "BEARISH_BOS":   return 1.0 if (t == "bearish" and k == "BOS")   else 0.0
+            if ind == "BULLISH_CHOCH": return 1.0 if (t == "bullish" and k == "CHoCH") else 0.0
+            if ind == "BEARISH_CHOCH": return 1.0 if (t == "bearish" and k == "CHoCH") else 0.0
+            return 0.0
+
+        if ind in _SMC_LIQ_INDS:
+            from ..lib import smc as _smc  # noqa: PLC0415
+            pos = self.n + idx
+            if pos < 0 or pos >= self.n:
+                return 0.0
+            if self._smc_swings is None:
+                self._smc_swings = _smc.swing_points(self.ohlcv)
+            sw = self._smc_swings
+
+            if ind in ("AT_BULLISH_OB", "AT_BEARISH_OB"):
+                if self._smc_obs is None:
+                    if self._smc_events is None:
+                        self._smc_events = _smc.market_structure(self.ohlcv)
+                    self._smc_obs = _smc.order_blocks(self.ohlcv, events=self._smc_events)
+                kind = "bullish" if ind == "AT_BULLISH_OB" else "bearish"
+                return 1.0 if _smc.at_order_block(self.ohlcv, pos, kind, obs=self._smc_obs) else 0.0
+
+            if ind == "LIQUIDITY_SWEEP_HIGH":
+                return 1.0 if _smc.liquidity_sweep_at(self.ohlcv, pos, swings=sw) == "high" else 0.0
+            if ind == "LIQUIDITY_SWEEP_LOW":
+                return 1.0 if _smc.liquidity_sweep_at(self.ohlcv, pos, swings=sw) == "low" else 0.0
+
+            if ind == "IN_PREMIUM":
+                return 1.0 if _smc.premium_discount_at(self.ohlcv, pos, swings=sw) == "premium" else 0.0
+            if ind == "IN_DISCOUNT":
+                return 1.0 if _smc.premium_discount_at(self.ohlcv, pos, swings=sw) == "discount" else 0.0
+
+            if ind in ("EQUAL_HIGHS", "EQUAL_LOWS"):
+                if self._smc_equal is None:
+                    self._smc_equal = _smc.equal_levels(self.ohlcv, swings=sw)
+                eq_highs, eq_lows = self._smc_equal
+                c = self.ohlcv[pos].get("close")
+                if c is None:
+                    return 0.0
+                if ind == "EQUAL_HIGHS":
+                    return 1.0 if any(cl["price"] > c for cl in eq_highs) else 0.0
+                return 1.0 if any(cl["price"] < c for cl in eq_lows) else 0.0
+            return 0.0
 
         # ── 52-week aggregations (true 252-day window) ─────────────────
         if ind in _WINDOW_52W_INDS:
