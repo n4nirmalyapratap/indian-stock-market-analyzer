@@ -273,6 +273,7 @@ async def get_stock_smc(
     from ..lib import smc as _smc
     symbol = symbol.upper()
     days = max(20, min(int(days), 500))
+    min_range_mult = max(0.0, float(min_range_mult))   # negative would disable the gate unexpectedly
     bars = await svc.price.get_historical_data(symbol, days)
     if not bars:
         return JSONResponse(status_code=404, content={"error": f"No history data found for {symbol}"})

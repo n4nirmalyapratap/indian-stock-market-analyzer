@@ -13,8 +13,8 @@ from app.lib import smc
 
 # ── Builders ─────────────────────────────────────────────────────────────────
 
-def _c(o, h, l, c, v=1000) -> dict:
-    return {"open": o, "high": h, "low": l, "close": c, "volume": v}
+def _c(o, h, lo, c, v=1000) -> dict:
+    return {"open": o, "high": h, "low": lo, "close": c, "volume": v}
 
 
 def _flat(n: int, price: float = 100.0) -> list[dict]:

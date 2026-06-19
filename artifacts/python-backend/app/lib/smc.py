@@ -271,6 +271,8 @@ def order_blocks(ohlcv: list[dict], n: int = 2, events: Optional[list[dict]] = N
         if ob_i is None:
             continue
         c = ohlcv[ob_i]
+        if c.get("high") is None or c.get("low") is None:
+            continue   # malformed bar — skip rather than poison the zone/mitigation
         ob = {
             "type":         ev["type"],
             "top":          c["high"],
