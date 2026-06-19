@@ -349,10 +349,14 @@ class PriceService:
             data = await self.get_historical_data(symbol, days)
             payload = _disk.load_with_meta(symbol, days) or {}
             candles = []
-            from datetime import datetime as _dt
+            from datetime import datetime as _dt, timezone as _tz
             for d in data:
                 try:
-                    ts = int(_dt.strptime(d["date"], "%Y-%m-%d").timestamp())
+                    # Pin to UTC so the timestamp is canonical UTC-midnight
+                    # regardless of the server's timezone (a naive .timestamp()
+                    # would otherwise resolve in the host tz). No-op on a UTC
+                    # host; correct everywhere else.
+                    ts = int(_dt.strptime(d["date"], "%Y-%m-%d").replace(tzinfo=_tz.utc).timestamp())
                 except Exception:
                     continue
                 candles.append({

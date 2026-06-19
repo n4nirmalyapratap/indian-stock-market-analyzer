@@ -38,4 +38,13 @@ export const INDICATOR_CATALOG: IndicatorMeta[] = [
   { key: "ao",         label: "Awesome Osc.",       pillColor: "#e879f9", group: "Oscillators",       paneOwn: true },
   { key: "cmf",        label: "CMF (20)",           pillColor: "#fcd34d", group: "Oscillators",       paneOwn: true, needsVolume: true },
   { key: "obv",        label: "OBV",                pillColor: "#fda4af", group: "Volume",            paneOwn: true },
+  // Smart Money Concepts — drawn as chart overlays (zones), not a series. The
+  // chart renderer skips this key (it has no compute entry in ChartPanel's
+  // IND_CATALOG); ChartPanel watches indicators.has("smc_fvg") to fetch + draw
+  // the Fair Value Gap boxes. Daily timeframe only.
+  { key: "smc_fvg",       label: "Fair Value Gaps (1D)",    pillColor: "#22c55e", group: "Smart Money",  paneOwn: false },
+  { key: "smc_structure", label: "Market Structure (1D)",   pillColor: "#3b82f6", group: "Smart Money",  paneOwn: false },
+  { key: "smc_ob",        label: "Order Blocks (1D)",       pillColor: "#f59e0b", group: "Smart Money",  paneOwn: false },
+  { key: "smc_pd",        label: "Premium / Discount (1D)", pillColor: "#a855f7", group: "Smart Money",  paneOwn: false },
+  { key: "smc_liq",       label: "Liquidity (1D)",          pillColor: "#06b6d4", group: "Smart Money",  paneOwn: false },
 ];
