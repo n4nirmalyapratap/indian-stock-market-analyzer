@@ -1451,8 +1451,8 @@ class TestSmcLiquidityIndicators:
     boolean scanner indicators. Each series ends on the bar that should fire."""
 
     @staticmethod
-    def _b(o, h, l, c):
-        return {"open": o, "high": h, "low": l, "close": c, "volume": 10_000}
+    def _b(o, h, lo, c):
+        return {"open": o, "high": h, "low": lo, "close": c, "volume": 10_000}
 
     def test_at_bullish_ob_fires(self):
         bars = [
