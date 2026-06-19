@@ -1,7 +1,6 @@
 import os
 import time
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 from .yahoo_service import YahooService
 from .nse_service import NseService
@@ -11,6 +10,7 @@ from .indicators import (
     calculate_macd, calculate_bollinger_bands, calculate_atr,
 )
 from ..lib.universe import get_scan_universe, cap_label
+from ..lib.db_paths import local_db_path
 from .scan_runner import ScanJob
 # Candle-pattern primitives — centralised in app/lib so the scanner DSL
 # can use the same definitions (BULLISH_ENGULFING etc. as boolean
@@ -26,7 +26,9 @@ from ..lib import candle_patterns as _cp
 # request. The TTL below is only echoed to the UI for display.
 _PATTERN_CACHE_TTL = 30 * 60  # seconds (informational)
 _PATTERNS_CONCURRENCY = int(os.environ.get("PATTERNS_SCAN_CONCURRENCY", "12"))
-_PATTERNS_DB = Path(__file__).parent.parent.parent / "market_cache" / "patterns_scan.db"
+# SQLite cache DB on local disk (see app/lib/db_paths.py — never market_cache/,
+# which is an SMB mount where SQLite WAL fails with "database is locked").
+_PATTERNS_DB = local_db_path("patterns_scan.db")
 
 
 # Aliases for backward compat with the inline detection blocks below.
