@@ -177,6 +177,29 @@ class ScanJob:
         finally:
             conn.close()
 
+    def _prune_orphans(self, scanned: set[str]) -> int:
+        """Drop cached rows for symbols that were NOT in the latest scan's universe.
+
+        The per-symbol upsert/delete in `_run` only refreshes symbols that are
+        actually scanned this pass. Symbols that fall OUT of the universe between
+        runs (it's a dynamic registry∪cache union that can shrink) would otherwise
+        linger forever with stale data — the very thing this prunes. Called once
+        after each completed scan so the cache reflects exactly the current
+        universe. Returns the number of rows removed.
+        """
+        orphans = [s for s in self._results if s not in scanned]
+        if not orphans:
+            return 0
+        for s in orphans:
+            self._results.pop(s, None)
+        conn = self._conn()
+        try:
+            conn.executemany("DELETE FROM results WHERE symbol=?", [(s,) for s in orphans])
+            conn.commit()
+        finally:
+            conn.close()
+        return len(orphans)
+
     def read_all(self) -> list[dict]:
         """All cached per-symbol result dicts — served from the in-memory
         mirror (no DB hit, no JSON parsing). Order not guaranteed."""
@@ -275,6 +298,15 @@ class ScanJob:
 
         try:
             await asyncio.gather(*[_worker(s) for s in symbols], return_exceptions=True)
+            # Prune rows for symbols that dropped out of the universe since the
+            # last scan — the per-symbol loop above only refreshes scanned
+            # symbols, so without this, results for removed symbols persist
+            # forever (stale data with old timestamps). Keeps cache-first UX:
+            # old rows stay visible DURING the scan, orphans vanish once it ends.
+            removed = self._prune_orphans(set(symbols))
+            if removed:
+                logger.info("scan_runner[%s]: pruned %d stale symbol(s) no longer in universe",
+                            self.name, removed)
             self._meta_set("last_scan_at", time.time())
             self._meta_set("last_scan_universe", len(symbols))
             with self._lock:

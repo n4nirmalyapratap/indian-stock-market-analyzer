@@ -109,6 +109,16 @@ async def _cache_warmup_task() -> None:
     except Exception as e:
         logger.warning("EOD seal failed: %s", e)
 
+    # Market is closed here (we returned early above if open) — pre-build the
+    # sector-rotation cockpit caches so a restart during closed hours doesn't
+    # leave the first cockpit load paying the cold build on the request thread.
+    try:
+        from app.services import sector_rotation_service as _srs  # noqa: PLC0415
+        res = await _srs.prewarm()
+        logger.info("Startup rotation prewarm: %s", res)
+    except Exception as e:
+        logger.warning("Startup rotation prewarm failed: %s", e)
+
 
 async def _market_state_transition_loop() -> None:
     """
@@ -169,6 +179,15 @@ async def _market_state_transition_loop() -> None:
                     )
                 except Exception as e:
                     logger.warning("Post-close full-universe warm failed: %s", e)
+                # Pre-build the sector-rotation cockpit caches now (off the EOD
+                # bars just sealed above), so the first cockpit load after close
+                # is a cache hit instead of a cold RRG/funnel build on-request.
+                try:
+                    from app.services import sector_rotation_service as _srs  # noqa: PLC0415
+                    res = await _srs.prewarm()
+                    logger.info("Post-close rotation prewarm: %s", res)
+                except Exception as e:
+                    logger.warning("Post-close rotation prewarm failed: %s", e)
 
             last_state = state
         except asyncio.CancelledError:

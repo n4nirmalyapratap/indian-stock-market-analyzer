@@ -625,14 +625,19 @@ class TestEvalCondition:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestDefaultScanners:
-    """Each of the 8 built-in scanners must be structurally sound."""
+    """Each built-in scanner must be structurally sound."""
 
     REQUIRED_FIELDS = {"id", "name", "description", "universe", "logic", "conditions",
                        "createdAt", "updatedAt"}
     REQUIRED_COND_FIELDS = {"id", "left", "operator", "right"}
 
-    def test_exactly_8_default_scanners_defined(self):
-        assert len(DEFAULT_SCANNERS_DEF) == 8
+    def test_default_scanners_not_truncated(self):
+        # Replaces a brittle `== 8` count check — the default set grows as new
+        # scanner categories ship (Volume, Pattern + Volume, Hidden Gems, …), so
+        # pin only the floor that guards against the list being accidentally
+        # truncated/emptied. Uniqueness is covered by
+        # test_default_scanner_names_are_unique.
+        assert len(DEFAULT_SCANNERS_DEF) >= 8
 
     def test_all_initialized_scanners_have_required_fields(self):
         _init_defaults()
