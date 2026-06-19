@@ -62,6 +62,16 @@ interface Props {
 
 const DRAW_CLR = "#6366f1";
 
+// SMC overlay keys are drawn overlays (zones/lines), not series, so they have no
+// IndicatorDef — the active-indicator pill row renders them from this map.
+const SMC_PILLS: Record<string, { label: string; color: string }> = {
+  smc_fvg:       { label: "FVG (SMC)",              color: "#22c55e" },
+  smc_structure: { label: "Structure (SMC)",        color: "#3b82f6" },
+  smc_ob:        { label: "Order Blocks (SMC)",     color: "#f59e0b" },
+  smc_pd:        { label: "Premium/Discount (SMC)", color: "#a855f7" },
+  smc_liq:       { label: "Liquidity (SMC)",        color: "#06b6d4" },
+};
+
 function getThemeColors(theme: "dark" | "light") {
   const d = theme === "dark";
   return {
@@ -385,6 +395,185 @@ interface SvgText    { type: "text";    x: number;  y: number;  text: string; an
 interface SvgPath    { type: "path";    d: string;  fill?: string; stroke?: string }
 type SvgEl = SvgLine | SvgRect | SvgCircle | SvgEllipse | SvgText | SvgPath;
 interface SvgPixels { id: string; els: SvgEl[] }
+
+// ── Smart Money Concepts overlay (read-only; from GET /stocks/:sym/smc) ──────
+// Phase 1: Fair Value Gaps. Each zone is anchored by trading DATE, matched the
+// same way the rest of this file maps candle.time → date (UTC slice — safe
+// because NSE hours never cross a UTC day boundary). Anchoring by date rather
+// than bar index survives differing bar counts between the chart and the /smc
+// endpoint, and guarantees the chart shows exactly what the screener detected.
+interface SmcZone {
+  type: "bullish" | "bearish";
+  top: number;
+  bottom: number;
+  startDate: string;
+  mitigated: boolean;
+  mitigatedDate: string | null;
+}
+
+function buildSmcEls(
+  zones: SmcZone[],
+  chart: echarts.ECharts,
+  candles: Candle[],
+  theme: "dark" | "light",
+): SvgEl[] {
+  if (!zones.length || !candles.length) return [];
+  const idxByDate = new Map<string, number>();
+  candles.forEach((c, i) => idxByDate.set(new Date(c.time * 1000).toISOString().slice(0, 10), i));
+  const lastIdx = candles.length - 1;
+  // Opacities tuned so zones read clearly on both backgrounds. The solid border
+  // (not just fill) is what makes a faint band actually visible — top/bottom
+  // edges bracket the gap like TradingView. Mitigated zones are dimmer.
+  const A = theme === "dark"
+    ? { open: 0.22, mit: 0.08, openLine: 0.9, mitLine: 0.45 }
+    : { open: 0.18, mit: 0.07, openLine: 0.8, mitLine: 0.40 };
+  const els: SvgEl[] = [];
+  for (const z of zones) {
+    const i0 = idxByDate.get(z.startDate);
+    if (i0 === undefined) continue;                 // zone predates the loaded window
+    // Open zones run to the current bar; mitigated ones stop where price filled them.
+    const iEnd = z.mitigated && z.mitigatedDate
+      ? (idxByDate.get(z.mitigatedDate) ?? lastIdx)
+      : lastIdx;
+    const px = shapeToPixels(
+      { type: "rectangle", x0Idx: i0, x1Idx: iEnd, y0: z.top, y1: z.bottom },
+      chart, candles,
+    );
+    if (!px) continue;
+    const rgb    = z.type === "bullish" ? "34,197,94" : "239,68,68";  // green / red
+    const fill   = `rgba(${rgb},${z.mitigated ? A.mit : A.open})`;
+    const stroke = `rgba(${rgb},${z.mitigated ? A.mitLine : A.openLine})`;
+    for (const e of px) if (e.type === "rect") { e.fill = fill; e.stroke = stroke; }
+    els.push(...px);
+  }
+  return els;
+}
+
+interface StructEvent {
+  type: "bullish" | "bearish";
+  kind: "BOS" | "CHoCH";
+  level: number;
+  breakDate: string;
+  swingDate: string | null;
+}
+
+// BOS / CHoCH markers: a horizontal line at the broken swing level, drawn from
+// the swing bar to the break bar, plus a small label. CHoCH (reversal) is solid
+// + slightly bolder; BOS (continuation) dashed. Colour encodes direction. Deeper
+// green/red than the FVG fills so the thin lines read on both themes.
+function buildStructEls(events: StructEvent[], chart: echarts.ECharts, candles: Candle[]): SvgEl[] {
+  if (!events.length || !candles.length) return [];
+  const idxByDate = new Map<string, number>();
+  candles.forEach((c, i) => idxByDate.set(new Date(c.time * 1000).toISOString().slice(0, 10), i));
+  const els: SvgEl[] = [];
+  for (const ev of events) {
+    const iBreak = idxByDate.get(ev.breakDate);
+    if (iBreak === undefined) continue;
+    const iSwing = ev.swingDate && idxByDate.has(ev.swingDate)
+      ? (idxByDate.get(ev.swingDate) as number)
+      : iBreak;
+    const [x0, y] = chart.convertToPixel({ gridIndex: 0 }, [iSwing, ev.level]) as [number, number];
+    const [x1]    = chart.convertToPixel({ gridIndex: 0 }, [iBreak, ev.level]) as [number, number];
+    const bull  = ev.type === "bullish";
+    const color = bull ? "#16a34a" : "#dc2626";
+    const choch = ev.kind === "CHoCH";
+    els.push({ type: "line", x1: x0, y1: y, x2: x1, y2: y, color, dash: !choch, width: choch ? 1.6 : 1.2 });
+    els.push({ type: "text", x: x1 + 4, y: y + (bull ? -4 : 11), text: ev.kind, anchor: "start", size: 9, color });
+  }
+  return els;
+}
+
+// candle.time → trading-date string, the shared anchor for all SMC overlays.
+function smcDateIndex(candles: Candle[]): Map<string, number> {
+  const m = new Map<string, number>();
+  candles.forEach((c, i) => m.set(new Date(c.time * 1000).toISOString().slice(0, 10), i));
+  return m;
+}
+
+interface OrderBlock {
+  type: "bullish" | "bearish";
+  top: number;
+  bottom: number;
+  startDate: string;
+  mitigated: boolean;
+  mitigatedDate: string | null;
+}
+
+// Order blocks: demand (green) / supply (red) zones, dimmed once mitigated. An
+// "OB" tag distinguishes them from FVG boxes when both layers are on.
+function buildObEls(obs: OrderBlock[], chart: echarts.ECharts, candles: Candle[]): SvgEl[] {
+  if (!obs.length || !candles.length) return [];
+  const idxByDate = smcDateIndex(candles);
+  const lastIdx = candles.length - 1;
+  const els: SvgEl[] = [];
+  for (const ob of obs) {
+    const i0 = idxByDate.get(ob.startDate);
+    if (i0 === undefined) continue;
+    const iEnd = ob.mitigated && ob.mitigatedDate
+      ? (idxByDate.get(ob.mitigatedDate) ?? lastIdx)
+      : lastIdx;
+    const px = shapeToPixels(
+      { type: "rectangle", x0Idx: i0, x1Idx: iEnd, y0: ob.top, y1: ob.bottom }, chart, candles,
+    );
+    if (!px) continue;
+    const rgb = ob.type === "bullish" ? "16,185,129" : "239,68,68";  // emerald / red
+    const fill = `rgba(${rgb},${ob.mitigated ? 0.05 : 0.12})`;
+    const stroke = `rgba(${rgb},${ob.mitigated ? 0.4 : 0.85})`;
+    for (const e of px) if (e.type === "rect") { e.fill = fill; e.stroke = stroke; }
+    els.push(...px);
+    const [lx, ly] = chart.convertToPixel({ gridIndex: 0 }, [i0, ob.top]) as [number, number];
+    els.push({ type: "text", x: lx + 2, y: ly + (ob.type === "bullish" ? 9 : -3), text: "OB", anchor: "start", size: 8, color: `rgba(${rgb},0.95)` });
+  }
+  return els;
+}
+
+interface DealingRange { high: number; low: number; eq: number; startDate: string }
+
+// Premium / Discount: the current dealing range, split at equilibrium — premium
+// half (red) above, discount half (green) below, with an EQ line + labels.
+function buildPdEls(dr: DealingRange | null, chart: echarts.ECharts, candles: Candle[]): SvgEl[] {
+  if (!dr || !candles.length) return [];
+  const idxByDate = smcDateIndex(candles);
+  const start = idxByDate.get(dr.startDate) ?? 0;
+  const iEnd = candles.length - 1;
+  const els: SvgEl[] = [];
+  const disc = shapeToPixels({ type: "rectangle", x0Idx: start, x1Idx: iEnd, y0: dr.low, y1: dr.eq }, chart, candles);
+  const prem = shapeToPixels({ type: "rectangle", x0Idx: start, x1Idx: iEnd, y0: dr.eq, y1: dr.high }, chart, candles);
+  if (disc) { for (const e of disc) if (e.type === "rect") { e.fill = "rgba(34,197,94,0.06)"; e.stroke = "none"; } els.push(...disc); }
+  if (prem) { for (const e of prem) if (e.type === "rect") { e.fill = "rgba(239,68,68,0.06)"; e.stroke = "none"; } els.push(...prem); }
+  const [x0, yEq] = chart.convertToPixel({ gridIndex: 0 }, [start, dr.eq]) as [number, number];
+  const [x1] = chart.convertToPixel({ gridIndex: 0 }, [iEnd, dr.eq]) as [number, number];
+  els.push({ type: "line", x1: x0, y1: yEq, x2: x1, y2: yEq, color: "#9ca3af", dash: true, width: 1 });
+  els.push({ type: "text", x: x1 + 3, y: yEq - 3, text: "EQ", anchor: "start", size: 9, color: "#9ca3af" });
+  const [, yPrem] = chart.convertToPixel({ gridIndex: 0 }, [start, (dr.eq + dr.high) / 2]) as [number, number];
+  const [, yDisc] = chart.convertToPixel({ gridIndex: 0 }, [start, (dr.low + dr.eq) / 2]) as [number, number];
+  els.push({ type: "text", x: x0 + 4, y: yPrem, text: "Premium", anchor: "start", size: 9, color: "rgba(239,68,68,0.85)" });
+  els.push({ type: "text", x: x0 + 4, y: yDisc, text: "Discount", anchor: "start", size: 9, color: "rgba(34,197,94,0.85)" });
+  return els;
+}
+
+interface EqualLevel { price: number; count: number; startDate: string }
+
+// Liquidity pools: equal highs = buy-side (BSL, red line above), equal lows =
+// sell-side (SSL, green line below) — the resting-stop targets smart money runs.
+function buildLiqEls(highs: EqualLevel[], lows: EqualLevel[], chart: echarts.ECharts, candles: Candle[]): SvgEl[] {
+  if (!candles.length) return [];
+  const idxByDate = smcDateIndex(candles);
+  const iEnd = candles.length - 1;
+  const els: SvgEl[] = [];
+  const draw = (lvls: EqualLevel[], color: string, tag: string) => {
+    for (const lv of lvls) {
+      const i0 = idxByDate.get(lv.startDate) ?? 0;
+      const [x0, y] = chart.convertToPixel({ gridIndex: 0 }, [i0, lv.price]) as [number, number];
+      const [x1] = chart.convertToPixel({ gridIndex: 0 }, [iEnd, lv.price]) as [number, number];
+      els.push({ type: "line", x1: x0, y1: y, x2: x1, y2: y, color, dash: true, width: 1 });
+      els.push({ type: "text", x: x1 + 3, y: y - 3, text: tag, anchor: "start", size: 8, color });
+    }
+  };
+  draw(highs, "#dc2626", "BSL");
+  draw(lows, "#16a34a", "SSL");
+  return els;
+}
 
 // GL / GR must stay in sync with the grid config in renderChart below
 const CHART_GL = 8, CHART_GR = 70;
@@ -1009,6 +1198,17 @@ export default function ChartPanel({
   const svgRef       = useRef<SVGSVGElement>(null);
   const chartRef     = useRef<echarts.ECharts | null>(null);
   const candles      = useRef<Candle[]>([]);
+  const smcZonesRef   = useRef<SmcZone[]>([]);
+  const smcStructRef  = useRef<StructEvent[]>([]);
+  const smcObRef      = useRef<OrderBlock[]>([]);
+  const smcDealingRef = useRef<DealingRange | null>(null);
+  const smcEqHighsRef = useRef<EqualLevel[]>([]);
+  const smcEqLowsRef  = useRef<EqualLevel[]>([]);
+  const smcSymbolRef  = useRef<string>("");   // symbol the SMC data was fetched for
+  // SMC overlays — toggled from the Indicators menu; all come from one /smc fetch.
+  const smcOn = indicators.has("smc_fvg") || indicators.has("smc_structure")
+             || indicators.has("smc_ob") || indicators.has("smc_pd")
+             || indicators.has("smc_liq");
   const dragStart    = useRef<{ px: number; py: number; xIdx: number; y: number } | null>(null);
   const eraserPos    = useRef<{ x: number; y: number } | null>(null);
   const paintSvgRef  = useRef<((preview?: SvgEl | SvgEl[] | null, eraser?: { x: number; y: number } | null, skipId?: string | null, handles?: HandleInfo[] | null) => void) | null>(null);
@@ -1075,8 +1275,75 @@ export default function ChartPanel({
       })
       .filter(Boolean) as SvgPixels[];
 
+    // Read-only SMC overlay (Fair Value Gaps). Kept OUT of PanelState.drawings
+    // so it's never selectable/erasable. Guard on symbol so a previous symbol's
+    // zones aren't painted onto the new symbol's candles during a switch.
+    // unshift → drawn behind the user's own drawings.
+    if (smcSymbolRef.current === symbol) {
+      // Lines + labels go ON TOP (push, after user drawings).
+      if (indicators.has("smc_structure") && smcStructRef.current.length) {
+        const stEls = buildStructEls(smcStructRef.current, chart, candles.current);
+        if (stEls.length) pixels.push({ id: "__smc_struct__", els: stEls });
+      }
+      if (indicators.has("smc_liq")) {
+        const liqEls = buildLiqEls(smcEqHighsRef.current, smcEqLowsRef.current, chart, candles.current);
+        if (liqEls.length) pixels.push({ id: "__smc_liq__", els: liqEls });
+      }
+      // Zones go BEHIND drawings (unshift). Unshift order matters: the last
+      // unshift ends up backmost, so push the big Premium/Discount box last.
+      if (indicators.has("smc_fvg") && smcZonesRef.current.length) {
+        const fvgEls = buildSmcEls(smcZonesRef.current, chart, candles.current, theme);
+        if (fvgEls.length) pixels.unshift({ id: "__smc_fvg__", els: fvgEls });
+      }
+      if (indicators.has("smc_ob") && smcObRef.current.length) {
+        const obEls = buildObEls(smcObRef.current, chart, candles.current);
+        if (obEls.length) pixels.unshift({ id: "__smc_ob__", els: obEls });
+      }
+      if (indicators.has("smc_pd") && smcDealingRef.current) {
+        const pdEls = buildPdEls(smcDealingRef.current, chart, candles.current);
+        if (pdEls.length) pixels.unshift({ id: "__smc_pd__", els: pdEls });   // backmost
+      }
+    }
+
     renderSvg(svg, pixels, preview, eraser, handles);
-  }, [drawings]);
+  }, [drawings, symbol, theme, indicators]);
+
+  // ── Smart Money Concepts (Fair Value Gaps) overlay fetch ────────────────────
+  // Daily-only — SMC is computed on daily EOD bars (see app/lib/smc.py). Fetches
+  // zones for the current symbol when the toggle is on, then repaints. Clears on
+  // toggle-off / non-daily interval / symbol change-in-flight.
+  useEffect(() => {
+    const clearSmc = () => {
+      smcZonesRef.current = []; smcStructRef.current = []; smcObRef.current = [];
+      smcDealingRef.current = null; smcEqHighsRef.current = []; smcEqLowsRef.current = [];
+    };
+    if (!smcOn || periodCfg.i !== "1d" || !symbol) {
+      clearSmc();
+      paintSvgRef.current?.();
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await fetchApi<{
+          fvgs?: SmcZone[]; structure?: StructEvent[]; orderBlocks?: OrderBlock[];
+          dealingRange?: DealingRange | null; equalHighs?: EqualLevel[]; equalLows?: EqualLevel[];
+        }>(`/stocks/${encodeURIComponent(symbol)}/smc?days=250`);
+        if (cancelled) return;
+        smcZonesRef.current   = Array.isArray(data?.fvgs) ? data.fvgs : [];
+        smcStructRef.current  = Array.isArray(data?.structure) ? data.structure : [];
+        smcObRef.current      = Array.isArray(data?.orderBlocks) ? data.orderBlocks : [];
+        smcDealingRef.current = data?.dealingRange ?? null;
+        smcEqHighsRef.current = Array.isArray(data?.equalHighs) ? data.equalHighs : [];
+        smcEqLowsRef.current  = Array.isArray(data?.equalLows) ? data.equalLows : [];
+        smcSymbolRef.current  = symbol;
+        paintSvgRef.current?.();
+      } catch {
+        if (!cancelled) { clearSmc(); paintSvgRef.current?.(); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [smcOn, symbol, periodCfg.i]);
 
   // Repaint SVG when hover changes (show/hide handles)
   useEffect(() => {
@@ -2121,6 +2388,27 @@ export default function ChartPanel({
           {hasAnyInd && (
             <div className="flex items-center gap-2 mt-0.5 flex-wrap">
               {[...indicators].map(key => {
+                // SMC overlays have no IndicatorDef (they're drawn zones/lines,
+                // not a series), so render a custom pill so the user can see
+                // they're on and remove them with the same × control.
+                if (SMC_PILLS[key]) {
+                  const { label: smcLabel, color: smcColor } = SMC_PILLS[key];
+                  return (
+                    <span key={key} className="group flex items-center gap-1 text-[10px] rounded px-1.5 py-0.5 hover:bg-white/5">
+                      <span style={{ color: smcColor }} className="font-medium">{smcLabel}</span>
+                      <button
+                        type="button"
+                        title={`Remove ${smcLabel}`}
+                        onClick={(e) => { e.stopPropagation(); onIndicatorRemove?.(key); }}
+                        className="ml-0.5 w-3.5 h-3.5 flex items-center justify-center rounded-sm text-gray-500 hover:text-red-400 hover:bg-red-500/15 opacity-60 group-hover:opacity-100 transition-opacity"
+                      >
+                        <svg viewBox="0 0 10 10" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                          <path d="M2 2 L8 8 M8 2 L2 8" />
+                        </svg>
+                      </button>
+                    </span>
+                  );
+                }
                 const def = IND_BY_KEY[key];
                 if (!def) return null;
                 const seriesKey = def.pillSeries ?? "main";
