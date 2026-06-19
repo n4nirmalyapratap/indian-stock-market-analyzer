@@ -15,7 +15,6 @@ import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter
@@ -25,6 +24,7 @@ from ..services import agents_service
 from ..services import registry as svc
 from ..lib.symbol_map import yahoo_candidates
 from ..lib.universe import get_scan_universe
+from ..lib.db_paths import local_db_path
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ async def list_agents():
 #     a restart picks up the daily registry refresh. The scan is cache-first:
 #     results persist in SQLite and a background scan streams updates in, so the
 #     large universe never blocks a request.
-#   * Results persist in market_cache/agents_screener.db (WAL SQLite) so they
+#   * Results persist in sqlite_cache/agents_screener.db (WAL SQLite) so they
 #     survive backend restarts and only one full scan happens per NSE session.
 #   * GET returns cached rows IMMEDIATELY and kicks off a background scan if
 #     the cache is empty or stale. The response includes a progress block so the
@@ -121,7 +121,9 @@ async def list_agents():
 _SCREENER_UNIVERSE: list[str] = get_scan_universe()
 _SCREENER_THRESHOLD   = 14          # of 16 personas — 87.5%
 _SCREENER_CONCURRENCY = 8           # parallel yfinance requests (rate-limit safe)
-_SCREENER_DB          = Path(__file__).parent.parent.parent / "market_cache" / "agents_screener.db"
+# SQLite cache DB on local disk (see app/lib/db_paths.py — never market_cache/,
+# which is an SMB mount where SQLite WAL fails with "database is locked").
+_SCREENER_DB          = local_db_path("agents_screener.db")
 _IST                  = ZoneInfo("Asia/Kolkata")
 _NSE_CLOSE_HOUR       = 15          # NSE settles at 15:30 IST
 _NSE_CLOSE_MINUTE     = 30
