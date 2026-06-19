@@ -51,7 +51,7 @@ services:
       # serving from the PG cache. Use while triaging which source is
       # failing — comment this line out (or set to 0) before merging to
       # production. Logs emit a WARNING line at startup when it's active.
-      SHAREHOLDING_DISABLE_CACHE: "${SHAREHOLDING_DISABLE_CACHE:-1}"
+      SHAREHOLDING_DISABLE_CACHE: "${SHAREHOLDING_DISABLE_CACHE:-0}"
       # LOG_LEVEL — overrides the root logger level. Defaults to INFO if
       # unset. Bump to DEBUG temporarily for noisy network traces.
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
