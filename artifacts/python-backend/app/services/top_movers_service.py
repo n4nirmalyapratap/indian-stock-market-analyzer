@@ -43,6 +43,13 @@ logger = logging.getLogger("top_movers")
 _FALLBACK_TTL_SEC = 5 * 60
 _fallback_cache: dict[str, tuple[float, dict]] = {}
 
+# Per-segment cache of the closed-market disk leaderboard, keyed (value side) by
+# trading date. When the market is closed the sealed EOD bars are frozen for the
+# whole session, so the ranking is stable — caching by date means we compute it
+# ONCE per session instead of re-reading ~750 canonical snapshots from the
+# (SMB-mounted in prod) market_cache on every dashboard render.
+_disk_movers_cache: dict[str, tuple[str, dict]] = {}
+
 # Segment → (label, NSE index slug, cache key).  Cache key is namespaced
 # per-segment so the existing nse_service cache layer doesn't collide.
 SEGMENT_INDEX = {
@@ -152,6 +159,19 @@ class TopMoversService:
         start before the post-close warmup has run), so the caller falls
         through to the live NSE/Yahoo path.
         """
+        # Session-frozen result cache: the sealed EOD bars don't change until the
+        # next session, so memoise the computed leaderboard keyed by trading date.
+        # A hit turns ~750 canonical-snapshot reads (over the SMB-mounted
+        # market_cache in prod) into one dict lookup — the dominant cost of the
+        # closed-market dashboard render. Only non-None results are cached (below),
+        # so a cold start keeps retrying until the post-close warmup has sealed
+        # enough of the segment.
+        td = _disk.last_trading_date()
+        cache_key = f"{segment}:{count}"
+        hit = _disk_movers_cache.get(cache_key)
+        if hit and hit[0] == td:
+            return hit[1]
+
         from ..lib import universe  # noqa: PLC0415
         universe_map = {
             "large": universe.NIFTY100,
@@ -209,7 +229,7 @@ class TopMoversService:
         gainers = sorted(rows, key=lambda r: r["pChange"], reverse=True)[:count]
         losers  = sorted(rows, key=lambda r: r["pChange"])[:count]
         label = SEGMENT_INDEX[segment][0]
-        return {
+        out = {
             "available":    True,
             "segment":      segment,
             "label":        label,
@@ -221,6 +241,8 @@ class TopMoversService:
             "losers":       losers,
             "servedFrom":   "DISK_EOD",
         }
+        _disk_movers_cache[cache_key] = (td, out)
+        return out
 
     async def _yahoo_fallback_scan(self, segment: str, count: int) -> Optional[dict]:
         """Per-stock Yahoo-backed fallback when the NSE bulk index endpoint

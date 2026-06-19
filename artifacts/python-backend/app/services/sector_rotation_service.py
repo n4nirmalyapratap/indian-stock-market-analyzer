@@ -51,11 +51,32 @@ def _cache_get(key: str) -> Optional[Any]:
     return None
 
 
+def _seconds_until_next_open() -> int:
+    """Seconds from now until the next NSE open (next weekday 09:15 IST).
+
+    Used as the closed-market cache TTL so a build done after the close stays
+    fresh for the WHOLE closed session instead of rebuilding every few hours
+    (the old flat 4h TTL forced repeated cold rebuilds overnight and across
+    weekends). The data is frozen between closes, so the only real invalidator
+    is the market reopening — and `_flush_if_state_changed` already drops the
+    cache precisely on that transition. This bound is the backstop. Skips
+    weekends; holidays at worst cause one extra rebuild on the holiday morning.
+    """
+    from . import market_cache_service as _disk  # noqa: PLC0415
+    now = _disk._now_ist()
+    nxt = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    if now >= nxt:
+        nxt += dt.timedelta(days=1)
+    while nxt.weekday() >= 5:   # Sat=5, Sun=6 → roll to Monday
+        nxt += dt.timedelta(days=1)
+    return max(600, int((nxt - now).total_seconds()))
+
+
 def _cache_set(key: str, data: Any, ttl: Optional[int] = None) -> None:
     _flush_if_state_changed()
     from . import market_cache_service as _disk  # noqa: PLC0415
     if ttl is None:
-        ttl = 600 if _disk.is_market_open() else 4 * 3600
+        ttl = 600 if _disk.is_market_open() else _seconds_until_next_open()
     _cache[key] = {"data": data, "expiry": time.time() + ttl}
 
 # ── RRG math (pure) ──────────────────────────────────────────────────────────
@@ -531,6 +552,23 @@ async def _subindustry_rrg_onthefly(grid_rows: list[dict], row_by_sub: dict,
 
 async def get_rrg(level: str = "sector", timeframe: str = "short") -> dict:
     return await (subindustry_rrg(timeframe) if level == "subindustry" else sector_rrg(timeframe))
+
+
+async def prewarm(timeframe: str = "short") -> dict:
+    """Pre-build the cockpit's default-view caches so the first user load after a
+    market close is instant instead of paying the cold RRG/funnel build on the
+    request thread. `funnel` internally warms `rrg:sector:<tf>`; `subindustry_rrg`
+    warms `rrg:subindustry:<tf>`. Safe to call repeatedly — later calls are cache
+    hits. Each leg is isolated so one failure doesn't abort the other."""
+    out: dict[str, bool] = {}
+    for label, coro in (("funnel", funnel(timeframe)), ("subindustry", subindustry_rrg(timeframe))):
+        try:
+            await coro
+            out[label] = True
+        except Exception as exc:  # noqa: BLE001 — pre-warm is best-effort
+            logger.warning("rotation prewarm %s failed: %s", label, exc)
+            out[label] = False
+    return out
 
 
 # ── Funnel ───────────────────────────────────────────────────────────────────
