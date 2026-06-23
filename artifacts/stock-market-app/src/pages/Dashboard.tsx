@@ -71,7 +71,7 @@ function StatCard({ title, value, sub, subCls, loading, icon }: StatProps) {
 // ── VIX card (slightly richer) ────────────────────────────────────────────────
 
 function VixCard({ vix, loading }: { vix: any; loading: boolean }) {
-  const { label, cls, bg } = vixMeta(vix?.value);
+  const { label, cls, bg } = vixMeta(vix?.price);
   return (
     <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm p-4 flex flex-col gap-2">
       <div className="flex items-center justify-between">
@@ -81,7 +81,7 @@ function VixCard({ vix, loading }: { vix: any; loading: boolean }) {
       {loading
         ? <Skel h="h-7" w="w-20" rounded="rounded-md" />
         : <p className="text-xl font-bold text-gray-900 dark:text-white leading-tight">
-            {vix?.value != null ? vix.value.toFixed(2) : "—"}
+            {vix?.price != null ? vix.price.toFixed(2) : "—"}
           </p>
       }
       {loading
@@ -204,11 +204,11 @@ export default function Dashboard() {
 
   const latestFiiRow = useMemo(() => {
     const rows: any[] = fiiData?.rows ?? [];
-    return rows.length > 0 ? rows[rows.length - 1] : null;
+    return rows.length > 0 ? rows[0] : null;
   }, [fiiData]);
 
-  const fiiNet = latestFiiRow?.fii_net ?? null;
-  const diiNet = latestFiiRow?.dii_net ?? null;
+  const fiiNet = latestFiiRow?.fiiNet ?? null;
+  const diiNet = latestFiiRow?.diiNet ?? null;
   const fiiDate = latestFiiRow?.date ?? null;
 
   const newsItems = useMemo(() => {
@@ -216,7 +216,7 @@ export default function Dashboard() {
     return articles.slice(0, 5);
   }, [newsData]);
 
-  const vix = macro?.quotes?.vix;
+  const vix = macro?.currencyStrip?.vix;
 
   return (
     <div className="space-y-6">
