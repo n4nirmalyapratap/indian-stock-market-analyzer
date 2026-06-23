@@ -4,7 +4,7 @@ import { Link } from "wouter";
 import { api, fetchApi } from "@/lib/api";
 import {
   RefreshCw, Activity, ScanSearch, Loader2,
-  Newspaper, TrendingUp, TrendingDown, Zap,
+  Newspaper, TrendingUp, TrendingDown, Zap, Rocket,
 } from "lucide-react";
 import MacroStrip from "@/components/macro/MacroStrip";
 import GlobalIndicesPanel from "@/components/GlobalIndicesPanel";
@@ -172,6 +172,12 @@ export default function Dashboard() {
     staleTime: 5 * 60_000,
   });
 
+  const { data: ipoData, isLoading: ipoLoading } = useQuery<any>({
+    queryKey: ["ipo-dash"],
+    queryFn:  () => fetchApi("/insights/ipos"),
+    staleTime: 10 * 60_000,
+  });
+
   const scanInProgress = patterns?.scanInProgress ?? false;
   const scanProgress   = patterns?.scanProgress   ?? null;
 
@@ -282,126 +288,142 @@ export default function Dashboard() {
       {/* ── Top Movers ──────────────────────────────────────────────────────── */}
       <TopMoversPanel />
 
-      {/* ── Pattern Signals detail  +  News ──────────────────────────────────── */}
+      {/* ── IPO Center  +  News ──────────────────────────────────────────────── */}
       <div className="grid md:grid-cols-2 gap-6">
 
-        {/* Pattern Signals */}
+        {/* IPO Center */}
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm p-5">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold text-gray-800 dark:text-gray-100 flex items-center gap-2">
-              <Activity className="w-4 h-4 text-indigo-500" /> Pattern Signals
+              <Rocket className="w-4 h-4 text-indigo-500" /> IPO Center
             </h2>
-            {(patterns?.totalPatterns ?? 0) > 0 && (
-              <Link href="/patterns" className="text-xs text-indigo-500 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300">
-                View all →
-              </Link>
-            )}
+            <Link href="/insights/ipo" className="text-xs text-indigo-500 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300">
+              View all →
+            </Link>
           </div>
 
-          {patLoading ? (
+          {ipoLoading ? (
             <div className="space-y-3">
-              <div className="flex gap-3">
-                {[1,2,3].map(i => <div key={i} className="flex-1 h-16 bg-gray-100 dark:bg-gray-700 animate-pulse rounded-lg" />)}
-              </div>
-              {[1,2,3].map(i => <div key={i} className="h-5 bg-gray-100 dark:bg-gray-700 animate-pulse rounded" />)}
+              {[1,2,3].map(i => <div key={i} className="h-14 bg-gray-100 dark:bg-gray-700 animate-pulse rounded-lg" />)}
             </div>
-          ) : patterns && (patterns.totalPatterns ?? 0) > 0 ? (
-            <div className="space-y-3">
-              {/* Slim scanning banner — shown while scan is running, data stays visible */}
-              {(scanInProgress || scanTriggered) && (
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800">
-                  <Loader2 className="w-3 h-3 text-indigo-500 animate-spin flex-shrink-0" />
-                  <span className="text-xs text-indigo-700 dark:text-indigo-300 flex-1">
-                    {scanProgress
-                      ? `Updating… ${scanProgress.done.toLocaleString()} / ${scanProgress.total.toLocaleString()} symbols`
-                      : "Scan in progress…"}
-                  </span>
-                  {scanProgress && scanProgress.total > 0 && (
-                    <div className="w-16 bg-indigo-200 dark:bg-indigo-800 rounded-full h-1 overflow-hidden flex-shrink-0">
-                      <div
-                        className="h-full bg-indigo-500 transition-all duration-500 rounded-full"
-                        style={{ width: `${Math.min(100, (scanProgress.done / scanProgress.total) * 100)}%` }}
-                      />
+          ) : (() => {
+            const open     = (ipoData?.open     ?? []).slice(0, 2);
+            const upcoming = (ipoData?.upcoming  ?? []).slice(0, 3 - open.length);
+            const all      = [...open, ...upcoming];
+
+            if (!ipoData?.available && !all.length) {
+              return (
+                <div className="flex flex-col items-center justify-center py-6 gap-2 text-center">
+                  <Rocket className="w-8 h-8 text-gray-300 dark:text-gray-600" />
+                  <p className="text-sm text-gray-500 dark:text-gray-400">{ipoData?.message ?? "No active IPOs right now"}</p>
+                </div>
+              );
+            }
+
+            if (!all.length) {
+              return (
+                <div className="flex flex-col items-center justify-center py-6 gap-2 text-center">
+                  <Rocket className="w-8 h-8 text-gray-300 dark:text-gray-600" />
+                  <p className="text-sm text-gray-500 dark:text-gray-400">No active or upcoming IPOs right now</p>
+                </div>
+              );
+            }
+
+            const fmtDate = (iso: string | null) => {
+              if (!iso) return "—";
+              const d = new Date(iso + "T00:00:00");
+              return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+            };
+
+            const daysUntil = (iso: string | null) => {
+              if (!iso) return null;
+              const today = new Date(); today.setHours(0,0,0,0);
+              return Math.round((new Date(iso + "T00:00:00").getTime() - today.getTime()) / 86_400_000);
+            };
+
+            return (
+              <div className="space-y-2.5">
+                {all.map((ipo: any, i: number) => {
+                  const isOpen    = ipo.status === "open";
+                  const closesIn  = daysUntil(ipo.closeDate);
+                  const opensIn   = daysUntil(ipo.openDate);
+                  const gmp       = ipo.gmp;
+                  const hasGmp    = gmp && gmp.premium != null;
+                  const gmpUp     = hasGmp && gmp.premium > 0;
+                  const gmpDown   = hasGmp && gmp.premium < 0;
+                  const priceStr  = ipo.priceHigh != null
+                    ? (ipo.priceLow && ipo.priceLow !== ipo.priceHigh ? `₹${ipo.priceLow}–${ipo.priceHigh}` : `₹${ipo.priceHigh}`)
+                    : null;
+
+                  return (
+                    <div key={i} className="flex items-start gap-3 p-3 rounded-lg border border-gray-100 dark:border-gray-700 hover:border-indigo-200 dark:hover:border-indigo-700 transition">
+                      {/* Status dot */}
+                      <div className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${isOpen ? "bg-green-400 animate-pulse" : "bg-gray-300 dark:bg-gray-600"}`} />
+
+                      {/* Main info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-sm font-semibold text-gray-900 dark:text-white truncate max-w-[140px]" title={ipo.companyName}>
+                            {ipo.companyName}
+                          </span>
+                          {ipo.isSme && (
+                            <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300 flex-shrink-0">SME</span>
+                          )}
+                          {isOpen ? (
+                            <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded flex-shrink-0 ${
+                              closesIn === 0 ? "bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
+                              : closesIn === 1 ? "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"
+                              : "bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-300"
+                            }`}>
+                              {closesIn != null ? (closesIn === 0 ? "Closes today" : closesIn === 1 ? "1d left" : `${closesIn}d left`) : "Open"}
+                            </span>
+                          ) : (
+                            <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300 flex-shrink-0">
+                              {opensIn != null && opensIn > 0 ? `Opens in ${opensIn}d` : "Upcoming"}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          {priceStr && <span className="text-xs text-gray-500 dark:text-gray-400">{priceStr}</span>}
+                          {ipo.openDate && <span className="text-xs text-gray-400 dark:text-gray-500">{fmtDate(ipo.openDate)}–{fmtDate(ipo.closeDate)}</span>}
+                        </div>
+                      </div>
+
+                      {/* GMP badge */}
+                      {hasGmp ? (
+                        <div className={`flex-shrink-0 text-right rounded-md px-2 py-1 ${
+                          gmpUp   ? "bg-emerald-50 dark:bg-emerald-500/10"
+                          : gmpDown ? "bg-rose-50 dark:bg-rose-500/10"
+                          : "bg-gray-50 dark:bg-gray-700/40"
+                        }`}>
+                          <p className="text-[9px] uppercase tracking-wide font-bold text-gray-400 leading-tight">GMP</p>
+                          <p className={`text-xs font-bold tabular-nums leading-tight ${
+                            gmpUp ? "text-emerald-600 dark:text-emerald-400"
+                            : gmpDown ? "text-rose-600 dark:text-rose-400"
+                            : "text-gray-600 dark:text-gray-300"
+                          }`}>
+                            {gmp.premium >= 0 ? "+" : ""}₹{gmp.premium}
+                          </p>
+                          {gmp.estGainPct != null && (
+                            <p className={`text-[9px] font-semibold tabular-nums leading-tight ${
+                              gmpUp ? "text-emerald-500" : gmpDown ? "text-rose-500" : "text-gray-500"
+                            }`}>
+                              {gmp.estGainPct >= 0 ? "+" : ""}{gmp.estGainPct.toFixed(1)}%
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex-shrink-0 text-right rounded-md px-2 py-1 bg-gray-50 dark:bg-gray-700/40">
+                          <p className="text-[9px] uppercase tracking-wide font-bold text-gray-400 leading-tight">GMP</p>
+                          <p className="text-xs text-gray-400 dark:text-gray-500">—</p>
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              )}
-              <div className="flex gap-3">
-                <div className="flex-1 bg-green-50 dark:bg-green-900/25 rounded-lg p-3 text-center">
-                  <p className="text-2xl font-bold text-green-600">{patterns.callSignals}</p>
-                  <p className="text-xs text-green-700 dark:text-green-400 font-medium">Bullish</p>
-                </div>
-                <div className="flex-1 bg-red-50 dark:bg-red-900/25 rounded-lg p-3 text-center">
-                  <p className="text-2xl font-bold text-red-600">{patterns.putSignals}</p>
-                  <p className="text-xs text-red-700 dark:text-red-400 font-medium">Bearish</p>
-                </div>
-                <div className="flex-1 bg-blue-50 dark:bg-blue-900/25 rounded-lg p-3 text-center">
-                  <p className="text-2xl font-bold text-blue-600">{patterns.totalPatterns}</p>
-                  <p className="text-xs text-blue-700 dark:text-blue-400 font-medium">Total</p>
-                </div>
+                  );
+                })}
               </div>
-              <div className="space-y-1.5 pt-1">
-                {patterns.topCalls?.slice(0, 3).map((p: any, i: number) => (
-                  <div key={i} className="flex justify-between items-center text-sm py-0.5">
-                    <span className="text-gray-700 dark:text-gray-300 flex items-center gap-1">
-                      <span className="font-medium">{p.symbol}</span>
-                      <ChartButton symbol={p.symbol} />
-                      <span className="text-gray-400 dark:text-gray-500">{p.pattern}</span>
-                    </span>
-                    <span className="text-green-600 font-semibold">{p.confidence}%</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (scanInProgress || scanTriggered) ? (
-            /* No existing data yet — show full scanning state */
-            <div className="flex flex-col items-center justify-center py-6 gap-4">
-              <div className="relative">
-                <ScanSearch className="w-10 h-10 text-indigo-300 dark:text-indigo-700" />
-                <Loader2 className="w-5 h-5 text-indigo-500 animate-spin absolute -bottom-1 -right-1" />
-              </div>
-              <div className="text-center">
-                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Scanning universe…</p>
-                {scanProgress ? (
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    {scanProgress.done.toLocaleString()} / {scanProgress.total.toLocaleString()} symbols
-                  </p>
-                ) : (
-                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Checking chart patterns across all NSE stocks</p>
-                )}
-              </div>
-              {scanProgress && scanProgress.total > 0 && (
-                <div className="w-full bg-gray-100 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
-                  <div
-                    className="h-full bg-indigo-500 transition-all duration-500 rounded-full"
-                    style={{ width: `${Math.min(100, (scanProgress.done / scanProgress.total) * 100)}%` }}
-                  />
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-5 gap-3">
-              <div className="w-12 h-12 rounded-full bg-indigo-50 dark:bg-indigo-900/30 flex items-center justify-center">
-                <ScanSearch className="w-6 h-6 text-indigo-400" />
-              </div>
-              <div className="text-center">
-                <p className="text-sm font-medium text-gray-700 dark:text-gray-200">No scan data yet</p>
-                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                  Detect bullish &amp; bearish chart patterns across all NSE stocks
-                </p>
-              </div>
-              <button
-                onClick={handleRunScan}
-                disabled={scanTriggered}
-                className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white transition disabled:opacity-60"
-              >
-                {scanTriggered
-                  ? <><Loader2 className="w-3 h-3 animate-spin" /> Starting…</>
-                  : <><ScanSearch className="w-3 h-3" /> Run Pattern Scan</>
-                }
-              </button>
-            </div>
-          )}
+            );
+          })()}
         </div>
 
         {/* Market News */}
