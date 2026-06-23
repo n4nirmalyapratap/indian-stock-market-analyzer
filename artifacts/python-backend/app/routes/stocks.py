@@ -1389,25 +1389,35 @@ async def get_stock_key_stats(symbol: str):
 
 
 @router.get("/{symbol}/event-attribution")
-async def stock_event_attribution(symbol: str):
+async def stock_event_attribution(
+    symbol:  str,
+    company: str = Query(default="", description="Company long name (for search URLs)"),
+):
     """
-    Detect significant price peaks/troughs over 5 years using the hydra price
-    cache (no external API calls, no AI). Results cached in-process for 24h.
+    Detect significant price peaks/troughs using the hydra price cache.
+    Annotates each event with:
+      - reason      : deterministic price-based description (always)
+      - headlines   : real news articles within ±7 days of the swing (best-effort)
+      - search_url  : Google News date-filtered link (always)
+    AI enrichment is a future hook gated on FEATURE_AI_ANALYST=on.
+    Results cached in-process for 24 h.
     """
-    import time
+    import os, time
+    from datetime import datetime, timedelta
+    from urllib.parse import quote_plus
     from ..services.event_attribution_service import detect_swings, _CACHE, _CACHE_TTL
 
     sym       = symbol.upper().strip()
     now       = time.time()
-    cache_key = sym
+    cache_key = f"{sym}:{company}"
 
     if cache_key in _CACHE:
         cached_at, data = _CACHE[cache_key]
         if now - cached_at < _CACHE_TTL:
             return data
 
-    # ── Fetch daily history from hydra cache (no external call) ────────────────
-    df = await svc.price.get_history_dataframe(sym, days=1825)   # up to ~5 years
+    # ── Fetch daily history from hydra cache ───────────────────────────────────
+    df = await svc.price.get_history_dataframe(sym, days=1825)
 
     if df is None or df.empty:
         return {"symbol": sym, "events": [], "prices": [], "error": "No price history"}
@@ -1416,19 +1426,81 @@ async def stock_event_attribution(symbol: str):
     dates  = [d.strftime("%Y-%m-%d") for d in df.index]
     prices = [{"date": d, "close": c} for d, c in zip(dates, closes)]
 
-    # ── Adaptive threshold: tighter for shorter windows ────────────────────────
+    # ── Adaptive threshold ─────────────────────────────────────────────────────
     n = len(closes)
-    if n >= 500:       # ~2+ years daily
-        min_pct = 0.15
-    elif n >= 240:     # ~1 year daily
-        min_pct = 0.10
-    elif n >= 120:     # ~6 months daily
-        min_pct = 0.08
-    else:              # <6 months
-        min_pct = 0.06
+    if n >= 500:    min_pct = 0.15
+    elif n >= 240:  min_pct = 0.10
+    elif n >= 120:  min_pct = 0.08
+    else:           min_pct = 0.06
 
-    # ── Detect swings ──────────────────────────────────────────────────────────
     events = detect_swings(closes, dates, min_pct=min_pct)
+
+    # ── Google News search URL per event (Option 3) ────────────────────────────
+    company_q = (company or sym).strip()
+    for ev in events:
+        try:
+            ev_dt  = datetime.strptime(ev["date"], "%Y-%m-%d")
+            d_min  = (ev_dt - timedelta(days=3)).strftime("%-m/%-d/%Y")
+            d_max  = (ev_dt + timedelta(days=7)).strftime("%-m/%-d/%Y")
+            q      = quote_plus(f"{company_q} share price")
+            ev["search_url"] = (
+                f"https://www.google.com/search?q={q}"
+                f"&tbm=nws&tbs=cdr:1,cd_min:{d_min},cd_max:{d_max}"
+            )
+        except Exception:
+            ev["search_url"] = (
+                f"https://www.google.com/search?q={quote_plus(company_q + ' stock')}&tbm=nws"
+            )
+
+    # ── Real news headlines per event (Option 1, best-effort) ─────────────────
+    try:
+        from ..services import news_service as _ns
+        news_data = await _ns.get_ticker_news(sym, limit=50)
+        articles  = news_data.get("articles", [])
+
+        parsed: list[tuple[datetime, dict]] = []
+        for art in articles:
+            pub = (art.get("published") or "").strip()
+            if not pub or art.get("undated"):
+                continue
+            try:
+                dt = datetime.fromisoformat(pub.replace("Z", "+00:00")).replace(tzinfo=None)
+                parsed.append((dt, art))
+            except Exception:
+                continue
+
+        sym_lc = sym.lower()
+        for ev in events:
+            try:
+                ev_dt  = datetime.strptime(ev["date"], "%Y-%m-%d")
+                lo, hi = ev_dt - timedelta(days=3), ev_dt + timedelta(days=7)
+                window = [(dt, a) for dt, a in parsed if lo <= dt <= hi]
+                # prefer articles that mention the ticker explicitly in the title
+                window.sort(key=lambda x: (
+                    0 if sym_lc in (x[1].get("title") or "").lower() else 1
+                ))
+                ev["headlines"] = [
+                    {
+                        "title":  a.get("title", ""),
+                        "url":    a.get("url", "#"),
+                        "source": a.get("source", ""),
+                    }
+                    for _, a in window[:2]
+                    if a.get("title")
+                ]
+            except Exception:
+                ev["headlines"] = []
+
+    except Exception:
+        for ev in events:
+            ev.setdefault("headlines", [])
+
+    # ── AI enrichment hook (Option 2 — no-op until key is available) ──────────
+    if os.environ.get("FEATURE_AI_ANALYST", "").lower() in ("on", "1", "true"):
+        # Future: for events with no headlines, call AI with:
+        #   symbol, company, ev["date"], ev["move_pct"], ev["direction"]
+        # and replace ev["reason"] with AI-generated text.
+        pass
 
     result = {"symbol": sym, "events": events, "prices": prices}
     _CACHE[cache_key] = (now, result)

@@ -290,6 +290,7 @@ export default function StockLookup() {
           {view === "attribution" && (
             <EventAttribution
               symbol={data.symbol}
+              companyName={data.companyName || data.symbol}
             />
           )}
         </div>
