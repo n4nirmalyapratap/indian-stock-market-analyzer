@@ -983,6 +983,8 @@ async def prewarm_heatmaps() -> dict:
         ("FNO",        "1d"),
         ("NIFTY100",   "1d"),
         ("NIFTYNEXT50","1d"),
+        ("NIFTY500",   "1d"),
+        ("NIFTY200",   "1d"),
     ]
     results: dict[str, bool] = {}
 
