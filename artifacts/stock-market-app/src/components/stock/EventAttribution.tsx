@@ -10,16 +10,27 @@ import {
   Tooltip,
   CartesianGrid,
 } from "recharts";
-import { TrendingUp, TrendingDown, ChevronDown, ChevronUp, Loader2, AlertCircle, GitBranch } from "lucide-react";
+import {
+  TrendingUp, TrendingDown, ChevronDown, ChevronUp,
+  Loader2, AlertCircle, GitBranch, Newspaper, ExternalLink, Search,
+} from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
+interface Headline {
+  title:  string;
+  url:    string;
+  source: string;
+}
+
 interface SwingEvent {
-  date:      string;
-  price:     number;
-  move_pct:  number;
-  direction: "peak" | "trough";
-  reason?:   string;
+  date:        string;
+  price:       number;
+  move_pct:    number;
+  direction:   "peak" | "trough";
+  reason?:     string;
+  headlines?:  Headline[];
+  search_url?: string;
 }
 
 interface ChartPoint {
@@ -72,50 +83,107 @@ const CustomTooltip = ({ active, payload }: any) => {
   );
 };
 
-// ── Table row ──────────────────────────────────────────────────────────────────
+// ── EventRow ───────────────────────────────────────────────────────────────────
 
 function EventRow({ ev, idx }: { ev: SwingEvent; idx: number }) {
   const [expanded, setExpanded] = useState(false);
-  const isPeak  = ev.direction === "peak";
-  const moveCls = isPeak ? "text-emerald-600 dark:text-emerald-400" : "text-red-500 dark:text-red-400";
-  const dateStr = new Date(ev.date).toLocaleDateString("en-IN", {
+
+  const isPeak      = ev.direction === "peak";
+  const moveCls     = isPeak
+    ? "text-emerald-600 dark:text-emerald-400"
+    : "text-red-500 dark:text-red-400";
+  const dateStr     = new Date(ev.date).toLocaleDateString("en-IN", {
     day: "2-digit", month: "short", year: "numeric",
   });
+  const hasHeadlines = (ev.headlines?.length ?? 0) > 0;
 
   return (
     <tr className={`border-b border-gray-100 dark:border-gray-700/60 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors ${idx % 2 !== 0 ? "bg-gray-50/50 dark:bg-gray-800/30" : ""}`}>
+
+      {/* Icon */}
       <td className="py-3 pl-4 pr-2 w-8">
         {isPeak
           ? <TrendingUp  className="w-4 h-4 text-emerald-500" />
           : <TrendingDown className="w-4 h-4 text-red-400" />}
       </td>
+
+      {/* Date */}
       <td className="py-3 pr-4 text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-nowrap">
         {dateStr}
       </td>
+
+      {/* Type */}
       <td className={`py-3 pr-4 text-xs font-semibold whitespace-nowrap ${moveCls}`}>
         {isPeak ? "Peak" : "Trough"}
       </td>
+
+      {/* Price */}
       <td className="py-3 pr-4 text-sm font-bold text-gray-900 dark:text-white whitespace-nowrap">
         ₹{ev.price.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
       </td>
+
+      {/* Move % */}
       <td className={`py-3 pr-4 text-sm font-semibold whitespace-nowrap ${moveCls}`}>
         {ev.move_pct > 0 ? "+" : ""}{ev.move_pct}%
       </td>
-      {ev.reason && (
-        <td className="py-3 pr-4 text-xs text-gray-600 dark:text-gray-400 max-w-xs lg:max-w-md">
-          <p className={expanded ? "" : "line-clamp-2"}>{ev.reason}</p>
-          {ev.reason.length > 100 && (
-            <button
-              onClick={() => setExpanded(e => !e)}
-              className="mt-0.5 text-indigo-500 hover:text-indigo-700 dark:text-indigo-400 flex items-center gap-0.5"
-            >
-              {expanded
-                ? <><ChevronUp className="w-3 h-3" /> Less</>
-                : <><ChevronDown className="w-3 h-3" /> More</>}
-            </button>
-          )}
-        </td>
-      )}
+
+      {/* What happened */}
+      <td className="py-3 pr-4 text-xs text-gray-600 dark:text-gray-400 max-w-xs lg:max-w-md">
+        {hasHeadlines ? (
+          <div className="space-y-1.5">
+            {(expanded ? ev.headlines! : ev.headlines!.slice(0, 1)).map((h, i) => (
+              <a
+                key={i}
+                href={h.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-start gap-1.5 group hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+              >
+                <Newspaper className="w-3 h-3 mt-0.5 shrink-0 text-gray-400 group-hover:text-indigo-500" />
+                <span className="leading-snug">
+                  {h.title}
+                  {h.source && (
+                    <span className="ml-1 text-gray-400 dark:text-gray-500 font-normal">
+                      — {h.source}
+                    </span>
+                  )}
+                </span>
+                <ExternalLink className="w-2.5 h-2.5 mt-0.5 shrink-0 opacity-0 group-hover:opacity-60" />
+              </a>
+            ))}
+
+            {/* expand/collapse if 2 headlines */}
+            {(ev.headlines?.length ?? 0) > 1 && (
+              <button
+                onClick={() => setExpanded(e => !e)}
+                className="text-indigo-500 hover:text-indigo-700 dark:text-indigo-400 flex items-center gap-0.5"
+              >
+                {expanded
+                  ? <><ChevronUp className="w-3 h-3" /> less</>
+                  : <><ChevronDown className="w-3 h-3" /> +{(ev.headlines?.length ?? 0) - 1} more</>}
+              </button>
+            )}
+          </div>
+        ) : (
+          /* fallback: deterministic reason text */
+          ev.reason && (
+            <p className={expanded ? "" : "line-clamp-2"}>{ev.reason}</p>
+          )
+        )}
+
+        {/* Search link — always shown */}
+        {ev.search_url && (
+          <a
+            href={ev.search_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-1.5 inline-flex items-center gap-1 text-indigo-500 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 transition-colors font-medium"
+          >
+            <Search className="w-3 h-3" />
+            Search news
+          </a>
+        )}
+      </td>
     </tr>
   );
 }
@@ -123,13 +191,18 @@ function EventRow({ ev, idx }: { ev: SwingEvent; idx: number }) {
 // ── Main component ─────────────────────────────────────────────────────────────
 
 interface Props {
-  symbol: string;
+  symbol:      string;
+  companyName?: string;
 }
 
-export default function EventAttribution({ symbol }: Props) {
+export default function EventAttribution({ symbol, companyName }: Props) {
+  const company = encodeURIComponent(companyName ?? "");
+
   const { data, isLoading, error } = useQuery<any>({
-    queryKey: ["event-attribution", symbol],
-    queryFn:  () => fetchApi(`/stocks/${encodeURIComponent(symbol)}/event-attribution`),
+    queryKey: ["event-attribution", symbol, companyName],
+    queryFn:  () => fetchApi(
+      `/stocks/${encodeURIComponent(symbol)}/event-attribution?company=${company}`
+    ),
     staleTime: 24 * 60 * 60_000,
     enabled:  !!symbol,
   });
@@ -156,7 +229,7 @@ export default function EventAttribution({ symbol }: Props) {
     return (
       <div className="flex flex-col items-center justify-center py-20 gap-3 text-gray-400 dark:text-gray-500">
         <Loader2 className="w-7 h-7 animate-spin text-indigo-500" />
-        <p className="text-sm font-medium">Analysing 5-year price history…</p>
+        <p className="text-sm font-medium">Analysing price history…</p>
       </div>
     );
   }
@@ -171,6 +244,7 @@ export default function EventAttribution({ symbol }: Props) {
   }
 
   const events: SwingEvent[] = data.events ?? [];
+  const headlineCount = events.filter(e => (e.headlines?.length ?? 0) > 0).length;
 
   return (
     <div className="space-y-6">
@@ -227,7 +301,15 @@ export default function EventAttribution({ symbol }: Props) {
         <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100 dark:border-gray-700">
           <GitBranch className="w-4 h-4 text-indigo-500" />
           <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Swing Timeline</h3>
-          <span className="ml-auto text-xs text-gray-400 dark:text-gray-500">Weekly · 5-year window</span>
+          {headlineCount > 0 && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 text-xs font-medium">
+              <Newspaper className="w-2.5 h-2.5" />
+              {headlineCount} with news
+            </span>
+          )}
+          <span className="ml-auto text-xs text-gray-400 dark:text-gray-500">
+            All swings · click "Search news" for any event
+          </span>
         </div>
 
         {events.length === 0 ? (
@@ -256,6 +338,13 @@ export default function EventAttribution({ symbol }: Props) {
           </div>
         )}
       </div>
+
+      {/* ── Footer note ── */}
+      <p className="text-xs text-gray-400 dark:text-gray-500 text-center pb-1">
+        News headlines matched from RSS &amp; Yahoo Finance feeds (recent events only).
+        Use "Search news" to find coverage for any swing date.
+        {" "}<span className="opacity-70">AI explanations coming soon.</span>
+      </p>
     </div>
   );
 }
