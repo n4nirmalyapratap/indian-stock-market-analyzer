@@ -1389,20 +1389,43 @@ async def get_stock_key_stats(symbol: str):
 
 
 @router.get("/{symbol}/event-attribution")
-async def stock_event_attribution(
-    symbol:  str,
-    company: str = Query(default="", description="Company long name (for LLM context)"),
-    sector:  str = Query(default="", description="Sector (for LLM context)"),
-):
+async def stock_event_attribution(symbol: str):
     """
-    Detect significant price peaks/troughs over 5 years (weekly bars) and
-    use an LLM to attribute the cause of each move.
-    Results cached in-process for 7 days.
+    Detect significant price peaks/troughs over 5 years using the hydra price
+    cache (no external API calls, no AI). Results cached in-process for 24h.
     """
-    from ..services.event_attribution_service import get_event_attribution
-    sym = symbol.upper().strip()
-    data = await get_event_attribution(sym, company_name=company, sector=sector)
-    return data
+    import time
+    from ..services.event_attribution_service import detect_swings, _CACHE, _CACHE_TTL
+
+    sym       = symbol.upper().strip()
+    now       = time.time()
+    cache_key = sym
+
+    if cache_key in _CACHE:
+        cached_at, data = _CACHE[cache_key]
+        if now - cached_at < _CACHE_TTL:
+            return data
+
+    # ── Fetch daily history from hydra cache (no external call) ────────────────
+    df = await svc.price.get_history_dataframe(sym, days=1825)   # ~5 years
+
+    if df is None or df.empty:
+        return {"symbol": sym, "events": [], "prices": [], "error": "No price history"}
+
+    # ── Resample daily → weekly (last close of each week) ──────────────────────
+    import pandas as pd
+    weekly = df["Close"].resample("W").last().dropna()
+
+    closes = [round(float(c), 2) for c in weekly.tolist()]
+    dates  = [d.strftime("%Y-%m-%d") for d in weekly.index]
+    prices = [{"date": d, "close": c} for d, c in zip(dates, closes)]
+
+    # ── Detect swings ──────────────────────────────────────────────────────────
+    events = detect_swings(closes, dates, min_pct=0.15)
+
+    result = {"symbol": sym, "events": events, "prices": prices}
+    _CACHE[cache_key] = (now, result)
+    return result
 
 
 @router.get("/{symbol}")
