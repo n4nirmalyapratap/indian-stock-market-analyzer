@@ -555,19 +555,37 @@ async def get_rrg(level: str = "sector", timeframe: str = "short") -> dict:
 
 
 async def prewarm(timeframe: str = "short") -> dict:
-    """Pre-build the cockpit's default-view caches so the first user load after a
-    market close is instant instead of paying the cold RRG/funnel build on the
-    request thread. `funnel` internally warms `rrg:sector:<tf>`; `subindustry_rrg`
-    warms `rrg:subindustry:<tf>`. Safe to call repeatedly — later calls are cache
-    hits. Each leg is isolated so one failure doesn't abort the other."""
+    """Pre-build caches for a single timeframe (funnel + subindustry RRG).
+    Safe to call repeatedly — later calls are cache hits."""
     out: dict[str, bool] = {}
     for label, coro in (("funnel", funnel(timeframe)), ("subindustry", subindustry_rrg(timeframe))):
         try:
             await coro
             out[label] = True
         except Exception as exc:  # noqa: BLE001 — pre-warm is best-effort
-            logger.warning("rotation prewarm %s failed: %s", label, exc)
+            logger.warning("rotation prewarm %s/%s failed: %s", label, timeframe, exc)
             out[label] = False
+    return out
+
+
+async def prewarm_all() -> dict:
+    """Pre-build caches for ALL three timeframes (short/mid/long) in parallel.
+    Runs each timeframe's funnel+subindustry concurrently so total time ≈ one
+    timeframe instead of three sequential builds (~20s vs ~60s)."""
+    results = await asyncio.gather(
+        prewarm("short"),
+        prewarm("mid"),
+        prewarm("long"),
+        return_exceptions=True,
+    )
+    labels = ("short", "mid", "long")
+    out: dict[str, Any] = {}
+    for tf, res in zip(labels, results):
+        if isinstance(res, Exception):
+            logger.warning("rotation prewarm_all %s failed: %s", tf, res)
+            out[tf] = False
+        else:
+            out[tf] = res
     return out
 
 
