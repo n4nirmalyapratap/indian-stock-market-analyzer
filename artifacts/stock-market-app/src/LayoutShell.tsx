@@ -10,7 +10,7 @@ import {
   Microscope, Brain, TrendingUp, CandlestickChart,
   Settings, ChevronRight, ChevronLeft, Sun, Moon,
   Newspaper, Gauge, Sparkles, Users, Briefcase, Calculator,
-  LogOut, Mail, Compass, Layers,
+  LogOut, Mail, Compass,
 } from "lucide-react";
 
 export const MAIN_NAV = [
@@ -18,7 +18,6 @@ export const MAIN_NAV = [
   { path: "/trading",    label: "Chart Studio",    icon: CandlestickChart },
   { path: "/sectors",    label: "Market Sectors",  icon: BarChart3 },
   { path: "/rotation",   label: "Sector Rotation", icon: Compass },
-  { path: "/sector-analytics", label: "Sub-Industry Rotation", icon: Layers },
   { path: "/insights",   label: "Insights",        icon: Sparkles },
   { path: "/sentiment",  label: "Sentiment",       icon: Gauge },
   { path: "/news",       label: "News Feed",       icon: Newspaper },
