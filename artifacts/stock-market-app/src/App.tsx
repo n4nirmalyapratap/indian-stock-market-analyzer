@@ -41,7 +41,14 @@ const queryClient = new QueryClient({
   // refetchOnWindowFocus defaults to true so any market-data query (even
   // ones not yet migrated to marketDataQueryOptions) re-validates against
   // the official close when the user returns to the tab.
-  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: true } },
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      refetchOnWindowFocus: true,
+      staleTime: 5 * 60 * 1000,   // treat data as fresh for 5 min — avoids
+      gcTime:   30 * 60 * 1000,   // keep cache entries for 30 min after unmount
+    },
+  },
 });
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
