@@ -93,19 +93,44 @@ def _opm(li: dict) -> Optional[float]:
 
 # ── Scoring ───────────────────────────────────────────────────────────────────
 
-def _score_filing(quarters: list[dict]) -> tuple[int, dict, dict]:
+def _find_yoy_quarter(
+    q0_date: date,
+    quarters: list[tuple[date, dict]],
+) -> Optional[dict]:
+    """Return the line_items dict for the quarter closest to q0_date − 365 days.
+    Accepts a match within ±45 days. Returns None if no such quarter exists."""
+    target = q0_date - timedelta(days=365)
+    best_li: Optional[dict] = None
+    best_delta = timedelta(days=999)
+    for pe, li in quarters:
+        delta = abs(pe - target)
+        if delta < best_delta and delta <= timedelta(days=45):
+            best_delta = delta
+            best_li = li
+    return best_li
+
+
+def _score_filing(quarters: list[tuple[date, dict]]) -> tuple[int, dict, dict]:
     """
     Compute 10-point score. Returns (score, score_breakdown, key_metrics).
 
-    `quarters` = [Q0_cur, Q_prev_qoq, Q_yoy, ...] — newest first,
-    each element is the `line_items` JSONB dict from financial_results.
+    `quarters` — list of (period_end, line_items) tuples, newest first,
+    as returned by `_quarters_for_symbol()`.
+
+    YoY baseline is the quarter whose period_end is closest to
+    q0_date − 365 days (±45 days), NOT a fixed list index.
+    QoQ baseline is always quarters[1] (immediately preceding quarter).
     """
-    if len(quarters) < 3:
+    if len(quarters) < 2:
         return 0, {"reason": "insufficient_data"}, {}
 
-    q0    = quarters[0]   # current quarter
-    q_qoq = quarters[1]   # prior quarter (QoQ base)
-    q_yoy = quarters[2]   # same quarter last year (YoY base)
+    q0_date, q0    = quarters[0]   # current quarter
+    _,       q_qoq = quarters[1]   # prior quarter (QoQ base)
+    q_yoy = _find_yoy_quarter(q0_date, quarters[1:])  # same-quarter-last-year
+
+    if q_yoy is None:
+        # Cannot compute any YoY metric — still score QoQ-only criteria
+        q_yoy = {}
 
     score = 0
     breakdown: dict = {}
@@ -199,18 +224,19 @@ def _score_filing(quarters: list[dict]) -> tuple[int, dict, dict]:
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
-def _quarters_for_symbol(symbol: str, basis: str = "consolidated") -> tuple[list[dict], str]:
-    """Read the 5 most recent line_items rows from financial_results.
-    Falls back consolidated → standalone. Returns (quarters_list, actual_basis)."""
+def _quarters_for_symbol(symbol: str, basis: str = "consolidated") -> tuple[list[tuple[date, dict]], str]:
+    """Read the 5 most recent (period_end, line_items) rows from financial_results.
+    Falls back consolidated → standalone.
+    Returns ([(period_end, line_items), ...] newest-first, actual_basis)."""
     ensure_primary_schema()
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT line_items FROM financial_results
+                SELECT period_end, line_items FROM financial_results
                  WHERE symbol = %s AND basis = %s
                  ORDER BY period_end DESC
-                 LIMIT 5
+                 LIMIT 6
                 """,
                 (symbol, basis),
             )
@@ -225,7 +251,10 @@ def _quarters_for_symbol(symbol: str, basis: str = "consolidated") -> tuple[list
                 li = json.loads(li)
             except Exception:
                 li = {}
-        result.append(li or {})
+        pe = r.get("period_end")
+        if not isinstance(pe, date):
+            continue
+        result.append((pe, li or {}))
     return result, basis
 
 
@@ -517,10 +546,11 @@ async def scan_recent_results(
         symbol  = item["symbol"]
         company = item.get("company") or symbol
         try:
-            # Refresh XBRL data (non-blocking on timeout)
+            # Force-refresh XBRL data for each filer so a filing posted since
+            # the last 24 h cache is picked up immediately (not skipped).
             try:
                 await asyncio.wait_for(
-                    _frs.get_financial_results(symbol, basis="consolidated", quarters=5),
+                    _frs.get_financial_results(symbol, basis="consolidated", quarters=6, force=True),
                     timeout=20.0,
                 )
             except asyncio.TimeoutError:
@@ -529,12 +559,12 @@ async def scan_recent_results(
                 logger.debug("Earnings scanner: XBRL error %s: %s", symbol, str(exc)[:80])
 
             quarters, actual_basis = _quarters_for_symbol(symbol, "consolidated")
-            if len(quarters) < 3:
+            # Need at least current + one prior quarter for QoQ; YoY is optional
+            if len(quarters) < 2:
                 continue
 
-            period_end = _latest_period_end(symbol, actual_basis)
-            if not period_end:
-                continue
+            # period_end comes from the newest quarter in the DB (index 0)
+            period_end = quarters[0][0]   # date from (date, line_items) tuple
             period_end_str = period_end.isoformat()
 
             score, score_breakdown, key_metrics = _score_filing(quarters)
@@ -581,32 +611,59 @@ def _format_telegram_alert(
 ) -> str:
     stars = "⭐" * min(score, 10)
 
-    def _pct(val) -> str:
+    def _pct(val, show_sign: bool = True) -> str:
         if val is None:
             return "N/A"
-        sign = "+" if val >= 0 else ""
+        sign = "+" if (show_sign and val >= 0) else ""
         return f"{sign}{val:.1f}%"
 
-    def _pts(key: str) -> str:
+    def _cr(val) -> str:
+        if val is None:
+            return "N/A"
+        return f"₹{val:,.0f} Cr"
+
+    def _pts_tag(key: str) -> str:
         b = breakdown.get(key, {})
         p = b.get("pts", 0)
-        return f"({p}/2 pts)" if isinstance(p, int) else ""
+        return f"[{p}/2]" if isinstance(p, int) else ""
+
+    rev_cr = key_metrics.get("revenueCrores")
+    pat_cr = key_metrics.get("patCrores")
 
     lines = [
         f"📊 *Earnings Radar Alert* — {score}/10 {stars}",
         f"*{company}* (`{symbol}`) · Q ending {period_end}",
         "",
-        f"📈 Revenue YoY: {_pct(key_metrics.get('revenueYoYPct'))} {_pts('revYoY')}",
-        f"💰 PAT YoY: {_pct(key_metrics.get('patYoYPct'))} {_pts('patYoY')}",
-        f"🔄 QoQ Rev/PAT: {_pct(key_metrics.get('revenueQoQPct'))} / {_pct(key_metrics.get('patQoQPct'))} {_pts('qoq')}",
+        # Revenue: absolute + YoY % change + pts
+        f"📈 Revenue: {_cr(rev_cr)}  |  YoY {_pct(key_metrics.get('revenueYoYPct'))} {_pts_tag('revYoY')}",
+        # PAT: absolute + YoY % change + pts
+        f"💰 PAT:     {_cr(pat_cr)}  |  YoY {_pct(key_metrics.get('patYoYPct'))} {_pts_tag('patYoY')}",
+        # QoQ
+        f"🔄 QoQ Rev {_pct(key_metrics.get('revenueQoQPct'))} / PAT {_pct(key_metrics.get('patQoQPct'))} {_pts_tag('qoq')}",
     ]
+
+    # OPM line
     opm_cur = key_metrics.get("opmCurPct")
     opm_yoy = key_metrics.get("opmYoYPct")
     if opm_cur is not None and opm_yoy is not None:
-        direction = "↑" if opm_cur > opm_yoy else "↓"
-        lines.append(f"📊 OPM: {opm_yoy:.1f}% → {opm_cur:.1f}% {direction} {_pts('opm')}")
+        direction = "↑ BEAT" if opm_cur > opm_yoy else "↓ MISS"
+        lines.append(
+            f"📊 OPM: {opm_yoy:.1f}% → {opm_cur:.1f}% {direction} {_pts_tag('opm')}"
+        )
+    elif opm_cur is not None:
+        lines.append(f"📊 OPM: {opm_cur:.1f}% (no prior-year data)")
+
+    # Exceptional items + finance costs (quality check)
+    q_bd = breakdown.get("quality", {})
+    exc_ok = q_bd.get("exceptionalOk", True)
     fin_chg = key_metrics.get("finCostChgPct")
-    lines.append(f"✅ Fin cost: {_pct(fin_chg)} {_pts('quality')}")
+    fin_line = (
+        f"✅ No negative exceptional; fin cost {_pct(fin_chg)} {_pts_tag('quality')}"
+        if exc_ok
+        else f"⚠️ Neg exceptional items; fin cost {_pct(fin_chg)} {_pts_tag('quality')}"
+    )
+    lines.append(fin_line)
+
     lines += ["", f"🔗 https://www.bseindia.com/stock-share-price/{symbol}"]
     return "\n".join(lines)
 
