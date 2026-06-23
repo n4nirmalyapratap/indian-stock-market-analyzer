@@ -2,17 +2,12 @@ import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
 import {
-  ResponsiveContainer,
-  ComposedChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
+  ResponsiveContainer, ComposedChart, Line,
+  XAxis, YAxis, Tooltip, CartesianGrid,
 } from "recharts";
 import {
-  TrendingUp, TrendingDown, ChevronDown, ChevronUp,
-  Loader2, AlertCircle, GitBranch, Newspaper, ExternalLink, Search,
+  TrendingUp, TrendingDown, Loader2, AlertCircle,
+  GitBranch, Newspaper, ExternalLink, Search,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -24,19 +19,37 @@ interface Headline {
 }
 
 interface SwingEvent {
-  date:        string;
-  price:       number;
-  move_pct:    number;
-  direction:   "peak" | "trough";
-  reason?:     string;
-  headlines?:  Headline[];
-  search_url?: string;
+  date:          string;
+  price:         number;
+  move_pct:      number;
+  direction:     "peak" | "trough";
+  reason?:       string;
+  context_tags?: string[];
+  headlines?:    Headline[];
+  search_url?:   string;
 }
 
 interface ChartPoint {
   date:  string;
   close: number;
   event: SwingEvent | null;
+}
+
+// ── Context tag styling ────────────────────────────────────────────────────────
+
+const TAG_STYLES: Record<string, string> = {
+  "Union Budget":          "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
+  "RBI MPC":               "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
+  "F&O Monthly Expiry":    "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300",
+  "Results Season":        "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+  "Index Rebalancing":     "bg-slate-100 text-slate-700 dark:bg-slate-700/40 dark:text-slate-300",
+};
+
+function tagStyle(tag: string): string {
+  for (const [key, cls] of Object.entries(TAG_STYLES)) {
+    if (tag.includes(key)) return cls;
+  }
+  return "bg-gray-100 text-gray-700 dark:bg-gray-700/40 dark:text-gray-300";
 }
 
 // ── Chart helpers ──────────────────────────────────────────────────────────────
@@ -70,14 +83,21 @@ const CustomTooltip = ({ active, payload }: any) => {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload as ChartPoint;
   return (
-    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg p-2.5 shadow-lg text-xs max-w-[200px]">
+    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg p-2.5 shadow-lg text-xs max-w-[220px]">
       <p className="font-medium text-gray-900 dark:text-white">{d.date}</p>
       <p className="text-indigo-600 dark:text-indigo-400 font-bold">₹{d.close.toFixed(2)}</p>
       {d.event && (
-        <p className={`mt-1 font-semibold ${d.event.direction === "peak" ? "text-emerald-600" : "text-red-500"}`}>
-          {d.event.direction === "peak" ? "▲ Peak" : "▼ Trough"}&nbsp;
-          {d.event.move_pct > 0 ? "+" : ""}{d.event.move_pct}%
-        </p>
+        <>
+          <p className={`mt-1 font-semibold ${d.event.direction === "peak" ? "text-emerald-600" : "text-red-500"}`}>
+            {d.event.direction === "peak" ? "▲ Peak" : "▼ Trough"}&nbsp;
+            {d.event.move_pct > 0 ? "+" : ""}{d.event.move_pct}%
+          </p>
+          {(d.event.context_tags ?? []).length > 0 && (
+            <p className="mt-1 text-gray-500 dark:text-gray-400">
+              {d.event.context_tags!.join(" · ")}
+            </p>
+          )}
+        </>
       )}
     </div>
   );
@@ -86,7 +106,7 @@ const CustomTooltip = ({ active, payload }: any) => {
 // ── EventRow ───────────────────────────────────────────────────────────────────
 
 function EventRow({ ev, idx }: { ev: SwingEvent; idx: number }) {
-  const [expanded, setExpanded] = useState(false);
+  const [showAll, setShowAll] = useState(false);
 
   const isPeak      = ev.direction === "peak";
   const moveCls     = isPeak
@@ -95,94 +115,113 @@ function EventRow({ ev, idx }: { ev: SwingEvent; idx: number }) {
   const dateStr     = new Date(ev.date).toLocaleDateString("en-IN", {
     day: "2-digit", month: "short", year: "numeric",
   });
-  const hasHeadlines = (ev.headlines?.length ?? 0) > 0;
+
+  const tags      = ev.context_tags ?? [];
+  const headlines = ev.headlines   ?? [];
+  const hasContext = tags.length > 0 || headlines.length > 0;
 
   return (
     <tr className={`border-b border-gray-100 dark:border-gray-700/60 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors ${idx % 2 !== 0 ? "bg-gray-50/50 dark:bg-gray-800/30" : ""}`}>
 
       {/* Icon */}
-      <td className="py-3 pl-4 pr-2 w-8">
+      <td className="py-3 pl-4 pr-2 w-8 align-top">
         {isPeak
-          ? <TrendingUp  className="w-4 h-4 text-emerald-500" />
-          : <TrendingDown className="w-4 h-4 text-red-400" />}
+          ? <TrendingUp  className="w-4 h-4 text-emerald-500 mt-0.5" />
+          : <TrendingDown className="w-4 h-4 text-red-400 mt-0.5" />}
       </td>
 
       {/* Date */}
-      <td className="py-3 pr-4 text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-nowrap">
+      <td className="py-3 pr-4 text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-nowrap align-top">
         {dateStr}
       </td>
 
       {/* Type */}
-      <td className={`py-3 pr-4 text-xs font-semibold whitespace-nowrap ${moveCls}`}>
+      <td className={`py-3 pr-4 text-xs font-semibold whitespace-nowrap align-top ${moveCls}`}>
         {isPeak ? "Peak" : "Trough"}
       </td>
 
       {/* Price */}
-      <td className="py-3 pr-4 text-sm font-bold text-gray-900 dark:text-white whitespace-nowrap">
+      <td className="py-3 pr-4 text-sm font-bold text-gray-900 dark:text-white whitespace-nowrap align-top">
         ₹{ev.price.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
       </td>
 
       {/* Move % */}
-      <td className={`py-3 pr-4 text-sm font-semibold whitespace-nowrap ${moveCls}`}>
+      <td className={`py-3 pr-4 text-sm font-semibold whitespace-nowrap align-top ${moveCls}`}>
         {ev.move_pct > 0 ? "+" : ""}{ev.move_pct}%
       </td>
 
       {/* What happened */}
-      <td className="py-3 pr-4 text-xs text-gray-600 dark:text-gray-400 max-w-xs lg:max-w-md">
-        {hasHeadlines ? (
-          <div className="space-y-1.5">
-            {(expanded ? ev.headlines! : ev.headlines!.slice(0, 1)).map((h, i) => (
-              <a
-                key={i}
-                href={h.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-start gap-1.5 group hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
-              >
-                <Newspaper className="w-3 h-3 mt-0.5 shrink-0 text-gray-400 group-hover:text-indigo-500" />
-                <span className="leading-snug">
-                  {h.title}
-                  {h.source && (
-                    <span className="ml-1 text-gray-400 dark:text-gray-500 font-normal">
-                      — {h.source}
-                    </span>
-                  )}
+      <td className="py-3 pr-4 align-top max-w-xs lg:max-w-md">
+        <div className="space-y-2">
+
+          {/* Calendar context tags */}
+          {tags.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {tags.map(tag => (
+                <span
+                  key={tag}
+                  className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold leading-none ${tagStyle(tag)}`}
+                >
+                  {tag}
                 </span>
-                <ExternalLink className="w-2.5 h-2.5 mt-0.5 shrink-0 opacity-0 group-hover:opacity-60" />
-              </a>
-            ))}
+              ))}
+            </div>
+          )}
 
-            {/* expand/collapse if 2 headlines */}
-            {(ev.headlines?.length ?? 0) > 1 && (
-              <button
-                onClick={() => setExpanded(e => !e)}
-                className="text-indigo-500 hover:text-indigo-700 dark:text-indigo-400 flex items-center gap-0.5"
-              >
-                {expanded
-                  ? <><ChevronUp className="w-3 h-3" /> less</>
-                  : <><ChevronDown className="w-3 h-3" /> +{(ev.headlines?.length ?? 0) - 1} more</>}
-              </button>
-            )}
-          </div>
-        ) : (
-          /* fallback: deterministic reason text */
-          ev.reason && (
-            <p className={expanded ? "" : "line-clamp-2"}>{ev.reason}</p>
-          )
-        )}
+          {/* Real news headlines (when matched) */}
+          {headlines.length > 0 && (
+            <div className="space-y-1">
+              {(showAll ? headlines : headlines.slice(0, 1)).map((h, i) => (
+                <a
+                  key={i}
+                  href={h.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-start gap-1.5 group text-xs text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+                >
+                  <Newspaper className="w-3 h-3 mt-0.5 shrink-0 text-gray-400 group-hover:text-indigo-500" />
+                  <span className="leading-snug">
+                    {h.title}
+                    {h.source && (
+                      <span className="ml-1 text-gray-400 dark:text-gray-500 font-normal">
+                        — {h.source}
+                      </span>
+                    )}
+                  </span>
+                  <ExternalLink className="w-2.5 h-2.5 mt-0.5 shrink-0 opacity-0 group-hover:opacity-60" />
+                </a>
+              ))}
+              {headlines.length > 1 && (
+                <button
+                  onClick={() => setShowAll(s => !s)}
+                  className="text-[10px] text-indigo-500 hover:text-indigo-700 dark:text-indigo-400"
+                >
+                  {showAll ? "show less" : `+${headlines.length - 1} more`}
+                </button>
+              )}
+            </div>
+          )}
 
-        {/* Search link — always shown */}
-        {ev.search_url && (
-          <a
-            href={ev.search_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-1.5 inline-flex items-center gap-1 text-indigo-500 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 transition-colors font-medium"
-          >
-            <Search className="w-3 h-3" />
-            Search news
-          </a>
-        )}
+          {/* No real data yet — small hint */}
+          {!hasContext && (
+            <span className="text-xs text-gray-400 dark:text-gray-500 italic">
+              No calendar event matched
+            </span>
+          )}
+
+          {/* Search link — always shown, primary CTA */}
+          {ev.search_url && (
+            <a
+              href={ev.search_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-700 text-[11px] font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors"
+            >
+              <Search className="w-2.5 h-2.5" />
+              Find reason on Google
+            </a>
+          )}
+        </div>
       </td>
     </tr>
   );
@@ -191,7 +230,7 @@ function EventRow({ ev, idx }: { ev: SwingEvent; idx: number }) {
 // ── Main component ─────────────────────────────────────────────────────────────
 
 interface Props {
-  symbol:      string;
+  symbol:       string;
   companyName?: string;
 }
 
@@ -244,7 +283,8 @@ export default function EventAttribution({ symbol, companyName }: Props) {
   }
 
   const events: SwingEvent[] = data.events ?? [];
-  const headlineCount = events.filter(e => (e.headlines?.length ?? 0) > 0).length;
+  const taggedCount    = events.filter(e => (e.context_tags?.length ?? 0) > 0).length;
+  const headlineCount  = events.filter(e => (e.headlines?.length   ?? 0) > 0).length;
 
   return (
     <div className="space-y-6">
@@ -298,17 +338,23 @@ export default function EventAttribution({ symbol, companyName }: Props) {
 
       {/* ── Table ── */}
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm overflow-hidden">
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100 dark:border-gray-700">
+        <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-100 dark:border-gray-700">
           <GitBranch className="w-4 h-4 text-indigo-500" />
           <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Swing Timeline</h3>
-          {headlineCount > 0 && (
-            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 text-xs font-medium">
-              <Newspaper className="w-2.5 h-2.5" />
-              {headlineCount} with news
+
+          {taggedCount > 0 && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-xs font-medium">
+              🗓 {taggedCount} calendar events matched
             </span>
           )}
-          <span className="ml-auto text-xs text-gray-400 dark:text-gray-500">
-            All swings · click "Search news" for any event
+          {headlineCount > 0 && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 text-xs font-medium">
+              <Newspaper className="w-2.5 h-2.5" /> {headlineCount} with news
+            </span>
+          )}
+
+          <span className="ml-auto text-xs text-gray-400 dark:text-gray-500 hidden sm:block">
+            Click "Find reason on Google" for full context
           </span>
         </div>
 
@@ -339,12 +385,22 @@ export default function EventAttribution({ symbol, companyName }: Props) {
         )}
       </div>
 
-      {/* ── Footer note ── */}
-      <p className="text-xs text-gray-400 dark:text-gray-500 text-center pb-1">
-        News headlines matched from RSS &amp; Yahoo Finance feeds (recent events only).
-        Use "Search news" to find coverage for any swing date.
-        {" "}<span className="opacity-70">AI explanations coming soon.</span>
-      </p>
+      {/* ── Legend ── */}
+      <div className="flex flex-wrap gap-3 text-[11px] text-gray-500 dark:text-gray-400 px-1 pb-1">
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded-sm bg-amber-400 inline-block" /> Union Budget
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded-sm bg-blue-400 inline-block" /> RBI MPC Decision
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded-sm bg-purple-400 inline-block" /> F&amp;O Expiry
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded-sm bg-emerald-400 inline-block" /> Earnings Season
+        </span>
+        <span className="ml-auto opacity-60">AI explanations coming soon</span>
+      </div>
     </div>
   );
 }
