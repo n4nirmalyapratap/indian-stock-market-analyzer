@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { TrendingUp, TrendingDown, Activity, AlertCircle, RefreshCw } from "lucide-react";
+import { TrendingUp, TrendingDown, Activity, AlertCircle, RefreshCw, ScanSearch, Loader2 } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
 import DataFreshness from "@/components/DataFreshness";
 import MacroStrip from "@/components/macro/MacroStrip";
@@ -52,12 +52,29 @@ export default function Dashboard() {
   const { data: rotation, isLoading: rotLoading, isFetching: rotFetching, error: rotErr } = useQuery(
     marketDataQueryOptions(["rotation"], api.sectorRotation),
   );
+  const [scanTriggered, setScanTriggered] = useState(false);
   const { data: patterns, isLoading: patLoading, isFetching: patFetching } = useQuery(
     marketDataQueryOptions(["patterns-overview"], () => api.patterns(), {
       staleTime: 10 * 60 * 1000,
-      refetchInterval: false,
+      refetchInterval: (query) => {
+        const d = query.state.data as any;
+        return d?.scanInProgress ? 3000 : false;
+      },
     }),
   );
+
+  const scanInProgress = patterns?.scanInProgress ?? false;
+  const scanProgress   = patterns?.scanProgress ?? null;
+
+  async function handleRunScan() {
+    setScanTriggered(true);
+    try {
+      await api.triggerScan();
+      await queryClient.invalidateQueries({ queryKey: ["patterns-overview"] });
+    } finally {
+      setScanTriggered(false);
+    }
+  }
 
   // Show per-card loaders ONLY on the initial fetch (when there's no
   // cached data yet). Background refetches (every 60s while market is
@@ -176,10 +193,40 @@ export default function Dashboard() {
             {patBusy && <CardLoader />}
           </div>
           {patLoading ? (
-            <div className="space-y-2">
-              {[1,2,3].map(i => <div key={i} className="h-8 bg-gray-100 dark:bg-gray-700 animate-pulse rounded" />)}
+            <div className="space-y-3">
+              <div className="flex gap-4">
+                {[1,2,3].map(i => <div key={i} className="flex-1 h-16 bg-gray-100 dark:bg-gray-700 animate-pulse rounded-lg" />)}
+              </div>
+              {[1,2,3].map(i => <div key={i} className="h-6 bg-gray-100 dark:bg-gray-700 animate-pulse rounded" />)}
             </div>
-          ) : patterns ? (
+          ) : (scanInProgress || scanTriggered) ? (
+            /* ── Scan in progress ── */
+            <div className="flex flex-col items-center justify-center py-6 gap-4">
+              <div className="relative">
+                <ScanSearch className="w-10 h-10 text-indigo-300 dark:text-indigo-700" />
+                <Loader2 className="w-5 h-5 text-indigo-500 animate-spin absolute -bottom-1 -right-1" />
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Scanning universe…</p>
+                {scanProgress ? (
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    {scanProgress.done.toLocaleString()} / {scanProgress.total.toLocaleString()} symbols
+                  </p>
+                ) : (
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Checking chart patterns across all NSE stocks</p>
+                )}
+              </div>
+              {scanProgress && scanProgress.total > 0 && (
+                <div className="w-full bg-gray-100 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className="h-full bg-indigo-500 transition-all duration-500 rounded-full"
+                    style={{ width: `${Math.min(100, (scanProgress.done / scanProgress.total) * 100)}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          ) : patterns && (patterns.totalPatterns ?? 0) > 0 ? (
+            /* ── Has results ── */
             <div className="space-y-3">
               <div className="flex gap-4">
                 <div className="flex-1 bg-green-50 dark:bg-green-900/25 rounded-lg p-3 text-center">
@@ -209,7 +256,28 @@ export default function Dashboard() {
               </div>
             </div>
           ) : (
-            <p className="text-sm text-gray-500 dark:text-gray-400">Run a pattern scan to see signals</p>
+            /* ── No scan yet / empty ── */
+            <div className="flex flex-col items-center justify-center py-5 gap-3">
+              <div className="w-12 h-12 rounded-full bg-indigo-50 dark:bg-indigo-900/30 flex items-center justify-center">
+                <ScanSearch className="w-6 h-6 text-indigo-400" />
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-medium text-gray-700 dark:text-gray-200">No scan data yet</p>
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                  Detect bullish & bearish chart patterns across all NSE stocks
+                </p>
+              </div>
+              <button
+                onClick={handleRunScan}
+                disabled={scanTriggered}
+                className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white transition disabled:opacity-60"
+              >
+                {scanTriggered
+                  ? <><Loader2 className="w-3 h-3 animate-spin" /> Starting…</>
+                  : <><ScanSearch className="w-3 h-3" /> Run Pattern Scan</>
+                }
+              </button>
+            </div>
           )}
           {patBusy && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-100 dark:bg-indigo-900"><div className="h-full bg-indigo-400 animate-pulse" /></div>}
         </div>
