@@ -203,41 +203,43 @@ export default function StockLookup() {
           </div>
 
           {/* View toggle: Technicals | Financials | News */}
-          <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1 w-fit">
+          <div className="w-full overflow-x-auto">
+            <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1 w-fit min-w-max">
             <button
               onClick={() => setView("technicals")}
               data-testid="technicals-tab-btn"
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "technicals" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+              className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${view === "technicals" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
             >
-              <Activity className="w-3.5 h-3.5" /> Technicals
+              <Activity className="w-3.5 h-3.5 shrink-0" /> <span className="hidden sm:inline">Technicals</span>
             </button>
             <button
               onClick={() => setView("financials")}
               data-testid="financials-tab-btn"
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "financials" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+              className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${view === "financials" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
             >
-              <BarChart2 className="w-3.5 h-3.5" /> Financials
+              <BarChart2 className="w-3.5 h-3.5 shrink-0" /> <span className="hidden sm:inline">Financials</span>
             </button>
             <button
               onClick={() => setView("news")}
               data-testid="news-tab-btn"
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "news" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+              className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${view === "news" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
             >
-              <Newspaper className="w-3.5 h-3.5" /> News
+              <Newspaper className="w-3.5 h-3.5 shrink-0" /> <span className="hidden sm:inline">News</span>
             </button>
             <button
               onClick={() => setView("scoring")}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "scoring" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+              className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${view === "scoring" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
             >
-              <Layers className="w-3.5 h-3.5" /> Scoring
+              <Layers className="w-3.5 h-3.5 shrink-0" /> <span className="hidden sm:inline">Scoring</span>
             </button>
             <button
               onClick={() => setView("shareholding")}
               data-testid="shareholding-tab-btn"
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "shareholding" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+              className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${view === "shareholding" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
             >
-              <PieChart className="w-3.5 h-3.5" /> Shareholding
+              <PieChart className="w-3.5 h-3.5 shrink-0" /> <span className="hidden sm:inline">Shareholding</span>
             </button>
+            </div>
           </div>
 
           {/* Technicals view — TradingView-style Indicators Summary */}
