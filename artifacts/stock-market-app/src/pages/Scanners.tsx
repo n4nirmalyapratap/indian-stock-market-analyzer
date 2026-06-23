@@ -743,10 +743,10 @@ export default function Scanners() {
       )}
 
       {/* Split layout */}
-      <div className="flex gap-5 flex-1 min-h-0">
+      <div className="flex flex-col lg:flex-row gap-5 flex-1 min-h-0">
 
         {/* ── LEFT: Scanner List ────────────────────────────────────────────── */}
-        <div className="w-80 flex-shrink-0 flex flex-col overflow-hidden">
+        <div className="w-full lg:w-80 lg:flex-shrink-0 flex flex-col overflow-hidden">
           {/* Category filter pills — sticky at the top of the column.
               Shows All / each category with the scanner count per group.
               Clicking a pill switches between "All grouped" and "single
@@ -775,7 +775,7 @@ export default function Scanners() {
             </div>
           )}
 
-          <div className="flex-1 flex flex-col gap-3 overflow-y-auto pb-4 pr-1">
+          <div className="max-h-[55vh] lg:max-h-none flex-1 flex flex-col gap-3 overflow-y-auto pb-4 pr-1">
             {isLoading ? (
               [...Array(3)].map((_, i) => <div key={i} className="h-36 bg-gray-100 animate-pulse rounded-xl" />)
             ) : scanners.length === 0 ? (
