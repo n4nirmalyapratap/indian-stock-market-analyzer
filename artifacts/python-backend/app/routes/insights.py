@@ -766,14 +766,38 @@ async def _fetch_one_quote_async(sym: str, period_yf: str, performance: str) -> 
     `performance` selects the comparison-base offset (1d=prev close, 1w=5d
     back, 1m=22d back, 1y=earliest in window) so the % change actually
     matches the timeframe label the user picked.
+
+    Bare US tickers (no dot suffix, e.g. "AAPL") bypass PriceService because
+    symbol_map.to_yahoo_ticker appends .NS to dotless symbols, causing Yahoo
+    to return Indian data or nothing. For those we fall back to yfinance direct.
+    Suffixed global tickers (.HK, .T, .L, .DE, …) pass through PriceService
+    unchanged and reach Yahoo correctly.
     """
     days = _PERIOD_DAYS.get(period_yf, 7)
     try:
         rows = await svc.price.get_historical_data(sym, days)
     except Exception as e:
         logger.debug("heatmap PriceService.get_historical_data %s failed: %s", sym, e)
-        return None
+        rows = []
     closes = _closes_from_history(rows)
+
+    # If PriceService returned nothing AND the symbol has no exchange suffix,
+    # it was likely mangled to <SYM>.NS by symbol_map. Retry with yfinance
+    # using the bare ticker (handles US stocks like AAPL, MSFT, NVDA, etc.).
+    if len(closes) < 2 and "." not in sym:
+        import yfinance as yf
+        loop = asyncio.get_running_loop()
+        yf_period = period_yf  # already in yfinance format ("5d","1mo","3mo","1y")
+        def _yf_sync() -> list[float]:
+            try:
+                hist = yf.Ticker(sym).history(period=yf_period, auto_adjust=False)
+                if hist.empty:
+                    return []
+                return [float(c) for c in hist["Close"].dropna().tolist()]
+            except Exception:
+                return []
+        closes = await loop.run_in_executor(None, _yf_sync)
+
     if len(closes) < 2:
         return None
 
@@ -978,13 +1002,31 @@ async def prewarm_heatmaps() -> dict:
     (they share the same price-service disk cache so subsequent timeframes are
     fast too). Called from _heatmap_prewarm_task() in main.py on every startup."""
     top = [
-        ("NIFTY50",    "1d"),
-        ("SENSEX",     "1d"),
-        ("FNO",        "1d"),
-        ("NIFTY100",   "1d"),
-        ("NIFTYNEXT50","1d"),
-        ("NIFTY500",   "1d"),
-        ("NIFTY200",   "1d"),
+        # India — broad (most visited)
+        ("NIFTY50",              "1d"),
+        ("SENSEX",               "1d"),
+        ("FNO",                  "1d"),
+        ("NIFTY100",             "1d"),
+        ("NIFTYNEXT50",          "1d"),
+        ("NIFTY500",             "1d"),
+        ("NIFTY200",             "1d"),
+        ("NIFTYLARGEMIDCAP250",  "1d"),
+        ("NIFTYSMALLCAP250",     "1d"),
+        # Global — Americas
+        ("DOW30",                "1d"),
+        ("NASDAQ100",            "1d"),
+        ("SP500",                "1d"),
+        # Global — Europe
+        ("FTSE100",              "1d"),
+        ("DAX40",                "1d"),
+        ("CAC40",                "1d"),
+        ("EUROSTOXX50",          "1d"),
+        # Global — Asia Pacific
+        ("NIKKEI225",            "1d"),
+        ("HANGSENG",             "1d"),
+        ("KOSPI",                "1d"),
+        ("ASX200",               "1d"),
+        ("SSE50",                "1d"),
     ]
     results: dict[str, bool] = {}
 
