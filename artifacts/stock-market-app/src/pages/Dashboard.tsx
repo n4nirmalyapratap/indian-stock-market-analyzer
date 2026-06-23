@@ -229,48 +229,56 @@ export default function Dashboard() {
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
 
         {/* FII Net */}
-        <StatCard
-          loading={fiiLoading}
-          title={`FII Net${fiiSuffix}`}
-          value={fmtCr(fiiNet)}
-          sub={fiiDate ? fiiDate : undefined}
-          subCls={fiiNet != null ? (fiiNet >= 0 ? "text-green-500" : "text-red-500") : "text-gray-400 dark:text-gray-500"}
-          icon={<TrendingUp className="w-4 h-4" />}
-        />
+        <Link href="/insights/fii-dii" className="block rounded-xl hover:ring-2 hover:ring-indigo-300 dark:hover:ring-indigo-600 transition-all">
+          <StatCard
+            loading={fiiLoading}
+            title={`FII Net${fiiSuffix}`}
+            value={fmtCr(fiiNet)}
+            sub={fiiDate ? fiiDate : undefined}
+            subCls={fiiNet != null ? (fiiNet >= 0 ? "text-green-500" : "text-red-500") : "text-gray-400 dark:text-gray-500"}
+            icon={<TrendingUp className="w-4 h-4" />}
+          />
+        </Link>
 
         {/* DII Net */}
-        <StatCard
-          loading={fiiLoading}
-          title={`DII Net${fiiSuffix}`}
-          value={fmtCr(diiNet)}
-          sub={fiiDate ? fiiDate : undefined}
-          subCls={diiNet != null ? (diiNet >= 0 ? "text-green-500" : "text-red-500") : "text-gray-400 dark:text-gray-500"}
-          icon={<TrendingDown className="w-4 h-4" />}
-        />
+        <Link href="/insights/fii-dii" className="block rounded-xl hover:ring-2 hover:ring-indigo-300 dark:hover:ring-indigo-600 transition-all">
+          <StatCard
+            loading={fiiLoading}
+            title={`DII Net${fiiSuffix}`}
+            value={fmtCr(diiNet)}
+            sub={fiiDate ? fiiDate : undefined}
+            subCls={diiNet != null ? (diiNet >= 0 ? "text-green-500" : "text-red-500") : "text-gray-400 dark:text-gray-500"}
+            icon={<TrendingDown className="w-4 h-4" />}
+          />
+        </Link>
 
         {/* A/D Ratio */}
-        <StatCard
-          loading={rotLoading}
-          title="A/D Ratio"
-          value={adRatio == null ? "∞" : adRatio.toFixed(2)}
-          sub={
-            breadth.advancing != null
-              ? `↑${breadth.advancing} adv  ↓${breadth.declining ?? 0} dec`
-              : undefined
-          }
-          subCls={adCls}
-          icon={<BarChart2 className="w-4 h-4" />}
-        />
+        <Link href="/rotation" className="block rounded-xl hover:ring-2 hover:ring-indigo-300 dark:hover:ring-indigo-600 transition-all">
+          <StatCard
+            loading={rotLoading}
+            title="A/D Ratio"
+            value={adRatio == null ? "∞" : adRatio.toFixed(2)}
+            sub={
+              breadth.advancing != null
+                ? `↑${breadth.advancing} adv  ↓${breadth.declining ?? 0} dec`
+                : undefined
+            }
+            subCls={adCls}
+            icon={<BarChart2 className="w-4 h-4" />}
+          />
+        </Link>
 
         {/* Market Phase */}
-        <StatCard
-          loading={rotLoading}
-          title="Market Phase"
-          value={rotPhase ?? "—"}
-          sub={breadth.breadthScore != null ? `Breadth ${breadth.breadthScore > 0 ? "+" : ""}${breadth.breadthScore}` : undefined}
-          subCls={phaseCls}
-          icon={<Layers className="w-4 h-4" />}
-        />
+        <Link href="/rotation" className="block rounded-xl hover:ring-2 hover:ring-indigo-300 dark:hover:ring-indigo-600 transition-all">
+          <StatCard
+            loading={rotLoading}
+            title="Market Phase"
+            value={rotPhase ?? "—"}
+            sub={breadth.breadthScore != null ? `Breadth ${breadth.breadthScore > 0 ? "+" : ""}${breadth.breadthScore}` : undefined}
+            subCls={phaseCls}
+            icon={<Layers className="w-4 h-4" />}
+          />
+        </Link>
 
         {/* Pattern Signals (clickable) */}
         <Link href="/patterns" className="block rounded-xl hover:ring-2 hover:ring-indigo-300 dark:hover:ring-indigo-600 transition-all">
