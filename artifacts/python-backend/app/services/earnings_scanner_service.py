@@ -27,6 +27,7 @@ from typing import Optional
 import httpx
 
 from ..lib.auth_store import ensure_primary_schema, get_conn, now_ms
+from ..lib.symbol_map import canonical_symbol
 
 logger = logging.getLogger("earnings_scanner")
 
@@ -546,19 +547,24 @@ async def scan_recent_results(
         symbol  = item["symbol"]
         company = item.get("company") or symbol
         try:
+            # Canonicalize symbol before any DB read/write so that the feed's
+            # raw symbol (which may differ in case or suffix) always maps to the
+            # same NSE ticker stored by financial_results_service.
+            canon = canonical_symbol(symbol) or symbol
+
             # Force-refresh XBRL data for each filer so a filing posted since
             # the last 24 h cache is picked up immediately (not skipped).
             try:
                 await asyncio.wait_for(
-                    _frs.get_financial_results(symbol, basis="consolidated", quarters=6, force=True),
+                    _frs.get_financial_results(canon, basis="consolidated", quarters=6, force=True),
                     timeout=20.0,
                 )
             except asyncio.TimeoutError:
-                logger.debug("Earnings scanner: XBRL timeout %s", symbol)
+                logger.debug("Earnings scanner: XBRL timeout %s", canon)
             except Exception as exc:
-                logger.debug("Earnings scanner: XBRL error %s: %s", symbol, str(exc)[:80])
+                logger.debug("Earnings scanner: XBRL error %s: %s", canon, str(exc)[:80])
 
-            quarters, actual_basis = _quarters_for_symbol(symbol, "consolidated")
+            quarters, actual_basis = _quarters_for_symbol(canon, "consolidated")
             # Need at least current + one prior quarter for QoQ; YoY is optional
             if len(quarters) < 2:
                 continue
@@ -574,22 +580,22 @@ async def scan_recent_results(
                 score >= ALERT_THRESHOLD
                 and telegram_svc is not None
                 and telegram_chat_id
-                and not _already_alerted(symbol, period_end_str, actual_basis)
+                and not _already_alerted(canon, period_end_str, actual_basis)
             )
 
             sent = False
             if should_telegram:
-                msg = _format_telegram_alert(symbol, company, period_end_str, score, score_breakdown, key_metrics)
+                msg = _format_telegram_alert(canon, company, period_end_str, score, score_breakdown, key_metrics)
                 try:
                     ok = await telegram_svc.send_message(telegram_chat_id, msg)
                     sent = bool(ok)
                     if sent:
                         alerted += 1
-                        logger.info("Earnings alert sent: %s score=%d/%d", symbol, score, 10)
+                        logger.info("Earnings alert sent: %s score=%d/%d", canon, score, 10)
                 except Exception as tg_exc:
-                    logger.warning("Earnings TG send failed %s: %s", symbol, tg_exc)
+                    logger.warning("Earnings TG send failed %s: %s", canon, tg_exc)
 
-            _upsert_alert(symbol, company, period_end_str, actual_basis,
+            _upsert_alert(canon, company, period_end_str, actual_basis,
                           score, score_breakdown, key_metrics, sent)
 
         except Exception as exc:

@@ -166,7 +166,11 @@ export default function EarningsRadar() {
 
   const scanMutation = useMutation({
     mutationFn: () =>
-      fetchApi("/earnings-scanner/scan", { method: "POST", body: JSON.stringify({}) }),
+      fetchApi("/earnings-scanner/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["earnings-radar/alerts"] });
     },
