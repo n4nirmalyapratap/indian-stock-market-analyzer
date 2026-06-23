@@ -43,7 +43,7 @@ function Skel({ h = "h-4", w = "w-full", rounded = "rounded" }: { h?: string; w?
 interface StatProps {
   title: string;
   value: string;
-  sub?: string;
+  sub?: React.ReactNode;
   subCls?: string;
   loading?: boolean;
   accent?: string;
@@ -262,15 +262,21 @@ export default function Dashboard() {
           icon={<TrendingDown className="w-4 h-4" />}
         />
 
-        <StatCard
-          loading={patLoading}
-          title="Pattern Signals"
-          value={patterns ? String(patterns.totalPatterns ?? 0) : "—"}
-          sub={patterns && (patterns.totalPatterns ?? 0) > 0
-            ? `↑${patterns.callSignals} bullish  ↓${patterns.putSignals} bearish`
-            : "Run a scan to detect"}
-          icon={<Activity className="w-4 h-4" />}
-        />
+        <Link href="/patterns" className="block rounded-xl hover:ring-2 hover:ring-indigo-300 dark:hover:ring-indigo-600 transition-all">
+          <StatCard
+            loading={patLoading}
+            title="Pattern Signals"
+            value={patterns ? String(patterns.totalPatterns ?? 0) : "—"}
+            sub={
+              (scanInProgress || scanTriggered)
+                ? <span className="flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Scanning…</span>
+                : patterns && (patterns.totalPatterns ?? 0) > 0
+                  ? `↑${patterns.callSignals} bullish  ↓${patterns.putSignals} bearish`
+                  : "Run a scan to detect"
+            }
+            icon={<Activity className="w-4 h-4" />}
+          />
+        </Link>
       </div>
 
       {/* ── Top Movers ──────────────────────────────────────────────────────── */}
@@ -299,33 +305,27 @@ export default function Dashboard() {
               </div>
               {[1,2,3].map(i => <div key={i} className="h-5 bg-gray-100 dark:bg-gray-700 animate-pulse rounded" />)}
             </div>
-          ) : (scanInProgress || scanTriggered) ? (
-            <div className="flex flex-col items-center justify-center py-6 gap-4">
-              <div className="relative">
-                <ScanSearch className="w-10 h-10 text-indigo-300 dark:text-indigo-700" />
-                <Loader2 className="w-5 h-5 text-indigo-500 animate-spin absolute -bottom-1 -right-1" />
-              </div>
-              <div className="text-center">
-                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Scanning universe…</p>
-                {scanProgress ? (
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    {scanProgress.done.toLocaleString()} / {scanProgress.total.toLocaleString()} symbols
-                  </p>
-                ) : (
-                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Checking chart patterns across all NSE stocks</p>
-                )}
-              </div>
-              {scanProgress && scanProgress.total > 0 && (
-                <div className="w-full bg-gray-100 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
-                  <div
-                    className="h-full bg-indigo-500 transition-all duration-500 rounded-full"
-                    style={{ width: `${Math.min(100, (scanProgress.done / scanProgress.total) * 100)}%` }}
-                  />
-                </div>
-              )}
-            </div>
           ) : patterns && (patterns.totalPatterns ?? 0) > 0 ? (
             <div className="space-y-3">
+              {/* Slim scanning banner — shown while scan is running, data stays visible */}
+              {(scanInProgress || scanTriggered) && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800">
+                  <Loader2 className="w-3 h-3 text-indigo-500 animate-spin flex-shrink-0" />
+                  <span className="text-xs text-indigo-700 dark:text-indigo-300 flex-1">
+                    {scanProgress
+                      ? `Updating… ${scanProgress.done.toLocaleString()} / ${scanProgress.total.toLocaleString()} symbols`
+                      : "Scan in progress…"}
+                  </span>
+                  {scanProgress && scanProgress.total > 0 && (
+                    <div className="w-16 bg-indigo-200 dark:bg-indigo-800 rounded-full h-1 overflow-hidden flex-shrink-0">
+                      <div
+                        className="h-full bg-indigo-500 transition-all duration-500 rounded-full"
+                        style={{ width: `${Math.min(100, (scanProgress.done / scanProgress.total) * 100)}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="flex gap-3">
                 <div className="flex-1 bg-green-50 dark:bg-green-900/25 rounded-lg p-3 text-center">
                   <p className="text-2xl font-bold text-green-600">{patterns.callSignals}</p>
@@ -352,6 +352,32 @@ export default function Dashboard() {
                   </div>
                 ))}
               </div>
+            </div>
+          ) : (scanInProgress || scanTriggered) ? (
+            /* No existing data yet — show full scanning state */
+            <div className="flex flex-col items-center justify-center py-6 gap-4">
+              <div className="relative">
+                <ScanSearch className="w-10 h-10 text-indigo-300 dark:text-indigo-700" />
+                <Loader2 className="w-5 h-5 text-indigo-500 animate-spin absolute -bottom-1 -right-1" />
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Scanning universe…</p>
+                {scanProgress ? (
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    {scanProgress.done.toLocaleString()} / {scanProgress.total.toLocaleString()} symbols
+                  </p>
+                ) : (
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Checking chart patterns across all NSE stocks</p>
+                )}
+              </div>
+              {scanProgress && scanProgress.total > 0 && (
+                <div className="w-full bg-gray-100 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className="h-full bg-indigo-500 transition-all duration-500 rounded-full"
+                    style={{ width: `${Math.min(100, (scanProgress.done / scanProgress.total) * 100)}%` }}
+                  />
+                </div>
+              )}
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-5 gap-3">
