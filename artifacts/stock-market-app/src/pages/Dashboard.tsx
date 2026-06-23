@@ -3,13 +3,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { api, fetchApi } from "@/lib/api";
 import {
-  RefreshCw, Activity, ScanSearch, Loader2,
-  Newspaper, TrendingUp, TrendingDown, Zap, Rocket,
+  RefreshCw, Activity, Loader2,
+  Newspaper, TrendingUp, TrendingDown, Rocket, BarChart2, Layers,
 } from "lucide-react";
 import MacroStrip from "@/components/macro/MacroStrip";
 import GlobalIndicesPanel from "@/components/GlobalIndicesPanel";
 import TopMoversPanel from "@/components/TopMoversPanel";
-import ChartButton from "@/components/ChartButton";
 import { marketDataQueryOptions } from "@/lib/marketData";
 
 // ── formatters ────────────────────────────────────────────────────────────────
@@ -23,14 +22,6 @@ function fmtCr(v: number | null | undefined): string {
   return `${sign}₹${abs.toFixed(2)}`;
 }
 
-function vixMeta(v: number | null | undefined): { label: string; cls: string; bg: string } {
-  if (v == null) return { label: "—",        cls: "text-gray-400 dark:text-gray-500",                   bg: "bg-gray-100 dark:bg-gray-700/40" };
-  if (v < 12)    return { label: "Very Low",  cls: "text-emerald-600 dark:text-emerald-400",             bg: "bg-emerald-50 dark:bg-emerald-900/20" };
-  if (v < 15)    return { label: "Low",       cls: "text-green-600 dark:text-green-400",                 bg: "bg-green-50 dark:bg-green-900/20" };
-  if (v < 20)    return { label: "Moderate",  cls: "text-amber-600 dark:text-amber-400",                 bg: "bg-amber-50 dark:bg-amber-900/20" };
-  if (v < 25)    return { label: "Elevated",  cls: "text-orange-600 dark:text-orange-400",               bg: "bg-orange-50 dark:bg-orange-900/20" };
-  return               { label: "High Fear",  cls: "text-red-600 dark:text-red-400",                     bg: "bg-red-50 dark:bg-red-900/20" };
-}
 
 // ── Skeleton ──────────────────────────────────────────────────────────────────
 
@@ -63,30 +54,6 @@ function StatCard({ title, value, sub, subCls, loading, icon }: StatProps) {
       {loading
         ? <Skel h="h-3" w="w-16" />
         : sub && <p className={`text-xs ${subCls ?? "text-gray-500 dark:text-gray-400"}`}>{sub}</p>
-      }
-    </div>
-  );
-}
-
-// ── VIX card (slightly richer) ────────────────────────────────────────────────
-
-function VixCard({ vix, loading }: { vix: any; loading: boolean }) {
-  const { label, cls, bg } = vixMeta(vix?.price);
-  return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm p-4 flex flex-col gap-2">
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">India VIX</p>
-        <Zap className="w-4 h-4 text-amber-400" />
-      </div>
-      {loading
-        ? <Skel h="h-7" w="w-20" rounded="rounded-md" />
-        : <p className="text-xl font-bold text-gray-900 dark:text-white leading-tight">
-            {vix?.price != null ? vix.price.toFixed(2) : "—"}
-          </p>
-      }
-      {loading
-        ? <Skel h="h-5" w="w-20" rounded="rounded-full" />
-        : <span className={`self-start text-xs font-semibold px-2 py-0.5 rounded-full ${bg} ${cls}`}>{label}</span>
       }
     </div>
   );
@@ -143,8 +110,7 @@ function NewsPanel({ loading, items }: { loading: boolean; items: any[] }) {
 
 export default function Dashboard() {
   const queryClient = useQueryClient();
-  const [refreshing, setRefreshing]     = useState(false);
-  const [scanTriggered, setScanTriggered] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const { data: patterns, isLoading: patLoading, isFetching: patFetching } = useQuery(
     marketDataQueryOptions(["patterns-overview"], () => api.patterns(), {
@@ -156,15 +122,15 @@ export default function Dashboard() {
     }),
   );
 
-  const { data: macro, isLoading: macroLoading } = useQuery(
-    marketDataQueryOptions(["macro-dash"], api.macroDashboard, { staleTime: 5 * 60_000 }),
-  );
-
   const { data: fiiData, isLoading: fiiLoading } = useQuery<any>({
     queryKey: ["fii-dash-equity"],
-    queryFn:  () => fetchApi("/insights/fii-dii?segment=equity&days=10"),
+    queryFn:  () => fetchApi("/insights/fii-dii?segment=equity&days=30"),
     staleTime: 10 * 60_000,
   });
+
+  const { data: rotation, isLoading: rotLoading } = useQuery(
+    marketDataQueryOptions(["sector-rotation-dash"], api.sectorRotation, { staleTime: 5 * 60_000 }),
+  );
 
   const { data: newsData, isLoading: newsLoading } = useQuery({
     queryKey: ["news-dash"],
@@ -179,27 +145,17 @@ export default function Dashboard() {
   });
 
   const scanInProgress = patterns?.scanInProgress ?? false;
-  const scanProgress   = patterns?.scanProgress   ?? null;
-
-  async function handleRunScan() {
-    setScanTriggered(true);
-    try {
-      await api.triggerScan();
-      await queryClient.invalidateQueries({ queryKey: ["patterns-overview"] });
-    } finally {
-      setScanTriggered(false);
-    }
-  }
 
   async function handleRefresh() {
     setRefreshing(true);
     try {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["patterns-overview"] }),
-        queryClient.invalidateQueries({ queryKey: ["macro-dash"] }),
+        queryClient.invalidateQueries({ queryKey: ["sector-rotation-dash"] }),
         queryClient.invalidateQueries({ queryKey: ["fii-dash-equity"] }),
         queryClient.invalidateQueries({ queryKey: ["news-dash"] }),
         queryClient.invalidateQueries({ queryKey: ["global-indices"] }),
+        queryClient.invalidateQueries({ queryKey: ["ipo-dash"] }),
       ]);
     } finally {
       setRefreshing(false);
@@ -213,16 +169,39 @@ export default function Dashboard() {
     return rows.length > 0 ? rows[0] : null;
   }, [fiiData]);
 
-  const fiiNet = latestFiiRow?.fiiNet ?? null;
-  const diiNet = latestFiiRow?.diiNet ?? null;
-  const fiiDate = latestFiiRow?.date ?? null;
+  const fiiNet  = latestFiiRow?.fiiNet  ?? null;
+  const diiNet  = latestFiiRow?.diiNet  ?? null;
+  const fiiDate = latestFiiRow?.date    ?? null;
+
+  // Smart FII/DII card title — show "· Today" / "· Yesterday" only when it matches
+  const todayIso     = new Date().toISOString().slice(0, 10);
+  const yesterdayIso = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+  const fiiSuffix = fiiDate === todayIso ? " · Today" : fiiDate === yesterdayIso ? " · Yesterday" : "";
+
+  // A/D Ratio & Market Phase from sector rotation
+  const adRatio    = (rotation as any)?.adRatio     ?? null;
+  const breadth    = (rotation as any)?.marketBreadth ?? {};
+  const rotPhase   = (rotation as any)?.rotationPhase ?? null;
+
+  // Colour helpers
+  const adCls = adRatio == null ? "text-gray-400 dark:text-gray-500"
+    : adRatio >= 1.5 ? "text-emerald-600 dark:text-emerald-400"
+    : adRatio >= 0.8 ? "text-amber-600 dark:text-amber-400"
+    : "text-red-600 dark:text-red-400";
+
+  const phaseLower  = (rotPhase ?? "").toLowerCase();
+  const phaseCls    = phaseLower.includes("bear") || phaseLower.includes("recession")
+    ? "text-red-600 dark:text-red-400"
+    : phaseLower.includes("slow") || phaseLower.includes("late")
+    ? "text-amber-600 dark:text-amber-400"
+    : phaseLower.includes("full") || phaseLower.includes("early")
+    ? "text-emerald-600 dark:text-emerald-400"
+    : "text-blue-600 dark:text-blue-400";
 
   const newsItems = useMemo(() => {
     const articles: any[] = (newsData as any)?.articles ?? [];
     return articles.slice(0, 5);
   }, [newsData]);
-
-  const vix = macro?.currencyStrip?.vix;
 
   return (
     <div className="space-y-6">
@@ -246,35 +225,61 @@ export default function Dashboard() {
       {/* ── Macro strip ─────────────────────────────────────────────────────── */}
       <MacroStrip />
 
-      {/* ── 4 quick-glance cards ─────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <VixCard vix={vix} loading={macroLoading} />
+      {/* ── 5 quick-glance cards ─────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
 
+        {/* FII Net */}
         <StatCard
           loading={fiiLoading}
-          title="FII Net · Today"
+          title={`FII Net${fiiSuffix}`}
           value={fmtCr(fiiNet)}
-          sub={fiiDate ?? undefined}
+          sub={fiiDate ? fiiDate : undefined}
           subCls={fiiNet != null ? (fiiNet >= 0 ? "text-green-500" : "text-red-500") : "text-gray-400 dark:text-gray-500"}
           icon={<TrendingUp className="w-4 h-4" />}
         />
 
+        {/* DII Net */}
         <StatCard
           loading={fiiLoading}
-          title="DII Net · Today"
+          title={`DII Net${fiiSuffix}`}
           value={fmtCr(diiNet)}
-          sub={fiiDate ?? undefined}
+          sub={fiiDate ? fiiDate : undefined}
           subCls={diiNet != null ? (diiNet >= 0 ? "text-green-500" : "text-red-500") : "text-gray-400 dark:text-gray-500"}
           icon={<TrendingDown className="w-4 h-4" />}
         />
 
+        {/* A/D Ratio */}
+        <StatCard
+          loading={rotLoading}
+          title="A/D Ratio"
+          value={adRatio == null ? "∞" : adRatio.toFixed(2)}
+          sub={
+            breadth.advancing != null
+              ? `↑${breadth.advancing} adv  ↓${breadth.declining ?? 0} dec`
+              : undefined
+          }
+          subCls={adCls}
+          icon={<BarChart2 className="w-4 h-4" />}
+        />
+
+        {/* Market Phase */}
+        <StatCard
+          loading={rotLoading}
+          title="Market Phase"
+          value={rotPhase ?? "—"}
+          sub={breadth.breadthScore != null ? `Breadth ${breadth.breadthScore > 0 ? "+" : ""}${breadth.breadthScore}` : undefined}
+          subCls={phaseCls}
+          icon={<Layers className="w-4 h-4" />}
+        />
+
+        {/* Pattern Signals (clickable) */}
         <Link href="/patterns" className="block rounded-xl hover:ring-2 hover:ring-indigo-300 dark:hover:ring-indigo-600 transition-all">
           <StatCard
             loading={patLoading}
             title="Pattern Signals"
             value={patterns ? String(patterns.totalPatterns ?? 0) : "—"}
             sub={
-              (scanInProgress || scanTriggered)
+              scanInProgress
                 ? <span className="flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Scanning…</span>
                 : patterns && (patterns.totalPatterns ?? 0) > 0
                   ? `↑${patterns.callSignals} bullish  ↓${patterns.putSignals} bearish`
@@ -283,6 +288,7 @@ export default function Dashboard() {
             icon={<Activity className="w-4 h-4" />}
           />
         </Link>
+
       </div>
 
       {/* ── Top Movers ──────────────────────────────────────────────────────── */}
