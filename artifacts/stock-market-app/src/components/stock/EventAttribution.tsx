@@ -162,10 +162,13 @@ export default function EventAttribution({ symbol }: Props) {
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm p-4">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h3 className="text-sm font-semibold text-gray-900 dark:text-white">5-Year Price History</h3>
+            <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Price History</h3>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
               <span className="text-emerald-500 font-bold">▲</span> Peaks &nbsp;
-              <span className="text-red-400 font-bold">▼</span> Troughs &nbsp;· Weekly bars · ≥15% swings
+              <span className="text-red-400 font-bold">▼</span> Troughs
+              {chartData.length > 0 && (
+                <> &nbsp;· {chartData[0].date} → {chartData[chartData.length - 1].date}</>
+              )}
             </p>
           </div>
           <span className="text-xs text-gray-400 dark:text-gray-500">{events.length} swings</span>

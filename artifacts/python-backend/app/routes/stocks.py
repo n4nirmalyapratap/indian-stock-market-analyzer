@@ -1407,21 +1407,28 @@ async def stock_event_attribution(symbol: str):
             return data
 
     # ── Fetch daily history from hydra cache (no external call) ────────────────
-    df = await svc.price.get_history_dataframe(sym, days=1825)   # ~5 years
+    df = await svc.price.get_history_dataframe(sym, days=1825)   # up to ~5 years
 
     if df is None or df.empty:
         return {"symbol": sym, "events": [], "prices": [], "error": "No price history"}
 
-    # ── Resample daily → weekly (last close of each week) ──────────────────────
-    import pandas as pd
-    weekly = df["Close"].resample("W").last().dropna()
-
-    closes = [round(float(c), 2) for c in weekly.tolist()]
-    dates  = [d.strftime("%Y-%m-%d") for d in weekly.index]
+    closes = [round(float(c), 2) for c in df["Close"].tolist()]
+    dates  = [d.strftime("%Y-%m-%d") for d in df.index]
     prices = [{"date": d, "close": c} for d, c in zip(dates, closes)]
 
+    # ── Adaptive threshold: tighter for shorter windows ────────────────────────
+    n = len(closes)
+    if n >= 500:       # ~2+ years daily
+        min_pct = 0.15
+    elif n >= 240:     # ~1 year daily
+        min_pct = 0.10
+    elif n >= 120:     # ~6 months daily
+        min_pct = 0.08
+    else:              # <6 months
+        min_pct = 0.06
+
     # ── Detect swings ──────────────────────────────────────────────────────────
-    events = detect_swings(closes, dates, min_pct=0.15)
+    events = detect_swings(closes, dates, min_pct=min_pct)
 
     result = {"symbol": sym, "events": events, "prices": prices}
     _CACHE[cache_key] = (now, result)
