@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
 import {
@@ -10,39 +10,27 @@ import {
   Tooltip,
   CartesianGrid,
 } from "recharts";
-import { TrendingUp, TrendingDown, ChevronDown, ChevronUp, Loader2, AlertCircle, Info } from "lucide-react";
+import { TrendingUp, TrendingDown, Loader2, AlertCircle, GitBranch } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-interface AttributionEvent {
+interface SwingEvent {
   date:      string;
   price:     number;
   move_pct:  number;
   direction: "peak" | "trough";
-  category:  "Earnings" | "Macro" | "Regulatory" | "Sector" | "Technical";
-  reason:    string;
 }
 
 interface ChartPoint {
-  date:   string;
-  close:  number;
-  event:  AttributionEvent | null;
+  date:  string;
+  close: number;
+  event: SwingEvent | null;
 }
 
-// ── Constants ──────────────────────────────────────────────────────────────────
-
-const CATEGORY_STYLE: Record<string, { bg: string; text: string; dot: string }> = {
-  Earnings:   { bg: "bg-blue-100 dark:bg-blue-900/30",   text: "text-blue-700 dark:text-blue-300",   dot: "#3b82f6" },
-  Macro:      { bg: "bg-red-100 dark:bg-red-900/30",     text: "text-red-700 dark:text-red-300",     dot: "#ef4444" },
-  Regulatory: { bg: "bg-purple-100 dark:bg-purple-900/30", text: "text-purple-700 dark:text-purple-300", dot: "#a855f7" },
-  Sector:     { bg: "bg-amber-100 dark:bg-amber-900/30", text: "text-amber-700 dark:text-amber-300", dot: "#f59e0b" },
-  Technical:  { bg: "bg-gray-100 dark:bg-gray-700/50",   text: "text-gray-600 dark:text-gray-300",   dot: "#6b7280" },
-};
+// ── Chart helpers ──────────────────────────────────────────────────────────────
 
 const PEAK_COLOR   = "#10b981";
 const TROUGH_COLOR = "#ef4444";
-
-// ── Chart helpers ──────────────────────────────────────────────────────────────
 
 function fmtDateTick(dateStr: string): string {
   const d = new Date(dateStr);
@@ -75,7 +63,8 @@ const CustomTooltip = ({ active, payload }: any) => {
       <p className="text-indigo-600 dark:text-indigo-400 font-bold">₹{d.close.toFixed(2)}</p>
       {d.event && (
         <p className={`mt-1 font-semibold ${d.event.direction === "peak" ? "text-emerald-600" : "text-red-500"}`}>
-          {d.event.direction === "peak" ? "▲ Peak" : "▼ Trough"} {d.event.move_pct > 0 ? "+" : ""}{d.event.move_pct}%
+          {d.event.direction === "peak" ? "▲ Peak" : "▼ Trough"}&nbsp;
+          {d.event.move_pct > 0 ? "+" : ""}{d.event.move_pct}%
         </p>
       )}
     </div>
@@ -84,59 +73,31 @@ const CustomTooltip = ({ active, payload }: any) => {
 
 // ── Table row ──────────────────────────────────────────────────────────────────
 
-function EventRow({ ev, idx }: { ev: AttributionEvent; idx: number }) {
-  const [expanded, setExpanded] = useState(false);
-  const isPeak   = ev.direction === "peak";
-  const catStyle = CATEGORY_STYLE[ev.category] ?? CATEGORY_STYLE.Technical;
-  const moveCls  = isPeak ? "text-emerald-600 dark:text-emerald-400" : "text-red-500 dark:text-red-400";
-
-  const dateObj  = new Date(ev.date);
-  const dateStr  = dateObj.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+function EventRow({ ev, idx }: { ev: SwingEvent; idx: number }) {
+  const isPeak  = ev.direction === "peak";
+  const moveCls = isPeak ? "text-emerald-600 dark:text-emerald-400" : "text-red-500 dark:text-red-400";
+  const dateStr = new Date(ev.date).toLocaleDateString("en-IN", {
+    day: "2-digit", month: "short", year: "numeric",
+  });
 
   return (
-    <tr className={`border-b border-gray-100 dark:border-gray-700/60 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors ${idx % 2 === 0 ? "" : "bg-gray-50/50 dark:bg-gray-800/30"}`}>
-      {/* Direction icon */}
+    <tr className={`border-b border-gray-100 dark:border-gray-700/60 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors ${idx % 2 !== 0 ? "bg-gray-50/50 dark:bg-gray-800/30" : ""}`}>
       <td className="py-3 pl-4 pr-2 w-8">
         {isPeak
-          ? <TrendingUp className="w-4 h-4 text-emerald-500" />
+          ? <TrendingUp  className="w-4 h-4 text-emerald-500" />
           : <TrendingDown className="w-4 h-4 text-red-400" />}
       </td>
-
-      {/* Date */}
       <td className="py-3 pr-4 text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-nowrap">
         {dateStr}
       </td>
-
-      {/* Price */}
+      <td className={`py-3 pr-4 text-xs font-semibold whitespace-nowrap ${moveCls}`}>
+        {isPeak ? "Peak" : "Trough"}
+      </td>
       <td className="py-3 pr-4 text-sm font-bold text-gray-900 dark:text-white whitespace-nowrap">
         ₹{ev.price.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
       </td>
-
-      {/* Move % */}
       <td className={`py-3 pr-4 text-sm font-semibold whitespace-nowrap ${moveCls}`}>
         {ev.move_pct > 0 ? "+" : ""}{ev.move_pct}%
-      </td>
-
-      {/* Category */}
-      <td className="py-3 pr-4">
-        <span className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full ${catStyle.bg} ${catStyle.text}`}>
-          {ev.category}
-        </span>
-      </td>
-
-      {/* Reason */}
-      <td className="py-3 pr-4 text-xs text-gray-600 dark:text-gray-400 max-w-xs lg:max-w-lg">
-        <div>
-          <p className={expanded ? "" : "line-clamp-2"}>{ev.reason}</p>
-          {ev.reason.length > 120 && (
-            <button
-              onClick={() => setExpanded(e => !e)}
-              className="mt-0.5 text-indigo-500 hover:text-indigo-700 dark:text-indigo-400 flex items-center gap-0.5"
-            >
-              {expanded ? <><ChevronUp className="w-3 h-3" /> Less</> : <><ChevronDown className="w-3 h-3" /> More</>}
-            </button>
-          )}
-        </div>
       </td>
     </tr>
   );
@@ -145,28 +106,21 @@ function EventRow({ ev, idx }: { ev: AttributionEvent; idx: number }) {
 // ── Main component ─────────────────────────────────────────────────────────────
 
 interface Props {
-  symbol:      string;
-  companyName: string;
-  sector:      string;
+  symbol: string;
 }
 
-export default function EventAttribution({ symbol, companyName, sector }: Props) {
+export default function EventAttribution({ symbol }: Props) {
   const { data, isLoading, error } = useQuery<any>({
     queryKey: ["event-attribution", symbol],
-    queryFn:  () =>
-      fetchApi(
-        `/stocks/${encodeURIComponent(symbol)}/event-attribution` +
-        `?company=${encodeURIComponent(companyName)}&sector=${encodeURIComponent(sector)}`,
-      ),
-    staleTime: 6 * 60 * 60_000,
-    enabled:   !!symbol,
+    queryFn:  () => fetchApi(`/stocks/${encodeURIComponent(symbol)}/event-attribution`),
+    staleTime: 24 * 60 * 60_000,
+    enabled:  !!symbol,
   });
 
-  // Merge event markers into the price series for the chart
   const chartData = useMemo<ChartPoint[]>(() => {
     if (!data?.prices) return [];
-    const eventMap = new Map<string, AttributionEvent>(
-      (data.events ?? []).map((e: AttributionEvent) => [e.date, e]),
+    const eventMap = new Map<string, SwingEvent>(
+      (data.events ?? []).map((e: SwingEvent) => [e.date, e]),
     );
     return data.prices.map((p: { date: string; close: number }) => ({
       date:  p.date,
@@ -175,7 +129,6 @@ export default function EventAttribution({ symbol, companyName, sector }: Props)
     }));
   }, [data]);
 
-  // X-axis: show one tick every ~13 weeks (quarterly)
   const xTicks = useMemo(() => {
     if (!chartData.length) return [];
     const step = Math.max(1, Math.floor(chartData.length / 10));
@@ -184,13 +137,9 @@ export default function EventAttribution({ symbol, companyName, sector }: Props)
 
   if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 gap-4 text-gray-400 dark:text-gray-500">
-        <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
+      <div className="flex flex-col items-center justify-center py-20 gap-3 text-gray-400 dark:text-gray-500">
+        <Loader2 className="w-7 h-7 animate-spin text-indigo-500" />
         <p className="text-sm font-medium">Analysing 5-year price history…</p>
-        <p className="text-xs text-center max-w-xs">
-          Detecting swing highs and lows, then using AI to explain each move.
-          First load takes ~20 seconds; results are cached for 7 days.
-        </p>
       </div>
     );
   }
@@ -199,12 +148,12 @@ export default function EventAttribution({ symbol, companyName, sector }: Props)
     return (
       <div className="flex items-center gap-3 p-4 text-sm text-red-600 bg-red-50 dark:bg-red-900/20 dark:text-red-400 rounded-xl border border-red-200 dark:border-red-800">
         <AlertCircle className="w-5 h-5 shrink-0" />
-        Unable to load event attribution. Please try again.
+        Unable to load price history. Please try again.
       </div>
     );
   }
 
-  const events: AttributionEvent[] = data.events ?? [];
+  const events: SwingEvent[] = data.events ?? [];
 
   return (
     <div className="space-y-6">
@@ -214,12 +163,12 @@ export default function EventAttribution({ symbol, companyName, sector }: Props)
         <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="text-sm font-semibold text-gray-900 dark:text-white">5-Year Price History</h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400">
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
               <span className="text-emerald-500 font-bold">▲</span> Peaks &nbsp;
-              <span className="text-red-400 font-bold">▼</span> Troughs &nbsp;· Weekly bars
+              <span className="text-red-400 font-bold">▼</span> Troughs &nbsp;· Weekly bars · ≥15% swings
             </p>
           </div>
-          <span className="text-xs text-gray-400 dark:text-gray-500">{events.length} events detected</span>
+          <span className="text-xs text-gray-400 dark:text-gray-500">{events.length} swings</span>
         </div>
         <ResponsiveContainer width="100%" height={260}>
           <ComposedChart data={chartData} margin={{ top: 10, right: 8, left: 0, bottom: 0 }}>
@@ -256,9 +205,9 @@ export default function EventAttribution({ symbol, companyName, sector }: Props)
       {/* ── Table ── */}
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm overflow-hidden">
         <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100 dark:border-gray-700">
-          <Info className="w-4 h-4 text-indigo-500" />
-          <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Event Attribution Timeline</h3>
-          <span className="ml-auto text-xs text-gray-400 dark:text-gray-500">AI-generated · Weekly data</span>
+          <GitBranch className="w-4 h-4 text-indigo-500" />
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Swing Timeline</h3>
+          <span className="ml-auto text-xs text-gray-400 dark:text-gray-500">Weekly · 5-year window</span>
         </div>
 
         {events.length === 0 ? (
@@ -270,12 +219,11 @@ export default function EventAttribution({ symbol, companyName, sector }: Props)
             <table className="w-full text-left">
               <thead>
                 <tr className="border-b border-gray-100 dark:border-gray-700">
-                  <th className="py-2 pl-4 pr-2 text-xs font-semibold text-gray-400 uppercase tracking-wide w-8" />
+                  <th className="py-2 pl-4 pr-2 w-8" />
                   <th className="py-2 pr-4 text-xs font-semibold text-gray-400 uppercase tracking-wide whitespace-nowrap">Date</th>
+                  <th className="py-2 pr-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Type</th>
                   <th className="py-2 pr-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Price</th>
                   <th className="py-2 pr-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Move</th>
-                  <th className="py-2 pr-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Category</th>
-                  <th className="py-2 pr-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Reason</th>
                 </tr>
               </thead>
               <tbody>
@@ -286,12 +234,6 @@ export default function EventAttribution({ symbol, companyName, sector }: Props)
             </table>
           </div>
         )}
-
-        <div className="px-4 py-2 border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60">
-          <p className="text-xs text-gray-400 dark:text-gray-500">
-            ⚠ AI-generated attributions are for educational purposes only and may not reflect exact causal factors. Not investment advice.
-          </p>
-        </div>
       </div>
     </div>
   );
