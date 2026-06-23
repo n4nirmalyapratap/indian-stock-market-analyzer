@@ -1388,6 +1388,23 @@ async def get_stock_key_stats(symbol: str):
     }
 
 
+@router.get("/{symbol}/event-attribution")
+async def stock_event_attribution(
+    symbol:  str,
+    company: str = Query(default="", description="Company long name (for LLM context)"),
+    sector:  str = Query(default="", description="Sector (for LLM context)"),
+):
+    """
+    Detect significant price peaks/troughs over 5 years (weekly bars) and
+    use an LLM to attribute the cause of each move.
+    Results cached in-process for 7 days.
+    """
+    from ..services.event_attribution_service import get_event_attribution
+    sym = symbol.upper().strip()
+    data = await get_event_attribution(sym, company_name=company, sector=sector)
+    return data
+
+
 @router.get("/{symbol}")
 async def get_stock(symbol: str):
     data = await svc.stocks.get_stock_details(symbol)
