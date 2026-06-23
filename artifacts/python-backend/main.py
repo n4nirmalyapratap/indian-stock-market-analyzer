@@ -109,16 +109,6 @@ async def _cache_warmup_task() -> None:
     except Exception as e:
         logger.warning("EOD seal failed: %s", e)
 
-    # Market is closed here (we returned early above if open) — pre-build the
-    # sector-rotation cockpit caches so a restart during closed hours doesn't
-    # leave the first cockpit load paying the cold build on the request thread.
-    try:
-        from app.services import sector_rotation_service as _srs  # noqa: PLC0415
-        res = await _srs.prewarm()
-        logger.info("Startup rotation prewarm: %s", res)
-    except Exception as e:
-        logger.warning("Startup rotation prewarm failed: %s", e)
-
     # Pre-warm sector detail pages so the first heatmap drilldown click is
     # instant. Skips any sectors already in the in-memory cache.
     try:
@@ -128,6 +118,20 @@ async def _cache_warmup_task() -> None:
         logger.info("Sector detail pre-warm: %s", res)
     except Exception as e:
         logger.warning("Sector detail pre-warm failed: %s", e)
+
+
+async def _rotation_prewarm_task() -> None:
+    """Unconditionally pre-warm all three rotation timeframes (short/mid/long)
+    on every server start so the first cockpit click is instant regardless of
+    whether the market is open or closed. Runs in parallel so total wait ≈ one
+    timeframe (~20s) instead of three sequential builds (~60s)."""
+    await asyncio.sleep(10)  # let the server settle first
+    try:
+        from app.services import sector_rotation_service as _srs  # noqa: PLC0415
+        res = await _srs.prewarm_all()
+        logger.info("Rotation prewarm_all complete: %s", res)
+    except Exception as e:
+        logger.warning("Rotation prewarm_all failed: %s", e)
 
 
 async def _market_state_transition_loop() -> None:
@@ -310,6 +314,7 @@ async def lifespan(app: FastAPI):
     # NSE master list with multi-source fallback. Run on startup +
     # once a day at 06:00 IST (after the overnight CSV refresh).
     registry_task   = asyncio.create_task(_security_registry_scheduler())
+    rotation_prewarm_task = asyncio.create_task(_rotation_prewarm_task())
     try:
         yield
     finally:
@@ -317,7 +322,7 @@ async def lifespan(app: FastAPI):
                   fixer_task, rfr_task, bhav_task, alerts_task, backtest_task,
                   digest_sched_task, digest_worker_task, fii_dii_task, dhan_task,
                   pcr_task, synth_class_task, synth_metrics_task,
-                  synth_bootstrap_task, registry_task):
+                  synth_bootstrap_task, registry_task, rotation_prewarm_task):
             t.cancel()
             try:
                 await t
