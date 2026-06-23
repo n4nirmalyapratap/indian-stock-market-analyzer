@@ -145,7 +145,7 @@ export default function FiiDii() {
   // don't fight with refetchInterval's function-form API across TQ versions.
   useEffect(() => {
     if (data?.todayStatus !== "fetching") return;
-    const timer = setTimeout(() => { refetch(); }, 12_000);
+    const timer = setTimeout(() => { refetch(); }, 5_000);
     return () => clearTimeout(timer);
   }, [data?.todayStatus, data?.rows?.length, refetch]);
 

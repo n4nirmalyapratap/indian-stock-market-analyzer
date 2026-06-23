@@ -61,6 +61,14 @@ _db_lock = threading.Lock()
 # asyncio.create_task() re-uses the same event loop, so a plain set is safe.
 _refresh_in_progress: set[str] = set()
 
+# When a background refresh completes without finding today's data (NSE hasn't
+# published yet), record the attempt time here so we don't re-fire immediately
+# on the next request.  After _REFRESH_COOLDOWN_S the segment is eligible for
+# another attempt.  This keeps "fetching" true ONLY while the task is actively
+# running (seconds) rather than for hours while waiting for NSE to publish.
+_refresh_last_failed: dict[str, float] = {}
+_REFRESH_COOLDOWN_S = 30 * 60  # 30-minute retry gap
+
 def date_chunks(start: datetime, end: datetime, chunk_days: int = NSE_CHUNK_DAYS):
     current = start
     while current < end:
@@ -601,10 +609,11 @@ class FiiDiiService:
     async def _background_refresh_segment(self, segment: str, start: datetime, end: datetime) -> None:
         """Fetch any missing date ranges from NSE and persist to the cache.
         Runs as a fire-and-forget asyncio task so get_flows() never blocks on it."""
-        global _refresh_in_progress
+        global _refresh_in_progress, _refresh_last_failed
         if segment in _refresh_in_progress:
             return
         _refresh_in_progress.add(segment)
+        found_today = False
         try:
             table = f"fii_dii_{segment}"
             loop = asyncio.get_running_loop()
@@ -645,23 +654,47 @@ class FiiDiiService:
             combined["date"] = pd.to_datetime(combined["date"])
             combined = combined.sort_values("date").drop_duplicates("date").reset_index(drop=True)
             await loop.run_in_executor(None, save_to_db, combined, table)
-            logger.info("Background refresh done — segment=%s, %d new rows added",
-                        segment, sum(len(d) for d in new_dfs))
+
+            # Check whether today's row was actually obtained so _today_status
+            # can flip to "available" on the next request.
+            import time as _time  # noqa: PLC0415
+            try:
+                import zoneinfo  # noqa: PLC0415
+                _ist = zoneinfo.ZoneInfo("Asia/Kolkata")
+            except Exception:
+                _ist = None  # type: ignore[assignment]
+            from datetime import timezone as _tz  # noqa: PLC0415
+            _now_ist = datetime.now(_ist) if _ist else datetime.now(_tz.utc)
+            today_iso = _now_ist.strftime("%Y-%m-%d")
+            if not combined.empty:
+                dates_got = set(combined["date"].dt.strftime("%Y-%m-%d").tolist())
+                found_today = today_iso in dates_got
+
+            logger.info("Background refresh done — segment=%s, %d new rows added, today=%s",
+                        segment, sum(len(d) for d in new_dfs), "yes" if found_today else "no")
         except Exception as exc:
             logger.warning("Background refresh error — segment=%s: %s", segment, exc)
         finally:
             _refresh_in_progress.discard(segment)
+            # If we finished without obtaining today's row, record the attempt
+            # time so _today_status backs off for _REFRESH_COOLDOWN_S before
+            # firing another task (avoids hammering NSE while waiting for publish).
+            if not found_today:
+                import time as _t  # noqa: PLC0415
+                _refresh_last_failed[segment] = _t.time()
 
     @staticmethod
     def _today_status(df: pd.DataFrame, segment: str) -> str:
         """Return 'available', 'fetching', or 'not_yet' for today's data.
 
         'available'  — today's row is already in the cached DataFrame.
-        'fetching'   — market has closed (≥ 16:00 IST) but data is not in
-                       cache yet; a background task was fired.
-        'not_yet'    — market is still open or it's a weekend; NSE hasn't
-                       published today's provisional data yet.
+        'fetching'   — a background task is actively running RIGHT NOW to
+                       fetch today's data (window is seconds, not hours).
+        'not_yet'    — market hasn't closed yet, it's a weekend, OR a recent
+                       fetch attempt completed but NSE hadn't published yet
+                       (cooldown period before the next retry).
         """
+        import time as _time  # noqa: PLC0415
         try:
             import zoneinfo  # noqa: PLC0415
             ist = zoneinfo.ZoneInfo("Asia/Kolkata")
@@ -677,13 +710,26 @@ class FiiDiiService:
             if today_iso in dates:
                 return "available"
 
-        # NSE publishes provisional data ~30 min after market close (15:30 IST).
-        # Mark as 'fetching' only on weekdays after 16:00 IST.
+        # Only eligible on weekdays after 16:00 IST.
         is_weekday = now_ist.weekday() < 5
         after_close = now_ist.hour >= 16
-        if is_weekday and after_close:
+        if not (is_weekday and after_close):
+            return "not_yet"
+
+        # If a background task is actively running for this segment, report
+        # "fetching" so the frontend polls quickly (task finishes in seconds).
+        if segment in _refresh_in_progress:
             return "fetching"
-        return "not_yet"
+
+        # If the last attempt finished but didn't find today's data, respect
+        # the cooldown before signalling that another task should be fired.
+        last_fail = _refresh_last_failed.get(segment, 0.0)
+        if _time.time() - last_fail < _REFRESH_COOLDOWN_S:
+            return "not_yet"
+
+        # Eligible: market has closed, no task running, cooldown elapsed.
+        # Returning "fetching" here tells get_flows() to fire a new task.
+        return "fetching"
 
     async def get_flows(self, segment: str, days: int = 365) -> dict:
         end_date = datetime.today()
