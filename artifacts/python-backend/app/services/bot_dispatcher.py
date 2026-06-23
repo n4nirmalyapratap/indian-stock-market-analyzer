@@ -136,6 +136,22 @@ COMMAND_REGISTRY: list[CommandSpec] = [
                 "Per-trade cost breakdown (premium × lot + fees)",
                 "/cost SYM CALL|PUT STRIKE QTY PREMIUM", "_h_cost"),
 
+    # ── Sector rotation cockpit ──
+    CommandSpec("cockpit", ["srr", "rotation-cockpit"], "Market",
+                "Sector rotation cockpit — leading sectors & winning stocks",
+                "/cockpit [SECTOR]", "_h_cockpit"),
+
+    # ── Extended per-stock ──
+    CommandSpec("council", ["investors", "verdict", "personas"], "Stock",
+                "Investor council verdict from 16 legendary investors",
+                "/council SYMBOL", "_h_council"),
+    CommandSpec("holders", ["shareholding", "ownership", "stake"], "Stock",
+                "Shareholding pattern — Promoter / FII / DII / Public",
+                "/holders SYMBOL", "_h_holders"),
+    CommandSpec("fundas", ["fundamentals", "fins", "financials"], "Stock",
+                "Key fundamental ratios & valuation metrics",
+                "/fundas SYMBOL", "_h_fundas"),
+
     # ── Alerts ──
     CommandSpec("alerts", ["alert"], "Alerts",
                 "List, add or remove price/pattern alerts",
@@ -318,6 +334,29 @@ class BotDispatcher:
             return await self._h_scanners(channel, chat_id, ["list"], text)
         if intent == "analytics":
             return await self._h_movers(channel, chat_id, [], text)
+        if intent == "cockpit_query":
+            return await self._h_cockpit(channel, chat_id, [], text)
+        if intent == "council_query":
+            if stocks:
+                return await self._h_council(channel, chat_id, [stocks[0]], text)
+            return BotResponse(
+                "Which stock should the council evaluate? E.g. _`/council RELIANCE`_",
+                actions=[BotAction("Council RELIANCE", "/council RELIANCE")],
+            )
+        if intent == "holders_query":
+            if stocks:
+                return await self._h_holders(channel, chat_id, [stocks[0]], text)
+            return BotResponse(
+                "Which stock's shareholding do you want? E.g. _`/holders RELIANCE`_",
+                actions=[BotAction("Holders RELIANCE", "/holders RELIANCE")],
+            )
+        if intent == "fundas_query":
+            if stocks:
+                return await self._h_fundas(channel, chat_id, [stocks[0]], text)
+            return BotResponse(
+                "Which stock's fundamentals? E.g. _`/fundas RELIANCE`_",
+                actions=[BotAction("Fundas RELIANCE", "/fundas RELIANCE")],
+            )
 
         # Bare symbol fallback
         upper = text.strip().upper()
@@ -519,10 +558,12 @@ class BotDispatcher:
         return BotResponse(
             "\n".join(lines),
             actions=[
-                BotAction(f"Entry {symbol}", f"/entry {symbol}"),
+                BotAction(f"Council {symbol}",  f"/council {symbol}"),
+                BotAction(f"Fundas {symbol}",   f"/fundas {symbol}"),
+                BotAction(f"Entry {symbol}",    f"/entry {symbol}"),
                 BotAction(f"Forecast {symbol}", f"/forecast {symbol}"),
-                BotAction(f"Sentiment {symbol}", f"/sentiment {symbol}"),
-                BotAction(f"News {symbol}", f"/news {symbol}"),
+                BotAction(f"Holders {symbol}",  f"/holders {symbol}"),
+                BotAction(f"News {symbol}",     f"/news {symbol}"),
             ],
         )
 
@@ -1005,6 +1046,384 @@ class BotDispatcher:
             f"Exch + SEBI + stamp: ₹{exch + sebi + stamp:,.2f}\n"
             f"*Total fees:   ₹{total:,.2f}*\n"
             f"*Net outflow:  ₹{net:,.0f}*"
+        )
+
+    # ── Sector rotation cockpit ──
+
+    async def _h_cockpit(self, channel, chat_id, args, raw) -> BotResponse:
+        from . import sector_rotation_service as _srs  # noqa: PLC0415
+        sector_arg = " ".join(args).strip() if args else None
+
+        try:
+            data = await _srs.funnel("short")
+        except Exception as e:
+            return BotResponse(f"⚠️ Cockpit unavailable: {e}", error=True)
+
+        sectors = data.get("sectors", [])
+        Q_ORDER   = ["Leading", "Improving", "Weakening", "Lagging"]
+        Q_EMOJI   = {"Leading": "🟢", "Improving": "🔵", "Weakening": "🟠", "Lagging": "🔴"}
+        Q_LABEL   = {"Leading": "Strong & Rising", "Improving": "Turning Up",
+                     "Weakening": "Fading", "Lagging": "Weak"}
+        by_quad: dict[str, list] = {q: [] for q in Q_ORDER}
+        for s in sectors:
+            q = s.get("quadrant", "Lagging")
+            if q in by_quad:
+                by_quad[q].append(s)
+
+        timeframe = data.get("timeframe", "short").capitalize()
+        lines = [f"🧭 *Sector Rotation Cockpit* _({timeframe}-term)_\n"]
+
+        for quad in Q_ORDER:
+            items = by_quad[quad]
+            if not items:
+                continue
+            emoji = Q_EMOJI[quad]
+            desc  = Q_LABEL[quad]
+            lines.append(f"{emoji} *{quad}* — _{desc}_")
+            for s in items[:6]:
+                name = (s.get("name") or "?").replace("Nifty ", "")
+                rs   = s.get("rsPct") or 0
+                dl   = " 📦" if s.get("deliveryBuildup") else ""
+                lines.append(f"  · {name}: RS {rs:+.1f}%{dl}")
+            lines.append("")
+
+        # If a sector arg was given, drill into its winning stocks
+        if sector_arg:
+            try:
+                sl     = await _srs.shortlist(sector=sector_arg)
+                stocks = sl.get("stocks", [])
+                if stocks:
+                    lines.append(f"🏆 *Top Picks — {sector_arg}*")
+                    for st in stocks[:8]:
+                        sym    = st.get("symbol", "?")
+                        rs_v   = st.get("rs") or 0
+                        dv     = st.get("delivPct") or 0
+                        trend  = "▲" if st.get("aboveTrend") else "▼"
+                        score  = st.get("score") or 0
+                        lines.append(
+                            f"  {trend} *{sym}*  RS {rs_v:+.1f}%  Del {dv:.0f}%  Score {score:.0f}"
+                        )
+                else:
+                    lines.append(f"_No constituents found for: {sector_arg}_")
+            except Exception as e:
+                lines.append(f"_Could not load stocks for {sector_arg}: {e}_")
+        else:
+            leading = by_quad.get("Leading", [])
+            if leading:
+                top = leading[0].get("name", "").replace("Nifty ", "").upper()
+                lines.append(f"_Tip: `/cockpit {top}` for winning stocks in the top sector_")
+
+        actions = [BotAction("Rotation", "/rotation"), BotAction("Sectors", "/sectors")]
+        if by_quad.get("Leading"):
+            top_name = by_quad["Leading"][0].get("name", "").replace("Nifty ", "").upper()
+            actions.insert(0, BotAction(f"Picks: {top_name[:10]}", f"/cockpit {top_name}"))
+        self._ctx[chat_id] = {"last_cockpit": sector_arg}
+        return BotResponse("\n".join(lines), actions=actions)
+
+    # ── Investor council ──
+
+    async def _h_council(self, channel, chat_id, args, raw) -> BotResponse:
+        symbol = self._resolve_symbol(args, raw)
+        if not symbol:
+            return BotResponse("Usage: `/council SYMBOL`", error=True)
+
+        from . import agents_service as _ag  # noqa: PLC0415
+
+        d = await self.stocks.get_stock_details(symbol)
+        if d.get("error"):
+            return BotResponse(f"⚠️ {d['error']}", error=True)
+
+        try:
+            result = _ag.run_council(d)
+        except Exception as e:
+            return BotResponse(f"⚠️ Council evaluation failed: {e}", error=True)
+
+        council     = result.get("council", {})
+        verdict     = council.get("verdict", "HOLD")
+        avg_score   = (council.get("avgScore") or 0) * 100
+        buy_cnt     = council.get("buyCount", 0)
+        avoid_cnt   = council.get("avoidCount", 0)
+        hold_cnt    = council.get("holdCount", 0)
+        n_total     = buy_cnt + avoid_cnt + hold_cnt or 1
+
+        V_EMOJI = {
+            "STRONG_BUY": "🟢🟢", "BUY": "🟢",
+            "HOLD": "🟡",
+            "AVOID": "🔴", "STRONG_AVOID": "🔴🔴",
+        }
+        v_emoji  = V_EMOJI.get(verdict, "⚪")
+        v_label  = verdict.replace("_", " ")
+        buy_bar  = "🟩" * buy_cnt + "⬜" * hold_cnt + "🟥" * avoid_cnt
+
+        price_dir = "📈" if (d.get("pChange") or 0) >= 0 else "📉"
+        name      = d.get("companyName", symbol)
+
+        lines = [
+            f"{price_dir} *{name}* ({symbol})",
+            f"Price: *{_fmt_price(d.get('lastPrice'))}*  {_fmt_pct(d.get('pChange'))}",
+            "",
+            f"⚖️ *Council Verdict: {v_emoji} {v_label}*",
+            f"Avg Score: *{avg_score:.0f}/100*",
+            f"{buy_bar}  {buy_cnt}🟢 {hold_cnt}🟡 {avoid_cnt}🔴 / {n_total} legends",
+            "",
+        ]
+
+        personas = result.get("personas", [])
+        buys     = [p for p in personas if p["verdict"] in ("BUY", "STRONG_BUY")]
+        avoids   = [p for p in personas if p["verdict"] in ("AVOID", "STRONG_AVOID")]
+        holds    = [p for p in personas if p["verdict"] == "HOLD"]
+
+        def _first(name_str): return name_str.split()[0]
+
+        if buys:
+            lines.append("🟢 *Backing it:*  " + "  ·  ".join(_first(p["name"]) for p in buys))
+        if holds:
+            lines.append("🟡 *Watching:*    " + "  ·  ".join(_first(p["name"]) for p in holds))
+        if avoids:
+            lines.append("🔴 *Avoiding it:* " + "  ·  ".join(_first(p["name"]) for p in avoids))
+
+        # Highlight the most bullish and most cautious voice
+        if buys:
+            tb = max(buys, key=lambda p: p["score"])
+            lines.append(f"\n🏆 *Most bullish:* {tb['name']}  _{tb['firm']}_  —  {tb['score']*100:.0f}/100")
+            top_check = next((c for c in tb.get("checklist", []) if c.get("pass")), None)
+            if top_check:
+                lines.append(f"   ✅ _{top_check['label']}_")
+        if avoids:
+            ta_ = max(avoids, key=lambda p: p["score"])
+            lines.append(f"\n⚠️ *Most cautious:* {ta_['name']}  _{ta_['firm']}_  —  {ta_['score']*100:.0f}/100")
+            fail_check = next((c for c in ta_.get("checklist", []) if not c.get("pass")), None)
+            if fail_check:
+                lines.append(f"   ❌ _{fail_check['label']}_")
+
+        self._ctx[chat_id] = {"symbol": symbol}
+        return BotResponse(
+            "\n".join(lines),
+            actions=[
+                BotAction(f"Fundas {symbol}",  f"/fundas {symbol}"),
+                BotAction(f"DCF {symbol}",     f"/dcf {symbol}"),
+                BotAction(f"Holders {symbol}", f"/holders {symbol}"),
+                BotAction(f"Analyze {symbol}", f"/analyze {symbol}"),
+            ],
+        )
+
+    # ── Shareholding / holders ──
+
+    async def _h_holders(self, channel, chat_id, args, raw) -> BotResponse:
+        symbol = self._resolve_symbol(args, raw)
+        if not symbol:
+            return BotResponse("Usage: `/holders SYMBOL`", error=True)
+
+        try:
+            from . import shareholding_service as _shp  # noqa: PLC0415
+            data = await _shp.get_shareholding(symbol, quarters=5)
+        except Exception as e:
+            return BotResponse(f"⚠️ Shareholding fetch failed: {e}", error=True)
+
+        rows = data.get("rows", [])
+        if not rows:
+            return BotResponse(f"No shareholding data available for *{symbol}*.")
+
+        latest = rows[0]
+        prev   = rows[1] if len(rows) > 1 else {}
+
+        def _pct(row, key):
+            return row.get(key)
+
+        def _bar(pct, width=10):
+            if pct is None:
+                return "░" * width
+            filled = round(min(max(pct, 0), 100) / 100 * width)
+            return "▰" * filled + "░" * (width - filled)
+
+        def _trend(cur_v, prev_v):
+            if cur_v is None or prev_v is None:
+                return ""
+            diff = cur_v - prev_v
+            if abs(diff) < 0.05:
+                return " ➡️"
+            sign = "▲" if diff > 0 else "▼"
+            return f" {sign}{abs(diff):.1f}pp"
+
+        def _fmt(v): return f"{v:.1f}%" if v is not None else "N/A"
+
+        date_str = latest.get("asOnDate", "")[:10]
+        promoter = _pct(latest, "promoterPct")
+        fii      = _pct(latest, "fiiPct")
+        dii      = _pct(latest, "diiPct")
+        public_  = _pct(latest, "publicPct")
+        govt     = _pct(latest, "govtPct")
+        pledge   = _pct(latest, "promoterPledgePct") or 0
+
+        p_pr = _pct(prev, "promoterPct")
+        p_fi = _pct(prev, "fiiPct")
+        p_di = _pct(prev, "diiPct")
+        p_pu = _pct(prev, "publicPct")
+
+        lines = [
+            f"🏦 *Shareholding Pattern — {symbol}*",
+            f"_Quarter ending: {date_str}_",
+            "",
+        ]
+        if promoter is not None:
+            lines.append(
+                f"🏢 *Promoter:* {_fmt(promoter)}{_trend(promoter, p_pr)}  `{_bar(promoter)}`"
+            )
+        if fii is not None:
+            lines.append(
+                f"🌍 *FII / FPI:* {_fmt(fii)}{_trend(fii, p_fi)}  `{_bar(fii)}`"
+            )
+        if dii is not None:
+            lines.append(
+                f"🏛 *DII:*       {_fmt(dii)}{_trend(dii, p_di)}  `{_bar(dii)}`"
+            )
+        if public_ is not None:
+            lines.append(
+                f"👥 *Public:*   {_fmt(public_)}{_trend(public_, p_pu)}  `{_bar(public_)}`"
+            )
+        if govt is not None and govt > 0:
+            lines.append(f"🏛 *Govt:*      {_fmt(govt)}")
+
+        if pledge > 0:
+            risk_tag = ("  ⚠️ *HIGH RISK*" if pledge > 20
+                        else ("  ⚠️ Elevated" if pledge > 10 else ""))
+            lines.append(f"\n🔒 *Promoter Pledge:* {pledge:.1f}%{risk_tag}")
+
+        # 4-quarter mini table
+        if len(rows) >= 3:
+            lines.append("\n*Last 4 quarters (Promoter / FII / DII):*")
+            for r in rows[:4]:
+                dt = str(r.get("asOnDate", ""))[:7]
+                pr = r.get("promoterPct"); fi = r.get("fiiPct"); di = r.get("diiPct")
+                def _s(v): return f"{v:.0f}" if v is not None else "—"
+                lines.append(f"  `{dt}`  {_s(pr)}% / {_s(fi)}% / {_s(di)}%")
+
+        sources = data.get("sources", [])
+        if sources:
+            lines.append(f"\n_Sources: {', '.join(sources)}_")
+
+        self._ctx[chat_id] = {"symbol": symbol}
+        return BotResponse(
+            "\n".join(lines),
+            actions=[
+                BotAction(f"Council {symbol}",  f"/council {symbol}"),
+                BotAction(f"Fundas {symbol}",   f"/fundas {symbol}"),
+                BotAction(f"Analyze {symbol}",  f"/analyze {symbol}"),
+            ],
+        )
+
+    # ── Fundamentals ──
+
+    async def _h_fundas(self, channel, chat_id, args, raw) -> BotResponse:
+        symbol = self._resolve_symbol(args, raw)
+        if not symbol:
+            return BotResponse("Usage: `/fundas SYMBOL`", error=True)
+
+        from . import agents_service as _ag  # noqa: PLC0415
+
+        d = await self.stocks.get_stock_details(symbol)
+        if d.get("error"):
+            return BotResponse(f"⚠️ {d['error']}", error=True)
+
+        # get_key_stats gives us a few extra fields (marketCap, 52-week range)
+        try:
+            ks = await self.stocks.get_key_stats(symbol)
+        except Exception:
+            ks = {}
+
+        # Build the enriched context the agent personas use — gives us clean
+        # normalised ratios (fractions to %, D/E scaling, FCF yield, ROCE etc.)
+        merged_d = {**d, **ks}
+        ctx = _ag.build_context(merged_d)
+
+        def _r(v, pct=False, dp=2):
+            if v is None:
+                return "N/A"
+            if pct:
+                return f"{v * 100:.{dp}f}%"
+            return f"{v:.{dp}f}"
+
+        def _cr(v, dp=1):
+            """For values already in ratio/pct form (e.g. debtToEquity = 50.0 for 0.5x)."""
+            if v is None:
+                return "N/A"
+            return f"{v:.{dp}f}"
+
+        def _mcap(v):
+            if v is None:
+                return "N/A"
+            cr = v / 1e7
+            if cr >= 10000:
+                return f"₹{cr/100:.0f}K Cr"
+            return f"₹{cr:.0f} Cr"
+
+        name    = d.get("companyName", symbol)
+        sector  = ctx.get("sector") or "—"
+        price   = ctx.get("lastPrice")
+        h52     = ctx.get("high52")
+        l52     = ctx.get("low52")
+        off_hi  = ctx.get("pctOffHigh")
+
+        lines = [
+            f"📋 *Fundamentals — {name}* ({symbol})",
+            f"Sector: _{sector}_",
+            f"Price: *{_fmt_price(price)}*  ({_fmt_pct(d.get('pChange'))})",
+        ]
+        if h52 or l52:
+            lines.append(
+                f"52W: ₹{l52:.0f} — ₹{h52:.0f}"
+                + (f"  _{off_hi:+.1f}% from high_" if off_hi is not None else "")
+            )
+        if ctx.get("marketCap"):
+            lines.append(f"Market Cap: *{_mcap(ctx['marketCap'])}*")
+
+        lines.append("\n*— Valuation —*")
+        lines.append(f"Trailing P/E: *{_cr(ctx.get('trailingPE'), 1)}x*  |  "
+                     f"Forward P/E: {_cr(ctx.get('forwardPE'), 1)}x")
+        lines.append(f"P/B: *{_cr(ctx.get('priceToBook'), 2)}x*  |  "
+                     f"P/S: {_cr(ctx.get('priceToSales'), 2)}x  |  "
+                     f"PEG: {_cr(ctx.get('pegRatio'), 2)}")
+        lines.append(f"EV/EBITDA: *{_cr(ctx.get('evToEbitda'), 1)}x*  |  "
+                     f"EV/Rev: {_cr(ctx.get('evToRevenue'), 2)}x")
+
+        lines.append("\n*— Profitability —*")
+        lines.append(f"ROE: *{_r(ctx.get('returnOnEquity'), pct=True, dp=1)}*  |  "
+                     f"ROA: {_r(ctx.get('returnOnAssets'), pct=True, dp=1)}  |  "
+                     f"ROCE: {_r(ctx.get('roce'), pct=True, dp=1)}")
+        lines.append(f"Gross Margin: *{_r(ctx.get('grossMargin'), pct=True, dp=1)}*  |  "
+                     f"Op Margin: {_r(ctx.get('operatingMargin'), pct=True, dp=1)}")
+        lines.append(f"Net Margin: *{_r(ctx.get('profitMargin'), pct=True, dp=1)}*  |  "
+                     f"FCF Yield: {_r(ctx.get('fcfYield'), dp=1) if ctx.get('fcfYield') else 'N/A'}%")
+
+        lines.append("\n*— Financial Health —*")
+        de = ctx.get("debtToEquity")
+        de_str = f"{de/100:.2f}x" if de is not None else "N/A"
+        lines.append(f"Debt/Equity: *{de_str}*  |  "
+                     f"Current Ratio: {_cr(ctx.get('currentRatio'), 2)}  |  "
+                     f"Quick: {_cr(ctx.get('quickRatio'), 2)}")
+        lines.append(f"Dividend Yield: *{_r(ctx.get('dividendYield'), pct=True, dp=2)}*  |  "
+                     f"Beta: {_cr(ctx.get('beta'), 2)}")
+
+        lines.append("\n*— Growth —*")
+        lines.append(f"EPS Growth (TTM): *{_r(ctx.get('earningsGrowth'), pct=True, dp=1)}*  |  "
+                     f"Rev Growth: {_r(ctx.get('revenueGrowth'), pct=True, dp=1)}")
+        lines.append(f"EPS Growth (QoQ): {_r(ctx.get('earningsQuarterlyGrowth'), pct=True, dp=1)}")
+
+        if ctx.get("targetMeanPrice"):
+            upside = ((ctx["targetMeanPrice"] / price) - 1) * 100 if price else None
+            upside_str = f"  ({'▲' if upside and upside > 0 else '▼'}{abs(upside):.0f}% upside)" \
+                if upside is not None else ""
+            lines.append(f"\n🎯 *Analyst Target:* {_fmt_price(ctx['targetMeanPrice'])}{upside_str}")
+
+        self._ctx[chat_id] = {"symbol": symbol}
+        return BotResponse(
+            "\n".join(lines),
+            actions=[
+                BotAction(f"Council {symbol}",  f"/council {symbol}"),
+                BotAction(f"DCF {symbol}",      f"/dcf {symbol}"),
+                BotAction(f"Holders {symbol}",  f"/holders {symbol}"),
+                BotAction(f"Analyze {symbol}",  f"/analyze {symbol}"),
+            ],
         )
 
     # ── Alerts ──
