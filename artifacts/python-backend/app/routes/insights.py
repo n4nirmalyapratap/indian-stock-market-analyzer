@@ -25,6 +25,7 @@ result is cached for 5 minutes.
 from __future__ import annotations
 import asyncio
 import logging
+import pathlib
 import time
 import os
 import re
@@ -626,6 +627,81 @@ def _quote_from_closes(
 _MCAP_TTL = 24 * 60 * 60
 _mcap_cache: dict[str, tuple[float, float]] = {}
 
+# ── Disk persistence paths ──────────────────────────────────────────────────
+_MCAP_DISK   = pathlib.Path("market_cache/mcap_cache.json")
+_HM_DISK_DIR = pathlib.Path("market_cache/heatmap_tiles")
+
+
+def _load_mcap_disk() -> None:
+    """Load persisted market-cap cache from disk on startup.
+    Entries older than 24 h are silently dropped."""
+    try:
+        if not _MCAP_DISK.exists():
+            return
+        raw: dict = json.loads(_MCAP_DISK.read_text())
+        now = time.time()
+        loaded = 0
+        for sym, entry in raw.items():
+            ts, mc = float(entry.get("ts", 0)), float(entry.get("mc", 0))
+            if now - ts < _MCAP_TTL:
+                _mcap_cache[sym] = (ts, mc)
+                loaded += 1
+        if loaded:
+            logger.info("mcap disk cache loaded: %d symbols", loaded)
+    except Exception as exc:
+        logger.debug("mcap disk cache load failed: %s", exc)
+
+
+def _save_mcap_disk() -> None:
+    """Persist current market-cap cache to disk (best-effort)."""
+    try:
+        _MCAP_DISK.parent.mkdir(parents=True, exist_ok=True)
+        payload = {sym: {"ts": ts, "mc": mc} for sym, (ts, mc) in _mcap_cache.items()}
+        _MCAP_DISK.write_text(json.dumps(payload))
+    except Exception as exc:
+        logger.debug("mcap disk cache save failed: %s", exc)
+
+
+def _load_heatmap_disk(cache_key: str) -> None:
+    """Load a heatmap result from disk into the in-memory _cache.
+    Respects the same stale_window logic as the live path: within TTL it counts
+    as fresh; within stale_window it triggers a background refresh on the next
+    request; outside stale_window it is ignored and fresh data is computed."""
+    try:
+        path = _HM_DISK_DIR / f"{cache_key.replace(':', '_')}.json"
+        if not path.exists():
+            return
+        raw: dict = json.loads(path.read_text())
+        saved_at = float(raw.get("saved_at", 0))
+        market_open = mcache.is_market_open()
+        ttl = 600 if market_open else LONG_TTL
+        stale_window = ttl * 6
+        if time.time() - saved_at > stale_window:
+            return
+        data = raw.get("data")
+        if data:
+            # Stamp with current version so _cache_get version-check passes
+            _cache[cache_key] = (saved_at, data, mcache.cache_version())
+    except Exception as exc:
+        logger.debug("heatmap disk load %s failed: %s", cache_key, exc)
+
+
+def _save_heatmap_disk(cache_key: str, data: Any) -> None:
+    """Persist a heatmap result to disk (best-effort)."""
+    try:
+        _HM_DISK_DIR.mkdir(parents=True, exist_ok=True)
+        path = _HM_DISK_DIR / f"{cache_key.replace(':', '_')}.json"
+        path.write_text(json.dumps({
+            "saved_at": time.time(),
+            "data": data,
+        }))
+    except Exception as exc:
+        logger.debug("heatmap disk save %s failed: %s", cache_key, exc)
+
+
+# ── Load mcap disk cache at import time (best-effort) ───────────────────────
+_load_mcap_disk()
+
 
 def _market_cap_cached(sym: str) -> float:
     # Use the symbol as-is — all tickers already carry the correct Yahoo
@@ -673,6 +749,7 @@ async def _prefetch_market_caps(symbols: list[str]) -> None:
         if isinstance(r, tuple):
             ysym, mc = r
             _mcap_cache[ysym] = (ts, mc)
+    _save_mcap_disk()
 
 
 async def _fetch_one_quote_async(sym: str, period_yf: str, performance: str) -> dict | None:
@@ -823,6 +900,7 @@ async def _compute_heatmap_fresh(code: str, performance: str, cache_key: str) ->
         "meta": _meta("HEATMAP_ENGINE"),
     }
     _cache_set(cache_key, response)
+    _save_heatmap_disk(cache_key, response)
     _HEATMAP_IN_FLIGHT.pop(cache_key, None)
     return response
 
@@ -863,19 +941,66 @@ async def get_heatmap(
                 )
             return stale_val
 
-    # ── 3. In-flight deduplication ───────────────────────────────────────────
+    # ── 3. Disk fallback — survives server restarts ───────────────────────────
+    # On first request after a restart the in-memory cache is empty. Load from
+    # disk; if valid, it populates _cache so step 1/2 serve it on the next call.
+    # We also kick off a background refresh so the disk data is freshened soon.
+    if cache_key not in _cache:
+        _load_heatmap_disk(cache_key)
+        hit = _cache.get(cache_key)
+        if hit:
+            _ts, disk_val, _ver = hit
+            inf = _HEATMAP_IN_FLIGHT.get(cache_key)
+            if inf is None or inf.done():
+                _HEATMAP_IN_FLIGHT[cache_key] = asyncio.ensure_future(
+                    _compute_heatmap_fresh(code, performance, cache_key)
+                )
+            return disk_val
+
+    # ── 4. In-flight deduplication ───────────────────────────────────────────
     # If another request is already computing this exact heatmap, wait for it
     # instead of spawning a duplicate set of 500 concurrent fetches.
     inf = _HEATMAP_IN_FLIGHT.get(cache_key)
     if inf is not None and not inf.done():
         return await inf
 
-    # ── 4. True cold miss — compute, cache, return ───────────────────────────
+    # ── 5. True cold miss — compute, cache, return ───────────────────────────
     task = asyncio.ensure_future(
         _compute_heatmap_fresh(code, performance, cache_key)
     )
     _HEATMAP_IN_FLIGHT[cache_key] = task
     return await task
+
+
+async def prewarm_heatmaps() -> dict:
+    """Pre-warm the most-visited heatmap combinations so the first user request
+    after a restart is always a cache hit. Runs the top indices × 1d in parallel
+    (they share the same price-service disk cache so subsequent timeframes are
+    fast too). Called from _heatmap_prewarm_task() in main.py on every startup."""
+    top = [
+        ("NIFTY50",    "1d"),
+        ("SENSEX",     "1d"),
+        ("FNO",        "1d"),
+        ("NIFTY100",   "1d"),
+        ("NIFTYNEXT50","1d"),
+    ]
+    results: dict[str, bool] = {}
+
+    async def _one(code: str, perf: str) -> None:
+        key = f"heatmap:{code}:{perf}"
+        if _cache_get(key, ttl=LONG_TTL) is not None:
+            results[key] = True  # already warm
+            return
+        try:
+            await _compute_heatmap_fresh(code, perf, key)
+            results[key] = True
+        except Exception as exc:
+            logger.debug("heatmap prewarm %s/%s failed: %s", code, perf, exc)
+            results[key] = False
+
+    await asyncio.gather(*[_one(c, p) for c, p in top], return_exceptions=True)
+    logger.info("heatmap prewarm complete: %s", results)
+    return results
 
 
 # ────────────────────────────────────────────────────────────────────────────

@@ -120,6 +120,18 @@ async def _cache_warmup_task() -> None:
         logger.warning("Sector detail pre-warm failed: %s", e)
 
 
+async def _heatmap_prewarm_task() -> None:
+    """Pre-warm the top-5 heatmap combos at every startup so the first user
+    click is instant instead of paying the cold 5–20s compute."""
+    await asyncio.sleep(15)  # let price-service disk cache settle first
+    try:
+        from app.routes.insights import prewarm_heatmaps  # noqa: PLC0415
+        res = await prewarm_heatmaps()
+        logger.info("Heatmap prewarm complete: %s", res)
+    except Exception as e:
+        logger.warning("Heatmap prewarm failed: %s", e)
+
+
 async def _rotation_prewarm_task() -> None:
     """Unconditionally pre-warm all three rotation timeframes (short/mid/long)
     on every server start so the first cockpit click is instant regardless of
@@ -315,6 +327,7 @@ async def lifespan(app: FastAPI):
     # once a day at 06:00 IST (after the overnight CSV refresh).
     registry_task   = asyncio.create_task(_security_registry_scheduler())
     rotation_prewarm_task = asyncio.create_task(_rotation_prewarm_task())
+    heatmap_prewarm_task  = asyncio.create_task(_heatmap_prewarm_task())
     try:
         yield
     finally:
@@ -322,7 +335,8 @@ async def lifespan(app: FastAPI):
                   fixer_task, rfr_task, bhav_task, alerts_task, backtest_task,
                   digest_sched_task, digest_worker_task, fii_dii_task, dhan_task,
                   pcr_task, synth_class_task, synth_metrics_task,
-                  synth_bootstrap_task, registry_task, rotation_prewarm_task):
+                  synth_bootstrap_task, registry_task, rotation_prewarm_task,
+                  heatmap_prewarm_task):
             t.cancel()
             try:
                 await t
