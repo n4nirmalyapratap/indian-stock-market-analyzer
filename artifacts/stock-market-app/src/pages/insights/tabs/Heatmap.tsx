@@ -497,7 +497,7 @@ export default function Heatmap() {
                       className={`font-black tracking-tighter uppercase leading-none mb-0.5 ${style.text} drop-shadow-sm`}
                       style={{ fontSize: Math.max(9, Math.min(24, Math.floor(Math.min(w, h) / 4))) }}
                     >
-                      {cleanSymbol}
+                      {item.name || cleanSymbol}
                     </span>
                     {!isSmall && (
                       <motion.div
