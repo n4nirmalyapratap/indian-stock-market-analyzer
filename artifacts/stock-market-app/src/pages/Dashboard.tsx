@@ -280,8 +280,8 @@ export default function Dashboard() {
           />
         </Link>
 
-        {/* Pattern Signals (clickable) */}
-        <Link href="/patterns" className="block rounded-xl hover:ring-2 hover:ring-indigo-300 dark:hover:ring-indigo-600 transition-all">
+        {/* Pattern Signals (clickable) — full-width on mobile so it doesn't sit alone */}
+        <Link href="/patterns" className="col-span-2 md:col-span-1 block rounded-xl hover:ring-2 hover:ring-indigo-300 dark:hover:ring-indigo-600 transition-all">
           <StatCard
             loading={patLoading}
             title="Pattern Signals"
