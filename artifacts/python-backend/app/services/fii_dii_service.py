@@ -57,6 +57,10 @@ SEGMENT_MAP = {
 
 _db_lock = threading.Lock()
 
+# In-process guard: tracks which segments have a background refresh flying.
+# asyncio.create_task() re-uses the same event loop, so a plain set is safe.
+_refresh_in_progress: set[str] = set()
+
 def date_chunks(start: datetime, end: datetime, chunk_days: int = NSE_CHUNK_DAYS):
     current = start
     while current < end:
@@ -570,14 +574,144 @@ class FiiDiiService:
             await loop.run_in_executor(None, save_to_db, df, table)
         return df
 
+    async def _load_cache_only(self, segment: str, start: datetime, end: datetime) -> pd.DataFrame:
+        """Read only what PostgreSQL (or old JSON) already has — no live NSE fetch.
+        Used by get_flows() so the first paint is always fast."""
+        table = f"fii_dii_{segment}"
+        loop = asyncio.get_running_loop()
+
+        cached_min, _ = await loop.run_in_executor(None, get_cached_date_range, table)
+
+        cached_df: pd.DataFrame | None = None
+        if segment == "equity" and not cached_min:
+            # One-time migration path: pull old JSON history into PG on first load.
+            cached_df = await loop.run_in_executor(None, _load_old_json_history)
+            if cached_df is not None and not cached_df.empty:
+                await loop.run_in_executor(None, save_to_db, cached_df, table)
+        else:
+            cached_df = await loop.run_in_executor(None, load_from_db, table)
+
+        if cached_df is None or cached_df.empty:
+            return pd.DataFrame()
+
+        cached_df["date"] = pd.to_datetime(cached_df["date"])
+        mask = (cached_df["date"] >= pd.Timestamp(start)) & (cached_df["date"] <= pd.Timestamp(end))
+        return cached_df[mask].copy()
+
+    async def _background_refresh_segment(self, segment: str, start: datetime, end: datetime) -> None:
+        """Fetch any missing date ranges from NSE and persist to the cache.
+        Runs as a fire-and-forget asyncio task so get_flows() never blocks on it."""
+        global _refresh_in_progress
+        if segment in _refresh_in_progress:
+            return
+        _refresh_in_progress.add(segment)
+        try:
+            table = f"fii_dii_{segment}"
+            loop = asyncio.get_running_loop()
+
+            cached_min, cached_max = await loop.run_in_executor(None, get_cached_date_range, table)
+
+            fetch_ranges: list[tuple[datetime, datetime]] = []
+            if cached_min and cached_max:
+                if start < cached_min:
+                    fetch_ranges.append((start, cached_min - timedelta(days=1)))
+                if end > cached_max:
+                    fetch_ranges.append((cached_max + timedelta(days=1), end))
+            else:
+                fetch_ranges.append((start, end))
+
+            if not fetch_ranges:
+                return
+
+            new_dfs: list[pd.DataFrame] = []
+            for rs, re in fetch_ranges:
+                try:
+                    if segment == "equity":
+                        ndf = await self.fetch_equity_historical(rs, re)
+                    else:
+                        ndf = await self.fetch_fno_historical(segment, rs, re)
+                    if not ndf.empty:
+                        new_dfs.append(ndf)
+                except Exception as exc:
+                    logger.warning("Background refresh failed for segment=%s range=%s→%s: %s",
+                                   segment, rs.date(), re.date(), exc)
+
+            if not new_dfs:
+                return
+
+            cached_df = await loop.run_in_executor(None, load_from_db, table)
+            all_dfs = ([cached_df] if cached_df is not None and not cached_df.empty else []) + new_dfs
+            combined = pd.concat(all_dfs, ignore_index=True)
+            combined["date"] = pd.to_datetime(combined["date"])
+            combined = combined.sort_values("date").drop_duplicates("date").reset_index(drop=True)
+            await loop.run_in_executor(None, save_to_db, combined, table)
+            logger.info("Background refresh done — segment=%s, %d new rows added",
+                        segment, sum(len(d) for d in new_dfs))
+        except Exception as exc:
+            logger.warning("Background refresh error — segment=%s: %s", segment, exc)
+        finally:
+            _refresh_in_progress.discard(segment)
+
+    @staticmethod
+    def _today_status(df: pd.DataFrame, segment: str) -> str:
+        """Return 'available', 'fetching', or 'not_yet' for today's data.
+
+        'available'  — today's row is already in the cached DataFrame.
+        'fetching'   — market has closed (≥ 16:00 IST) but data is not in
+                       cache yet; a background task was fired.
+        'not_yet'    — market is still open or it's a weekend; NSE hasn't
+                       published today's provisional data yet.
+        """
+        try:
+            import zoneinfo  # noqa: PLC0415
+            ist = zoneinfo.ZoneInfo("Asia/Kolkata")
+        except Exception:
+            ist = None  # type: ignore[assignment]
+
+        from datetime import timezone as _tz  # noqa: PLC0415
+        now_ist = datetime.now(ist) if ist else datetime.now(_tz.utc)
+        today_iso = now_ist.strftime("%Y-%m-%d")
+
+        if df is not None and not df.empty:
+            dates = set(df["date"].dt.strftime("%Y-%m-%d").tolist())
+            if today_iso in dates:
+                return "available"
+
+        # NSE publishes provisional data ~30 min after market close (15:30 IST).
+        # Mark as 'fetching' only on weekdays after 16:00 IST.
+        is_weekday = now_ist.weekday() < 5
+        after_close = now_ist.hour >= 16
+        if is_weekday and after_close:
+            return "fetching"
+        return "not_yet"
+
     async def get_flows(self, segment: str, days: int = 365) -> dict:
         end_date = datetime.today()
         start_date = end_date - timedelta(days=days)
-        
+
+        # ── Fast path: serve from cache immediately ───────────────────────────
+        df: pd.DataFrame = pd.DataFrame()
         try:
-            df = await self.get_historical(segment, start_date, end_date)
-        except Exception as e:
-            return self._empty_response(segment, f"Failed to fetch data: {e}")
+            df = await self._load_cache_only(segment, start_date, end_date)
+        except Exception as exc:
+            logger.warning("Cache-only load failed for segment=%s: %s — will attempt live fetch", segment, exc)
+
+        today_status = self._today_status(df, segment)
+
+        # Fire background refresh when the cache is missing today's data and
+        # the market has already closed.  Never blocks the response.
+        if today_status == "fetching" and segment not in _refresh_in_progress:
+            asyncio.create_task(
+                self._background_refresh_segment(segment, start_date, end_date)
+            )
+
+        # ── Cold-start fallback: no cached rows at all → blocking fetch ───────
+        if df is None or df.empty:
+            try:
+                df = await self.get_historical(segment, start_date, end_date)
+                today_status = self._today_status(df, segment)
+            except Exception as e:
+                return self._empty_response(segment, f"Failed to fetch data: {e}")
 
         if df is None or df.empty:
             if segment == "equity":
@@ -678,6 +812,10 @@ class FiiDiiService:
             "monthly": monthly,
             "totalDays": len(rows),
             "rangeDays": days,
+            # 'available' = today's row in cache
+            # 'fetching'  = market closed, background task kicked off
+            # 'not_yet'   = market still open / weekend, NSE hasn't published yet
+            "todayStatus": today_status,
         }
 
     @staticmethod

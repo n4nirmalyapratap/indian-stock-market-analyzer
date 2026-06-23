@@ -13,7 +13,7 @@ import {
 import {
   ArrowDownUp, BarChart3, Table as TableIcon, Info, ExternalLink,
   TrendingUp, TrendingDown, ChevronDown, Calendar, LineChart as LineChartIcon,
-  LayoutGrid, Building2, Globe2,
+  LayoutGrid, Building2, Globe2, RefreshCw, Clock,
 } from "lucide-react";
 
 type Segment = "equity" | "index_future" | "index_option" | "stock_future" | "stock_option";
@@ -47,6 +47,8 @@ interface MonthBucket {
   rows: Row[];
 }
 
+type TodayStatus = "available" | "fetching" | "not_yet";
+
 interface FiiDiiResponse {
   available: boolean;
   segment: string;
@@ -59,6 +61,7 @@ interface FiiDiiResponse {
   totalDays?: number;
   rangeDays?: number;
   message?: string | null;
+  todayStatus?: TodayStatus;
 }
 
 const SEGMENT_OPTIONS: { value: Segment; label: string; short: string; icon: typeof Globe2 }[] = [
@@ -127,7 +130,7 @@ export default function FiiDii() {
   // re-render never blocks click feedback or the theme ripple.
   const [, startTransition] = useTransition();
 
-  const { data, isLoading, isFetching, error } = useQuery<FiiDiiResponse>({
+  const { data, isLoading, isFetching, error, refetch } = useQuery<FiiDiiResponse>({
     queryKey: ["insights/fii-dii", segment, range],
     queryFn: () => fetchApi(`/insights/fii-dii?segment=${segment}&days=${rangeLimit(range)}`),
     staleTime: 10 * 60_000,
@@ -137,6 +140,15 @@ export default function FiiDii() {
     placeholderData: keepPreviousData,
   });
 
+  // When the backend is fetching today's data in the background, poll every
+  // 12s until todayStatus flips to "available". Uses a plain timeout so we
+  // don't fight with refetchInterval's function-form API across TQ versions.
+  useEffect(() => {
+    if (data?.todayStatus !== "fetching") return;
+    const timer = setTimeout(() => { refetch(); }, 12_000);
+    return () => clearTimeout(timer);
+  }, [data?.todayStatus, data?.rows?.length, refetch]);
+
   const segMeta = SEGMENT_OPTIONS.find(s => s.value === segment)!;
   const switchSegment = (v: Segment) => startTransition(() => setSegment(v));
   const switchRange = (v: Range) => startTransition(() => setRange(v));
@@ -145,7 +157,7 @@ export default function FiiDii() {
     <div>
       <PageHeader
         title="FII / DII Activity"
-        info="Daily provisional cash and derivatives activity by Foreign and Domestic Institutional Investors. Data is fetched live from NSE and accumulated locally as a rolling history."
+        info="Daily provisional cash and derivatives activity by Foreign and Domestic Institutional Investors. Historical data loads instantly from cache. Today's provisional data is fetched in the background after market close."
         right={data?.sourceUrl ? (
           <a href={data.sourceUrl} target="_blank" rel="noreferrer noopener"
              className="hidden md:inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition">
@@ -153,6 +165,11 @@ export default function FiiDii() {
           </a>
         ) : undefined}
       />
+
+      {/* Today-data status chip — only shown when relevant */}
+      {data && data.todayStatus !== "available" && (
+        <TodayStatusChip status={data.todayStatus ?? "not_yet"} isFetching={isFetching} />
+      )}
 
       {/* Segment tabs — modern card-style strip */}
       <div className="mb-4 -mx-2 px-2 overflow-x-auto">
@@ -406,6 +423,26 @@ function VisibleOnce({ placeholder, children, rootMargin = "200px" }: {
     return () => obs.disconnect();
   }, [visible, rootMargin]);
   return <div ref={ref}>{visible ? children : placeholder}</div>;
+}
+
+function TodayStatusChip({ status, isFetching }: { status: TodayStatus; isFetching: boolean }) {
+  if (status === "fetching") {
+    return (
+      <div className="mb-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/40 text-xs text-amber-700 dark:text-amber-400">
+        <RefreshCw className={`w-3 h-3 flex-shrink-0 ${isFetching ? "animate-spin" : ""}`} />
+        Fetching today&rsquo;s data in the background&hellip; page will update automatically.
+      </div>
+    );
+  }
+  if (status === "not_yet") {
+    return (
+      <div className="mb-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700/50 text-xs text-gray-500 dark:text-gray-400">
+        <Clock className="w-3 h-3 flex-shrink-0" />
+        Today&rsquo;s provisional data not yet published by NSE (available ~30 min after market close).
+      </div>
+    );
+  }
+  return null;
 }
 
 function ChartSkeleton() {
