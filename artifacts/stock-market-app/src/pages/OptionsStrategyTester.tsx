@@ -1576,8 +1576,9 @@ export default function OptionsStrategyTester() {
 
             {/* ── Indices panel ────────────────────────────────────────────── */}
             {assetMode === "indices" && (
-              <div className={`border-b p-2 ${isDark ? "border-slate-700" : "border-gray-100"}`}>
-                <div className={`p-1 flex gap-0.5 rounded-xl ${isDark ? "bg-slate-900/50" : "bg-gray-100"}`}>
+              <div className={`border-b px-2 py-2 ${isDark ? "border-slate-700" : "border-gray-100"}`}>
+                <div className="overflow-x-auto">
+                  <div className={`p-1 flex gap-0.5 rounded-xl min-w-max ${isDark ? "bg-slate-900/50" : "bg-gray-100"}`}>
                   {INDICES.map(({ sym, label, lot: staticLot, exch }) => {
                     const active   = symbol === sym;
                     const fetching = active && loadingSpot;
@@ -1587,7 +1588,7 @@ export default function OptionsStrategyTester() {
                         key={sym}
                         onClick={() => switchAsset(sym)}
                         disabled={loadingSpot}
-                        className={`flex-1 flex flex-col items-center py-2 px-1 rounded-lg transition-all duration-150 disabled:opacity-60
+                        className={`flex flex-col items-center py-2 px-3 rounded-lg transition-all duration-150 disabled:opacity-60
                           ${active
                             ? isDark ? "bg-slate-700 shadow-sm text-slate-100" : "bg-white shadow-sm text-gray-900"
                             : isDark ? "text-slate-400 hover:text-slate-200 hover:bg-slate-700/40" : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
@@ -1598,13 +1599,14 @@ export default function OptionsStrategyTester() {
                             ? <span className="flex items-center gap-1"><RefreshCw className="w-3 h-3 animate-spin" />{label}</span>
                             : label}
                         </span>
-                        <span className={`text-[10px] leading-tight mt-0.5 font-medium
+                        <span className={`text-[10px] leading-tight mt-0.5 font-medium whitespace-nowrap
                           ${active ? "text-indigo-400" : isDark ? "text-slate-500" : "text-gray-400"}`}>
                           {exch} · {lot}
                         </span>
                       </button>
                     );
                   })}
+                  </div>
                 </div>
               </div>
             )}
