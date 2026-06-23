@@ -50,9 +50,16 @@ from typing import Any, Optional
 import httpx
 
 from ..lib import auth_store
+from ..lib.cache_utils import MarketTTLCache
 from ..lib.symbol_map import to_yahoo_ticker
 
 logger = logging.getLogger("synthetic_sectors")
+
+# ── In-memory caches for read endpoints ──────────────────────────────────────
+# grid: expensive RS + multi-query computation; drilldown: DB + weight maths.
+# Both are safe to cache because the underlying data only changes nightly.
+_GRID_CACHE      = MarketTTLCache(open_ttl=5 * 60, closed_ttl=4 * 3600, max_entries=8)
+_DRILLDOWN_CACHE = MarketTTLCache(open_ttl=5 * 60, closed_ttl=4 * 3600, max_entries=256)
 
 # ── Tunables ─────────────────────────────────────────────────────────────────
 _CLASSIFY_CONCURRENCY = int(os.environ.get("SYNTH_CLASSIFY_CONCURRENCY", "6"))
@@ -857,6 +864,9 @@ def get_grid() -> dict[str, Any]:
     """Scanner grid feed: one entry per sub-industry with 30D RS vs Nifty 50,
     delivery build-up vs 20-DMA, and 50-EMA breadth. Honest unavailable state
     when the nightly worker has never run."""
+    cached = _GRID_CACHE.get("grid")
+    if cached is not None:
+        return cached
     auth_store.ensure_primary_schema()
     latest = _latest_metric_date()
     if latest is None:
@@ -901,13 +911,19 @@ def get_grid() -> dict[str, Any]:
                 "constituentCount": r["constituent_count"],
             }
         )
-    return {"asOf": str(latest), "available": True, "rows": rows}
+    result = {"asOf": str(latest), "available": True, "rows": rows}
+    _GRID_CACHE.set("grid", result)
+    return result
 
 
 def get_drilldown(sub_industry: str, yahoo) -> dict[str, Any]:
     """Constituents of a sub-industry ranked by market-cap weight. Merges
     Yahoo-classified stocks with admin-managed overrides so every manually
     curated stock is visible even if Yahoo classification failed."""
+    cache_key = f"drilldown:{sub_industry}"
+    cached = _DRILLDOWN_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     auth_store.ensure_primary_schema()
     with auth_store.get_conn() as conn:
         with conn.cursor() as cur:
@@ -954,12 +970,14 @@ def get_drilldown(sub_industry: str, yahoo) -> dict[str, Any]:
         })
 
     if not members:
-        return {"subIndustry": sub_industry, "available": False, "constituents": []}
+        out = {"subIndustry": sub_industry, "available": False, "constituents": []}
+        _DRILLDOWN_CACHE.set(cache_key, out)
+        return out
     total_cap = sum((m["market_cap"] or 0) for m in members) or 0
-    out = []
+    constituents = []
     for m in members:
         cap = m["market_cap"] or 0
-        out.append(
+        constituents.append(
             {
                 "symbol": m["symbol"],
                 "name": m["name"],
@@ -970,4 +988,6 @@ def get_drilldown(sub_industry: str, yahoo) -> dict[str, Any]:
                 "weightPct": (cap / total_cap * 100.0) if total_cap else None,
             }
         )
-    return {"subIndustry": sub_industry, "available": True, "constituents": out}
+    result = {"subIndustry": sub_industry, "available": True, "constituents": constituents}
+    _DRILLDOWN_CACHE.set(cache_key, result)
+    return result

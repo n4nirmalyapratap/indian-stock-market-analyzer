@@ -119,6 +119,16 @@ async def _cache_warmup_task() -> None:
     except Exception as e:
         logger.warning("Startup rotation prewarm failed: %s", e)
 
+    # Pre-warm sector detail pages so the first heatmap drilldown click is
+    # instant. Skips any sectors already in the in-memory cache.
+    try:
+        from app.services.sector_analytics_service import pre_warm_sector_details  # noqa: PLC0415
+        from app.services import registry as _reg  # noqa: PLC0415
+        res = await pre_warm_sector_details(_reg.sector_analytics)
+        logger.info("Sector detail pre-warm: %s", res)
+    except Exception as e:
+        logger.warning("Sector detail pre-warm failed: %s", e)
+
 
 async def _market_state_transition_loop() -> None:
     """
