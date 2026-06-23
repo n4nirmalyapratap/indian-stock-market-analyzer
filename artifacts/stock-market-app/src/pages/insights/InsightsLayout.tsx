@@ -73,6 +73,15 @@ const TABS = [
     bg: "bg-emerald-50 dark:bg-emerald-500/10"
   },
   {
+    slug: "earnings-radar",
+    label: "Earnings Radar",
+    description: "Live earnings beat/miss scanner — scores quarterly results on revenue, PAT, OPM and quality.",
+    icon: Zap,
+    Component: EarningsRadarTab,
+    color: "text-yellow-500",
+    bg: "bg-yellow-50 dark:bg-yellow-500/10"
+  },
+  {
     slug: "mf-holdings",
     label: "MF Holdings",
     description: "Analyze mutual fund portfolios and their top stock holdings.",
@@ -89,15 +98,6 @@ const TABS = [
     Component: BulkBlockDealsTab,
     color: "text-indigo-500",
     bg: "bg-indigo-50 dark:bg-indigo-500/10"
-  },
-  {
-    slug: "earnings-radar",
-    label: "Earnings Radar",
-    description: "Live earnings beat/miss scanner — scores quarterly results on revenue, PAT, OPM and quality.",
-    icon: Zap,
-    Component: EarningsRadarTab,
-    color: "text-yellow-500",
-    bg: "bg-yellow-50 dark:bg-yellow-500/10"
   },
   {
     slug: "corp-events",
