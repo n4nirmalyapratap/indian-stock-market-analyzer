@@ -2,3 +2,4 @@
 - [Synthetic sector rotation](synthetic-sector-rotation.md) — how the sub-industry rotation engine is structured and the non-obvious math contracts (RS windowing, 20-DMA gating).
 - [Sub-industry taxonomy](sub-industry-taxonomy.md) — comprehensive 50+ Indian sub-sector taxonomy in universe.py; admin override table; TradingView rule.
 - [Sector analytics caching](sector-analytics-caching.md) — 4-layer cache strategy: MarketTTLCache for grid/drilldown, disk JSON for yf fundamentals, TanStack staleTime, startup pre-warm.
+- [Sector Analytics ban](sector-analytics-ban.md) — NEVER work on sector analytics / hyper-granular rotation — user explicitly and repeatedly forbidden it.
