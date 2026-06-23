@@ -863,6 +863,12 @@ export const api = {
       { method: "POST" },
     ),
 
+  // Lightweight scan progress for the nav badge — no pattern payload.
+  patternsScanStatus: () =>
+    fetchApi<{ scanInProgress: boolean; scanProgress: { done: number; total: number } | null; cachedAt: string | null; universeSize: number }>(
+      "/patterns/status",
+    ),
+
   scanners:      async () => {
     const res = await fetchApi<Scanner[] | { scanners: Scanner[]; meta?: unknown }>("/scanners");
     return Array.isArray(res) ? res : (res?.scanners ?? []);

@@ -145,7 +145,9 @@ export default function StockLookup() {
                 <p className="text-2xl font-bold text-gray-900">₹{data.lastPrice?.toLocaleString("en-IN", { minimumFractionDigits: 2 }) || "—"}</p>
                 <p className={`text-sm font-medium flex items-center gap-1 justify-end ${(data.pChange || 0) >= 0 ? "text-green-600" : "text-red-500"}`}>
                   {(data.pChange || 0) >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                  {data.pChange >= 0 ? "+" : ""}{data.pChange?.toFixed(2) || "0"}% ({data.change >= 0 ? "+" : ""}{data.change?.toFixed(2) || "0"})
+                  {/* Coerce to Number — some providers return change/pChange as
+                      strings, which would crash `.toFixed` ("…toFixed is not a function"). */}
+                  {Number(data.pChange ?? 0) >= 0 ? "+" : ""}{Number(data.pChange ?? 0).toFixed(2)}% ({Number(data.change ?? 0) >= 0 ? "+" : ""}{Number(data.change ?? 0).toFixed(2)})
                 </p>
               </div>
             </div>
