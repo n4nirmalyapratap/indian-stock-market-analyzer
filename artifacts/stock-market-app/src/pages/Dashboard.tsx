@@ -42,7 +42,7 @@ interface StatProps {
 }
 function StatCard({ title, value, sub, subCls, loading, icon }: StatProps) {
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm p-4 flex flex-col gap-2">
+    <div className="h-full bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm p-4 flex flex-col gap-2">
       <div className="flex items-center justify-between">
         <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{title}</p>
         <span className="text-gray-400 dark:text-gray-500">{icon}</span>
