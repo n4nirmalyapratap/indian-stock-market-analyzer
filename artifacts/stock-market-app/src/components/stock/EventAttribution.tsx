@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
 import {
@@ -10,7 +10,7 @@ import {
   Tooltip,
   CartesianGrid,
 } from "recharts";
-import { TrendingUp, TrendingDown, Loader2, AlertCircle, GitBranch } from "lucide-react";
+import { TrendingUp, TrendingDown, ChevronDown, ChevronUp, Loader2, AlertCircle, GitBranch } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -19,6 +19,7 @@ interface SwingEvent {
   price:     number;
   move_pct:  number;
   direction: "peak" | "trough";
+  reason?:   string;
 }
 
 interface ChartPoint {
@@ -74,6 +75,7 @@ const CustomTooltip = ({ active, payload }: any) => {
 // ── Table row ──────────────────────────────────────────────────────────────────
 
 function EventRow({ ev, idx }: { ev: SwingEvent; idx: number }) {
+  const [expanded, setExpanded] = useState(false);
   const isPeak  = ev.direction === "peak";
   const moveCls = isPeak ? "text-emerald-600 dark:text-emerald-400" : "text-red-500 dark:text-red-400";
   const dateStr = new Date(ev.date).toLocaleDateString("en-IN", {
@@ -99,6 +101,21 @@ function EventRow({ ev, idx }: { ev: SwingEvent; idx: number }) {
       <td className={`py-3 pr-4 text-sm font-semibold whitespace-nowrap ${moveCls}`}>
         {ev.move_pct > 0 ? "+" : ""}{ev.move_pct}%
       </td>
+      {ev.reason && (
+        <td className="py-3 pr-4 text-xs text-gray-600 dark:text-gray-400 max-w-xs lg:max-w-md">
+          <p className={expanded ? "" : "line-clamp-2"}>{ev.reason}</p>
+          {ev.reason.length > 100 && (
+            <button
+              onClick={() => setExpanded(e => !e)}
+              className="mt-0.5 text-indigo-500 hover:text-indigo-700 dark:text-indigo-400 flex items-center gap-0.5"
+            >
+              {expanded
+                ? <><ChevronUp className="w-3 h-3" /> Less</>
+                : <><ChevronDown className="w-3 h-3" /> More</>}
+            </button>
+          )}
+        </td>
+      )}
     </tr>
   );
 }
@@ -227,6 +244,7 @@ export default function EventAttribution({ symbol }: Props) {
                   <th className="py-2 pr-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Type</th>
                   <th className="py-2 pr-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Price</th>
                   <th className="py-2 pr-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Move</th>
+                  <th className="py-2 pr-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">What happened</th>
                 </tr>
               </thead>
               <tbody>
