@@ -29,6 +29,7 @@ import AIAnalystScan from "@/pages/AIAnalystScan";
 import AIAnalystTrackRecord from "@/pages/AIAnalystTrackRecord";
 import EmailDigestSettings from "@/pages/EmailDigestSettings";
 import SavedAnalyses from "@/pages/SavedAnalyses";
+import SectorAnalytics from "@/pages/SectorAnalytics";
 import GlobalAssistant from "@/components/GlobalAssistant";
 import CommandPalette from "@/components/CommandPalette";
 import { ThemeProvider } from "@/context/ThemeContext";
@@ -105,6 +106,7 @@ function AppRoutes() {
         <Route path="/"                component={Dashboard} />
         <Route path="/trading"         component={TradingPlatform} />
         <Route path="/rotation"         component={SectorRotation} />
+        <Route path="/sector-analytics" component={SectorAnalytics} />
         <Route path="/sectors/:sectorId" component={SectorDetail} />
         <Route path="/sectors"          component={Sectors} />
         <Route path="/insights/:tab*"   component={InsightsLayout} />
