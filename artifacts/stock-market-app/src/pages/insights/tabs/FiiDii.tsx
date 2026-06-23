@@ -438,7 +438,7 @@ function TodayStatusChip({ status, isFetching }: { status: TodayStatus; isFetchi
     return (
       <div className="mb-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700/50 text-xs text-gray-500 dark:text-gray-400">
         <Clock className="w-3 h-3 flex-shrink-0" />
-        Today&rsquo;s provisional data not yet published by NSE (available ~30 min after market close).
+        Today&rsquo;s provisional data not yet published by NSE.
       </div>
     );
   }
