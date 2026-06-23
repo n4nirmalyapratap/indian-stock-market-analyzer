@@ -473,22 +473,50 @@ def ensure_primary_schema() -> None:
                     """
                 )
                 # ── Earnings Radar alerts ─────────────────────────────
-                # One row per (symbol, period_end) — the earnings scanner
-                # upserts here after scoring each BSE result filing.
-                # `detail_json` holds the per-criterion breakdown dict.
-                # `telegram_sent` flips to TRUE once the Telegram alert
+                # One row per (symbol, period_end, basis) — the earnings
+                # scanner upserts here after scoring each filing.
+                # `score_breakdown` is the per-criterion point breakdown.
+                # `key_metrics` holds the extracted financial ratios for
+                # display. `alerted` flips to TRUE once the Telegram alert
                 # fires so re-runs never double-alert the same quarter.
+                #
+                # Safe migration: if the old version of this table was
+                # created with PK (symbol, period_end) we drop it first
+                # so the new composite PK is applied cleanly. This is safe
+                # because the Earnings Radar is a new feature — no
+                # production data yet.
+                cur.execute(
+                    """
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.tables
+                             WHERE table_name = 'earnings_alerts'
+                        ) AND NOT EXISTS (
+                            SELECT 1
+                              FROM information_schema.columns
+                             WHERE table_name = 'earnings_alerts'
+                               AND column_name = 'basis'
+                        ) THEN
+                            DROP TABLE earnings_alerts;
+                        END IF;
+                    END $$;
+                    """
+                )
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS earnings_alerts (
                         symbol          TEXT NOT NULL,
                         company         TEXT NOT NULL DEFAULT '',
                         period_end      DATE NOT NULL,
+                        basis           TEXT NOT NULL DEFAULT 'standalone',
                         score           INTEGER NOT NULL DEFAULT 0,
-                        detail_json     JSONB NOT NULL DEFAULT '{}',
-                        telegram_sent   BOOLEAN NOT NULL DEFAULT FALSE,
+                        score_breakdown JSONB NOT NULL DEFAULT '{}',
+                        key_metrics     JSONB NOT NULL DEFAULT '{}',
+                        alerted         BOOLEAN NOT NULL DEFAULT FALSE,
+                        created_at_ms   BIGINT NOT NULL,
                         scanned_at_ms   BIGINT NOT NULL,
-                        PRIMARY KEY (symbol, period_end)
+                        PRIMARY KEY (symbol, period_end, basis)
                     )
                     """
                 )
