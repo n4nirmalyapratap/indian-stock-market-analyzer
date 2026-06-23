@@ -1,5 +1,6 @@
 import { useLocation } from "wouter";
 import { LineChart, SearchCode, PieChart } from "lucide-react";
+import type { PatternOverlay } from "@/components/trading/ChartPanel";
 
 interface ChartButtonProps {
   symbol: string;
@@ -8,6 +9,8 @@ interface ChartButtonProps {
   hideLookup?: boolean;
   /** Comma-separated indicator keys to pre-apply in Chart Studio (e.g. "rsi,ema50,macd"). */
   indicators?: string;
+  /** Detected pattern geometry to replay as a read-only overlay in Chart Studio (symbol is attached here). */
+  overlay?: Omit<PatternOverlay, "symbol"> | null;
 }
 
 /**
@@ -24,7 +27,7 @@ interface ChartButtonProps {
  * (`<ChartButton symbol="RELIANCE.NS" />`) automatically gain the second
  * icon without any code changes.
  */
-export default function ChartButton({ symbol, className = "", hideLookup = false, indicators }: ChartButtonProps) {
+export default function ChartButton({ symbol, className = "", hideLookup = false, indicators, overlay }: ChartButtonProps) {
   const [, navigate] = useLocation();
   const clean = symbol.replace(/\.(NS|BO)$/i, "").trim().toUpperCase();
   const isSector = /\s/.test(clean);
@@ -42,9 +45,18 @@ export default function ChartButton({ symbol, className = "", hideLookup = false
         type="button"
         onClick={(e) => {
           e.stopPropagation();
-          navigate(`/trading?symbol=${encodeURIComponent(clean)}${indicators ? `&indicators=${encodeURIComponent(indicators)}` : ""}`);
+          let overlayParam = "";
+          if (overlay && (overlay.markers?.length || overlay.lines?.length)) {
+            // Geometry is too large for the URL, so hand it over via sessionStorage;
+            // the ?overlay=1 flag tells Chart Studio to consume it once on arrival.
+            try {
+              sessionStorage.setItem("_patternOverlay", JSON.stringify({ ...overlay, symbol: clean }));
+              overlayParam = "&overlay=1";
+            } catch { /* sessionStorage unavailable — open chart without the overlay */ }
+          }
+          navigate(`/trading?symbol=${encodeURIComponent(clean)}${indicators ? `&indicators=${encodeURIComponent(indicators)}` : ""}${overlayParam}`);
         }}
-        title={`Open ${clean} in Chart Studio`}
+        title={overlay ? `Open ${clean} in Chart Studio — pattern drawn` : `Open ${clean} in Chart Studio`}
         aria-label={`Open ${clean} in Chart Studio`}
         className={`${baseBtn} text-indigo-400 dark:text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/40`}
       >

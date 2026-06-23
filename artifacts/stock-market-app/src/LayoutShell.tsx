@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, ComponentType, ReactNode } from "react";
 import { Link, useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 import { useTheme } from "@/context/ThemeContext";
 import { useCustomAuth } from "@/context/CustomAuthContext";
 import { BrandLogo } from "@/components/BrandLogo";
@@ -31,8 +33,8 @@ export const MAIN_NAV = [
   { path: "/email-digest", label: "Email Digest",  icon: Mail },
 ];
 
-export function NavLink({ path, label, icon: Icon, open, indent = false }: {
-  path: string; label: string; icon: ComponentType<{ className?: string }>; open: boolean; indent?: boolean;
+export function NavLink({ path, label, icon: Icon, open, indent = false, badge }: {
+  path: string; label: string; icon: ComponentType<{ className?: string }>; open: boolean; indent?: boolean; badge?: ReactNode;
 }) {
   const [loc] = useLocation();
   const active = loc === path || (path !== "/" && loc.startsWith(path));
@@ -40,7 +42,7 @@ export function NavLink({ path, label, icon: Icon, open, indent = false }: {
     <Link
       href={path}
       title={!open ? label : undefined}
-      className={`flex items-center gap-2.5 transition rounded-lg mx-1.5
+      className={`relative flex items-center gap-2.5 transition rounded-lg mx-1.5
         ${indent && open ? "pl-7 pr-2.5 py-1" : open ? "px-2.5 py-1.5" : "px-0 py-1.5 justify-center"}
         ${active
           ? "bg-indigo-50 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300"
@@ -49,6 +51,11 @@ export function NavLink({ path, label, icon: Icon, open, indent = false }: {
     >
       <Icon className={`flex-shrink-0 ${indent ? "w-4 h-4" : "w-[18px] h-[18px]"} ${active ? "text-indigo-600 dark:text-indigo-400" : ""}`} />
       {open && <span className={`font-medium whitespace-nowrap ${indent ? "text-xs" : "text-sm"}`}>{label}</span>}
+      {/* Live scan-progress badge (expanded → count pill; collapsed → pulsing dot) */}
+      {badge != null && (open
+        ? <span className="ml-auto text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-500/25 text-indigo-700 dark:text-indigo-300 tabular-nums whitespace-nowrap">{badge}</span>
+        : <span className="absolute top-1 right-1.5 w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+      )}
     </Link>
   );
 }
@@ -160,6 +167,17 @@ export function LayoutShell({
 
   useEffect(() => { localStorage.setItem("sidebar-open", String(open)); }, [open]);
 
+  // Live pattern-scan progress for the Patterns nav badge. Polls fast while a
+  // scan runs, slowly when idle (the badge only shows mid-scan).
+  const { data: scanStatus } = useQuery({
+    queryKey: ["patterns-scan-status"],
+    queryFn: api.patternsScanStatus,
+    refetchInterval: (q: any) => (q?.state?.data?.scanInProgress ? 2500 : 60_000),
+  });
+  const scanBadge = scanStatus?.scanInProgress && scanStatus.scanProgress
+    ? `${scanStatus.scanProgress.done}/${scanStatus.scanProgress.total}`
+    : null;
+
   return (
     <div className="h-screen bg-gray-50 dark:bg-gray-950 flex overflow-hidden">
 
@@ -173,7 +191,8 @@ export function LayoutShell({
         {/* Nav items */}
         <nav className="sidebar-nav flex-1 py-2 space-y-0.5 overflow-y-auto overflow-x-hidden">
           {MAIN_NAV.map((item) => (
-            <NavLink key={item.path} {...item} open={open} />
+            <NavLink key={item.path} {...item} open={open}
+              badge={item.path === "/patterns" ? scanBadge : undefined} />
           ))}
         </nav>
 
