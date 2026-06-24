@@ -93,134 +93,179 @@ function NavCard({ title, dotCls, value, valueCls, sub, detail, loading, href, i
   return <Link href={href} className="block h-full rounded-xl">{inner}</Link>;
 }
 
-// ── Mini Sentiment Gauge ──────────────────────────────────────────────────────
-// Valley-inspired SVG arc gauge — color-reactive, animated needle + fill.
-function MiniGauge({ score }: { score: number | null }) {
+// ── Sentiment Flow Diagram ────────────────────────────────────────────────────
+// Valley-inspired: source nodes → animated dashed lines flowing into a hub.
+function SentimentFlow({ score, label, components }: {
+  score: number | null;
+  label: string;
+  components: any[];
+}) {
   const { theme } = useTheme();
   const isDark = theme === "dark";
-  const [fired, setFired] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setFired(false);
-    const t = setTimeout(() => setFired(true), 120);
+    setMounted(false);
+    const t = setTimeout(() => setMounted(true), 80);
     return () => clearTimeout(t);
   }, [score]);
 
-  const cx = 110, cy = 96, r = 76;
+  // Hub accent color — green / grey / red
+  const hubAccent =
+    score == null     ? (isDark ? "#475569" : "#94a3b8")
+    : score >= 20     ? "#16a34a"
+    : score >= 5      ? "#22c55e"
+    : score > -5      ? (isDark ? "#64748b" : "#94a3b8")
+    : score > -20     ? "#f97316"
+    : "#dc2626";
 
-  // Accent color tracks the sentiment zone
-  const accent =
-    score == null       ? (isDark ? "#475569" : "#94a3b8")
-    : score >= 30       ? "#16a34a"   // bullish — green-700
-    : score >= 10       ? "#22c55e"   // mildly bullish — green-500
-    : score > -10       ? (isDark ? "#64748b" : "#94a3b8")  // neutral — slate
-    : score > -30       ? "#f97316"   // mildly bearish — orange
-    : "#dc2626";                      // bearish — red-600
-
-  const trackColor  = isDark ? "#1e293b" : "#f1f5f9";
-  const hubFill     = isDark ? "#0f172a" : "#ffffff";
-  const neutralTick = isDark ? "#334155" : "#cbd5e1";
-
-  // Angle: score −100→+100 maps to −90°→+90°
-  const needleAngle = score != null ? score * 0.9 : -90;
-
-  // Arc helpers — 0° = top, clockwise
-  function pt(deg: number, radius = r) {
-    const rad = ((deg - 90) * Math.PI) / 180;
-    return { x: cx + radius * Math.cos(rad), y: cy + radius * Math.sin(rad) };
-  }
-  function arc(from: number, to: number, radius = r) {
-    const s = pt(from, radius), e = pt(to, radius);
-    const large = Math.abs(to - from) > 180 ? 1 : 0;
-    return `M ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${radius} ${radius} 0 ${large} 1 ${e.x.toFixed(2)} ${e.y.toFixed(2)}`;
+  // Per-component accent
+  function compAccent(sc: number | null) {
+    if (sc == null) return isDark ? "#475569" : "#94a3b8";
+    if (sc >= 10)  return "#16a34a";
+    if (sc >= 0)   return "#22c55e";
+    if (sc > -10)  return isDark ? "#64748b" : "#94a3b8";
+    return "#dc2626";
   }
 
-  // Five equal segments (−90°..+90° split into 5×36°)
-  const segColors = ["#dc2626", "#f97316", neutralTick, "#22c55e", "#16a34a"];
-  const segs = segColors.map((color, i) => ({
-    from: i * 36,
-    to:   (i + 1) * 36,
-    color,
-  }));
+  const bg      = isDark ? "#1e293b"   : "#f8fafc";
+  const border  = isDark ? "#334155"   : "#e2e8f0";
+  const textCol = isDark ? "#94a3b8"   : "#64748b";
+  const hubFill = isDark ? "#0f172a"   : "#ffffff";
 
-  // Tick marks at each segment boundary (6 ticks)
-  const ticks = [0, 36, 72, 108, 144, 180].map(deg => {
-    const inner = pt(deg, r - 9);
-    const outer = pt(deg, r + 1);
-    return { inner, outer };
-  });
+  // Layout constants
+  const W = 280, H = 185;
+  const HX = 140, HY = 104, HR = 38;      // hub
 
-  // Fill arc: from leftmost (0°) to needle position
-  const needleDeg = needleAngle + 90; // convert to 0°=left convention
-  const arcLen = Math.PI * r;
-  const normalized = score != null ? (score + 100) / 200 : 0;
+  // Source node boxes  [cx, cy, half-w, half-h, label, weight-key]
+  const nodes = [
+    { cx: 140, cy: 20,  hw: 68, hh: 13, key: "News Sentiment",  short: "NEWS SENTIMENT"  },
+    { cx: 44,  cy: 160, hw: 52, hh: 13, key: "Price Action",    short: "PRICE ACTION"    },
+    { cx: 236, cy: 160, hw: 44, hh: 13, key: "India VIX",       short: "INDIA VIX"       },
+  ] as const;
+
+  // Resolve component scores by name
+  function compScore(key: string) {
+    const c = components.find((c: any) =>
+      (c.name ?? "").toLowerCase().includes(key.toLowerCase().split(" ")[0])
+    );
+    return c?.score ?? null;
+  }
+
+  // Connector: straight line from node box-edge to hub border
+  function connector(nx: number, ny: number, nhh: number) {
+    // direction from node to hub
+    const dx = HX - nx, dy = HY - ny;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const ux = dx / dist, uy = dy / dist;
+    // start: bottom or top edge of node box (whichever faces hub)
+    const startY = ny < HY ? ny + nhh : ny - nhh;
+    const startX = nx;
+    // end: hub border
+    const endX = HX - ux * HR, endY = HY - uy * HR;
+    return { x1: startX, y1: startY, x2: endX, y2: endY };
+  }
+
+  const lines = nodes.map(n => connector(n.cx, n.cy, n.hh));
+
+  const scoreStr = score != null ? (score > 0 ? `+${score}` : `${score}`) : "—";
 
   return (
-    <svg width="220" height="130" viewBox="0 0 220 130" className="mx-auto overflow-visible">
-      {/* Track */}
-      <path d={arc(0, 180)} fill="none" stroke={trackColor} strokeWidth="12" strokeLinecap="round" />
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: H }}>
+      <defs>
+        <style>{`
+          @keyframes nf-flow {
+            0%   { stroke-dashoffset: 12; }
+            100% { stroke-dashoffset:  0; }
+          }
+          .nf-line { stroke-dasharray: 4 4; animation: nf-flow 0.7s linear infinite; }
+          @keyframes nf-pulse {
+            0%, 100% { opacity: 0.25; r: ${HR}; }
+            50%       { opacity: 0.08; r: ${HR + 6}; }
+          }
+          .nf-pulse { animation: nf-pulse 2.4s ease-in-out infinite; }
+        `}</style>
+      </defs>
 
-      {/* Segment zones — dim all, highlight the active one */}
-      {segs.map((s, i) => {
-        const midDeg = (s.from + s.to) / 2;
-        const active = fired && needleDeg >= s.from && needleDeg < s.to;
+      {/* Hub pulse ring — color-reactive */}
+      <circle className="nf-pulse" cx={HX} cy={HY} r={HR}
+        fill="none" stroke={hubAccent} strokeWidth="1"
+        style={{ opacity: mounted ? undefined : 0, transition: "opacity 0.6s" }}
+      />
+
+      {/* Flow lines — one per source node */}
+      {lines.map((l, i) => {
+        const sc = compScore(nodes[i].key);
+        const col = compAccent(sc);
         return (
-          <path key={i} d={arc(s.from, s.to)} fill="none" stroke={s.color}
-            strokeWidth="10" strokeLinecap="butt"
-            style={{
-              opacity: active ? 1 : 0.18,
-              filter: active ? `drop-shadow(0 0 4px ${s.color}90)` : "none",
-              transition: "opacity 0.55s ease, filter 0.55s ease",
-            }}
+          <line key={i}
+            className={mounted ? "nf-line" : ""}
+            x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2}
+            stroke={col} strokeWidth="1.2"
+            strokeDasharray="4 4"
+            strokeDashoffset={mounted ? undefined : 12}
+            style={{ animationDelay: `${i * 0.18}s`, opacity: 0.75 }}
           />
         );
       })}
 
-      {/* Tick lines between segments */}
-      {ticks.map((tk, i) => (
-        <line key={i}
-          x1={tk.inner.x} y1={tk.inner.y}
-          x2={tk.outer.x} y2={tk.outer.y}
-          stroke={isDark ? "#1e293b" : "#ffffff"} strokeWidth="2"
-        />
-      ))}
-
-      {/* Fill sweep — animated */}
-      <path d={arc(0, 180)} fill="none" stroke={accent} strokeWidth="3"
-        strokeLinecap="round" strokeDasharray={`${arcLen} ${arcLen}`}
-        strokeDashoffset={fired ? arcLen * (1 - normalized) : arcLen}
-        style={{ transition: "stroke-dashoffset 1.1s cubic-bezier(0.34,1.56,0.64,1)", opacity: 0.6 }}
-      />
-
-      {/* Needle */}
-      <g style={{
-        transform: `rotate(${fired ? needleAngle : -90}deg)`,
-        transformOrigin: `${cx}px ${cy}px`,
-        transition: "transform 1.15s cubic-bezier(0.34,1.56,0.64,1)",
-      }}>
-        <line x1={cx} y1={cy + 6} x2={cx} y2={cy - r + 16}
-          stroke={accent} strokeWidth="2" strokeLinecap="round" />
-        <circle cx={cx} cy={cy - r + 16} r={3} fill={accent} opacity={0.3} />
-        <circle cx={cx} cy={cy - r + 16} r={1.5} fill={accent} />
-      </g>
+      {/* Source node chips */}
+      {nodes.map((n, i) => {
+        const sc = compScore(n.key);
+        const col = compAccent(sc);
+        const comp = components.find((c: any) =>
+          (c.name ?? "").toLowerCase().includes(n.key.toLowerCase().split(" ")[0])
+        );
+        const weight = comp?.weight;
+        return (
+          <g key={i} style={{ opacity: mounted ? 1 : 0, transition: `opacity 0.5s ${i * 0.12}s` }}>
+            {/* Box */}
+            <rect
+              x={n.cx - n.hw} y={n.cy - n.hh}
+              width={n.hw * 2} height={n.hh * 2}
+              rx="5" ry="5"
+              fill={bg} stroke={col} strokeWidth="1"
+            />
+            {/* Label */}
+            <text x={n.cx} y={n.cy - 1}
+              textAnchor="middle" dominantBaseline="middle"
+              fontSize="6.5" fontWeight="700" letterSpacing="0.8"
+              fill={col} style={{ fontFamily: "system-ui,sans-serif" }}>
+              {n.short}{weight != null ? ` · ${weight}%` : ""}
+            </text>
+            {/* Tiny score */}
+            {sc != null && (
+              <text x={n.cx} y={n.cy + 7}
+                textAnchor="middle"
+                fontSize="5.5" fontWeight="600"
+                fill={col} opacity={0.7} style={{ fontFamily: "system-ui,sans-serif" }}>
+                {sc > 0 ? `+${sc}` : sc}
+              </text>
+            )}
+          </g>
+        );
+      })}
 
       {/* Hub */}
-      <circle cx={cx} cy={cy} r={9} fill={hubFill} stroke={accent} strokeWidth="1.5" />
-      <circle cx={cx} cy={cy} r={4} fill={accent} />
+      <circle cx={HX} cy={HY} r={HR} fill={hubFill} stroke={hubAccent} strokeWidth="1.5" />
 
-      {/* Score */}
-      {score != null
-        ? <text x={cx} y={cy + 28} textAnchor="middle" fontSize="20" fontWeight="800"
-            fill={accent} style={{ letterSpacing: "-0.5px", fontFamily: "system-ui,sans-serif" }}>
-            {score > 0 ? `+${score}` : `${score}`}
-          </text>
-        : <text x={cx} y={cy + 22} textAnchor="middle" fontSize="14" fill={neutralTick} fontWeight="600">—</text>
-      }
+      {/* Hub score */}
+      <text x={HX} y={HY - 7}
+        textAnchor="middle"
+        fontSize="17" fontWeight="900" letterSpacing="-0.5"
+        fill={hubAccent} style={{ fontFamily: "system-ui,sans-serif" }}>
+        {scoreStr}
+      </text>
+      <text x={HX} y={HY + 10}
+        textAnchor="middle"
+        fontSize="6.5" fontWeight="700" letterSpacing="1"
+        fill={hubAccent} style={{ fontFamily: "system-ui,sans-serif" }}>
+        {label.toUpperCase()}
+      </text>
 
-      {/* Labels */}
-      <text x="8"   y="118" fontSize="7.5" fill="#dc2626" fontWeight="700" letterSpacing="0.5">BEAR</text>
-      <text x={cx}  y="14"  textAnchor="middle" fontSize="7.5" fill={neutralTick} fontWeight="700" letterSpacing="0.5">NEUTRAL</text>
-      <text x="212" y="118" textAnchor="end" fontSize="7.5" fill="#16a34a" fontWeight="700" letterSpacing="0.5">BULL</text>
+      {/* Hub center dot */}
+      <circle cx={HX} cy={HY} r={3.5} fill={hubAccent} opacity={0.35} />
+      <circle cx={HX} cy={HY} r={2}   fill={hubAccent} />
     </svg>
   );
 }
@@ -260,52 +305,20 @@ function SentimentCard({ sentiment, loading }: { sentiment: any; loading: boolea
       </div>
 
       {loading ? (
-        <div className="flex-1 flex flex-col items-center justify-center gap-3 py-4">
-          <div className="w-[220px] h-[130px] bg-gray-100 dark:bg-gray-700 animate-pulse rounded-xl" />
-          <Skel h="h-4" w="w-24" r="rounded" />
+        <div className="flex-1 flex flex-col gap-3 py-2">
+          <div className="w-full h-[185px] bg-gray-100 dark:bg-gray-700 animate-pulse rounded-xl" />
+          <div className="flex gap-2">
+            <Skel h="h-6" w="w-16" r="rounded" />
+            <Skel h="h-6" w="w-24" r="rounded" />
+          </div>
         </div>
       ) : (
         <>
-          {/* Gauge */}
-          <MiniGauge score={composite} />
+          {/* Flow diagram — nodes → animated lines → hub */}
+          <SentimentFlow score={composite} label={label} components={components} />
 
-          {/* Label — large, weighted, color-reactive */}
-          <p className={`text-base font-black text-center tracking-tight mb-4 transition-colors duration-700 ${accentCls}`}>
-            {label}
-          </p>
-
-          {/* Divider */}
-          <div className="border-t border-gray-100 dark:border-gray-700/60 mb-3" />
-
-          {/* Component bars — Valley-style: label + dot-bar + weight */}
-          <div className="space-y-2.5">
-            {components.filter(c => c.weight > 0).map((c, i) => {
-              const sc: number = c.score ?? 0;
-              const pct = Math.min(100, Math.max(0, (sc + 100) / 2));
-              const barBull = sc >= 10;
-              const barBear = sc <= -10;
-              const barCls  = barBull ? "bg-green-500 dark:bg-green-400"
-                            : barBear ? "bg-red-500 dark:bg-red-400"
-                            : "bg-slate-300 dark:bg-slate-600";
-              return (
-                <div key={i}>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-gray-400 dark:text-gray-500">
-                      {c.name}
-                    </span>
-                    <span className="text-[9px] font-bold text-gray-500 dark:text-gray-400">{c.weight}%</span>
-                  </div>
-                  <div className="h-[3px] bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
-                    <div className={`h-full rounded-full ${barCls}`}
-                      style={{ width: `${pct}%`, transition: "width 1s cubic-bezier(0.34,1.56,0.64,1)" }} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* VIX + News chips — Valley square-pill style */}
-          <div className="flex gap-1.5 mt-3.5 flex-wrap">
+          {/* VIX + News chips */}
+          <div className="flex gap-1.5 mt-2 flex-wrap">
             {vixVal != null && (
               <span className={`inline-flex items-center gap-1 text-[9px] rounded px-2 py-1 border font-bold tracking-wide uppercase
                 ${vixVal < 15
