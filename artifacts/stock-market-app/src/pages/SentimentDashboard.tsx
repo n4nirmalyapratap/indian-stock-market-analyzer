@@ -478,221 +478,204 @@ export default function SentimentDashboard() {
             </div>
           )}
 
-          {/* ── Main cards row ─────────────────────────────────────────────── */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-            {/* Gauge card */}
-            <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 flex flex-col items-center gap-4 lg:col-span-1">
-              <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-widest self-start">
-                Composite Score
-              </h2>
+          {/* ── Composite Score — full width ───────────────────────────────── */}
+          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
+            <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-widest mb-4">
+              Composite Score
+            </h2>
+            {/* Flow diagram — centres itself, viewBox gives it room to breathe */}
+            <div className="max-w-2xl mx-auto">
               <SentimentFlow score={score} label={sentiment.label} components={sentiment.components} />
-
-              {/* Weight breakdown */}
-              <div className="w-full space-y-3 pt-2 border-t border-gray-100 dark:border-gray-800">
-                {sentiment.components.map((c, i) => (
-                  <ComponentBar key={i} comp={c} index={i} />
-                ))}
-              </div>
             </div>
 
-            {/* VIX + PCR panel */}
-            <div className="space-y-4 lg:col-span-1">
-
-              {/* VIX card */}
-              <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-widest">
-                    India VIX
-                  </h2>
-                  <span className="text-xs text-gray-400">Fear Gauge</span>
-                </div>
-                {sentiment.vix.current == null || sentiment.vix.interpretation == null ? (
-                  <div className="rounded-lg p-3 text-xs border bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400">
-                    VIX feed unavailable. The VIX leg is excluded from the composite until the next refresh succeeds.
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex items-end gap-3 mb-3">
-                      <span className="text-4xl font-black text-gray-900 dark:text-white">
-                        {sentiment.vix.current.toFixed(1)}
-                      </span>
-                      {sentiment.vix.change5d_pct != null && (
-                        <span className={`text-sm font-medium mb-1 ${sentiment.vix.change5d_pct >= 0 ? "text-red-500" : "text-emerald-500"}`}>
-                          {sentiment.vix.change5d_pct > 0 ? "▲" : "▼"} {Math.abs(sentiment.vix.change5d_pct).toFixed(1)}% (5d)
-                        </span>
-                      )}
-                    </div>
-
-                    {/* VIX level bar */}
-                    <div className="relative h-3 bg-gradient-to-r from-emerald-400 via-yellow-400 to-red-500 rounded-full mb-3">
-                      <div
-                        className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white border-2 border-gray-800 dark:border-white rounded-full shadow-sm"
-                        style={{ left: `${Math.min(95, Math.max(5, (sentiment.vix.current / 40) * 100))}%` }}
-                      />
-                    </div>
-                    <div className="flex justify-between text-[10px] text-gray-400 mb-3">
-                      <span>0 (Calm)</span><span>20</span><span>40+ (Panic)</span>
-                    </div>
-
-                    <div className={`rounded-lg p-3 text-xs border
-                      ${sentiment.vix.current < 15 ? "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800"
-                      : sentiment.vix.current < 22 ? "bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800"
-                      : "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800"}`}>
-                      <p className="font-semibold text-gray-800 dark:text-gray-200 mb-0.5">
-                        {sentiment.vix.interpretation.emoji} {sentiment.vix.interpretation.level}
-                      </p>
-                      <p className="text-gray-600 dark:text-gray-400">{sentiment.vix.interpretation.text}</p>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* PCR card — display only, derived from VIX, not in composite */}
-              <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-widest">
-                    PCR Proxy
-                  </h2>
-                  <span className="text-[10px] text-gray-400 uppercase tracking-wider">Informational</span>
-                </div>
-                {sentiment.pcr.proxy_value == null || sentiment.pcr.interpretation == null ? (
-                  <div className="rounded-lg p-3 text-xs border bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400">
-                    PCR proxy requires VIX — currently unavailable.
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex items-end gap-3 mb-3">
-                      <span className="text-4xl font-black text-gray-900 dark:text-white">
-                        {sentiment.pcr.proxy_value.toFixed(2)}
-                      </span>
-                      <span className={`text-xs mb-1.5 font-medium ${sentiment.pcr.proxy_value > 1.0 ? "text-red-500" : "text-emerald-500"}`}>
-                        {sentiment.pcr.interpretation.level}
-                      </span>
-                    </div>
-
-                    {/* PCR zones bar */}
-                    <div className="relative h-3 rounded-full mb-1 overflow-hidden">
-                      <div className="absolute inset-0 flex">
-                        <div className="flex-1 bg-emerald-500" title="< 0.5 Extreme Bull" />
-                        <div className="flex-1 bg-green-400"   title="0.5–0.7 Bullish" />
-                        <div className="flex-1 bg-gray-400"    title="0.7–1.0 Neutral" />
-                        <div className="flex-1 bg-orange-400"  title="1.0–1.4 Bearish" />
-                        <div className="flex-1 bg-red-500"     title="> 1.4 Extreme Bear" />
-                      </div>
-                      <div
-                        className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white border-2 border-gray-800 dark:border-white rounded-full shadow-sm"
-                        style={{ left: `${Math.min(95, Math.max(5, ((sentiment.pcr.proxy_value - 0.3) / 1.5) * 100))}%` }}
-                      />
-                    </div>
-                    <div className="flex justify-between text-[10px] text-gray-400 mb-3">
-                      <span>0.3</span><span>0.7</span><span>1.0</span><span>1.4</span><span>1.8</span>
-                    </div>
-
-                    <div className={`rounded-lg p-3 text-xs border
-                      ${sentiment.pcr.proxy_value < 0.7 ? "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800"
-                      : sentiment.pcr.proxy_value < 1.0 ? "bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700"
-                      : "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800"}`}>
-                      <p className="font-semibold text-gray-800 dark:text-gray-200 mb-0.5">
-                        {sentiment.pcr.interpretation.emoji} {sentiment.pcr.interpretation.level}
-                      </p>
-                      <p className="text-gray-600 dark:text-gray-400">{sentiment.pcr.interpretation.text}</p>
-                    </div>
-                  </>
-                )}
-                <p className="text-[10px] text-gray-400 mt-2 flex items-start gap-1">
-                  <Info className="w-3 h-3 shrink-0 mt-0.5" /> {sentiment.pcr.note}
-                </p>
-              </div>
+            {/* Component bars — horizontal row on wide screens */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-8 gap-y-4 pt-5 mt-2 border-t border-gray-100 dark:border-gray-800">
+              {sentiment.components.map((c, i) => (
+                <ComponentBar key={i} comp={c} index={i} />
+              ))}
             </div>
+          </div>
 
-            {/* News + Price Action */}
-            <div className="space-y-4 lg:col-span-1">
+          {/* ── Detail cards — 2×2 / 4-col ─────────────────────────────────── */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
 
-              {/* News card */}
-              <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-5">
-                <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-widest mb-4">
-                  News Sentiment
+            {/* VIX card */}
+            <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-widest">
+                  India VIX
                 </h2>
-                {sentiment.news.available === false ? (
-                  <div className="rounded-lg p-3 text-xs border bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400">
-                    Insufficient article sample to score the news leg
-                    ({sentiment.news.total_articles} articles, need ≥5).
-                    Excluded from composite.
-                  </div>
-                ) : (
+                <span className="text-xs text-gray-400">Fear Gauge</span>
+              </div>
+              {sentiment.vix.current == null || sentiment.vix.interpretation == null ? (
+                <div className="rounded-lg p-3 text-xs border bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400">
+                  VIX feed unavailable. The VIX leg is excluded from the composite until the next refresh succeeds.
+                </div>
+              ) : (
                 <>
-                <div className="flex items-center gap-3 mb-4">
-                  <div className={`text-3xl font-black ${sentiment.news.mood === "bullish" ? "text-emerald-500" : sentiment.news.mood === "bearish" ? "text-red-500" : "text-gray-500"}`}>
-                    {sentiment.news.mood === "bullish" ? "Bullish" : sentiment.news.mood === "bearish" ? "Bearish" : "Neutral"}
+                  <div className="flex items-end gap-3 mb-3">
+                    <span className="text-4xl font-black text-gray-900 dark:text-white">
+                      {sentiment.vix.current.toFixed(1)}
+                    </span>
+                    {sentiment.vix.change5d_pct != null && (
+                      <span className={`text-sm font-medium mb-1 ${sentiment.vix.change5d_pct >= 0 ? "text-red-500" : "text-emerald-500"}`}>
+                        {sentiment.vix.change5d_pct > 0 ? "▲" : "▼"} {Math.abs(sentiment.vix.change5d_pct).toFixed(1)}% (5d)
+                      </span>
+                    )}
                   </div>
-                  <div className="text-xs text-gray-400">{sentiment.news.total_articles} articles</div>
-                </div>
-                {/* Article ratio bar */}
-                <div className="space-y-2 text-xs">
-                  {(["bullish", "bearish", "neutral"] as const).map(type => {
-                    const count = sentiment.news[type];
-                    const total = sentiment.news.total_articles || 1;
-                    const pct   = Math.round((count / total) * 100);
-                    const color = type === "bullish" ? "bg-emerald-500" : type === "bearish" ? "bg-red-500" : "bg-gray-400";
-                    return (
-                      <div key={type}>
-                        <div className="flex justify-between mb-0.5 capitalize">
-                          <span className="text-gray-500 dark:text-gray-400">{type}</span>
-                          <span className="text-gray-700 dark:text-gray-300">{count} ({pct}%)</span>
-                        </div>
-                        <div className="h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full">
-                          <div className={`h-full ${color} rounded-full`} style={{ width: `${pct}%` }} />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                </>
-                )}
-              </div>
-
-              {/* Price Action card */}
-              <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-5">
-                <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-widest mb-4">
-                  Nifty 50 Price Action
-                </h2>
-                {sentiment.price_action.available === false || sentiment.price_action.score == null ? (
-                  <div className="rounded-lg p-3 text-xs border bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400">
-                    Nifty price feed unavailable. Price-action leg excluded from the composite.
+                  <div className="relative h-3 bg-gradient-to-r from-emerald-400 via-yellow-400 to-red-500 rounded-full mb-3">
+                    <div className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white border-2 border-gray-800 dark:border-white rounded-full shadow-sm"
+                      style={{ left: `${Math.min(95, Math.max(5, (sentiment.vix.current / 40) * 100))}%` }} />
                   </div>
-                ) : (
-                  <>
-                    <div className="grid grid-cols-3 gap-3">
-                      {[
-                        { label: "5d Momentum",  raw: sentiment.price_action.indicators.momentum5d,
-                          fmt: (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(1)}%`,
-                          positive: (v: number) => v >= 0 },
-                        { label: "20d Momentum", raw: sentiment.price_action.indicators.momentum20d,
-                          fmt: (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(1)}%`,
-                          positive: (v: number) => v >= 0 },
-                        { label: "RSI 14",       raw: sentiment.price_action.indicators.rsi14,
-                          fmt: (v: number) => v.toFixed(0),
-                          positive: (v: number) => v >= 50 },
-                      ].map((kpi, i) => {
-                        const has = kpi.raw != null;
-                        return (
-                          <div key={i} className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3 text-center">
-                            <p className="text-[10px] text-gray-400 mb-1">{kpi.label}</p>
-                            <p className={`text-sm font-bold ${!has ? "text-gray-400" : kpi.positive(kpi.raw as number) ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
-                              {has ? kpi.fmt(kpi.raw as number) : "—"}
-                            </p>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <p className={`text-center text-sm font-semibold mt-3 ${sentiment.price_action.score >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
-                      {sentiment.price_action.label.replace("_", " ")}
+                  <div className="flex justify-between text-[10px] text-gray-400 mb-3">
+                    <span>0 (Calm)</span><span>20</span><span>40+ (Panic)</span>
+                  </div>
+                  <div className={`rounded-lg p-3 text-xs border
+                    ${sentiment.vix.current < 15 ? "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800"
+                    : sentiment.vix.current < 22 ? "bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800"
+                    : "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800"}`}>
+                    <p className="font-semibold text-gray-800 dark:text-gray-200 mb-0.5">
+                      {sentiment.vix.interpretation.emoji} {sentiment.vix.interpretation.level}
                     </p>
-                  </>
-                )}
-              </div>
+                    <p className="text-gray-600 dark:text-gray-400">{sentiment.vix.interpretation.text}</p>
+                  </div>
+                </>
+              )}
             </div>
+
+            {/* PCR card */}
+            <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-widest">
+                  PCR Proxy
+                </h2>
+                <span className="text-[10px] text-gray-400 uppercase tracking-wider">Informational</span>
+              </div>
+              {sentiment.pcr.proxy_value == null || sentiment.pcr.interpretation == null ? (
+                <div className="rounded-lg p-3 text-xs border bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400">
+                  PCR proxy requires VIX — currently unavailable.
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-end gap-3 mb-3">
+                    <span className="text-4xl font-black text-gray-900 dark:text-white">
+                      {sentiment.pcr.proxy_value.toFixed(2)}
+                    </span>
+                    <span className={`text-xs mb-1.5 font-medium ${sentiment.pcr.proxy_value > 1.0 ? "text-red-500" : "text-emerald-500"}`}>
+                      {sentiment.pcr.interpretation.level}
+                    </span>
+                  </div>
+                  <div className="relative h-3 rounded-full mb-1 overflow-hidden">
+                    <div className="absolute inset-0 flex">
+                      <div className="flex-1 bg-emerald-500" title="< 0.5 Extreme Bull" />
+                      <div className="flex-1 bg-green-400"   title="0.5–0.7 Bullish" />
+                      <div className="flex-1 bg-gray-400"    title="0.7–1.0 Neutral" />
+                      <div className="flex-1 bg-orange-400"  title="1.0–1.4 Bearish" />
+                      <div className="flex-1 bg-red-500"     title="> 1.4 Extreme Bear" />
+                    </div>
+                    <div className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white border-2 border-gray-800 dark:border-white rounded-full shadow-sm"
+                      style={{ left: `${Math.min(95, Math.max(5, ((sentiment.pcr.proxy_value - 0.3) / 1.5) * 100))}%` }} />
+                  </div>
+                  <div className="flex justify-between text-[10px] text-gray-400 mb-3">
+                    <span>0.3</span><span>0.7</span><span>1.0</span><span>1.4</span><span>1.8</span>
+                  </div>
+                  <div className={`rounded-lg p-3 text-xs border
+                    ${sentiment.pcr.proxy_value < 0.7 ? "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800"
+                    : sentiment.pcr.proxy_value < 1.0 ? "bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700"
+                    : "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800"}`}>
+                    <p className="font-semibold text-gray-800 dark:text-gray-200 mb-0.5">
+                      {sentiment.pcr.interpretation.emoji} {sentiment.pcr.interpretation.level}
+                    </p>
+                    <p className="text-gray-600 dark:text-gray-400">{sentiment.pcr.interpretation.text}</p>
+                  </div>
+                </>
+              )}
+              <p className="text-[10px] text-gray-400 mt-2 flex items-start gap-1">
+                <Info className="w-3 h-3 shrink-0 mt-0.5" /> {sentiment.pcr.note}
+              </p>
+            </div>
+
+            {/* News Sentiment card */}
+            <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-5">
+              <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-widest mb-4">
+                News Sentiment
+              </h2>
+              {sentiment.news.available === false ? (
+                <div className="rounded-lg p-3 text-xs border bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400">
+                  Insufficient article sample ({sentiment.news.total_articles} articles, need ≥5). Excluded from composite.
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className={`text-3xl font-black ${sentiment.news.mood === "bullish" ? "text-emerald-500" : sentiment.news.mood === "bearish" ? "text-red-500" : "text-gray-500"}`}>
+                      {sentiment.news.mood === "bullish" ? "Bullish" : sentiment.news.mood === "bearish" ? "Bearish" : "Neutral"}
+                    </div>
+                    <div className="text-xs text-gray-400">{sentiment.news.total_articles} articles</div>
+                  </div>
+                  <div className="space-y-2 text-xs">
+                    {(["bullish", "bearish", "neutral"] as const).map(type => {
+                      const count = sentiment.news[type];
+                      const total = sentiment.news.total_articles || 1;
+                      const pct   = Math.round((count / total) * 100);
+                      const color = type === "bullish" ? "bg-emerald-500" : type === "bearish" ? "bg-red-500" : "bg-gray-400";
+                      return (
+                        <div key={type}>
+                          <div className="flex justify-between mb-0.5 capitalize">
+                            <span className="text-gray-500 dark:text-gray-400">{type}</span>
+                            <span className="text-gray-700 dark:text-gray-300">{count} ({pct}%)</span>
+                          </div>
+                          <div className="h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full">
+                            <div className={`h-full ${color} rounded-full`} style={{ width: `${pct}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Price Action card */}
+            <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-5">
+              <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-widest mb-4">
+                Nifty 50 Price Action
+              </h2>
+              {sentiment.price_action.available === false || sentiment.price_action.score == null ? (
+                <div className="rounded-lg p-3 text-xs border bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400">
+                  Nifty price feed unavailable. Price-action leg excluded from the composite.
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { label: "5d Mom",  raw: sentiment.price_action.indicators.momentum5d,
+                        fmt: (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(1)}%`,
+                        positive: (v: number) => v >= 0 },
+                      { label: "20d Mom", raw: sentiment.price_action.indicators.momentum20d,
+                        fmt: (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(1)}%`,
+                        positive: (v: number) => v >= 0 },
+                      { label: "RSI 14",  raw: sentiment.price_action.indicators.rsi14,
+                        fmt: (v: number) => v.toFixed(0),
+                        positive: (v: number) => v >= 50 },
+                    ].map((kpi, i) => {
+                      const has = kpi.raw != null;
+                      return (
+                        <div key={i} className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3 text-center">
+                          <p className="text-[10px] text-gray-400 mb-1">{kpi.label}</p>
+                          <p className={`text-sm font-bold ${!has ? "text-gray-400" : kpi.positive(kpi.raw as number) ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+                            {has ? kpi.fmt(kpi.raw as number) : "—"}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className={`text-center text-sm font-semibold mt-3 ${sentiment.price_action.score >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+                    {sentiment.price_action.label.replace("_", " ")}
+                  </p>
+                </>
+              )}
+            </div>
+
           </div>
 
           {/* ── Sector heatmap ─────────────────────────────────────────────── */}
