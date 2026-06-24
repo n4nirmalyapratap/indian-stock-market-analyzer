@@ -780,12 +780,22 @@ export default function Dashboard() {
 
           {ipoLoading ? (
             <div className="space-y-3">
-              {[1,2,3].map(i => <div key={i} className="h-14 bg-gray-100 dark:bg-gray-700 animate-pulse rounded-lg" />)}
+              {[1,2,3,4,5].map(i => <div key={i} className="h-14 bg-gray-100 dark:bg-gray-700 animate-pulse rounded-lg" />)}
             </div>
           ) : (() => {
-            const open     = (ipoData?.open     ?? []).slice(0, 2);
-            const upcoming = (ipoData?.upcoming  ?? []).slice(0, 3 - open.length);
-            const all      = [...open, ...upcoming];
+            const combined = [
+              ...(ipoData?.open ?? []),
+              ...(ipoData?.upcoming ?? []),
+            ];
+            // Sort by GMP premium descending; nulls/no-GMP go to the bottom
+            const all = combined
+              .slice()
+              .sort((a: any, b: any) => {
+                const ga = a.gmp?.premium ?? -Infinity;
+                const gb = b.gmp?.premium ?? -Infinity;
+                return gb - ga;
+              })
+              .slice(0, 6);
 
             if (!all.length) {
               return (
