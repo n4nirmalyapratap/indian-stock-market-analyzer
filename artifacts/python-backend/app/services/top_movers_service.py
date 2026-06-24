@@ -251,7 +251,7 @@ class TopMoversService:
             "segment":      segment,
             "label":        label,
             "indexSlug":    SEGMENT_INDEX[segment][1],
-            "asOf":         as_of or _disk._now_ist().isoformat(),
+            "asOf":         _last_close_ist().isoformat(),
             "marketState":  _disk.current_market_state(),
             "totalScanned": len(rows),
             "gainers":      gainers,
