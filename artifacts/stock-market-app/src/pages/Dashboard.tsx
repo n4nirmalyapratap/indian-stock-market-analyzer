@@ -7,7 +7,7 @@ import { useTheme } from "@/context/ThemeContext";
 import {
   RefreshCw, Activity, Loader2, Newspaper, Rocket,
   TrendingUp, TrendingDown, ArrowRight, ShieldAlert,
-  BarChart2, Zap, Flame, Package,
+  BarChart2, Zap, Flame, Package, X, Search, ArrowUpDown,
 } from "lucide-react";
 import GlobalIndicesPanel from "@/components/GlobalIndicesPanel";
 import TopMoversPanel from "@/components/TopMoversPanel";
@@ -452,8 +452,186 @@ function sectorEmoji(name: string): string {
   return "📊";
 }
 
+// ── High-Conviction Stock Drawer ───────────────────────────────────────────────
+type SortKey = "delivPct" | "changePct" | "turnover";
+
+function HighDeliveryDrawer({ open, onClose, summaryCount }: {
+  open: boolean; onClose: () => void; summaryCount: number | null;
+}) {
+  const [search, setSearch]   = useState("");
+  const [sortBy, setSortBy]   = useState<SortKey>("delivPct");
+  const [sortAsc, setSortAsc] = useState(false);
+
+  const { data, isLoading } = useQuery<any>({
+    queryKey: ["high-delivery-stocks-drawer"],
+    queryFn:  () => fetchApi("/insights/top-deliveries?minDelivPct=65&limit=500&sort=delivPct"),
+    enabled:  open,
+    staleTime: 30 * 60_000,
+  });
+
+  const items: any[] = data?.items ?? [];
+
+  const filtered = items
+    .filter(r => {
+      if (!search) return true;
+      const q = search.toLowerCase();
+      return (r.symbol ?? "").toLowerCase().includes(q)
+          || (r.name   ?? "").toLowerCase().includes(q)
+          || (r.sector ?? "").toLowerCase().includes(q);
+    })
+    .sort((a, b) => {
+      const va = a[sortBy] ?? 0;
+      const vb = b[sortBy] ?? 0;
+      return sortAsc ? va - vb : vb - va;
+    });
+
+  function toggleSort(key: SortKey) {
+    if (sortBy === key) setSortAsc(v => !v);
+    else { setSortBy(key); setSortAsc(false); }
+  }
+
+  function fmtTurnover(v: number): string {
+    if (!v) return "—";
+    const cr = v / 1_00_00_000;
+    if (cr >= 1000) return `₹${(cr / 1000).toFixed(1)}K Cr`;
+    if (cr >= 1)    return `₹${cr.toFixed(0)} Cr`;
+    return `₹${(v / 1_00_000).toFixed(1)} L`;
+  }
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative ml-auto w-full max-w-2xl bg-white dark:bg-gray-900 flex flex-col h-full shadow-2xl">
+
+        {/* Header */}
+        <div className="flex items-start justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800 flex-shrink-0">
+          <div>
+            <div className="flex items-center gap-2 mb-0.5">
+              <Flame className="w-4 h-4 text-orange-400" />
+              <h2 className="text-base font-bold text-gray-900 dark:text-white">High-Conviction Volume Stocks</h2>
+            </div>
+            <p className="text-xs text-gray-400 dark:text-gray-500">
+              {summaryCount ?? filtered.length} stocks with ≥65% delivery today — NSE bhavcopy
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Search + sort bar */}
+        <div className="px-5 py-3 border-b border-gray-100 dark:border-gray-800 flex items-center gap-3 flex-shrink-0">
+          <div className="flex-1 relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search symbol, name or sector…"
+              className="w-full pl-8 pr-3 py-1.5 text-sm bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:border-indigo-400 dark:text-white"
+            />
+          </div>
+          <span className="text-xs text-gray-400 flex-shrink-0">{filtered.length} shown</span>
+        </div>
+
+        {/* Table */}
+        <div className="flex-1 overflow-y-auto">
+          {isLoading ? (
+            <div className="space-y-2 p-4">
+              {Array.from({ length: 12 }).map((_, i) => <Skel key={i} h="h-10" r="rounded-lg" />)}
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-gray-50 dark:bg-gray-800/90 backdrop-blur z-10">
+                <tr className="text-left">
+                  <th className="px-4 py-2.5 text-[10px] font-bold text-gray-400 uppercase tracking-wide w-28">Symbol</th>
+                  <th className="px-2 py-2.5 text-[10px] font-bold text-gray-400 uppercase tracking-wide">Sector</th>
+                  <th className="px-2 py-2.5 cursor-pointer select-none" onClick={() => toggleSort("delivPct")}>
+                    <span className={`text-[10px] font-bold uppercase tracking-wide flex items-center gap-1 transition ${sortBy === "delivPct" ? "text-indigo-500" : "text-gray-400 hover:text-indigo-500"}`}>
+                      Delivery% <ArrowUpDown className="w-2.5 h-2.5" />
+                    </span>
+                  </th>
+                  <th className="px-2 py-2.5 cursor-pointer select-none" onClick={() => toggleSort("changePct")}>
+                    <span className={`text-[10px] font-bold uppercase tracking-wide flex items-center gap-1 transition ${sortBy === "changePct" ? "text-indigo-500" : "text-gray-400 hover:text-indigo-500"}`}>
+                      Day Chg <ArrowUpDown className="w-2.5 h-2.5" />
+                    </span>
+                  </th>
+                  <th className="px-2 py-2.5 cursor-pointer select-none" onClick={() => toggleSort("turnover")}>
+                    <span className={`text-[10px] font-bold uppercase tracking-wide flex items-center gap-1 transition ${sortBy === "turnover" ? "text-indigo-500" : "text-gray-400 hover:text-indigo-500"}`}>
+                      Turnover <ArrowUpDown className="w-2.5 h-2.5" />
+                    </span>
+                  </th>
+                  <th className="px-4 py-2.5 w-12" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50 dark:divide-gray-800">
+                {filtered.map((r, i) => {
+                  const chg = r.changePct ?? 0;
+                  const chgCls = chg >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-500 dark:text-red-400";
+                  const delivPct = r.delivPct ?? 0;
+                  const barW = Math.min(100, delivPct);
+                  const barCls = delivPct >= 80 ? "bg-emerald-500" : delivPct >= 65 ? "bg-amber-400" : "bg-gray-300";
+                  return (
+                    <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-800/60 transition">
+                      <td className="px-4 py-2.5">
+                        <p className="font-bold text-gray-900 dark:text-white text-xs">{r.symbol}</p>
+                        <p className="text-[10px] text-gray-400 truncate max-w-[90px]">{r.name !== r.symbol ? r.name : ""}</p>
+                      </td>
+                      <td className="px-2 py-2.5">
+                        <span className="text-[10px] text-gray-500 dark:text-gray-400 truncate max-w-[80px] block">
+                          {r.sector ? `${sectorEmoji(r.sector)} ${r.sector}` : "—"}
+                        </span>
+                      </td>
+                      <td className="px-2 py-2.5">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-bold text-gray-800 dark:text-gray-200 w-10 text-right">{delivPct.toFixed(1)}%</span>
+                          <div className="w-16 h-1.5 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full ${barCls}`} style={{ width: `${barW}%` }} />
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-2 py-2.5">
+                        <span className={`text-xs font-bold ${chgCls}`}>
+                          {chg >= 0 ? "+" : ""}{chg.toFixed(2)}%
+                        </span>
+                      </td>
+                      <td className="px-2 py-2.5 text-xs text-gray-500 dark:text-gray-400">{fmtTurnover(r.turnover)}</td>
+                      <td className="px-4 py-2.5 text-right">
+                        <Link href={`/chart/${r.symbol}`}
+                          className="text-[10px] font-semibold text-indigo-500 hover:text-indigo-700 dark:hover:text-indigo-300 transition"
+                          onClick={onClose}>
+                          Chart →
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {filtered.length === 0 && !isLoading && (
+                  <tr><td colSpan={6} className="py-12 text-center text-sm text-gray-400">No stocks match your search</td></tr>
+                )}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 py-3 border-t border-gray-100 dark:border-gray-800 flex items-center justify-between flex-shrink-0">
+          <p className="text-[10px] text-gray-400">Delivery ≥65% · NSE bhavcopy · Updated daily after market close</p>
+          <Link href="/insights/top-deliveries" onClick={onClose}
+            className="text-[10px] font-semibold text-indigo-500 hover:text-indigo-700 flex items-center gap-1 transition">
+            Full Delivery View <ArrowRight className="w-2.5 h-2.5" />
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Volume Activity Card ───────────────────────────────────────────────────────
 function VolumeActivityCard({ data, loading }: { data: any; loading: boolean }) {
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
   const count     = data?.unusualCount ?? null;
   const total     = data?.totalStocks  ?? null;
   const topSector = data?.topSector    ?? null;
@@ -468,86 +646,102 @@ function VolumeActivityCard({ data, loading }: { data: any; loading: boolean }) 
                    : "bg-gray-400";
 
   const links = [
-    { href: "/insights/top-deliveries", label: count != null ? `View all ${count} stocks` : "View all stocks", icon: <Package className="w-3 h-3" /> },
     { href: "/scanners?preset=volume-spike", label: "Volume Surge Scanner", icon: <Zap className="w-3 h-3" /> },
     { href: "/insights/heatmap",             label: "Sector Heatmap",        icon: <Activity className="w-3 h-3" /> },
   ];
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm p-5 flex flex-col">
-      <div className="flex items-center justify-between mb-4">
-        <p className="text-[9px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-[0.18em] flex items-center gap-1.5">
-          <Flame className="w-3 h-3 text-orange-400" /> Volume Activity
-        </p>
-        <Link href="/insights/top-deliveries"
-          className="text-[9px] font-semibold text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 flex items-center gap-0.5 tracking-wide transition uppercase">
-          Full View <ArrowRight className="w-2.5 h-2.5" />
-        </Link>
-      </div>
+    <>
+      <HighDeliveryDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} summaryCount={count} />
 
-      {loading ? (
-        <div className="space-y-3">
-          <Skel h="h-8" w="w-32" r="rounded" />
-          <Skel h="h-4" w="w-48" r="rounded" />
-          <div className="space-y-2 mt-4">
-            {[1,2,3].map(i => <Skel key={i} h="h-8" r="rounded-lg" />)}
-          </div>
-        </div>
-      ) : !available ? (
-        <div className="flex-1 flex items-center justify-center">
-          <p className="text-sm text-gray-400 dark:text-gray-500 text-center">
-            Volume data unavailable<br />
-            <span className="text-xs">NSE bhavdata not yet published for today</span>
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm p-5 flex flex-col">
+        <div className="flex items-center justify-between mb-4">
+          <p className="text-[9px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-[0.18em] flex items-center gap-1.5">
+            <Flame className="w-3 h-3 text-orange-400" /> Volume Activity
           </p>
+          <Link href="/insights/top-deliveries"
+            className="text-[9px] font-semibold text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 flex items-center gap-0.5 tracking-wide transition uppercase">
+            Full View <ArrowRight className="w-2.5 h-2.5" />
+          </Link>
         </div>
-      ) : (
-        <>
-          {/* Hero count */}
-          <div className="flex items-end gap-2 mb-1">
-            <span className="text-4xl font-black text-gray-900 dark:text-white leading-none">
-              {count ?? "—"}
-            </span>
-            {total != null && (
-              <span className="text-xs text-gray-400 dark:text-gray-500 mb-1">
-                of {total.toLocaleString()} stocks
-              </span>
-            )}
-          </div>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-            high-conviction volume stocks today
-          </p>
 
-          {/* Top theme */}
-          {topSector && (
-            <div className="flex items-center gap-2 mb-5 bg-gray-50 dark:bg-gray-700/50 rounded-lg px-3 py-2">
-              <span className="text-sm">{sectorEmoji(topSector)}</span>
-              <div className="min-w-0">
-                <p className="text-[10px] text-gray-400 uppercase tracking-wide">Top theme</p>
-                <p className="text-sm font-bold text-gray-800 dark:text-gray-100 truncate">{topSector}</p>
-              </div>
-              <span className={`ml-auto text-[10px] font-bold uppercase tracking-wide ${trendColor} flex items-center gap-1`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${trendDot}`} />
-                {trend}
-              </span>
+        {loading ? (
+          <div className="space-y-3">
+            <Skel h="h-8" w="w-32" r="rounded" />
+            <Skel h="h-4" w="w-48" r="rounded" />
+            <div className="space-y-2 mt-4">
+              {[1,2,3].map(i => <Skel key={i} h="h-8" r="rounded-lg" />)}
             </div>
-          )}
-
-          {/* Quick links */}
-          <div className="mt-auto space-y-1.5">
-            {links.map((l, i) => (
-              <Link key={i} href={l.href}
-                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-700/40 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 border border-gray-100 dark:border-gray-700 hover:border-indigo-200 dark:hover:border-indigo-700 transition group">
-                <span className="text-gray-400 group-hover:text-indigo-500 transition">{l.icon}</span>
-                <span className="text-xs font-medium text-gray-700 dark:text-gray-300 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">
-                  {l.label}
-                </span>
-                <ArrowRight className="w-3 h-3 text-gray-300 dark:text-gray-600 group-hover:text-indigo-400 ml-auto transition" />
-              </Link>
-            ))}
           </div>
-        </>
-      )}
-    </div>
+        ) : !available ? (
+          <div className="flex-1 flex items-center justify-center">
+            <p className="text-sm text-gray-400 dark:text-gray-500 text-center">
+              Volume data unavailable<br />
+              <span className="text-xs">NSE bhavdata not yet published for today</span>
+            </p>
+          </div>
+        ) : (
+          <>
+            {/* Hero count — clickable to open drawer */}
+            <button onClick={() => setDrawerOpen(true)} className="text-left group mb-1">
+              <div className="flex items-end gap-2">
+                <span className="text-4xl font-black text-gray-900 dark:text-white leading-none group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">
+                  {count ?? "—"}
+                </span>
+                {total != null && (
+                  <span className="text-xs text-gray-400 dark:text-gray-500 mb-1">
+                    of {total.toLocaleString()} stocks
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 group-hover:text-indigo-500 transition flex items-center gap-1">
+                high-conviction volume stocks today
+                <ArrowRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition" />
+              </p>
+            </button>
+
+            {/* Top theme */}
+            {topSector && (
+              <div className="flex items-center gap-2 my-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg px-3 py-2">
+                <span className="text-sm">{sectorEmoji(topSector)}</span>
+                <div className="min-w-0">
+                  <p className="text-[10px] text-gray-400 uppercase tracking-wide">Top theme</p>
+                  <p className="text-sm font-bold text-gray-800 dark:text-gray-100 truncate">{topSector}</p>
+                </div>
+                <span className={`ml-auto text-[10px] font-bold uppercase tracking-wide ${trendColor} flex items-center gap-1`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${trendDot}`} />
+                  {trend}
+                </span>
+              </div>
+            )}
+
+            {/* Quick links */}
+            <div className="mt-auto space-y-1.5">
+              {/* View all stocks — opens drawer */}
+              <button onClick={() => setDrawerOpen(true)}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 border border-indigo-100 dark:border-indigo-800 transition group">
+                <Package className="w-3 h-3 text-indigo-400" />
+                <span className="text-xs font-medium text-indigo-700 dark:text-indigo-300">
+                  {count != null ? `Browse all ${count} stocks` : "Browse stocks"}
+                </span>
+                <ArrowRight className="w-3 h-3 text-indigo-300 group-hover:text-indigo-500 ml-auto transition" />
+              </button>
+
+              {links.map((l, i) => (
+                <Link key={i} href={l.href}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-700/40 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 border border-gray-100 dark:border-gray-700 hover:border-indigo-200 dark:hover:border-indigo-700 transition group">
+                  <span className="text-gray-400 group-hover:text-indigo-500 transition">{l.icon}</span>
+                  <span className="text-xs font-medium text-gray-700 dark:text-gray-300 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">
+                    {l.label}
+                  </span>
+                  <ArrowRight className="w-3 h-3 text-gray-300 dark:text-gray-600 group-hover:text-indigo-400 ml-auto transition" />
+                </Link>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </>
   );
 }
 
