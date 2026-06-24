@@ -783,8 +783,10 @@ export default function Dashboard() {
               {[1,2,3,4,5].map(i => <div key={i} className="h-14 bg-gray-100 dark:bg-gray-700 animate-pulse rounded-lg" />)}
             </div>
           ) : (() => {
+            const hasGmpValue = (ipo: any) => ipo.gmp?.premium != null && ipo.gmp.premium !== 0;
             // 1. Open IPOs first (fewest days left to close → closing soonest first)
             const open = (ipoData?.open ?? [])
+              .filter(hasGmpValue)
               .slice()
               .sort((a: any, b: any) => {
                 const da = daysUntil(a.closeDate) ?? Infinity;
@@ -793,6 +795,7 @@ export default function Dashboard() {
               });
             // 2. Upcoming IPOs — soonest to open first
             const upcoming = (ipoData?.upcoming ?? [])
+              .filter(hasGmpValue)
               .slice()
               .sort((a: any, b: any) => {
                 const da = daysUntil(a.openDate) ?? Infinity;
