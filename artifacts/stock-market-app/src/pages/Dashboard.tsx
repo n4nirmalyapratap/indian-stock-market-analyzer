@@ -463,7 +463,7 @@ function HighDeliveryDrawer({ open, onClose, summaryCount }: {
   const [sortAsc, setSortAsc] = useState(false);
 
   const { data, isLoading } = useQuery<any>({
-    queryKey: ["high-delivery-stocks-drawer"],
+    queryKey: ["high-delivery-stocks-drawer", "ALL", 65],
     queryFn:  () => fetchApi("/insights/top-deliveries?index=ALL&minDelivPct=65&limit=1000&sort=delivPct"),
     enabled:  open,
     staleTime: 30 * 60_000,
