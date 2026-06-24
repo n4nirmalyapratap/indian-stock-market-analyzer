@@ -19,7 +19,6 @@ export const MAIN_NAV = [
   { path: "/sectors",    label: "Market Sectors",  icon: BarChart3 },
   { path: "/rotation",   label: "Sector Rotation", icon: Compass },
   { path: "/insights",   label: "Insights",        icon: Sparkles },
-  { path: "/sentiment",  label: "Sentiment",       icon: Gauge },
   { path: "/news",       label: "News Feed",       icon: Newspaper },
   { path: "/stocks",     label: "Stock Lookup",    icon: Search },
   { path: "/agents",     label: "Investor Council",icon: Users },
