@@ -7,7 +7,7 @@ import { useTheme } from "@/context/ThemeContext";
 import {
   RefreshCw, Activity, Loader2, Newspaper, Rocket,
   TrendingUp, TrendingDown, ArrowRight, ShieldAlert,
-  BarChart2, Zap,
+  BarChart2, Zap, Flame, Package,
 } from "lucide-react";
 import GlobalIndicesPanel from "@/components/GlobalIndicesPanel";
 import TopMoversPanel from "@/components/TopMoversPanel";
@@ -428,6 +428,129 @@ function SentimentCard({ sentiment, loading }: { sentiment: any; loading: boolea
   );
 }
 
+// ── Sector emoji helper ───────────────────────────────────────────────────────
+const SECTOR_EMOJI: Record<string, string> = {
+  "Financial Services": "🏦", "Bank": "🏦", "Banking": "🏦",
+  "IT": "💻", "Technology": "💻", "Information Technology": "💻",
+  "Healthcare": "💊", "Pharma": "💊", "Pharmaceutical": "💊",
+  "Energy": "⚡", "Oil": "🛢️", "Gas": "🛢️",
+  "Auto": "🚗", "Automobile": "🚗",
+  "FMCG": "🛒", "Consumer": "🛒",
+  "Metal": "⚙️", "Metals": "⚙️",
+  "Realty": "🏗️", "Real Estate": "🏗️", "Infrastructure": "🏗️",
+  "Telecom": "📡", "Communication": "📡",
+  "Defence": "🛡️", "Defense": "🛡️",
+  "PSU": "🏛️", "Public Sector": "🏛️",
+  "Media": "📺", "Entertainment": "📺",
+  "Chemical": "🧪", "Chemicals": "🧪",
+  "Cement": "🏭", "Capital Goods": "🏭",
+};
+function sectorEmoji(name: string): string {
+  for (const [key, emoji] of Object.entries(SECTOR_EMOJI)) {
+    if (name.toLowerCase().includes(key.toLowerCase())) return emoji;
+  }
+  return "📊";
+}
+
+// ── Volume Activity Card ───────────────────────────────────────────────────────
+function VolumeActivityCard({ data, loading }: { data: any; loading: boolean }) {
+  const count     = data?.unusualCount ?? null;
+  const total     = data?.totalStocks  ?? null;
+  const topSector = data?.topSector    ?? null;
+  const trend     = data?.trend        ?? "neutral";
+  const available = data?.available !== false;
+
+  const trendColor = trend === "bullish" ? "text-emerald-600 dark:text-emerald-400"
+                   : trend === "bearish" ? "text-red-600 dark:text-red-400"
+                   : "text-gray-500 dark:text-gray-400";
+  const trendDot   = trend === "bullish" ? "bg-emerald-500"
+                   : trend === "bearish" ? "bg-red-500"
+                   : "bg-gray-400";
+
+  const links = [
+    { href: "/insights/delivery", label: "Delivery volume", icon: <Package className="w-3 h-3" /> },
+    { href: "/scanners",          label: "Volume surge stocks", icon: <Zap className="w-3 h-3" /> },
+    { href: "/patterns",          label: "All volume scanners", icon: <Activity className="w-3 h-3" /> },
+  ];
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm p-5 flex flex-col">
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-[9px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-[0.18em] flex items-center gap-1.5">
+          <Flame className="w-3 h-3 text-orange-400" /> Volume Activity
+        </p>
+        <Link href="/insights/delivery"
+          className="text-[9px] font-semibold text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 flex items-center gap-0.5 tracking-wide transition uppercase">
+          Full View <ArrowRight className="w-2.5 h-2.5" />
+        </Link>
+      </div>
+
+      {loading ? (
+        <div className="space-y-3">
+          <Skel h="h-8" w="w-32" r="rounded" />
+          <Skel h="h-4" w="w-48" r="rounded" />
+          <div className="space-y-2 mt-4">
+            {[1,2,3].map(i => <Skel key={i} h="h-8" r="rounded-lg" />)}
+          </div>
+        </div>
+      ) : !available ? (
+        <div className="flex-1 flex items-center justify-center">
+          <p className="text-sm text-gray-400 dark:text-gray-500 text-center">
+            Volume data unavailable<br />
+            <span className="text-xs">NSE bhavdata not yet published for today</span>
+          </p>
+        </div>
+      ) : (
+        <>
+          {/* Hero count */}
+          <div className="flex items-end gap-2 mb-1">
+            <span className="text-4xl font-black text-gray-900 dark:text-white leading-none">
+              {count ?? "—"}
+            </span>
+            {total != null && (
+              <span className="text-xs text-gray-400 dark:text-gray-500 mb-1">
+                of {total.toLocaleString()} stocks
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+            high-conviction volume stocks today
+          </p>
+
+          {/* Top theme */}
+          {topSector && (
+            <div className="flex items-center gap-2 mb-5 bg-gray-50 dark:bg-gray-700/50 rounded-lg px-3 py-2">
+              <span className="text-sm">{sectorEmoji(topSector)}</span>
+              <div className="min-w-0">
+                <p className="text-[10px] text-gray-400 uppercase tracking-wide">Top theme</p>
+                <p className="text-sm font-bold text-gray-800 dark:text-gray-100 truncate">{topSector}</p>
+              </div>
+              <span className={`ml-auto text-[10px] font-bold uppercase tracking-wide ${trendColor} flex items-center gap-1`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${trendDot}`} />
+                {trend}
+              </span>
+            </div>
+          )}
+
+          {/* Quick links */}
+          <div className="mt-auto space-y-1.5">
+            {links.map((l, i) => (
+              <Link key={i} href={l.href}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-700/40 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 border border-gray-100 dark:border-gray-700 hover:border-indigo-200 dark:hover:border-indigo-700 transition group">
+                <span className="text-gray-400 group-hover:text-indigo-500 transition">{l.icon}</span>
+                <span className="text-xs font-medium text-gray-700 dark:text-gray-300 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">
+                  {l.label}
+                </span>
+                <ArrowRight className="w-3 h-3 text-gray-300 dark:text-gray-600 group-hover:text-indigo-400 ml-auto transition" />
+              </Link>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Macro Strip (compact single-row bar) ──────────────────────────────────────
 function MacroStrip({ macroData, loading }: { macroData: any; loading: boolean }) {
   const tiles: any[] = macroData?.tiles ?? [];
@@ -556,30 +679,6 @@ function NewsPanel({ loading, items }: { loading: boolean; items: any[] }) {
   );
 }
 
-// ── Sector emoji helper ───────────────────────────────────────────────────────
-const SECTOR_EMOJI: Record<string, string> = {
-  "Financial Services": "🏦", "Bank": "🏦", "Banking": "🏦",
-  "IT": "💻", "Technology": "💻", "Information Technology": "💻",
-  "Healthcare": "💊", "Pharma": "💊", "Pharmaceutical": "💊",
-  "Energy": "⚡", "Oil": "🛢️", "Gas": "🛢️",
-  "Auto": "🚗", "Automobile": "🚗",
-  "FMCG": "🛒", "Consumer": "🛒",
-  "Metal": "⚙️", "Metals": "⚙️",
-  "Realty": "🏗️", "Real Estate": "🏗️", "Infrastructure": "🏗️",
-  "Telecom": "📡", "Communication": "📡",
-  "Defence": "🛡️", "Defense": "🛡️",
-  "PSU": "🏛️", "Public Sector": "🏛️",
-  "Media": "📺", "Entertainment": "📺",
-  "Chemical": "🧪", "Chemicals": "🧪",
-  "Cement": "🏭", "Capital Goods": "🏭",
-};
-function sectorEmoji(name: string): string {
-  for (const [key, emoji] of Object.entries(SECTOR_EMOJI)) {
-    if (name.toLowerCase().includes(key.toLowerCase())) return emoji;
-  }
-  return "📊";
-}
-
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const queryClient = useQueryClient();
@@ -622,6 +721,13 @@ export default function Dashboard() {
     queryKey: ["macro-strip"],
     queryFn:  api.macroStrip,
     staleTime: 15 * 60_000,
+  });
+
+  // Volume Activity summary
+  const { data: volSummary, isLoading: volLoading } = useQuery<any>({
+    queryKey: ["volume-summary-dash"],
+    queryFn:  () => fetchApi("/insights/volume-summary"),
+    staleTime: 30 * 60_000,
   });
 
   // Sentiment — 15-min cache, same data as /sentiment page
@@ -879,8 +985,11 @@ export default function Dashboard() {
 
       </div>
 
-      {/* ── Sentiment ────────────────────────────────────────────────────────── */}
-      <SentimentCard sentiment={sentimentData} loading={sentLoading} />
+      {/* ── Sentiment + Volume Activity ──────────────────────────────────────── */}
+      <div className="grid md:grid-cols-2 gap-6">
+        <SentimentCard sentiment={sentimentData} loading={sentLoading} />
+        <VolumeActivityCard data={volSummary} loading={volLoading} />
+      </div>
 
       {/* ── Macro Strip ──────────────────────────────────────────────────────── */}
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm px-4 py-3">
