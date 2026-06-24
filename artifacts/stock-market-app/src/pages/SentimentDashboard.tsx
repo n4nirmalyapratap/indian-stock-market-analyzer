@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
 import {
@@ -81,167 +81,197 @@ function signalBorderColor(color: string): string {
        : "border-orange-400 bg-orange-50 dark:bg-orange-900/20";
 }
 
-// ── Speedometer gauge ────────────────────────────────────────────────────────
-function Speedometer({ score, label }: { score: number | null; label: string }) {
+// ── Aesthetic flow diagram (matches Dashboard SentimentFlow) ─────────────────
+function SentimentFlow({ score, label, components }: {
+  score: number | null; label: string; components: Component[];
+}) {
   const { theme } = useTheme();
   const isDark = theme === "dark";
-  const [fired, setFired] = useState(false);
-  const [countedScore, setCountedScore] = useState(0);
-  const rafRef = useRef<number>(0);
-
-  const cx = 140, cy = 128, r = 100;
-  // score –100..+100 → CSS rotation –90..+90 deg (0 = pointing up)
-  const targetAngle = score != null ? score * 0.9 : -90;
-
-  const zoneColor = score == null
-    ? (isDark ? "#475569" : "#94a3b8")
-    : score >= 50  ? "#10b981"
-    : score >= 20  ? "#22c55e"
-    : score > -20  ? (isDark ? "#64748b" : "#94a3b8")
-    : score > -50  ? "#f97316"
-    : "#ef4444";
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setFired(false);
-    setCountedScore(0);
-    const t = setTimeout(() => setFired(true), 100);
-    if (score == null) return () => clearTimeout(t);
-    const start = performance.now();
-    const dur = 1000;
-    const to = score;
-    const tick = () => {
-      const elapsed = performance.now() - start;
-      const p = Math.min(elapsed / dur, 1);
-      setCountedScore(Math.round(to * (1 - Math.pow(1 - p, 3))));
-      if (p < 1) rafRef.current = requestAnimationFrame(tick);
-    };
-    const t2 = setTimeout(() => { rafRef.current = requestAnimationFrame(tick); }, 100);
-    return () => { clearTimeout(t); clearTimeout(t2); cancelAnimationFrame(rafRef.current); };
+    setMounted(false);
+    const t = setTimeout(() => setMounted(true), 100);
+    return () => clearTimeout(t);
   }, [score]);
 
-  // angle 0° = top (12-o'clock), +90° = right, –90° = left
-  function ap(deg: number, radius = r) {
-    const rad = (deg * Math.PI) / 180;
-    return { x: cx + radius * Math.sin(rad), y: cy - radius * Math.cos(rad) };
+  const hubColor =
+    score == null ? "#64748b"
+    : score >= 20  ? "#22c55e"
+    : score >= 5   ? "#4ade80"
+    : score > -5   ? "#94a3b8"
+    : score > -20  ? "#fb923c"
+    : "#f87171";
+
+  function compAccent(sc: number | null): string {
+    if (sc == null) return "#64748b";
+    if (sc >= 10) return "#22c55e";
+    if (sc >= 0)  return "#4ade80";
+    if (sc > -10) return "#94a3b8";
+    return "#f87171";
   }
-  function arcD(from: number, to: number, radius = r) {
-    const { x: x1, y: y1 } = ap(from, radius);
-    const { x: x2, y: y2 } = ap(to, radius);
-    const large = Math.abs(to - from) > 180 ? 1 : 0;
-    return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${radius} ${radius} 0 ${large} 0 ${x2.toFixed(2)} ${y2.toFixed(2)}`;
-  }
 
-  const arcLen = Math.PI * r;
-  const normalized = score != null ? (score + 100) / 200 : 0;
-
-  // Theme-aware palette
-  const trackColor  = isDark ? "#1e293b" : "#e2e8f0";
-  const hubFill     = isDark ? "#0f172a" : "#ffffff";
-  const neutralZone = isDark ? "#475569" : "#94a3b8";
-  const axisNeutral = isDark ? "#64748b" : "#94a3b8";
-  const tipDot      = isDark ? "#ffffff" : "#1e293b";
-
-  const zones = [
-    { from: -90, to: -54, color: "#ef4444" },
-    { from: -54, to: -18, color: "#f97316" },
-    { from: -18, to:  18, color: neutralZone },
-    { from:  18, to:  54, color: "#22c55e" },
-    { from:  54, to:  90, color: "#10b981" },
-  ];
-
-  if (score == null) {
-    return (
-      <div className="flex flex-col items-center">
-        <svg width="280" height="168" viewBox="0 0 280 168">
-          <path d={arcD(-90, 90)} fill="none" stroke={trackColor} strokeWidth="14" strokeLinecap="round" />
-          <text x={cx} y={cy + 10} textAnchor="middle" fontSize="28" fontWeight="900"
-            fill={isDark ? "#334155" : "#cbd5e1"}>—</text>
-          <text x={cx} y={cy + 28} textAnchor="middle" fontSize="9" fontWeight="600"
-            fill={isDark ? "#334155" : "#cbd5e1"} letterSpacing="2">DATA UNAVAILABLE</text>
-        </svg>
-      </div>
+  function compScore(key: string) {
+    const c = components.find((c: Component) =>
+      (c.name ?? "").toLowerCase().includes(key.toLowerCase().split(" ")[0])
     );
+    return c?.score ?? null;
   }
 
-  // Place BEAR/BULL below the arc endpoints (inside viewBox), NEUTRAL above the peak
-  const leftEnd  = ap(-90, r);       // left arc terminus
-  const rightEnd = ap(90,  r);       // right arc terminus
-  const topPeak  = ap(0,   r + 18);  // just above the arc top
+  const W = 380, H = 224, HX = 190, HY = 122, HR = 48;
+  const hubFill = isDark ? "#0f172a" : "#ffffff";
+
+  const nodes = [
+    { cx: 190, cy: 22,  hw: 76, hh: 16, key: "News Sentiment", short: "NEWS SENTIMENT", curveBias: 0   },
+    { cx: 48,  cy: 196, hw: 58, hh: 16, key: "Price Action",   short: "PRICE ACTION",   curveBias: 28  },
+    { cx: 332, cy: 196, hw: 52, hh: 16, key: "India VIX",      short: "INDIA VIX",      curveBias: -28 },
+  ] as const;
+
+  function makePath(n: typeof nodes[number]): string {
+    const dx = HX - n.cx, dy = HY - n.cy;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const ux = dx / dist, uy = dy / dist;
+    const sy = n.cy < HY ? n.cy + n.hh : n.cy - n.hh;
+    const ex = HX - ux * HR, ey = HY - uy * HR;
+    const mx = (n.cx + ex) / 2, my = (sy + ey) / 2;
+    return `M ${n.cx} ${sy} Q ${mx + (-uy * n.curveBias)} ${my + (ux * n.curveBias)} ${ex} ${ey}`;
+  }
+
+  const paths = nodes.map((n, i) => ({ d: makePath(n), id: `sdf-${i}` }));
+  const scoreStr = score != null ? (score > 0 ? `+${score}` : `${score}`) : "—";
 
   return (
-    <div className="flex flex-col items-center w-full">
-      <svg width="280" height="190" viewBox="0 0 280 190">
-        <defs>
-          <filter id="sd-tip" x="-80%" y="-80%" width="260%" height="260%">
-            <feGaussianBlur stdDeviation="3" result="b" />
-            <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
-          </filter>
-        </defs>
-
-        {/* Track */}
-        <path d={arcD(-90, 90)} fill="none" stroke={trackColor} strokeWidth="14" strokeLinecap="round" />
-
-        {/* Zone segments */}
-        {zones.map((z, i) => {
-          const active = fired && targetAngle >= z.from && targetAngle <= z.to;
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: H }}>
+      <defs>
+        <style>{`
+          @keyframes sdf-dash { from { stroke-dashoffset: 10; } to { stroke-dashoffset: 0; } }
+          @keyframes sdf-r1 { 0%,100% { r:${HR+3}px; opacity:.35; } 50% { r:${HR+11}px; opacity:.08; } }
+          @keyframes sdf-r2 { 0%,100% { r:${HR+7}px; opacity:.18; } 50% { r:${HR+17}px; opacity:.04; } }
+          @keyframes sdf-cd { 0%,100% { r:3px; opacity:1; } 50% { r:2px; opacity:.4; } }
+          .sdf-r1 { animation: sdf-r1 2.6s ease-in-out infinite; }
+          .sdf-r2 { animation: sdf-r2 2.6s ease-in-out infinite .9s; }
+          .sdf-cd { animation: sdf-cd 1.6s ease-in-out infinite; }
+        `}</style>
+        <filter id="sdf-glow" x="-40%" y="-40%" width="180%" height="180%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="3.5" result="blur" />
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+        <filter id="sdf-hub-glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur" />
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+        <radialGradient id="sdf-aura" cx="50%" cy="50%" r="50%">
+          <stop offset="0%"   stopColor={hubColor} stopOpacity="0.22" />
+          <stop offset="55%"  stopColor={hubColor} stopOpacity="0.07" />
+          <stop offset="100%" stopColor={hubColor} stopOpacity="0"    />
+        </radialGradient>
+        <radialGradient id="sdf-hub-fill" cx="40%" cy="35%" r="65%">
+          <stop offset="0%"   stopColor={hubColor} stopOpacity={isDark ? "0.18" : "0.10"} />
+          <stop offset="100%" stopColor={hubColor} stopOpacity="0" />
+        </radialGradient>
+        {nodes.map((n, i) => {
+          const col = compAccent(compScore(n.key));
           return (
-            <path key={i} d={arcD(z.from, z.to)} fill="none" stroke={z.color}
-              strokeWidth="10" strokeLinecap="butt"
-              style={{
-                opacity: active ? 1 : 0.28,
-                transition: "opacity 0.5s ease",
-                filter: active ? `drop-shadow(0 0 4px ${z.color})` : "none",
-              }}
-            />
+            <linearGradient key={i} id={`sdf-lg-${i}`} gradientUnits="userSpaceOnUse"
+              x1={n.cx} y1={n.cy < HY ? n.cy + n.hh : n.cy - n.hh} x2={HX} y2={HY}>
+              <stop offset="0%"   stopColor={col}     stopOpacity="1"   />
+              <stop offset="100%" stopColor={hubColor} stopOpacity="0.7" />
+            </linearGradient>
           );
         })}
+      </defs>
 
-        {/* Animated fill arc (dashoffset trick) — butt caps so no phantom dot at start */}
-        <path
-          d={arcD(-90, 90)} fill="none" stroke={zoneColor} strokeWidth="2.5"
-          strokeLinecap="butt"
-          strokeDasharray={`${arcLen} ${arcLen}`}
-          strokeDashoffset={fired ? arcLen * (1 - normalized) : arcLen}
-          opacity={0.55}
-          style={{ transition: "stroke-dashoffset 1.1s cubic-bezier(0.34,1.56,0.64,1)" }}
-        />
+      <ellipse cx={HX} cy={HY} rx={105} ry={82} fill="url(#sdf-aura)"
+        style={{ opacity: mounted ? 1 : 0, transition: "opacity 1s" }} />
+      <circle className="sdf-r1" cx={HX} cy={HY} r={HR + 3}
+        fill="none" stroke={hubColor} strokeWidth="1"
+        style={{ opacity: mounted ? undefined : 0 }} />
+      <circle className="sdf-r2" cx={HX} cy={HY} r={HR + 7}
+        fill="none" stroke={hubColor} strokeWidth="0.5"
+        style={{ opacity: mounted ? undefined : 0 }} />
 
-        {/* Needle */}
-        <g style={{
-          transform: `rotate(${fired ? targetAngle : -90}deg)`,
-          transformOrigin: `${cx}px ${cy}px`,
-          transition: "transform 1.1s cubic-bezier(0.34,1.56,0.64,1)",
-        }}>
-          <line x1={cx} y1={cy + 10} x2={cx} y2={cy - r + 18}
-            stroke={zoneColor} strokeWidth="2" strokeLinecap="round" />
-          <circle cx={cx} cy={cy - r + 18} r={6} fill={zoneColor} opacity={0.3} filter="url(#sd-tip)" />
-          <circle cx={cx} cy={cy - r + 18} r={3} fill={tipDot} />
-        </g>
+      {paths.map(({ d, id }, i) => {
+        const col = compAccent(compScore(nodes[i].key));
+        return (
+          <g key={i}>
+            <path d={d} fill="none" stroke={col} strokeWidth="4" strokeOpacity="0.28"
+              filter="url(#sdf-glow)"
+              style={{ opacity: mounted ? 1 : 0, transition: `opacity .6s ${i * .15}s` }} />
+            <path id={id} d={d} fill="none"
+              stroke={`url(#sdf-lg-${i})`} strokeWidth="1.6" strokeDasharray="5 5"
+              style={{
+                opacity: mounted ? 0.9 : 0,
+                transition: `opacity .5s ${i * .15}s`,
+                animation: mounted ? `sdf-dash .9s linear infinite ${i * .25}s` : undefined,
+              }} />
+            {mounted && ([0, 0.45, 0.78] as number[]).map((delay, pi) => (
+              <circle key={pi} r="3.2" fill={col}>
+                <animateMotion dur="1.9s" repeatCount="indefinite" begin={`${delay}s`}
+                  keyPoints="0;1" keyTimes="0;1" calcMode="linear">
+                  <mpath href={`#${id}`} />
+                </animateMotion>
+                <animate attributeName="opacity" dur="1.9s" repeatCount="indefinite" begin={`${delay}s`}
+                  values="0;1;1;0" keyTimes="0;0.07;0.9;1" />
+                <animate attributeName="r" dur="1.9s" repeatCount="indefinite" begin={`${delay}s`}
+                  values="0;3.2;2.8;0" keyTimes="0;0.07;0.9;1" />
+              </circle>
+            ))}
+          </g>
+        );
+      })}
 
-        {/* Hub */}
-        <circle cx={cx} cy={cy} r={10} fill={hubFill} stroke={zoneColor} strokeWidth="2" />
-        <circle cx={cx} cy={cy} r={4}  fill={zoneColor} />
+      <circle cx={HX} cy={HY} r={HR + 8} fill={hubColor} opacity="0.12"
+        filter="url(#sdf-hub-glow)"
+        style={{ opacity: mounted ? 0.12 : 0, transition: "opacity .8s" }} />
+      <circle cx={HX} cy={HY} r={HR} fill={hubFill} stroke={hubColor} strokeWidth="1.8"
+        style={{ filter: `drop-shadow(0 0 8px ${hubColor}55)` }} />
+      <circle cx={HX} cy={HY} r={HR} fill="url(#sdf-hub-fill)" />
+      <circle cx={HX} cy={HY} r={HR - 8} fill="none" stroke={hubColor}
+        strokeWidth="0.5" strokeOpacity="0.3" />
 
-        {/* Score */}
-        <text x={cx} y={cy + 38} textAnchor="middle" fontSize="32" fontWeight="900" fill={zoneColor}>
-          {countedScore > 0 ? `+${countedScore}` : countedScore}
-        </text>
+      <text x={HX} y={HY - 7} textAnchor="middle"
+        fontSize="20" fontWeight="900" letterSpacing="-0.5"
+        fill={hubColor} style={{ fontFamily: "system-ui,sans-serif" }}>{scoreStr}</text>
+      <text x={HX} y={HY + 11} textAnchor="middle"
+        fontSize="7" fontWeight="700" letterSpacing="1.5"
+        fill={hubColor} fillOpacity="0.75"
+        style={{ fontFamily: "system-ui,sans-serif" }}>{label.toUpperCase()}</text>
 
-        {/* Axis labels — anchored below arc endpoints to stay inside viewBox */}
-        <text x={leftEnd.x}  y={leftEnd.y  + 18} textAnchor="middle" fontSize="9" fill="#ef4444"    fontWeight="700">BEAR</text>
-        <text x={topPeak.x}  y={topPeak.y  -  4} textAnchor="middle" fontSize="9" fill={axisNeutral} fontWeight="700">NEUTRAL</text>
-        <text x={rightEnd.x} y={rightEnd.y + 18} textAnchor="middle" fontSize="9" fill="#10b981"    fontWeight="700">BULL</text>
+      <circle className="sdf-cd" cx={HX} cy={HY} r={3} fill={hubColor}
+        style={{ opacity: mounted ? undefined : 0 }} />
 
-        {/* Scale ticks */}
-        <text x="6"   y="186" fontSize="8" fill={axisNeutral} fontWeight="500">−100</text>
-        <text x={cx}  y="186" fontSize="8" fill={axisNeutral} fontWeight="500" textAnchor="middle">0</text>
-        <text x="274" y="186" fontSize="8" fill={axisNeutral} fontWeight="500" textAnchor="end">+100</text>
-      </svg>
-
-      <p className="text-sm font-bold mt-0.5" style={{ color: zoneColor }}>
-        {label}
-      </p>
-    </div>
+      {nodes.map((n, i) => {
+        const sc  = compScore(n.key);
+        const col = compAccent(sc);
+        const comp = components.find((c: Component) =>
+          (c.name ?? "").toLowerCase().includes(n.key.toLowerCase().split(" ")[0])
+        );
+        const weight = comp?.weight;
+        return (
+          <g key={i} style={{ opacity: mounted ? 1 : 0, transition: `opacity .55s ${i * .13}s` }}>
+            <rect x={n.cx - n.hw - 1} y={n.cy - n.hh - 1}
+              width={n.hw * 2 + 2} height={n.hh * 2 + 2}
+              rx="10" fill={col} opacity="0.12" filter="url(#sdf-glow)" />
+            <rect x={n.cx - n.hw} y={n.cy - n.hh}
+              width={n.hw * 2} height={n.hh * 2}
+              rx="9" ry="9" fill={col} fillOpacity="0.11"
+              stroke={col} strokeWidth="1.1" strokeOpacity="0.75" />
+            <text x={n.cx} y={n.cy - 2} textAnchor="middle" dominantBaseline="middle"
+              fontSize="6.8" fontWeight="800" letterSpacing="0.7"
+              fill={col} style={{ fontFamily: "system-ui,sans-serif" }}>
+              {n.short}{weight != null ? ` · ${weight}%` : ""}
+            </text>
+            {sc != null && (
+              <text x={n.cx} y={n.cy + 8} textAnchor="middle"
+                fontSize="6.2" fontWeight="600" fill={col} fillOpacity="0.7"
+                style={{ fontFamily: "system-ui,sans-serif" }}>
+                {sc > 0 ? `+${sc}` : sc}
+              </text>
+            )}
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 
@@ -456,7 +486,7 @@ export default function SentimentDashboard() {
               <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-widest self-start">
                 Composite Score
               </h2>
-              <Speedometer score={score} label={sentiment.label} />
+              <SentimentFlow score={score} label={sentiment.label} components={sentiment.components} />
 
               {/* Weight breakdown */}
               <div className="w-full space-y-3 pt-2 border-t border-gray-100 dark:border-gray-800">
