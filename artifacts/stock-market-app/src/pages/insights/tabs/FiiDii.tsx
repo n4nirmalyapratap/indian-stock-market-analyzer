@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { fetchApi } from "@/lib/api";
@@ -62,6 +62,8 @@ interface FiiDiiResponse {
   rangeDays?: number;
   message?: string | null;
   todayStatus?: TodayStatus;
+  todayFetchAttempt?: number;   // how many attempts have been made (0-5)
+  todayMaxAttempts?: number;    // always 5
 }
 
 const SEGMENT_OPTIONS: { value: Segment; label: string; short: string; icon: typeof Globe2 }[] = [
@@ -130,9 +132,28 @@ export default function FiiDii() {
   // re-render never blocks click feedback or the theme ripple.
   const [, startTransition] = useTransition();
 
+  // forceRef: set to true right before a user-initiated force-retry so the
+  // queryFn can append &force=1.  Cleared after the fetch resolves.
+  const forceRef = useRef(false);
+
+  // Detect browser hard-refresh (Ctrl+R / ⌘+R) so the initial query resets
+  // the backend retry counter, preventing the page from staying stuck in the
+  // 30-min cooldown after a manual reload.
+  const hardRefreshRef = useRef(
+    (performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined)
+      ?.type === "reload"
+  );
+
   const { data, isLoading, isFetching, error, refetch } = useQuery<FiiDiiResponse>({
     queryKey: ["insights/fii-dii", segment, range],
-    queryFn: () => fetchApi(`/insights/fii-dii?segment=${segment}&days=${rangeLimit(range)}`),
+    queryFn: () => {
+      const force = forceRef.current || hardRefreshRef.current;
+      // One-shot flags: cleared immediately so subsequent background polls are normal.
+      forceRef.current = false;
+      hardRefreshRef.current = false;
+      const forceSuffix = force ? "&force=1" : "";
+      return fetchApi(`/insights/fii-dii?segment=${segment}&days=${rangeLimit(range)}${forceSuffix}`);
+    },
     staleTime: 10 * 60_000,
     // Keep showing the previous tab's content while the next segment loads —
     // no more "collapses to spinner then re-mounts everything" jank when
@@ -141,13 +162,18 @@ export default function FiiDii() {
   });
 
   // When the backend is fetching today's data in the background, poll every
-  // 12s until todayStatus flips to "available". Uses a plain timeout so we
-  // don't fight with refetchInterval's function-form API across TQ versions.
+  // 10s until todayStatus flips to "available" or "not_yet" (exhausted).
   useEffect(() => {
     if (data?.todayStatus !== "fetching") return;
-    const timer = setTimeout(() => { refetch(); }, 5_000);
+    const timer = setTimeout(() => { refetch(); }, 10_000);
     return () => clearTimeout(timer);
-  }, [data?.todayStatus, data?.rows?.length, refetch]);
+  }, [data?.todayStatus, data?.rows?.length, data?.todayFetchAttempt, refetch]);
+
+  // Force-retry: reset backend counters and start a fresh 5-attempt cycle.
+  const handleForceRetry = useCallback(async () => {
+    forceRef.current = true;
+    await refetch();
+  }, [refetch]);
 
   const segMeta = SEGMENT_OPTIONS.find(s => s.value === segment)!;
   const switchSegment = (v: Segment) => startTransition(() => setSegment(v));
@@ -168,7 +194,13 @@ export default function FiiDii() {
 
       {/* Today-data status chip — only shown when relevant */}
       {data && data.todayStatus !== "available" && (
-        <TodayStatusChip status={data.todayStatus ?? "not_yet"} isFetching={isFetching} />
+        <TodayStatusChip
+          status={data.todayStatus ?? "not_yet"}
+          isFetching={isFetching}
+          attempt={data.todayFetchAttempt ?? 0}
+          maxAttempts={data.todayMaxAttempts ?? 5}
+          onRetry={handleForceRetry}
+        />
       )}
 
       {/* Segment tabs — modern card-style strip */}
@@ -425,20 +457,69 @@ function VisibleOnce({ placeholder, children, rootMargin = "200px" }: {
   return <div ref={ref}>{visible ? children : placeholder}</div>;
 }
 
-function TodayStatusChip({ status, isFetching }: { status: TodayStatus; isFetching: boolean }) {
+function TodayStatusChip({
+  status, isFetching, attempt, maxAttempts, onRetry,
+}: {
+  status: TodayStatus;
+  isFetching: boolean;
+  attempt: number;
+  maxAttempts: number;
+  onRetry: () => void;
+}) {
+  const [retrying, setRetrying] = useState(false);
+
+  const handleRetry = async () => {
+    setRetrying(true);
+    await onRetry();
+    setRetrying(false);
+  };
+
   if (status === "fetching") {
+    const nextAttempt = attempt + 1;
+    const spinning = isFetching || retrying;
     return (
-      <div className="mb-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/40 text-xs text-amber-700 dark:text-amber-400">
-        <RefreshCw className={`w-3 h-3 flex-shrink-0 ${isFetching ? "animate-spin" : ""}`} />
-        Fetching today&rsquo;s data in the background&hellip; page will update automatically.
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/40 text-xs text-amber-700 dark:text-amber-400">
+          <RefreshCw className={`w-3 h-3 flex-shrink-0 ${spinning ? "animate-spin" : ""}`} />
+          <span>
+            Fetching today&rsquo;s data&hellip;
+            {attempt > 0 && (
+              <span className="ml-1 font-semibold">
+                (attempt {Math.min(nextAttempt, maxAttempts)}/{maxAttempts})
+              </span>
+            )}
+            {" "}Page updates automatically.
+          </span>
+        </div>
+        <button
+          onClick={handleRetry}
+          disabled={spinning}
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-amber-300 dark:border-amber-600 bg-amber-100 dark:bg-amber-900/30 text-xs font-medium text-amber-800 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-800/40 disabled:opacity-50 disabled:cursor-not-allowed transition"
+        >
+          <RefreshCw className={`w-3 h-3 ${spinning ? "animate-spin" : ""}`} />
+          {spinning ? "Retrying…" : "Retry now"}
+        </button>
       </div>
     );
   }
+
   if (status === "not_yet") {
     return (
-      <div className="mb-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700/50 text-xs text-gray-500 dark:text-gray-400">
-        <Clock className="w-3 h-3 flex-shrink-0" />
-        Today&rsquo;s provisional data not yet published by NSE.
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700/50 text-xs text-gray-500 dark:text-gray-400">
+          <Clock className="w-3 h-3 flex-shrink-0" />
+          {attempt >= maxAttempts
+            ? `${maxAttempts} fetch attempts failed — NSE hasn't published today's data yet. Retrying in ~30 min.`
+            : "Today\u2019s provisional data not yet published by NSE."}
+        </div>
+        <button
+          onClick={handleRetry}
+          disabled={retrying}
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-xs font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
+        >
+          <RefreshCw className={`w-3 h-3 ${retrying ? "animate-spin" : ""}`} />
+          {retrying ? "Retrying…" : "Retry now"}
+        </button>
       </div>
     );
   }
