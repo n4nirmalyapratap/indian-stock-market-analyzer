@@ -28,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from . import market_cache_service as _disk
@@ -68,6 +68,23 @@ _CLOSED_TTL = 5 * 60
 
 def _ttl() -> int:
     return _OPEN_TTL if _disk.is_market_open() else _CLOSED_TTL
+
+
+def _last_close_ist() -> datetime:
+    """Return the datetime of the most-recent market close (15:30 IST on the
+    last trading weekday).  When the market is live, returns now instead so
+    the pill shows the current time."""
+    if _disk.is_market_open():
+        return _disk._now_ist()
+    now = _disk._now_ist()
+    candidate = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    # If today hasn't reached 15:30 yet (PRE_OPEN), step back one day first
+    if now < candidate:
+        candidate -= timedelta(days=1)
+    # Roll back over weekends
+    while candidate.weekday() >= 5:
+        candidate -= timedelta(days=1)
+    return candidate
 
 
 def _name_for(sym: str, provided: Optional[str]) -> str:
@@ -339,9 +356,9 @@ class TopMoversService:
         out = {
             "available":    True,
             "segment":      segment,
-            "label":        f"{label} (Yahoo fallback)",
+            "label":        label,
             "indexSlug":    SEGMENT_INDEX[segment][1],
-            "asOf":         _disk._now_ist().isoformat(),
+            "asOf":         _last_close_ist().isoformat(),
             "marketState":  _disk.current_market_state(),
             "totalScanned": len(rows),
             "gainers":      gainers,
