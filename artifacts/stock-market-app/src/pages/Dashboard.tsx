@@ -464,7 +464,7 @@ function HighDeliveryDrawer({ open, onClose, summaryCount }: {
 
   const { data, isLoading } = useQuery<any>({
     queryKey: ["high-delivery-stocks-drawer"],
-    queryFn:  () => fetchApi("/insights/top-deliveries?minDelivPct=65&limit=500&sort=delivPct"),
+    queryFn:  () => fetchApi("/insights/top-deliveries?index=ALL&minDelivPct=65&limit=1000&sort=delivPct"),
     enabled:  open,
     staleTime: 30 * 60_000,
   });
@@ -562,7 +562,7 @@ function HighDeliveryDrawer({ open, onClose, summaryCount }: {
                       Turnover <ArrowUpDown className="w-2.5 h-2.5" />
                     </span>
                   </th>
-                  <th className="px-4 py-2.5 w-12" />
+                  
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50 dark:divide-gray-800">
@@ -597,18 +597,11 @@ function HighDeliveryDrawer({ open, onClose, summaryCount }: {
                         </span>
                       </td>
                       <td className="px-2 py-2.5 text-xs text-gray-500 dark:text-gray-400">{fmtTurnover(r.turnover)}</td>
-                      <td className="px-4 py-2.5 text-right">
-                        <Link href={`/chart/${r.symbol}`}
-                          className="text-[10px] font-semibold text-indigo-500 hover:text-indigo-700 dark:hover:text-indigo-300 transition"
-                          onClick={onClose}>
-                          Chart →
-                        </Link>
-                      </td>
                     </tr>
                   );
                 })}
                 {filtered.length === 0 && !isLoading && (
-                  <tr><td colSpan={6} className="py-12 text-center text-sm text-gray-400">No stocks match your search</td></tr>
+                  <tr><td colSpan={5} className="py-12 text-center text-sm text-gray-400">No stocks match your search</td></tr>
                 )}
               </tbody>
             </table>
