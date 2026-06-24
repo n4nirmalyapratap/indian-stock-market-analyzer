@@ -3,3 +3,4 @@
 - [Sub-industry taxonomy](sub-industry-taxonomy.md) — comprehensive 50+ Indian sub-sector taxonomy in universe.py; admin override table; TradingView rule.
 - [Sector analytics caching](sector-analytics-caching.md) — 4-layer cache strategy: MarketTTLCache for grid/drilldown, disk JSON for yf fundamentals, TanStack staleTime, startup pre-warm.
 - [Sector Analytics ban](sector-analytics-ban.md) — NEVER work on sector analytics / hyper-granular rotation — user explicitly and repeatedly forbidden it.
+- [Python package install location](python-package-install-location.md) — install Python pkgs via `pip install --target .pythonlibs/lib/python3.11/site-packages`; uv/installLanguagePackages fail on read-only nix store.
