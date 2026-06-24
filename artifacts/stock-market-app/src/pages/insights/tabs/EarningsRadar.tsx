@@ -1,11 +1,11 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { fetchApi } from "@/lib/api";
 import { useCustomAuth } from "@/context/CustomAuthContext";
 import { PageHeader, Card, Loading, EmptyState, ErrorState, PillTabs } from "../_shared";
 import {
   Zap, RefreshCw, TrendingUp, TrendingDown, Minus,
-  Play, ChevronLeft, ChevronRight,
+  Play, ChevronLeft, ChevronRight, ChevronDown, ChevronUp,
 } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
 
@@ -53,6 +53,13 @@ interface AlertsResponse {
   hasMore:        boolean;
   alertThreshold: number;
   error?:         string;
+}
+
+interface HistoryResponse {
+  symbol:  string;
+  history: EarningsAlert[];
+  count:   number;
+  error?:  string;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -141,6 +148,185 @@ function fmtDate(ms: number) {
   }) + " IST";
 }
 
+// ── Score Sparkline ────────────────────────────────────────────────────────────
+
+function ScoreSparkline({ rows }: { rows: EarningsAlert[] }) {
+  if (rows.length === 0) return null;
+
+  const W = 200;
+  const H = 48;
+  const PAD_X = 8;
+  const PAD_Y = 6;
+  const inner_w = W - PAD_X * 2;
+  const inner_h = H - PAD_Y * 2;
+
+  const xs = rows.map((_, i) => PAD_X + (rows.length === 1 ? inner_w / 2 : (i / (rows.length - 1)) * inner_w));
+  const ys = rows.map(r => PAD_Y + inner_h - (r.score / 10) * inner_h);
+
+  const polyline = xs.map((x, i) => `${x},${ys[i]}`).join(" ");
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full max-w-[200px]" style={{ minWidth: 120 }}>
+      {/* Grid line at 6 (alert threshold) */}
+      <line
+        x1={PAD_X} y1={PAD_Y + inner_h - (6 / 10) * inner_h}
+        x2={W - PAD_X} y2={PAD_Y + inner_h - (6 / 10) * inner_h}
+        stroke="currentColor" strokeWidth="0.5" strokeDasharray="3,2"
+        className="text-gray-300 dark:text-gray-600"
+      />
+      {/* Line */}
+      <polyline
+        points={polyline}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        className="text-indigo-500 dark:text-indigo-400"
+      />
+      {/* Dots */}
+      {rows.map((r, i) => (
+        <circle
+          key={i}
+          cx={xs[i]}
+          cy={ys[i]}
+          r="3"
+          className={r.score >= 6
+            ? "fill-emerald-500 dark:fill-emerald-400"
+            : r.score >= 4
+              ? "fill-amber-500 dark:fill-amber-400"
+              : "fill-gray-400 dark:fill-gray-500"}
+        />
+      ))}
+    </svg>
+  );
+}
+
+// ── History Panel ─────────────────────────────────────────────────────────────
+
+function HistoryPanel({ symbol, colSpan }: { symbol: string; colSpan: number }) {
+  const { data, isLoading, error } = useQuery<HistoryResponse>({
+    queryKey: ["earnings-history", symbol],
+    queryFn:  () => fetchApi(`/earnings-scanner/history/${encodeURIComponent(symbol)}`),
+    staleTime: 5 * 60_000,
+  });
+
+  const rows = data?.history ?? [];
+  // Show up to 6 quarters; newest first for the table but sparkline needs oldest first
+  const displayed = rows.slice(-6);
+
+  return (
+    <tr>
+      <td colSpan={colSpan} className="px-0 py-0">
+        <div className="mx-4 mb-3 mt-1 rounded-xl border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/60 dark:bg-indigo-500/5 overflow-hidden">
+          {/* Header */}
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-indigo-100 dark:border-indigo-500/20">
+            <span className="text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 uppercase tracking-wide">
+              Score History — {symbol}
+            </span>
+            {!isLoading && rows.length > 0 && (
+              <span className="text-[10px] text-indigo-500 dark:text-indigo-400">
+                {rows.length} quarter{rows.length !== 1 ? "s" : ""} on record
+              </span>
+            )}
+          </div>
+
+          {isLoading && (
+            <div className="px-4 py-3 text-[11px] text-gray-500 dark:text-gray-400 animate-pulse">
+              Loading history…
+            </div>
+          )}
+
+          {error && !isLoading && (
+            <div className="px-4 py-3 text-[11px] text-red-500 dark:text-red-400">
+              Failed to load history.
+            </div>
+          )}
+
+          {!isLoading && !error && displayed.length === 0 && (
+            <div className="px-4 py-3 text-[11px] text-gray-400 dark:text-gray-500">
+              No historical quarters on record yet.
+            </div>
+          )}
+
+          {!isLoading && displayed.length > 0 && (
+            <div className="flex flex-col sm:flex-row gap-4 px-4 py-3">
+              {/* Sparkline */}
+              <div className="flex flex-col gap-1 justify-center">
+                <p className="text-[10px] text-gray-400 dark:text-gray-500 mb-0.5">Score trend (oldest → newest)</p>
+                <ScoreSparkline rows={displayed} />
+                <div className="flex justify-between text-[9px] text-gray-400 dark:text-gray-600 px-1">
+                  <span>{displayed[0]?.periodEnd}</span>
+                  <span>{displayed[displayed.length - 1]?.periodEnd}</span>
+                </div>
+              </div>
+
+              {/* Quarter-by-quarter table */}
+              <div className="flex-1 min-w-0">
+                <table className="w-full text-[11px]">
+                  <thead>
+                    <tr className="text-[10px] uppercase text-gray-400 dark:text-gray-500">
+                      <th className="text-left pb-1 font-medium">Quarter</th>
+                      <th className="text-left pb-1 font-medium">Basis</th>
+                      <th className="text-left pb-1 font-medium">Score</th>
+                      <th className="text-left pb-1 font-medium">Rev YoY</th>
+                      <th className="text-left pb-1 font-medium">PAT YoY</th>
+                      <th className="text-left pb-1 font-medium">OPM</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...displayed].reverse().map((h, i) => {
+                      const km = h.keyMetrics || {};
+                      const trend = i < displayed.length - 1
+                        ? displayed[displayed.length - 1 - i - 1]?.score - h.score
+                        : null;
+                      const trendIcon = trend === null ? null
+                        : trend > 0 ? <TrendingUp className="w-2.5 h-2.5 text-emerald-500 inline" />
+                        : trend < 0 ? <TrendingDown className="w-2.5 h-2.5 text-red-400 inline" />
+                        : <Minus className="w-2.5 h-2.5 text-gray-400 inline" />;
+                      return (
+                        <tr key={`${h.periodEnd}-${h.basis}`} className="border-t border-indigo-100 dark:border-indigo-500/15">
+                          <td className="py-1.5 pr-2 font-mono text-gray-700 dark:text-gray-300 whitespace-nowrap">{h.periodEnd}</td>
+                          <td className="py-1.5 pr-2 text-gray-500 dark:text-gray-400">{h.basis === "consolidated" ? "Con." : "SA"}</td>
+                          <td className="py-1.5 pr-3">
+                            <span className={`inline-flex items-center gap-0.5 font-bold tabular-nums ${scoreColor(h.score)}`}>
+                              {h.score}/10
+                              {trendIcon && <span className="ml-0.5">{trendIcon}</span>}
+                            </span>
+                          </td>
+                          <td className="py-1.5 pr-2">
+                            {km.revenueYoYPct != null
+                              ? <span className={km.revenueYoYPct > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-400"}>
+                                  {km.revenueYoYPct > 0 ? "+" : ""}{km.revenueYoYPct.toFixed(1)}%
+                                </span>
+                              : <span className="text-gray-400">N/A</span>}
+                          </td>
+                          <td className="py-1.5 pr-2">
+                            {km.patYoYPct != null
+                              ? <span className={km.patYoYPct > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-400"}>
+                                  {km.patYoYPct > 0 ? "+" : ""}{km.patYoYPct.toFixed(1)}%
+                                </span>
+                              : <span className="text-gray-400">N/A</span>}
+                          </td>
+                          <td className="py-1.5">
+                            {km.opmCurPct != null
+                              ? <span className="text-gray-600 dark:text-gray-300">{km.opmCurPct.toFixed(1)}%</span>
+                              : <span className="text-gray-400">N/A</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function EarningsRadar() {
@@ -150,6 +336,7 @@ export default function EarningsRadar() {
   const [scoreFilter, setScoreFilter] = useState("all");
   const [search,      setSearch]      = useState("");
   const [page,        setPage]        = useState(1);
+  const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const qc = useQueryClient();
 
   const minScore = minScoreFromFilter(scoreFilter);
@@ -203,12 +390,19 @@ export default function EarningsRadar() {
     refetch();
   }
 
+  function toggleRow(key: string) {
+    setExpandedRow(prev => prev === key ? null : key);
+  }
+
+  // Number of columns in the table (for colSpan on the history row)
+  const COL_COUNT = 9;
+
   return (
     <div>
       <PageHeader
         title="Earnings Radar"
         subtitle="Live earnings beat/miss scanner — NSE + BSE financial results scored every 3 minutes"
-        info="Scores each quarterly filing on Revenue YoY/QoQ, PAT YoY/QoQ, OPM expansion, and balance-sheet quality. Alert threshold = 6/10. Runs Mon–Fri 09:00–17:30 IST."
+        info="Scores each quarterly filing on Revenue YoY/QoQ, PAT YoY/QoQ, OPM expansion, and balance-sheet quality. Alert threshold = 6/10. Runs Mon–Fri 09:00–17:30 IST. Click any row to see quarter-over-quarter score history."
         right={
           <div className="flex items-center gap-2 flex-wrap">
             <input
@@ -270,7 +464,7 @@ export default function EarningsRadar() {
       <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
         <PillTabs value={scoreFilter} onChange={v => { setScoreFilter(v); setPage(1); }} options={SCORE_FILTERS} />
         <p className="text-[11px] text-gray-500 dark:text-gray-400">
-          Auto-refreshes every 2 min · Scans Mon–Fri 09:00–17:30 IST
+          Auto-refreshes every 2 min · Click a row to see score history
         </p>
       </div>
 
@@ -308,6 +502,7 @@ export default function EarningsRadar() {
             <table className="w-full text-sm min-w-[900px]">
               <thead className="text-xs uppercase text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/40 border-b border-gray-100 dark:border-gray-700">
                 <tr>
+                  <th className="px-4 py-3 text-left w-6"></th>
                   <th className="px-4 py-3 text-left">Company</th>
                   <th className="px-4 py-3 text-left">Quarter / Basis</th>
                   <th className="px-4 py-3 text-left">Score</th>
@@ -322,100 +517,126 @@ export default function EarningsRadar() {
                 {displayed.map((a) => {
                   const km = a.keyMetrics || {};
                   const bd = a.scoreBreakdown || {};
+                  const rowKey = `${a.symbol}-${a.basis}`;
+                  const isExpanded = expandedRow === rowKey;
+
                   return (
-                    <tr
-                      key={`${a.symbol}-${a.periodEnd}-${a.basis}`}
-                      className="border-t border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition"
-                    >
-                      {/* Company */}
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">{a.symbol}</span>
-                          <ChartButton symbol={a.symbol} />
-                        </div>
-                        <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 max-w-[160px] truncate">{a.company}</div>
-                      </td>
+                    <Fragment key={rowKey}>
+                      <tr
+                        onClick={() => toggleRow(rowKey)}
+                        className={`border-t border-gray-200 dark:border-gray-700 cursor-pointer transition
+                          ${isExpanded
+                            ? "bg-indigo-50/40 dark:bg-indigo-500/5 hover:bg-indigo-50/70 dark:hover:bg-indigo-500/10"
+                            : "hover:bg-gray-50 dark:hover:bg-gray-700/30"}`}
+                        title="Click to view score history"
+                      >
+                        {/* Expand toggle */}
+                        <td className="px-3 py-3 text-gray-400 dark:text-gray-500">
+                          {isExpanded
+                            ? <ChevronUp className="w-3.5 h-3.5 text-indigo-500" />
+                            : <ChevronDown className="w-3.5 h-3.5" />}
+                        </td>
 
-                      {/* Quarter / Basis */}
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        <div className="text-xs font-mono text-gray-800 dark:text-gray-200">{a.periodEnd}</div>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium mt-0.5 inline-block
-                          ${a.basis === "consolidated"
-                            ? "bg-blue-500/10 text-blue-700 dark:text-blue-300"
-                            : "bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400"}`}>
-                          {a.basis}
-                        </span>
-                      </td>
-
-                      {/* Score */}
-                      <td className="px-4 py-3">
-                        <div className="flex flex-col gap-1.5">
-                          <span className={`inline-flex items-center justify-center w-10 h-7 rounded-lg text-sm font-bold ${scoreBadgeCls(a.score)}`}>
-                            {a.score}
-                          </span>
-                          <ScoreBar score={a.score} />
-                        </div>
-                      </td>
-
-                      {/* Revenue / PAT YoY */}
-                      <td className="px-4 py-3">
-                        <div className="flex flex-col gap-1">
-                          <PctCell val={km.revenueYoYPct} label="Rev" />
-                          <PctCell val={km.patYoYPct}     label="PAT" />
-                          {km.revenueCrores != null && (
-                            <span className="text-[10px] text-gray-400 dark:text-gray-600">
-                              Rev: ₹{km.revenueCrores.toLocaleString("en-IN")} Cr
+                        {/* Company */}
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1">
+                            <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">{a.symbol}</span>
+                            <span onClick={e => e.stopPropagation()}>
+                              <ChartButton symbol={a.symbol} />
                             </span>
-                          )}
-                        </div>
-                      </td>
+                          </div>
+                          <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 max-w-[160px] truncate">{a.company}</div>
+                        </td>
 
-                      {/* QoQ */}
-                      <td className="px-4 py-3">
-                        <div className="flex flex-col gap-1">
-                          <PctCell val={km.revenueQoQPct} label="Rev" />
-                          <PctCell val={km.patQoQPct}     label="PAT" />
-                          <CheckBullet ok={bd.qoq?.bothUp} label="both up" pts={bd.qoq?.pts} />
-                        </div>
-                      </td>
-
-                      {/* OPM + Quality */}
-                      <td className="px-4 py-3">
-                        <div className="flex flex-col gap-1">
-                          <CheckBullet ok={bd.opm?.expanded} label={
-                            (bd.opm?.yoy != null && bd.opm?.cur != null)
-                              ? `OPM ${bd.opm.yoy.toFixed(1)}%→${bd.opm.cur.toFixed(1)}%`
-                              : "OPM ↑ YoY"
-                          } pts={bd.opm?.pts} />
-                          <CheckBullet ok={bd.quality?.finCostDown} label={
-                            bd.quality?.finCostChgPct != null
-                              ? `Fin cost ${bd.quality.finCostChgPct > 0 ? "+" : ""}${bd.quality.finCostChgPct.toFixed(1)}%`
-                              : "Fin cost ↓"
-                          } pts={bd.quality?.pts} />
-                          <CheckBullet ok={bd.quality?.exceptionalOk} label="No neg exceptional" />
-                        </div>
-                      </td>
-
-                      {/* Alert status */}
-                      <td className="px-4 py-3">
-                        {a.score >= 6 ? (
-                          <span className={`text-xs px-2 py-1 rounded-md font-medium whitespace-nowrap ${
-                            a.alerted
-                              ? "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300"
-                              : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
-                          }`}>
-                            {a.alerted ? "✓ Sent" : "⏳ Pending"}
+                        {/* Quarter / Basis */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="text-xs font-mono text-gray-800 dark:text-gray-200">{a.periodEnd}</div>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium mt-0.5 inline-block
+                            ${a.basis === "consolidated"
+                              ? "bg-blue-500/10 text-blue-700 dark:text-blue-300"
+                              : "bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400"}`}>
+                            {a.basis}
                           </span>
-                        ) : (
-                          <span className="text-xs text-gray-400 dark:text-gray-600">—</span>
-                        )}
-                      </td>
+                        </td>
 
-                      {/* Scanned at */}
-                      <td className="px-4 py-3 text-right text-[10px] text-gray-400 dark:text-gray-500 whitespace-nowrap">
-                        {fmtDate(a.scannedAt)}
-                      </td>
-                    </tr>
+                        {/* Score */}
+                        <td className="px-4 py-3">
+                          <div className="flex flex-col gap-1.5">
+                            <span className={`inline-flex items-center justify-center w-10 h-7 rounded-lg text-sm font-bold ${scoreBadgeCls(a.score)}`}>
+                              {a.score}
+                            </span>
+                            <ScoreBar score={a.score} />
+                          </div>
+                        </td>
+
+                        {/* Revenue / PAT YoY */}
+                        <td className="px-4 py-3">
+                          <div className="flex flex-col gap-1">
+                            <PctCell val={km.revenueYoYPct} label="Rev" />
+                            <PctCell val={km.patYoYPct}     label="PAT" />
+                            {km.revenueCrores != null && (
+                              <span className="text-[10px] text-gray-400 dark:text-gray-600">
+                                Rev: ₹{km.revenueCrores.toLocaleString("en-IN")} Cr
+                              </span>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* QoQ */}
+                        <td className="px-4 py-3">
+                          <div className="flex flex-col gap-1">
+                            <PctCell val={km.revenueQoQPct} label="Rev" />
+                            <PctCell val={km.patQoQPct}     label="PAT" />
+                            <CheckBullet ok={bd.qoq?.bothUp} label="both up" pts={bd.qoq?.pts} />
+                          </div>
+                        </td>
+
+                        {/* OPM + Quality */}
+                        <td className="px-4 py-3">
+                          <div className="flex flex-col gap-1">
+                            <CheckBullet ok={bd.opm?.expanded} label={
+                              (bd.opm?.yoy != null && bd.opm?.cur != null)
+                                ? `OPM ${bd.opm.yoy.toFixed(1)}%→${bd.opm.cur.toFixed(1)}%`
+                                : "OPM ↑ YoY"
+                            } pts={bd.opm?.pts} />
+                            <CheckBullet ok={bd.quality?.finCostDown} label={
+                              bd.quality?.finCostChgPct != null
+                                ? `Fin cost ${bd.quality.finCostChgPct > 0 ? "+" : ""}${bd.quality.finCostChgPct.toFixed(1)}%`
+                                : "Fin cost ↓"
+                            } pts={bd.quality?.pts} />
+                            <CheckBullet ok={bd.quality?.exceptionalOk} label="No neg exceptional" />
+                          </div>
+                        </td>
+
+                        {/* Alert status */}
+                        <td className="px-4 py-3">
+                          {a.score >= 6 ? (
+                            <span className={`text-xs px-2 py-1 rounded-md font-medium whitespace-nowrap ${
+                              a.alerted
+                                ? "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300"
+                                : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                            }`}>
+                              {a.alerted ? "✓ Sent" : "⏳ Pending"}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-gray-400 dark:text-gray-600">—</span>
+                          )}
+                        </td>
+
+                        {/* Scanned at */}
+                        <td className="px-4 py-3 text-right text-[10px] text-gray-400 dark:text-gray-500 whitespace-nowrap">
+                          {fmtDate(a.scannedAt)}
+                        </td>
+                      </tr>
+
+                      {/* Inline history panel */}
+                      {isExpanded && (
+                        <HistoryPanel
+                          symbol={a.symbol}
+                          colSpan={COL_COUNT}
+                        />
+                      )}
+                    </Fragment>
                   );
                 })}
               </tbody>
