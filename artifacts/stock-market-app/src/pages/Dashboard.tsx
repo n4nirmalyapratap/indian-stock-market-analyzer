@@ -647,7 +647,7 @@ export default function Dashboard() {
 
   const newsItems = useMemo(() => {
     const articles: any[] = (newsData as any)?.articles ?? [];
-    return articles.slice(0, 5);
+    return articles.slice(0, 7);
   }, [newsData]);
 
   const anyLoading = fiiLoading || rotLoading || patLoading || sentLoading || macroLoading;
