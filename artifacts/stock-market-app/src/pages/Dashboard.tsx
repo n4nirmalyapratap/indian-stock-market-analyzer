@@ -260,7 +260,11 @@ export default function Dashboard() {
             value={adRatio == null ? "∞" : adRatio.toFixed(2)}
             sub={
               breadth.advancing != null
-                ? `↑${breadth.advancing} adv  ↓${breadth.declining ?? 0} dec`
+                ? <span>
+                    <span className="text-emerald-500">↑{breadth.advancing} adv</span>
+                    {"  "}
+                    <span className="text-red-500">↓{breadth.declining ?? 0} dec</span>
+                  </span>
                 : undefined
             }
             subCls={adCls}
