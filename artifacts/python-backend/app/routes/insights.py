@@ -3498,6 +3498,64 @@ async def get_top_deliveries(
     }
 
 
+@router.get("/volume-summary")
+async def get_volume_summary():
+    """Lightweight dashboard card: unusual-volume stock count, top sector theme, trend."""
+    cache_key = "volume_summary"
+    cached = _cache_get(cache_key, ttl=1800)
+    if cached is not None:
+        return cached
+
+    (nse_rows, trade_date), scanx_rows = await asyncio.gather(
+        _fetch_nse_bhavdata(),
+        _fetch_scanx_top_deliveries(),
+    )
+
+    if not nse_rows:
+        result = {"available": False, "unusualCount": 0, "totalStocks": 0,
+                  "topSector": None, "trend": "neutral", "tradeDate": trade_date}
+        _cache_set(cache_key, result)
+        return result
+
+    # Enrich with sector from scanx
+    scanx_meta: dict[str, dict] = {r["symbol"]: r for r in scanx_rows}
+    for r in nse_rows:
+        sx = scanx_meta.get(r["symbol"])
+        if sx and sx.get("sector"):
+            r["sector"] = sx["sector"]
+        if not r.get("sector"):
+            r["sector"] = _STOCK_SECTOR_MAP.get(r["symbol"])
+
+    # Unusual volume = high-conviction delivery (≥ 65% delivery pct)
+    unusual = [r for r in nse_rows if (r.get("delivPct") or 0) >= 65]
+
+    # Top sector by count of unusual-volume stocks
+    from collections import Counter
+    sector_counts = Counter(r.get("sector") for r in unusual if r.get("sector"))
+    top_entry = sector_counts.most_common(1)
+    top_sector = top_entry[0][0] if top_entry else None
+    top_sector_count = top_entry[0][1] if top_entry else 0
+
+    # Trend direction
+    up   = sum(1 for r in unusual if (r.get("changePct") or 0) >= 0)
+    down = len(unusual) - up
+    trend = "bullish" if up > down else "bearish" if down > up else "neutral"
+
+    result = {
+        "available": True,
+        "unusualCount": len(unusual),
+        "totalStocks": len(nse_rows),
+        "topSector": top_sector,
+        "topSectorCount": top_sector_count,
+        "trend": trend,
+        "upCount": up,
+        "downCount": down,
+        "tradeDate": trade_date,
+    }
+    _cache_set(cache_key, result)
+    return result
+
+
 @router.get("/delivery-history")
 async def get_delivery_history(symbol: str = Query(..., min_length=1), days: int = Query(40, ge=5, le=120)):
     """Per-stock delivery % over the last `days` trading sessions, reconstructed
