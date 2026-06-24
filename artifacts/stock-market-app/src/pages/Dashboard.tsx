@@ -468,9 +468,9 @@ function VolumeActivityCard({ data, loading }: { data: any; loading: boolean }) 
                    : "bg-gray-400";
 
   const links = [
-    { href: "/insights/delivery", label: "Delivery volume", icon: <Package className="w-3 h-3" /> },
-    { href: "/scanners",          label: "Volume surge stocks", icon: <Zap className="w-3 h-3" /> },
-    { href: "/patterns",          label: "All volume scanners", icon: <Activity className="w-3 h-3" /> },
+    { href: "/insights/top-deliveries", label: "Delivery volume",     icon: <Package className="w-3 h-3" /> },
+    { href: "/scanners",                label: "Volume surge stocks",  icon: <Zap className="w-3 h-3" /> },
+    { href: "/patterns",                label: "All volume scanners",  icon: <Activity className="w-3 h-3" /> },
   ];
 
   return (
@@ -479,7 +479,7 @@ function VolumeActivityCard({ data, loading }: { data: any; loading: boolean }) 
         <p className="text-[9px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-[0.18em] flex items-center gap-1.5">
           <Flame className="w-3 h-3 text-orange-400" /> Volume Activity
         </p>
-        <Link href="/insights/delivery"
+        <Link href="/insights/top-deliveries"
           className="text-[9px] font-semibold text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 flex items-center gap-0.5 tracking-wide transition uppercase">
           Full View <ArrowRight className="w-2.5 h-2.5" />
         </Link>
