@@ -58,6 +58,24 @@ async def get_earnings_alerts(
         )
 
 
+@router.get("/history/{symbol}")
+async def get_earnings_history(symbol: str, request: Request):
+    """
+    All historical score rows for a symbol, ordered oldest → newest.
+    Used to draw a quarter-over-quarter sparkline in the UI.
+    """
+    _require_auth(request)
+    try:
+        from ..services.earnings_scanner_service import get_history_for_symbol
+        rows = get_history_for_symbol(symbol)
+        return {"symbol": symbol.upper(), "history": rows, "count": len(rows)}
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"symbol": symbol, "history": [], "count": 0, "error": str(exc)},
+        )
+
+
 @router.get("/stats")
 async def get_earnings_stats(request: Request):
     """Summary counts for the Earnings Radar dashboard tile."""

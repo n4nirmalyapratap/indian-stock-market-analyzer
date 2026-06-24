@@ -331,6 +331,51 @@ def _upsert_alert(
         conn.commit()
 
 
+def get_history_for_symbol(symbol: str) -> list[dict]:
+    """Return all scored rows for a symbol ordered by period_end ASC (oldest → newest)."""
+    ensure_primary_schema()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT symbol, company, period_end, basis, score,
+                       score_breakdown, key_metrics, alerted, created_at_ms, scanned_at_ms
+                  FROM earnings_alerts
+                 WHERE symbol = %s
+                 ORDER BY period_end ASC
+                """,
+                (symbol.upper(),),
+            )
+            rows = [dict(r) for r in (cur.fetchall() or [])]
+
+    def _parse_json(v):
+        if isinstance(v, dict):
+            return v
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except Exception:
+                return {}
+        return {}
+
+    out = []
+    for r in rows:
+        pe = r.get("period_end")
+        out.append({
+            "symbol":         r["symbol"],
+            "company":        r.get("company") or r["symbol"],
+            "periodEnd":      pe.isoformat() if hasattr(pe, "isoformat") else str(pe),
+            "basis":          r.get("basis") or "standalone",
+            "score":          r["score"],
+            "scoreBreakdown": _parse_json(r.get("score_breakdown")),
+            "keyMetrics":     _parse_json(r.get("key_metrics")),
+            "alerted":        r.get("alerted") or False,
+            "createdAt":      r.get("created_at_ms"),
+            "scannedAt":      r.get("scanned_at_ms"),
+        })
+    return out
+
+
 def get_alerts(limit: int = 100, offset: int = 0, min_score: int = 0) -> tuple[list[dict], int]:
     """Return scored alerts newest-first. Returns (rows, total_count)."""
     ensure_primary_schema()
