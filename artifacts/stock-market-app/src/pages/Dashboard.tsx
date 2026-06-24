@@ -94,7 +94,7 @@ function NavCard({ title, dotCls, value, valueCls, sub, detail, loading, href, i
 }
 
 // ── Sentiment Flow Diagram ────────────────────────────────────────────────────
-// Valley-inspired: source nodes → animated dashed lines flowing into a hub.
+// Aesthetic flow diagram: glowing curved paths + animated particles → radial hub
 function SentimentFlow({ score, label, components }: {
   score: number | null;
   label: string;
@@ -106,45 +106,27 @@ function SentimentFlow({ score, label, components }: {
 
   useEffect(() => {
     setMounted(false);
-    const t = setTimeout(() => setMounted(true), 80);
+    const t = setTimeout(() => setMounted(true), 100);
     return () => clearTimeout(t);
   }, [score]);
 
-  // Hub accent color — green / grey / red
-  const hubAccent =
-    score == null     ? (isDark ? "#475569" : "#94a3b8")
-    : score >= 20     ? "#16a34a"
-    : score >= 5      ? "#22c55e"
-    : score > -5      ? (isDark ? "#64748b" : "#94a3b8")
-    : score > -20     ? "#f97316"
-    : "#dc2626";
+  // Hub color palette
+  const hubColor =
+    score == null ? "#64748b"
+    : score >= 20  ? "#22c55e"
+    : score >= 5   ? "#4ade80"
+    : score > -5   ? "#94a3b8"
+    : score > -20  ? "#fb923c"
+    : "#f87171";
 
-  // Per-component accent
-  function compAccent(sc: number | null) {
-    if (sc == null) return isDark ? "#475569" : "#94a3b8";
-    if (sc >= 10)  return "#16a34a";
-    if (sc >= 0)   return "#22c55e";
-    if (sc > -10)  return isDark ? "#64748b" : "#94a3b8";
-    return "#dc2626";
+  function compAccent(sc: number | null): string {
+    if (sc == null) return "#64748b";
+    if (sc >= 10) return "#22c55e";
+    if (sc >= 0)  return "#4ade80";
+    if (sc > -10) return "#94a3b8";
+    return "#f87171";
   }
 
-  const bg      = isDark ? "#1e293b"   : "#f8fafc";
-  const border  = isDark ? "#334155"   : "#e2e8f0";
-  const textCol = isDark ? "#94a3b8"   : "#64748b";
-  const hubFill = isDark ? "#0f172a"   : "#ffffff";
-
-  // Layout constants
-  const W = 280, H = 185;
-  const HX = 140, HY = 104, HR = 38;      // hub
-
-  // Source node boxes  [cx, cy, half-w, half-h, label, weight-key]
-  const nodes = [
-    { cx: 140, cy: 20,  hw: 68, hh: 13, key: "News Sentiment",  short: "NEWS SENTIMENT"  },
-    { cx: 44,  cy: 160, hw: 52, hh: 13, key: "Price Action",    short: "PRICE ACTION"    },
-    { cx: 236, cy: 160, hw: 44, hh: 13, key: "India VIX",       short: "INDIA VIX"       },
-  ] as const;
-
-  // Resolve component scores by name
   function compScore(key: string) {
     const c = components.find((c: any) =>
       (c.name ?? "").toLowerCase().includes(key.toLowerCase().split(" ")[0])
@@ -152,120 +134,217 @@ function SentimentFlow({ score, label, components }: {
     return c?.score ?? null;
   }
 
-  // Connector: straight line from node box-edge to hub border
-  function connector(nx: number, ny: number, nhh: number) {
-    // direction from node to hub
-    const dx = HX - nx, dy = HY - ny;
+  const W = 380, H = 224;
+  const HX = 190, HY = 122, HR = 48;
+  const hubFill = isDark ? "#0f172a" : "#ffffff";
+
+  const nodes = [
+    { cx: 190, cy: 22,  hw: 76, hh: 16, key: "News Sentiment", short: "NEWS SENTIMENT", curveBias: 0  },
+    { cx: 48,  cy: 196, hw: 58, hh: 16, key: "Price Action",   short: "PRICE ACTION",   curveBias: 28 },
+    { cx: 332, cy: 196, hw: 52, hh: 16, key: "India VIX",      short: "INDIA VIX",      curveBias: -28 },
+  ] as const;
+
+  // Quadratic bezier path from node edge → hub border, with lateral curve
+  function makePath(n: typeof nodes[number], idx: number): string {
+    const dx = HX - n.cx, dy = HY - n.cy;
     const dist = Math.sqrt(dx * dx + dy * dy);
     const ux = dx / dist, uy = dy / dist;
-    // start: bottom or top edge of node box (whichever faces hub)
-    const startY = ny < HY ? ny + nhh : ny - nhh;
-    const startX = nx;
-    // end: hub border
-    const endX = HX - ux * HR, endY = HY - uy * HR;
-    return { x1: startX, y1: startY, x2: endX, y2: endY };
+    const sy = n.cy < HY ? n.cy + n.hh : n.cy - n.hh;
+    const sx = n.cx;
+    const ex = HX - ux * HR, ey = HY - uy * HR;
+    const mx = (sx + ex) / 2, my = (sy + ey) / 2;
+    const cpx = mx + (-uy * n.curveBias);
+    const cpy = my + (ux  * n.curveBias);
+    return `M ${sx} ${sy} Q ${cpx} ${cpy} ${ex} ${ey}`;
   }
 
-  const lines = nodes.map(n => connector(n.cx, n.cy, n.hh));
-
+  const paths = nodes.map((n, i) => ({ d: makePath(n, i), id: `sfp-${i}` }));
   const scoreStr = score != null ? (score > 0 ? `+${score}` : `${score}`) : "—";
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: H }}>
       <defs>
         <style>{`
-          @keyframes nf-flow {
-            0%   { stroke-dashoffset: 12; }
-            100% { stroke-dashoffset:  0; }
+          @keyframes sf-dash { from { stroke-dashoffset: 10; } to { stroke-dashoffset: 0; } }
+          @keyframes sf-ring1 {
+            0%,100% { r: ${HR + 3}px;  opacity: .35; }
+            50%     { r: ${HR + 11}px; opacity: .08; }
           }
-          .nf-line { stroke-dasharray: 4 4; animation: nf-flow 0.7s linear infinite; }
-          @keyframes nf-pulse {
-            0%, 100% { opacity: 0.25; r: ${HR}; }
-            50%       { opacity: 0.08; r: ${HR + 6}; }
+          @keyframes sf-ring2 {
+            0%,100% { r: ${HR + 7}px;  opacity: .18; }
+            50%     { r: ${HR + 17}px; opacity: .04; }
           }
-          .nf-pulse { animation: nf-pulse 2.4s ease-in-out infinite; }
+          @keyframes sf-cdot {
+            0%,100% { r: 3px; opacity: 1; }
+            50%     { r: 2px; opacity: .4; }
+          }
+          .sf-r1  { animation: sf-ring1 2.6s ease-in-out infinite; }
+          .sf-r2  { animation: sf-ring2 2.6s ease-in-out infinite .9s; }
+          .sf-cd  { animation: sf-cdot  1.6s ease-in-out infinite; }
         `}</style>
+
+        {/* Glow filter for paths */}
+        <filter id="sf-glow" x="-40%" y="-40%" width="180%" height="180%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="3.5" result="blur" />
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+
+        {/* Soft glow filter for hub */}
+        <filter id="sf-hub-glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur" />
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+
+        {/* Radial aura behind hub */}
+        <radialGradient id="sf-aura" cx="50%" cy="50%" r="50%">
+          <stop offset="0%"   stopColor={hubColor} stopOpacity="0.22" />
+          <stop offset="55%"  stopColor={hubColor} stopOpacity="0.07" />
+          <stop offset="100%" stopColor={hubColor} stopOpacity="0"    />
+        </radialGradient>
+
+        {/* Hub fill gradient */}
+        <radialGradient id="sf-hub-fill" cx="40%" cy="35%" r="65%">
+          <stop offset="0%"   stopColor={hubColor} stopOpacity={isDark ? "0.18" : "0.10"} />
+          <stop offset="100%" stopColor={hubColor} stopOpacity="0" />
+        </radialGradient>
+
+        {/* Per-path gradient: node color → hub color */}
+        {nodes.map((n, i) => {
+          const col = compAccent(compScore(n.key));
+          return (
+            <linearGradient key={i} id={`sf-lg-${i}`} gradientUnits="userSpaceOnUse"
+              x1={n.cx} y1={n.cy < HY ? n.cy + n.hh : n.cy - n.hh}
+              x2={HX} y2={HY}>
+              <stop offset="0%"   stopColor={col}      stopOpacity="1" />
+              <stop offset="100%" stopColor={hubColor}  stopOpacity="0.7" />
+            </linearGradient>
+          );
+        })}
       </defs>
 
-      {/* Hub pulse ring — color-reactive */}
-      <circle className="nf-pulse" cx={HX} cy={HY} r={HR}
-        fill="none" stroke={hubAccent} strokeWidth="1"
-        style={{ opacity: mounted ? undefined : 0, transition: "opacity 0.6s" }}
-      />
+      {/* Ambient background aura */}
+      <ellipse cx={HX} cy={HY} rx={105} ry={82} fill="url(#sf-aura)"
+        style={{ opacity: mounted ? 1 : 0, transition: "opacity 1s" }} />
 
-      {/* Flow lines — one per source node */}
-      {lines.map((l, i) => {
-        const sc = compScore(nodes[i].key);
-        const col = compAccent(sc);
+      {/* Hub outer pulse rings */}
+      <circle className="sf-r1" cx={HX} cy={HY} r={HR + 3}
+        fill="none" stroke={hubColor} strokeWidth="1"
+        style={{ opacity: mounted ? undefined : 0 }} />
+      <circle className="sf-r2" cx={HX} cy={HY} r={HR + 7}
+        fill="none" stroke={hubColor} strokeWidth="0.5"
+        style={{ opacity: mounted ? undefined : 0 }} />
+
+      {/* Curved paths */}
+      {paths.map(({ d, id }, i) => {
+        const col = compAccent(compScore(nodes[i].key));
         return (
-          <line key={i}
-            className={mounted ? "nf-line" : ""}
-            x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2}
-            stroke={col} strokeWidth="1.2"
-            strokeDasharray="4 4"
-            strokeDashoffset={mounted ? undefined : 12}
-            style={{ animationDelay: `${i * 0.18}s`, opacity: 0.75 }}
-          />
+          <g key={i}>
+            {/* Glow layer */}
+            <path d={d} fill="none" stroke={col} strokeWidth="4"
+              strokeOpacity="0.28" filter="url(#sf-glow)"
+              style={{ opacity: mounted ? 1 : 0, transition: `opacity .6s ${i * .15}s` }}
+            />
+            {/* Dashed animated line */}
+            <path id={id} d={d} fill="none"
+              stroke={`url(#sf-lg-${i})`} strokeWidth="1.6"
+              strokeDasharray="5 5"
+              style={{
+                opacity: mounted ? 0.9 : 0,
+                transition: `opacity .5s ${i * .15}s`,
+                animation: mounted ? `sf-dash .9s linear infinite ${i * .25}s` : undefined,
+              }}
+            />
+            {/* Particles flowing along path */}
+            {mounted && ([0, 0.45, 0.78] as number[]).map((delay, pi) => (
+              <circle key={pi} r="3.2" fill={col}>
+                <animateMotion dur="1.9s" repeatCount="indefinite" begin={`${delay}s`}
+                  keyPoints="0;1" keyTimes="0;1" calcMode="linear">
+                  <mpath href={`#${id}`} />
+                </animateMotion>
+                <animate attributeName="opacity" dur="1.9s" repeatCount="indefinite" begin={`${delay}s`}
+                  values="0;1;1;0" keyTimes="0;0.07;0.9;1" />
+                <animate attributeName="r" dur="1.9s" repeatCount="indefinite" begin={`${delay}s`}
+                  values="0;3.2;2.8;0" keyTimes="0;0.07;0.9;1" />
+              </circle>
+            ))}
+          </g>
         );
       })}
 
-      {/* Source node chips */}
+      {/* Hub glow blob */}
+      <circle cx={HX} cy={HY} r={HR + 8} fill={hubColor} opacity="0.12"
+        filter="url(#sf-hub-glow)"
+        style={{ opacity: mounted ? 0.12 : 0, transition: "opacity .8s" }} />
+
+      {/* Hub body */}
+      <circle cx={HX} cy={HY} r={HR} fill={hubFill} stroke={hubColor} strokeWidth="1.8"
+        style={{ filter: `drop-shadow(0 0 8px ${hubColor}55)` }} />
+
+      {/* Hub inner gradient tint */}
+      <circle cx={HX} cy={HY} r={HR} fill="url(#sf-hub-fill)" />
+
+      {/* Hub inner ring (static, subtle) */}
+      <circle cx={HX} cy={HY} r={HR - 8} fill="none" stroke={hubColor}
+        strokeWidth="0.5" strokeOpacity="0.3" />
+
+      {/* Score */}
+      <text x={HX} y={HY - 7} textAnchor="middle"
+        fontSize="20" fontWeight="900" letterSpacing="-0.5"
+        fill={hubColor} style={{ fontFamily: "system-ui,sans-serif" }}>
+        {scoreStr}
+      </text>
+      <text x={HX} y={HY + 11} textAnchor="middle"
+        fontSize="7" fontWeight="700" letterSpacing="1.5"
+        fill={hubColor} fillOpacity="0.75" style={{ fontFamily: "system-ui,sans-serif" }}>
+        {label.toUpperCase()}
+      </text>
+
+      {/* Center pulsing dot */}
+      <circle className="sf-cd" cx={HX} cy={HY} r={3} fill={hubColor}
+        style={{ opacity: mounted ? undefined : 0 }} />
+
+      {/* Node chips */}
       {nodes.map((n, i) => {
-        const sc = compScore(n.key);
+        const sc  = compScore(n.key);
         const col = compAccent(sc);
         const comp = components.find((c: any) =>
           (c.name ?? "").toLowerCase().includes(n.key.toLowerCase().split(" ")[0])
         );
         const weight = comp?.weight;
         return (
-          <g key={i} style={{ opacity: mounted ? 1 : 0, transition: `opacity 0.5s ${i * 0.12}s` }}>
-            {/* Box */}
-            <rect
-              x={n.cx - n.hw} y={n.cy - n.hh}
-              width={n.hw * 2} height={n.hh * 2}
-              rx="5" ry="5"
-              fill={bg} stroke={col} strokeWidth="1"
+          <g key={i} style={{ opacity: mounted ? 1 : 0, transition: `opacity .55s ${i * .13}s` }}>
+            {/* Chip glow */}
+            <rect x={n.cx - n.hw - 1} y={n.cy - n.hh - 1}
+              width={n.hw * 2 + 2} height={n.hh * 2 + 2}
+              rx="10" fill={col} opacity="0.12" filter="url(#sf-glow)"
             />
-            {/* Label */}
-            <text x={n.cx} y={n.cy - 1}
+            {/* Chip body */}
+            <rect x={n.cx - n.hw} y={n.cy - n.hh}
+              width={n.hw * 2} height={n.hh * 2}
+              rx="9" ry="9"
+              fill={col} fillOpacity="0.11"
+              stroke={col} strokeWidth="1.1" strokeOpacity="0.75"
+            />
+            {/* Label row */}
+            <text x={n.cx} y={n.cy - 2}
               textAnchor="middle" dominantBaseline="middle"
-              fontSize="6.5" fontWeight="700" letterSpacing="0.8"
+              fontSize="6.8" fontWeight="800" letterSpacing="0.7"
               fill={col} style={{ fontFamily: "system-ui,sans-serif" }}>
               {n.short}{weight != null ? ` · ${weight}%` : ""}
             </text>
-            {/* Tiny score */}
+            {/* Score sub-text */}
             {sc != null && (
-              <text x={n.cx} y={n.cy + 7}
+              <text x={n.cx} y={n.cy + 8}
                 textAnchor="middle"
-                fontSize="5.5" fontWeight="600"
-                fill={col} opacity={0.7} style={{ fontFamily: "system-ui,sans-serif" }}>
+                fontSize="6.2" fontWeight="600"
+                fill={col} fillOpacity="0.7"
+                style={{ fontFamily: "system-ui,sans-serif" }}>
                 {sc > 0 ? `+${sc}` : sc}
               </text>
             )}
           </g>
         );
       })}
-
-      {/* Hub */}
-      <circle cx={HX} cy={HY} r={HR} fill={hubFill} stroke={hubAccent} strokeWidth="1.5" />
-
-      {/* Hub score */}
-      <text x={HX} y={HY - 7}
-        textAnchor="middle"
-        fontSize="17" fontWeight="900" letterSpacing="-0.5"
-        fill={hubAccent} style={{ fontFamily: "system-ui,sans-serif" }}>
-        {scoreStr}
-      </text>
-      <text x={HX} y={HY + 10}
-        textAnchor="middle"
-        fontSize="6.5" fontWeight="700" letterSpacing="1"
-        fill={hubAccent} style={{ fontFamily: "system-ui,sans-serif" }}>
-        {label.toUpperCase()}
-      </text>
-
-      {/* Hub center dot */}
-      <circle cx={HX} cy={HY} r={3.5} fill={hubAccent} opacity={0.35} />
-      <circle cx={HX} cy={HY} r={2}   fill={hubAccent} />
     </svg>
   );
 }
