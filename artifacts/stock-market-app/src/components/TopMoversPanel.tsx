@@ -26,7 +26,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  TrendingUp, TrendingDown, Loader2, AlertCircle, Activity,
+  TrendingUp, TrendingDown, AlertCircle, Activity,
   X as XIcon,
 } from "lucide-react";
 import { api, TopMoverRow, TopMoversAllResponse } from "@/lib/api";
@@ -242,9 +242,22 @@ export default function TopMoversPanel() {
 
       {/* Body */}
       {isLoading && (
-        <div className="flex items-center justify-center py-12 text-gray-500 dark:text-gray-400">
-          <Loader2 className="w-5 h-5 animate-spin mr-2" />
-          <span className="text-sm">Fetching top movers…</span>
+        <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-100 dark:divide-gray-700">
+          {(["up", "down"] as const).map((tone) => (
+            <div key={tone}>
+              <ColumnHeader tone={tone} />
+              <div className="divide-y divide-gray-100 dark:divide-gray-700/60">
+                {Array.from({ length: INLINE_COUNT }).map((_, i) => (
+                  <div key={i} className="flex items-center justify-between px-4 py-2.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="h-3 w-20 bg-gray-100 dark:bg-gray-700 rounded animate-pulse" />
+                    </div>
+                    <div className="h-3 w-12 bg-gray-100 dark:bg-gray-700 rounded animate-pulse" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
