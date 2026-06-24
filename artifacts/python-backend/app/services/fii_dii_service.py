@@ -61,13 +61,28 @@ _db_lock = threading.Lock()
 # asyncio.create_task() re-uses the same event loop, so a plain set is safe.
 _refresh_in_progress: set[str] = set()
 
-# When a background refresh completes without finding today's data (NSE hasn't
-# published yet), record the attempt time here so we don't re-fire immediately
-# on the next request.  After _REFRESH_COOLDOWN_S the segment is eligible for
-# another attempt.  This keeps "fetching" true ONLY while the task is actively
-# running (seconds) rather than for hours while waiting for NSE to publish.
+# Per-segment retry state for today's data fetch.
+#
+# Logic:
+#   - Up to MAX_TODAY_RETRIES attempts are fired, spaced _RETRY_INTERVAL_S apart.
+#   - After MAX_TODAY_RETRIES consecutive failures the segment enters a
+#     _REFRESH_COOLDOWN_S (30-minute) cooldown.  After that cooldown expires the
+#     retry counter resets and a fresh 5-attempt cycle begins.
+#   - A force-refresh (user clicks Retry) resets both counters immediately.
 _refresh_last_failed: dict[str, float] = {}
-_REFRESH_COOLDOWN_S = 30 * 60  # 30-minute retry gap
+_refresh_fail_count: dict[str, int] = {}
+
+MAX_TODAY_RETRIES = 5          # attempts before entering long cooldown
+_RETRY_INTERVAL_S = 60        # seconds between individual retry attempts
+_REFRESH_COOLDOWN_S = 30 * 60  # 30-minute cooldown after all retries exhausted
+
+
+def reset_today_fetch(segment: str) -> None:
+    """Reset the per-segment retry counter and cooldown (force-refresh path).
+    Called when the user explicitly requests a retry from the UI."""
+    _refresh_fail_count.pop(segment, None)
+    _refresh_last_failed.pop(segment, None)
+    logger.info("Today-fetch state reset (force) — segment=%s", segment)
 
 def date_chunks(start: datetime, end: datetime, chunk_days: int = NSE_CHUNK_DAYS):
     current = start
@@ -676,23 +691,46 @@ class FiiDiiService:
             logger.warning("Background refresh error — segment=%s: %s", segment, exc)
         finally:
             _refresh_in_progress.discard(segment)
-            # If we finished without obtaining today's row, record the attempt
-            # time so _today_status backs off for _REFRESH_COOLDOWN_S before
-            # firing another task (avoids hammering NSE while waiting for publish).
-            if not found_today:
-                import time as _t  # noqa: PLC0415
+            import time as _t  # noqa: PLC0415
+            if found_today:
+                # Success — reset the retry counter so we're clean for tomorrow.
+                _refresh_fail_count.pop(segment, None)
+                _refresh_last_failed.pop(segment, None)
+            else:
+                # This attempt didn't find today's data. Increment counter and
+                # record when it finished so _today_status can enforce the retry
+                # interval before firing the next task.
+                prev = _refresh_fail_count.get(segment, 0)
+                _refresh_fail_count[segment] = prev + 1
                 _refresh_last_failed[segment] = _t.time()
+                attempt = _refresh_fail_count[segment]
+                if attempt >= MAX_TODAY_RETRIES:
+                    logger.info(
+                        "FII/DII today-fetch exhausted %d/%d attempts for %s — "
+                        "entering %d-min cooldown.",
+                        attempt, MAX_TODAY_RETRIES, segment, _REFRESH_COOLDOWN_S // 60,
+                    )
+                else:
+                    logger.info(
+                        "FII/DII today-fetch attempt %d/%d failed for %s — "
+                        "retrying in %ds.",
+                        attempt, MAX_TODAY_RETRIES, segment, _RETRY_INTERVAL_S,
+                    )
 
     @staticmethod
-    def _today_status(df: pd.DataFrame, segment: str) -> str:
-        """Return 'available', 'fetching', or 'not_yet' for today's data.
+    def _today_status(df: pd.DataFrame, segment: str) -> tuple[str, int]:
+        """Return (status, attempt_number) for today's data.
 
-        'available'  — today's row is already in the cached DataFrame.
-        'fetching'   — a background task is actively running RIGHT NOW to
-                       fetch today's data (window is seconds, not hours).
-        'not_yet'    — market hasn't closed yet, it's a weekend, OR a recent
-                       fetch attempt completed but NSE hadn't published yet
-                       (cooldown period before the next retry).
+        status values:
+          'available' — today's row is already in the cached DataFrame.
+          'fetching'  — a background task is running OR we are within the
+                        MAX_TODAY_RETRIES retry budget (task will fire shortly).
+          'not_yet'   — market hasn't closed yet, it's a weekend, OR all
+                        MAX_TODAY_RETRIES attempts failed and the 30-min
+                        cooldown hasn't elapsed.
+
+        attempt_number — how many fetch attempts have been made so far
+                         (0 = none yet, 5 = exhausted).
         """
         import time as _time  # noqa: PLC0415
         try:
@@ -708,32 +746,47 @@ class FiiDiiService:
         if df is not None and not df.empty:
             dates = set(df["date"].dt.strftime("%Y-%m-%d").tolist())
             if today_iso in dates:
-                return "available"
+                return "available", 0
 
         # Only eligible on weekdays after 16:00 IST.
         is_weekday = now_ist.weekday() < 5
         after_close = now_ist.hour >= 16
         if not (is_weekday and after_close):
-            return "not_yet"
+            return "not_yet", 0
 
-        # If a background task is actively running for this segment, report
-        # "fetching" so the frontend polls quickly (task finishes in seconds).
+        # Task actively running — report fetching so frontend keeps polling.
         if segment in _refresh_in_progress:
-            return "fetching"
+            return "fetching", _refresh_fail_count.get(segment, 0)
 
-        # If the last attempt finished but didn't find today's data, respect
-        # the cooldown before signalling that another task should be fired.
+        fail_count = _refresh_fail_count.get(segment, 0)
         last_fail = _refresh_last_failed.get(segment, 0.0)
-        if _time.time() - last_fail < _REFRESH_COOLDOWN_S:
-            return "not_yet"
+        elapsed = _time.time() - last_fail
 
-        # Eligible: market has closed, no task running, cooldown elapsed.
-        # Returning "fetching" here tells get_flows() to fire a new task.
-        return "fetching"
+        if fail_count < MAX_TODAY_RETRIES:
+            # Still within the retry budget.  Return "fetching" so the frontend
+            # shows the amber chip throughout the sequence.  get_flows() will
+            # only fire a new task when _RETRY_INTERVAL_S has elapsed.
+            return "fetching", fail_count
 
-    async def get_flows(self, segment: str, days: int = 365) -> dict:
+        # All retries exhausted — apply the long cooldown.
+        if elapsed < _REFRESH_COOLDOWN_S:
+            return "not_yet", fail_count
+
+        # Cooldown expired — ready for a fresh 5-attempt cycle.
+        # Reset the counter here so _background_refresh_segment starts clean.
+        _refresh_fail_count.pop(segment, None)
+        _refresh_last_failed.pop(segment, None)
+        return "fetching", 0
+
+    async def get_flows(self, segment: str, days: int = 365, force: bool = False) -> dict:
+        import time as _time  # noqa: PLC0415
         end_date = datetime.today()
         start_date = end_date - timedelta(days=days)
+
+        # Force-refresh: the user explicitly clicked Retry → reset counters so
+        # the full 5-attempt cycle starts fresh regardless of cooldown state.
+        if force:
+            reset_today_fetch(segment)
 
         # ── Fast path: serve from cache immediately ───────────────────────────
         df: pd.DataFrame = pd.DataFrame()
@@ -742,20 +795,24 @@ class FiiDiiService:
         except Exception as exc:
             logger.warning("Cache-only load failed for segment=%s: %s — will attempt live fetch", segment, exc)
 
-        today_status = self._today_status(df, segment)
+        today_status, fetch_attempt = self._today_status(df, segment)
 
         # Fire background refresh when the cache is missing today's data and
-        # the market has already closed.  Never blocks the response.
+        # the market has already closed.  Enforce _RETRY_INTERVAL_S between
+        # individual attempts so we don't hammer NSE on every frontend poll.
         if today_status == "fetching" and segment not in _refresh_in_progress:
-            asyncio.create_task(
-                self._background_refresh_segment(segment, start_date, end_date)
-            )
+            last_fail = _refresh_last_failed.get(segment, 0.0)
+            elapsed = _time.time() - last_fail
+            if last_fail == 0.0 or elapsed >= _RETRY_INTERVAL_S:
+                asyncio.create_task(
+                    self._background_refresh_segment(segment, start_date, end_date)
+                )
 
         # ── Cold-start fallback: no cached rows at all → blocking fetch ───────
         if df is None or df.empty:
             try:
                 df = await self.get_historical(segment, start_date, end_date)
-                today_status = self._today_status(df, segment)
+                today_status, fetch_attempt = self._today_status(df, segment)
             except Exception as e:
                 return self._empty_response(segment, f"Failed to fetch data: {e}")
 
@@ -859,9 +916,12 @@ class FiiDiiService:
             "totalDays": len(rows),
             "rangeDays": days,
             # 'available' = today's row in cache
-            # 'fetching'  = market closed, background task kicked off
-            # 'not_yet'   = market still open / weekend, NSE hasn't published yet
+            # 'fetching'  = within the MAX_TODAY_RETRIES budget, task will fire
+            # 'not_yet'   = market open/weekend OR cooldown after exhausting retries
             "todayStatus": today_status,
+            # Retry progress — lets the frontend show "Attempt 2 of 5"
+            "todayFetchAttempt": fetch_attempt,
+            "todayMaxAttempts": MAX_TODAY_RETRIES,
         }
 
     @staticmethod

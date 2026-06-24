@@ -3511,13 +3511,20 @@ async def get_delivery_history(symbol: str = Query(..., min_length=1), days: int
 
 
 @router.get("/fii-dii")
-async def get_fii_dii(segment: str = Query("equity"), days: int = Query(365, ge=7, le=1500)):
+async def get_fii_dii(
+    segment: str = Query("equity"),
+    days: int = Query(365, ge=7, le=1500),
+    force: bool = Query(False),
+):
     """FII/DII activity. Equity is real NSE data with a rolling local history.
-    F&O segments fetch historical data using the NSE FNO participant endpoint."""
+    F&O segments fetch historical data using the NSE FNO participant endpoint.
+
+    force=true resets the per-segment retry counter and cooldown immediately,
+    triggering a fresh 5-attempt cycle for today's data (user-initiated retry)."""
     from app.services.fii_dii_service import FiiDiiService
     svc = FiiDiiService()
     seg = (segment or "equity").lower().strip()
-    return await svc.get_flows(seg, days=days)
+    return await svc.get_flows(seg, days=days, force=bool(force))
 
 
 @router.post("/fii-dii/backfill")
