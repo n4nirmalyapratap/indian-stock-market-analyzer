@@ -349,8 +349,8 @@ function SentimentCard({ sentiment, loading }: { sentiment: any; loading: boolea
   );
 }
 
-// ── Macro Environment Card ─────────────────────────────────────────────────────
-function MacroEnvironmentCard({ macroData, loading }: { macroData: any; loading: boolean }) {
+// ── Macro Strip (compact single-row bar) ──────────────────────────────────────
+function MacroStrip({ macroData, loading }: { macroData: any; loading: boolean }) {
   const tiles: any[] = macroData?.tiles ?? [];
 
   const findTile = (...ids: string[]) =>
@@ -360,110 +360,76 @@ function MacroEnvironmentCard({ macroData, loading }: { macroData: any; loading:
   const gdpTile    = findTile("gdp");
   const repoTile   = findTile("repo");
   const usdinrTile = findTile("usdinr", "usd_inr", "usd-inr");
-  const ind10yTile = findTile("india_10y", "ind10y", "10y", "bond_10y", "gsec10y");
   const brentTile  = findTile("brent", "crude", "oil");
+  const ind10yTile = findTile("india_10y", "ind10y", "10y", "bond_10y", "gsec10y");
 
-  // Derive macro environment label
   let envTag = "Neutral";
   let envDotCls = "bg-gray-400";
-  let envTextCls = "text-gray-600 dark:text-gray-400";
+  let envTextCls = "text-gray-500 dark:text-gray-400";
 
   if (tiles.length > 0) {
-    const cpiVal   = cpiTile?.value   ?? null;
-    const cpiDelta = cpiTile?.delta   ?? null;
-    const gdpVal   = gdpTile?.value   ?? null;
-
+    const cpiVal = cpiTile?.value ?? null;
+    const cpiDelta = cpiTile?.delta ?? null;
+    const gdpVal = gdpTile?.value ?? null;
     if (cpiDelta != null && cpiDelta > 0.2 && (cpiVal ?? 0) > 5) {
-      if (gdpVal != null && gdpVal >= 6.5) {
-        envTag = "Inflationary Growth";
-        envDotCls = "bg-amber-500";
-        envTextCls = "text-amber-600 dark:text-amber-400";
-      } else {
-        envTag = "Inflationary";
-        envDotCls = "bg-red-400";
-        envTextCls = "text-red-500 dark:text-red-400";
-      }
+      envTag = gdpVal != null && gdpVal >= 6.5 ? "Inflationary Growth" : "Inflationary";
+      envDotCls = gdpVal != null && gdpVal >= 6.5 ? "bg-amber-400" : "bg-red-400";
+      envTextCls = gdpVal != null && gdpVal >= 6.5 ? "text-amber-600 dark:text-amber-400" : "text-red-500 dark:text-red-400";
     } else if ((cpiDelta ?? 0) <= 0 && (gdpVal ?? 0) >= 6.5) {
-      envTag = "Stable Growth";
-      envDotCls = "bg-emerald-500";
-      envTextCls = "text-emerald-600 dark:text-emerald-400";
-    } else if ((gdpVal ?? 99) < 5.5 && gdpVal != null) {
-      envTag = "Growth Slowdown";
-      envDotCls = "bg-orange-400";
-      envTextCls = "text-orange-600 dark:text-orange-400";
+      envTag = "Stable Growth"; envDotCls = "bg-emerald-500"; envTextCls = "text-emerald-600 dark:text-emerald-400";
+    } else if (gdpVal != null && gdpVal < 5.5) {
+      envTag = "Growth Slowdown"; envDotCls = "bg-orange-400"; envTextCls = "text-orange-500 dark:text-orange-400";
     } else if (cpiDelta != null && cpiDelta < -0.2) {
-      envTag = "Disinflationary";
-      envDotCls = "bg-blue-400";
-      envTextCls = "text-blue-600 dark:text-blue-400";
+      envTag = "Disinflationary"; envDotCls = "bg-blue-400"; envTextCls = "text-blue-600 dark:text-blue-400";
     }
   }
 
-  const pillTiles = [repoTile, cpiTile, usdinrTile, ind10yTile, brentTile].filter(Boolean);
+  const stripTiles = [repoTile, cpiTile, usdinrTile, brentTile, ind10yTile].filter(Boolean);
 
-  function fmtTileVal(t: any): string {
+  function fmtVal(t: any): string {
     if (t?.value == null) return "—";
     const v = t.value as number;
     const u = (t.unit ?? "").toLowerCase();
     if (u.includes("inr") || u === "₹") return `₹${v.toFixed(1)}`;
     if (u === "$" || t.id === "brent" || t.id === "crude") return `$${Math.round(v)}`;
-    if (u === "%" || u.includes("pct") || u.includes("percent")) return `${v.toFixed(2)}%`;
+    if (u === "%" || u.includes("pct")) return `${v.toFixed(2)}%`;
     return v.toFixed(2);
   }
 
-  return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm p-5 flex flex-col">
-      <div className="flex items-center justify-between mb-3">
-        <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-widest">
-          Macro Environment
-        </p>
-        <Link href="/insights/macro"
-          className="text-[10px] text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-300 flex items-center gap-0.5 transition">
-          Macro Pulse <ArrowRight className="w-2.5 h-2.5" />
-        </Link>
+  function deltaColor(t: any): string {
+    if (t.delta == null) return "";
+    const downGood = ["cpi", "brent", "usdinr"];
+    const good = downGood.includes(t.id) ? t.delta < 0 : t.delta > 0;
+    return good ? "text-emerald-500" : "text-red-400";
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 px-1">
+        {[1,2,3,4].map(i => <Skel key={i} h="h-6" w="w-20" r="rounded" />)}
       </div>
+    );
+  }
 
-      {loading ? (
-        <div className="space-y-3">
-          <Skel h="h-5" w="w-36" r="rounded" />
-          <div className="flex gap-2 flex-wrap">
-            {[1,2,3,4,5].map(i => <Skel key={i} h="h-7" w="w-20" r="rounded-full" />)}
-          </div>
-        </div>
-      ) : (
-        <>
-          <div className="flex items-center gap-2 mb-4">
-            <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${envDotCls}`} />
-            <span className={`text-base font-bold ${envTextCls}`}>{envTag}</span>
-          </div>
-
-          {pillTiles.length > 0 ? (
-            <div className="flex flex-wrap gap-2">
-              {pillTiles.map((t: any) => (
-                <div key={t.id}
-                  className="inline-flex items-center gap-1.5 bg-gray-50 dark:bg-gray-700/60 border border-gray-100 dark:border-gray-600 rounded-full px-3 py-1 text-xs">
-                  <span className="text-gray-500 dark:text-gray-400">{t.label}</span>
-                  <span className="font-bold text-gray-900 dark:text-white">{fmtTileVal(t)}</span>
-                  {t.delta != null && (
-                    <span className={t.id === "cpi" || t.id === "brent" || t.id === "usdinr"
-                      ? (t.delta > 0 ? "text-red-400" : "text-emerald-400")
-                      : (t.delta > 0 ? "text-emerald-400" : "text-red-400")}>
-                      {t.delta > 0 ? "↑" : "↓"}
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-gray-400 dark:text-gray-500 flex-1 flex items-center">
-              Macro data unavailable
-            </p>
+  return (
+    <div className="flex items-center gap-3 flex-wrap">
+      {/* Env label */}
+      <Link href="/insights/macro" className="flex items-center gap-1.5 shrink-0 group">
+        <span className={`w-2 h-2 rounded-full ${envDotCls}`} />
+        <span className={`text-[10px] font-bold uppercase tracking-wide ${envTextCls} group-hover:underline`}>{envTag}</span>
+        <ArrowRight className="w-2.5 h-2.5 text-gray-300 dark:text-gray-600" />
+      </Link>
+      <span className="w-px h-4 bg-gray-200 dark:bg-gray-700 shrink-0" />
+      {/* Metric pills */}
+      {stripTiles.map((t: any) => (
+        <div key={t.id} className="inline-flex items-center gap-1 text-[10px]">
+          <span className="text-gray-400 dark:text-gray-500">{t.label}</span>
+          <span className="font-bold text-gray-800 dark:text-gray-200">{fmtVal(t)}</span>
+          {t.delta != null && (
+            <span className={`${deltaColor(t)} text-[9px]`}>{t.delta > 0 ? "↑" : "↓"}</span>
           )}
-
-          <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-3">
-            GDP, CPI, IIP, WPI, Repo — updated monthly from official sources
-          </p>
-        </>
-      )}
+        </div>
+      ))}
     </div>
   );
 }
@@ -834,10 +800,12 @@ export default function Dashboard() {
 
       </div>
 
-      {/* ── Sentiment + Macro Environment ─────────────────────────────────────── */}
-      <div className="grid md:grid-cols-2 gap-6">
-        <SentimentCard sentiment={sentimentData} loading={sentLoading} />
-        <MacroEnvironmentCard macroData={macroData} loading={macroLoading} />
+      {/* ── Sentiment ────────────────────────────────────────────────────────── */}
+      <SentimentCard sentiment={sentimentData} loading={sentLoading} />
+
+      {/* ── Macro Strip ──────────────────────────────────────────────────────── */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm px-4 py-3">
+        <MacroStrip macroData={macroData} loading={macroLoading} />
       </div>
 
       {/* ── Top Movers ──────────────────────────────────────────────────────── */}
