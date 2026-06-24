@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { api, fetchApi } from "@/lib/api";
+import { marketDataQueryOptions } from "@/lib/marketData";
 import { useTheme } from "@/context/ThemeContext";
 import {
   RefreshCw, Activity, Loader2, Newspaper, Rocket,
