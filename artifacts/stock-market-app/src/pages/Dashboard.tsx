@@ -783,19 +783,23 @@ export default function Dashboard() {
               {[1,2,3,4,5].map(i => <div key={i} className="h-14 bg-gray-100 dark:bg-gray-700 animate-pulse rounded-lg" />)}
             </div>
           ) : (() => {
-            const combined = [
-              ...(ipoData?.open ?? []),
-              ...(ipoData?.upcoming ?? []),
-            ];
-            // Sort by GMP premium descending; nulls/no-GMP go to the bottom
-            const all = combined
+            // 1. Open IPOs first (fewest days left to close → closing soonest first)
+            const open = (ipoData?.open ?? [])
               .slice()
               .sort((a: any, b: any) => {
-                const ga = a.gmp?.premium ?? -Infinity;
-                const gb = b.gmp?.premium ?? -Infinity;
-                return gb - ga;
-              })
-              .slice(0, 6);
+                const da = daysUntil(a.closeDate) ?? Infinity;
+                const db = daysUntil(b.closeDate) ?? Infinity;
+                return da - db;
+              });
+            // 2. Upcoming IPOs — soonest to open first
+            const upcoming = (ipoData?.upcoming ?? [])
+              .slice()
+              .sort((a: any, b: any) => {
+                const da = daysUntil(a.openDate) ?? Infinity;
+                const db = daysUntil(b.openDate) ?? Infinity;
+                return da - db;
+              });
+            const all = [...open, ...upcoming].slice(0, 6);
 
             if (!all.length) {
               return (
