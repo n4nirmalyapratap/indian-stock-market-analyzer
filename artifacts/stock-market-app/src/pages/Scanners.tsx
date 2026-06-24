@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { useSearch } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type ConditionSide, type Condition, type Scanner, type ScanResult, type ScannerCreateInput } from "@/lib/api";
 import {
@@ -553,6 +554,7 @@ type RightPanel = "empty" | "builder" | "results";
 
 export default function Scanners() {
   const qc = useQueryClient();
+  const search = useSearch();
 
   // State
   const [rightPanel, setRightPanel] = useState<RightPanel>("empty");
@@ -564,6 +566,23 @@ export default function Scanners() {
   // Active category filter. "All" → grouped view with sticky headers.
   // A specific category → flat filtered list.
   const [categoryFilter, setCategoryFilter] = useState<string>("All");
+
+  // Deep-link: ?preset=volume-spike → auto-load Volume Spike template
+  const presetApplied = useRef(false);
+  useEffect(() => {
+    if (presetApplied.current) return;
+    const params = new URLSearchParams(search);
+    const preset = params.get("preset");
+    if (preset === "volume-spike") {
+      const tpl = TEMPLATES.find(t => t.label === "Volume Spike 2×");
+      if (tpl) {
+        const conds: Condition[] = tpl.conditions.map(c => ({ ...c, id: uid() } as Condition));
+        setDraft({ ...blankDraft(), name: "Volume Surge", conditions: conds });
+        setRightPanel("builder");
+        presetApplied.current = true;
+      }
+    }
+  }, [search]);
 
   const { data: scannersResp, isLoading } = useQuery(
     marketDataQueryOptions(["scanners"], api.scannersWithMeta),

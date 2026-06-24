@@ -468,9 +468,9 @@ function VolumeActivityCard({ data, loading }: { data: any; loading: boolean }) 
                    : "bg-gray-400";
 
   const links = [
-    { href: "/insights/top-deliveries", label: "Delivery volume",     icon: <Package className="w-3 h-3" /> },
-    { href: "/scanners",                label: "Volume surge stocks",  icon: <Zap className="w-3 h-3" /> },
-    { href: "/patterns",                label: "All volume scanners",  icon: <Activity className="w-3 h-3" /> },
+    { href: "/scanners?preset=volume-spike", label: "Volume Surge Scanner", icon: <Zap className="w-3 h-3" /> },
+    { href: "/insights/fii-dii",             label: "FII / DII Flows",      icon: <BarChart2 className="w-3 h-3" /> },
+    { href: "/insights/heatmap",             label: "Sector Heatmap",        icon: <Activity className="w-3 h-3" /> },
   ];
 
   return (
