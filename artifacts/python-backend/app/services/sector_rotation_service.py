@@ -364,16 +364,15 @@ async def sector_rrg(timeframe: str = "short") -> dict:
 
 
 async def subindustry_rrg(timeframe: str = "short") -> dict:
-    """RRG + RS%-over-timeframe for curated sub-industries vs Nifty 50.
+    """RRG + RS%-over-timeframe for all curated sub-industries vs Nifty 50.
 
-    Single source of truth: _EXTRA_SUBSECTOR_MAP in sector_utils.py.
-    To add or change a sub-industry, edit that map only — no DB migration,
-    no SUBSECTOR_TAXONOMY entry, no separate seeding step required.
+    Sources (merged, no DB required):
+      • SUBSECTOR_TAXONOMY (universe.py) — ~72 India-specific sub-industries
+      • _EXTRA_SUBSECTOR_MAP (sector_utils.py) — additional curated groupings
+    When a sub-industry name appears in both, _EXTRA_SUBSECTOR_MAP wins
+    (our hand-picked stock lists take priority over the taxonomy defaults).
 
-    Computation mirrors the curated-sector path: deep Nifty history fetched
-    once (disk-first when market is closed), then equal-weight price series
-    built per sub-industry from its constituent stocks.
-    Ranked by RS% over the selected timeframe.
+    To add a new sub-industry: add it to either source and restart.
     """
     tf = _tf(timeframe)
     cache_key = f"rrg:subindustry:{timeframe}"
@@ -382,12 +381,22 @@ async def subindustry_rrg(timeframe: str = "short") -> dict:
         return cached
 
     from ..lib import sector_utils as _su_si  # noqa: PLC0415
+    from ..lib.universe import SUBSECTOR_TAXONOMY  # noqa: PLC0415
     t0 = time.perf_counter()
 
-    all_subs = _su_si.get_all_extra_subsectors()
-    if not all_subs:
-        return {"level": "subindustry", "available": False, "entities": [],
-                "note": "No sub-industries defined in _EXTRA_SUBSECTOR_MAP."}
+    # Build merged symbol lookup: taxonomy base, curated overrides on name clash.
+    # _EXTRA_SUBSECTOR_MAP is symbol→name; invert to name→[symbols].
+    extra_by_name: dict[str, list[str]] = {}
+    for sym, sub in _su_si._EXTRA_SUBSECTOR_MAP.items():
+        extra_by_name.setdefault(sub, []).append(sym)
+
+    merged: dict[str, list[str]] = {
+        name: list(entry["symbols"]) for name, entry in SUBSECTOR_TAXONOMY.items()
+    }
+    merged.update(extra_by_name)   # curated wins on name conflicts
+
+    all_subs = sorted(merged.keys())
+    sym_getter = lambda name: merged.get(name, [])  # noqa: E731
 
     # Deep Nifty benchmark — disk-first, zero network I/O when market is closed.
     needed = tf["lookback"] + tf["smooth"] * 2 + 5
@@ -399,7 +408,7 @@ async def subindustry_rrg(timeframe: str = "short") -> dict:
 
     entities = await _curated_sector_rrg_onthefly(
         all_subs, bench_series, tf, timeframe,
-        sym_getter=_su_si.get_subsector_symbols,
+        sym_getter=sym_getter,
     )
 
     entities.sort(key=lambda e: (e.get("rsPct") is not None, e.get("rsPct") or -1e9), reverse=True)
@@ -416,7 +425,7 @@ async def subindustry_rrg(timeframe: str = "short") -> dict:
         "entities": entities,
         "note": note,
         "diag": {"subs": len(all_subs), "rendered": len(entities),
-                 "benchPoints": len(bench_series), "source": "curated"},
+                 "benchPoints": len(bench_series), "source": "merged"},
     }
     logger.info("subindustry_rrg tf=%s subs=%d rendered=%d in %.2fs",
                 timeframe, len(all_subs), len(entities), time.perf_counter() - t0)
