@@ -1077,6 +1077,10 @@ async def add_subsector_override(request: Request):
                 (str(uuid.uuid4()), symbol, sub_industry, industry, sector, note, set_by, now_ms, now_ms),
             )
             row = cur.fetchone()
+    # Clear from the unclassified queue now that it's been assigned
+    from app.lib import unclassified_log as _ul  # noqa: PLC0415
+    _ul.dismiss(symbol)
+
     return {"ok": True, "id": row["id"] if row else None,
             "symbol": symbol, "subIndustry": sub_industry}
 
@@ -1098,6 +1102,28 @@ async def delete_subsector_override(override_id: str, request: Request):
     if not row:
         return JSONResponse(status_code=404, content={"error": "Override not found"})
     return {"ok": True, "removed": dict(row)}
+
+
+@router.get("/admin/subsectors/unclassified")
+async def list_unclassified(request: Request):
+    """Return the in-memory queue of stocks that were looked up but have no
+    sub-sector classification.  Sorted by hit count descending (most-viewed
+    unclassified stocks first).  No DB read — purely from the live process log."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.lib import unclassified_log  # noqa: PLC0415
+    return {"items": unclassified_log.get_all(), "total": unclassified_log.size()}
+
+
+@router.delete("/admin/subsectors/unclassified/{symbol}")
+async def dismiss_unclassified(symbol: str, request: Request):
+    """Dismiss a symbol from the unclassified queue without classifying it
+    (e.g. it's a warrant/ETF that doesn't need a sub-sector)."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.lib import unclassified_log  # noqa: PLC0415
+    unclassified_log.dismiss(symbol.upper().strip())
+    return {"ok": True, "dismissed": symbol.upper().strip()}
 
 
 @router.post("/admin/subsectors/reclassify")

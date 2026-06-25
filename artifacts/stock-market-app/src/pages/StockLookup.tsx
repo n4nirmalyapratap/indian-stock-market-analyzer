@@ -171,6 +171,11 @@ export default function StockLookup() {
                       {profile.industry}
                     </span>
                   )}
+                  {(profile as any).sub_sector && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-cyan-50 dark:bg-cyan-500/15 text-cyan-700 dark:text-cyan-300">
+                      {(profile as any).sub_sector}
+                    </span>
+                  )}
                 </div>
                 {profile.description && (
                   <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed line-clamp-3">

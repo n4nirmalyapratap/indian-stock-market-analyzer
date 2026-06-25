@@ -2928,6 +2928,17 @@ def get_all_extra_subsectors() -> list[str]:
     return sorted(set(_EXTRA_SUBSECTOR_MAP.values()))
 
 
+def get_sub_sector(symbol: str) -> str | None:
+    """Return the curated sub-industry label for *symbol*, or None if not mapped.
+
+    Checks _EXTRA_SUBSECTOR_MAP (the curated hand-maintained map added via
+    batch imports).  Returns None for any symbol not yet classified — the
+    caller can decide to surface it in an unclassified queue, fall back to
+    industry, etc.
+    """
+    return _EXTRA_SUBSECTOR_MAP.get((symbol or "").upper().strip())
+
+
 def classify_market_cap(market_cap_inr: float | int | None) -> str:
     """Classify a market cap (raw rupees from Yahoo Finance) into a cap bucket.
 

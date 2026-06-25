@@ -25,8 +25,9 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from ..lib.sector_utils import classify_sector
+from ..lib.sector_utils import classify_sector, get_sub_sector
 from ..lib.symbol_map import yahoo_candidates
+from ..lib import unclassified_log
 
 logger = logging.getLogger(__name__)
 
@@ -99,10 +100,18 @@ def _fetch_yahoo_info(symbol: str) -> Optional[dict]:
 
 
 def _shape(symbol: str, entry: dict) -> dict:
+    sub_sector = get_sub_sector(symbol)
+    sector     = entry.get("sector")
+    industry   = entry.get("industry")
+    # Log symbols that have sector data but no sub-sector classification so
+    # the admin "Needs Classification" queue surfaces them automatically.
+    if sector and not sub_sector:
+        unclassified_log.record(symbol, sector, industry)
     return {
         "symbol":      symbol,
-        "sector":      entry.get("sector"),
-        "industry":    entry.get("industry"),
+        "sector":      sector,
+        "industry":    industry,
+        "sub_sector":  sub_sector,
         "description": entry.get("description"),
         "source":      entry.get("source"),
     }
