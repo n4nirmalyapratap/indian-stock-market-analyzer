@@ -447,28 +447,37 @@ async def subindustry_rrg(timeframe: str = "short") -> dict:
     entities.sort(key=lambda e: (e.get("rsPct") is not None, e.get("rsPct") or -1e9), reverse=True)
 
     # Auto-inject curated sub-industries from _EXTRA_SUBSECTOR_MAP that the DB
-    # grid doesn't know about yet (e.g. brand-new mid/small-cap clusters added
-    # in a batch before the synthetic index has had time to accrue history).
-    # They appear at the bottom of the leaderboard with no RS data but ARE
-    # clickable — shortlist() will pull their constituents from _EXTRA_SUBSECTOR_MAP.
+    # grid doesn't know about yet.  Compute RS/breadth on-the-fly from their
+    # constituent stocks — same approach as curated sectors — so they get real
+    # gaining/fading/quadrant data instead of "no data yet" stubs.
     from ..lib import sector_utils as _su_si  # noqa: PLC0415
     existing_subs = {e["name"] for e in entities}
-    for si in _su_si.get_all_extra_subsectors():
-        if si not in existing_subs:
-            entities.append({
-                "name": si,
-                "rs": None, "momentum": None, "quadrant": None,
-                "rsPct": None, "rsMomentum": None, "rsRatio": None,
-                "tail": [], "strengthScore": None, "tier": None,
-                "rs30d": None, "breadth50emaPct": None, "deliveryBuildup": None,
-                "curated": True,
-            })
+    uncovered_subs = [si for si in _su_si.get_all_extra_subsectors() if si not in existing_subs]
+    if uncovered_subs:
+        # bench_iso may be empty when the stored Nifty series hasn't been built
+        # yet (source=onthefly path).  Fall back to a live price-history fetch —
+        # the same ^NSEI pull that _subindustry_rrg_onthefly already uses.
+        effective_bench = bench_iso
+        if not effective_bench:
+            _nifty_raw = await _deep_history(
+                "^NSEI", 320,
+                tf["lookback"] + tf["smooth"] * 2 + 5,
+                asyncio.Semaphore(2),
+            )
+            effective_bench = [(d, v) for d, v in _nifty_raw] if _nifty_raw else []
+        if effective_bench:
+            otf_subs = await _curated_sector_rrg_onthefly(
+                uncovered_subs, effective_bench, tf, timeframe,
+                sym_getter=_su_si.get_subsector_symbols,
+            )
+            entities.extend(otf_subs)
 
     note = None
     if not entities:
         note = ("Rotation graph unavailable — not enough stored history "
                 f"({len(bench_iso)} day(s)) and constituent price history could "
                 "not be fetched. Try again after a market close.")
+    n_curated = sum(1 for e in entities if e.get("curated"))
     out = {
         "level": "subindustry",
         "available": bool(entities),
@@ -479,10 +488,10 @@ async def subindustry_rrg(timeframe: str = "short") -> dict:
         "note": note,
         "diag": {"latest": str(latest), "subs": len(grid_rows),
                  "benchPoints": len(bench_iso), "effSmooth": eff_smooth,
-                 "rendered": len(entities), "source": source},
+                 "rendered": len(entities), "curated": n_curated, "source": source},
     }
-    logger.info("subindustry_rrg tf=%s source=%s subs=%d rendered=%d in %.2fs",
-                timeframe, source, len(grid_rows), len(entities), time.perf_counter() - t0)
+    logger.info("subindustry_rrg tf=%s source=%s subs=%d curated=%d rendered=%d in %.2fs",
+                timeframe, source, len(grid_rows), n_curated, len(entities), time.perf_counter() - t0)
     _cache_set(cache_key, out)
     return out
 
@@ -555,14 +564,18 @@ async def _curated_sector_rrg_onthefly(
     bench_series: list[tuple],
     tf: dict,
     timeframe: str = "short",
+    sym_getter=None,
 ) -> list[dict]:
-    """Compute RS/RRG + real breadth on-the-fly for curated sectors that have
-    no NSE Yahoo ticker.  Uses the top-N constituents from _EXTRA_SECTOR_MAP.
+    """Compute RS/RRG + real breadth on-the-fly for curated sectors/sub-industries
+    that have no NSE Yahoo ticker.  Uses the top-N constituents from
+    _EXTRA_SECTOR_MAP (or _EXTRA_SUBSECTOR_MAP when sym_getter is provided).
     Breadth = % of stocks above their 50-EMA, computed from the same price
     bars already fetched for the RS calculation — no extra API calls.
     Returns a list of RRG entity dicts — same shape as Yahoo-sourced entities."""
     from ..lib import sector_utils as _su  # noqa: PLC0415
     from ..lib.symbol_map import canonical_symbol  # noqa: PLC0415
+
+    _get_syms = sym_getter or _su.get_sector_symbols
 
     tf_obj = _tf(timeframe)
     needed = tf_obj["lookback"] + tf_obj["smooth"] * 2 + 5
@@ -571,7 +584,7 @@ async def _curated_sector_rrg_onthefly(
 
     async def _one(canon: str) -> Optional[dict]:
         async with sector_sem:
-            syms = [canonical_symbol(s) for s in _su.get_sector_symbols(canon)][:8]
+            syms = [canonical_symbol(s) for s in _get_syms(canon)][:8]
             if not syms:
                 return None
             hists = await asyncio.gather(
