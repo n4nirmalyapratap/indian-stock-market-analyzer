@@ -870,15 +870,28 @@ async def shortlist(sub_industry: Optional[str] = None, sector: Optional[str] = 
     nifty_closes = [r["close"] for r in nifty if r.get("close")]
     nifty_ret = _pct_return(nifty_closes, 21)
 
+    from . import market_cache_service as _disk  # noqa: PLC0415
+    _market_closed = not _disk.is_market_open()
+
     sem = asyncio.Semaphore(max(1, concurrency))
 
     async def _one(c: dict) -> dict:
         sym = c["symbol"]
-        async with sem:
-            try:
-                h = await svc.price.get_historical_data(sym, 120)
-            except Exception:
-                h = []
+        # When market is closed, try the disk cache first regardless of
+        # eodSealed status — prices are frozen and any data on disk for
+        # today's trading date is valid.  This mirrors _yf_history's
+        # pattern and avoids all yfinance network calls on closed days.
+        h: list[dict] = []
+        if _market_closed:
+            disk_rows = _disk.load_from_disk(sym, 120)
+            if disk_rows:
+                h = disk_rows
+        if not h:
+            async with sem:
+                try:
+                    h = await svc.price.get_historical_data(sym, 120)
+                except Exception:
+                    h = []
         closes = [b["close"] for b in (h or []) if b.get("close")]
         stock_ret = _pct_return(closes, 21)
         rs = (stock_ret - nifty_ret) if (stock_ret is not None and nifty_ret is not None) else None
