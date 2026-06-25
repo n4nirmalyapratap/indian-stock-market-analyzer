@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import GlobalIndicesPanel from "@/components/GlobalIndicesPanel";
 import TopMoversPanel from "@/components/TopMoversPanel";
+import ChartButton from "@/components/ChartButton";
 
 // ── Skeleton ──────────────────────────────────────────────────────────────────
 function Skel({ h = "h-4", w = "w-full", r = "rounded" }: { h?: string; w?: string; r?: string }) {
@@ -579,7 +580,10 @@ function HighDeliveryDrawer({ open, onClose, summaryCount }: {
                   return (
                     <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-800/60 transition">
                       <td className="px-4 py-2.5">
-                        <p className="font-bold text-gray-900 dark:text-white text-xs">{r.symbol}</p>
+                        <div className="flex items-center gap-1">
+                          <p className="font-bold text-gray-900 dark:text-white text-xs">{r.symbol}</p>
+                          <ChartButton symbol={r.symbol} />
+                        </div>
                         <p className="text-[10px] text-gray-400 truncate max-w-[90px]">{r.name !== r.symbol ? r.name : ""}</p>
                       </td>
                       <td className="px-2 py-2.5">

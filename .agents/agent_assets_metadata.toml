@@ -18,3 +18,9 @@ id = "9udvbwXyAr2dpjjB_zkT1"
 uri = "file://artifacts/python-backend/data/sample_portfolio.xlsx"
 type = "table"
 title = "Sample Indian Portfolio (Excel)"
+
+[[outputs]]
+id = "ydBqTAeDjOfdQJtF4Fm9r"
+uri = "file://attached_assets/missing_sector_symbols.txt"
+type = "text"
+title = "1,303 symbols without sector classification"
