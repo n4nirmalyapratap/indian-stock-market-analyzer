@@ -444,6 +444,10 @@ const SECTOR_EMOJI: Record<string, string> = {
   "Media": "📺", "Entertainment": "📺",
   "Chemical": "🧪", "Chemicals": "🧪",
   "Cement": "🏭", "Capital Goods": "🏭",
+  "ETF": "📦", "Agriculture": "🌾", "Textiles": "🧵",
+  "Automobiles": "🚗", "Pharmaceuticals": "💊",
+  "Metals & Mining": "⚙️", "Oil & Gas": "🛢️",
+  "PSU Banks": "🏛️",
 };
 function sectorEmoji(name: string): string {
   for (const [key, emoji] of Object.entries(SECTOR_EMOJI)) {
