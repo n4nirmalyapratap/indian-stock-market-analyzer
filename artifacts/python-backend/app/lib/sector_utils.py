@@ -818,6 +818,22 @@ def get_subsector_symbols(sub_industry: str) -> list[str]:
     return [sym for sym, si in _EXTRA_SUBSECTOR_MAP.items() if si == sub_industry]
 
 
+def get_all_extra_sectors() -> list[str]:
+    """Return the sorted unique set of canonical sector names present in
+    _EXTRA_SECTOR_MAP.  Used by sector_rotation_service to auto-inject
+    curated sectors into the cockpit leaderboard even when no NSE Yahoo
+    ticker exists for them."""
+    return sorted(set(_EXTRA_SECTOR_MAP.values()))
+
+
+def get_all_extra_subsectors() -> list[str]:
+    """Return the sorted unique set of sub-industry names present in
+    _EXTRA_SUBSECTOR_MAP.  Used by sector_rotation_service to auto-inject
+    curated sub-industries into the cockpit leaderboard even before the
+    synthetic-index DB has built enough history for an RRG entry."""
+    return sorted(set(_EXTRA_SUBSECTOR_MAP.values()))
+
+
 def classify_market_cap(market_cap_inr: float | int | None) -> str:
     """Classify a market cap (raw rupees from Yahoo Finance) into a cap bucket.
 
