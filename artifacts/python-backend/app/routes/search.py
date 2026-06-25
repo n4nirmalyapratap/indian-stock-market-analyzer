@@ -30,6 +30,7 @@ from difflib import SequenceMatcher
 from fastapi import APIRouter, Query
 
 from ..lib import universe
+from ..lib.sector_utils import get_sub_sector
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/search", tags=["search"])
@@ -131,6 +132,7 @@ async def suggest(
             "symbol":      sym,
             "name":        name or None,
             "category":    _category_for(sym),
+            "sub_sector":  get_sub_sector(sym),
         }))
 
     scored.sort(key=lambda pair: pair[0])
