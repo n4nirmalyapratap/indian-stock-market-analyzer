@@ -3421,14 +3421,33 @@ async def get_top_deliveries(
         if syms:
             universe = {_pretty(s).upper() for s in syms}
 
+    # ETF / index-fund symbol patterns — these are always excluded from the
+    # delivery drawer because their delivery% is trivially high (AMC holdings).
+    _ETF_SUFFIXES = ("BEES", "ETF", "IETF", "ADD", "BETA", "CASE",
+                     "NIFTY", "SENSEX", "GOLD", "SILVER", "LIQUID")
+    def _is_etf(sym: str) -> bool:
+        if (_STOCK_SECTOR_MAP.get(sym) == "ETF"):
+            return True
+        s = sym.upper()
+        if s.startswith("GROWW"):          # Groww fund house ETFs
+            return True
+        if s.startswith("MON") and len(s) >= 5 and s[3:].isdigit():
+            return True
+        if any(s.endswith(suf) for suf in _ETF_SUFFIXES):
+            return True
+        return False
+
     def keep(r: dict) -> bool:
-        if universe is not None and r["symbol"] not in universe:
+        sym = r["symbol"]
+        if _is_etf(sym):
+            return False
+        if universe is not None and sym not in universe:
             return False
         if (r.get("delivPct") or 0.0) < minDelivPct:
             return False
         if search:
             q = search.lower().strip()
-            if q not in (r.get("symbol") or "").lower() and q not in (r.get("name") or "").lower():
+            if q not in (sym or "").lower() and q not in (r.get("name") or "").lower():
                 return False
         return True
 
