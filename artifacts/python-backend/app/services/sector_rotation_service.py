@@ -788,11 +788,24 @@ async def funnel(timeframe: str = "short") -> dict:
 # ── Shortlist (winning stocks in a sub-industry) ─────────────────────────────
 
 async def shortlist(sub_industry: Optional[str] = None, sector: Optional[str] = None,
-                    concurrency: int = 8) -> dict:
+                    concurrency: int = 20) -> dict:
     """Rank a group's constituents into a winning-stocks shortlist — relative
     strength (stock ~1mo return minus Nifty), delivery %, and an above-50-EMA
     trend flag → composite score. The group is either a sub-industry (synthetic
-    drilldown) or an NSE sector index (SECTOR_SYMBOLS membership)."""
+    drilldown) or an NSE sector index (SECTOR_SYMBOLS membership).
+
+    For sectors the universe is capped at _SECTOR_SHORTLIST_CAP symbols to
+    keep response time under ~3 s.  NSE live-index members (large-caps) are
+    always included first; the curated extra-map fills the remaining slots.
+    """
+    _SECTOR_SHORTLIST_CAP = 50   # max symbols fetched per sector click
+
+    # Fast path — return cached result if still fresh
+    _ck = f"shortlist:{'sector' if sector else 'sub'}:{sector or sub_industry}"
+    _hit = _cache_get(_ck)
+    if _hit is not None:
+        return _hit
+
     from . import synthetic_sectors_service as _syn       # noqa: PLC0415
     from . import delivery_service as _deliv              # noqa: PLC0415
     from . import sector_analytics_service as _sa         # noqa: PLC0415
@@ -804,16 +817,21 @@ async def shortlist(sub_industry: Optional[str] = None, sector: Optional[str] = 
 
     if sector:
         label, kind = sector, "sector"
-        # NSE index members (existing source — large-caps from live index)
+        # NSE index members first (large-caps from live index) — always included
         nse_syms: set[str] = {
             s.replace(".NS", "").replace(".BO", "")
             for s in _u.SECTOR_SYMBOLS.get(sector, [])
         }
         raw_consts = [{"symbol": s, "name": s, "weightPct": None} for s in nse_syms]
-        # Centralized map — mid/small-caps curated in sector_utils._EXTRA_SECTOR_MAP
-        for sym in _su.get_sector_symbols(sector):
-            if sym not in nse_syms:
-                raw_consts.append({"symbol": sym, "name": sym, "weightPct": None})
+        # Curated extra-map — fill remaining slots up to the cap
+        slots_left = _SECTOR_SHORTLIST_CAP - len(raw_consts)
+        if slots_left > 0:
+            for sym in _su.get_sector_symbols(sector):
+                if sym not in nse_syms:
+                    raw_consts.append({"symbol": sym, "name": sym, "weightPct": None})
+                    slots_left -= 1
+                    if slots_left <= 0:
+                        break
     else:
         label, kind = (sub_industry or ""), "subindustry"
         dd = await asyncio.to_thread(_syn.get_drilldown, sub_industry, svc.yahoo)
@@ -883,7 +901,9 @@ async def shortlist(sub_industry: Optional[str] = None, sector: Optional[str] = 
     usable = [r for r in raw
               if r and (r["rs"] is not None or r["delivPct"] is not None or r["aboveTrend"] is not None)]
     ranked = rank_shortlist(usable)
-    return {"group": label, "kind": kind, "available": True,
-            "benchmark": "NIFTY 50", "stocks": ranked,
-            "diag": {"constituents": len(raw_consts), "scored": len(usable),
-                     "dropped": len(canon) - len(usable)}}
+    out = {"group": label, "kind": kind, "available": True,
+           "benchmark": "NIFTY 50", "stocks": ranked,
+           "diag": {"constituents": len(raw_consts), "scored": len(usable),
+                    "dropped": len(canon) - len(usable)}}
+    _cache_set(_ck, out)
+    return out
