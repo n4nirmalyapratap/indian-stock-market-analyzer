@@ -797,9 +797,19 @@ class FiiDiiService:
 
         today_status, fetch_attempt = self._today_status(df, segment)
 
-        # Fire background refresh when the cache is missing today's data and
-        # the market has already closed.  Enforce _RETRY_INTERVAL_S between
-        # individual attempts so we don't hammer NSE on every frontend poll.
+        # ── Cold-start fallback: no cached rows at all → blocking fetch ───────
+        # Must run BEFORE the background-refresh decision so we only fire a
+        # background task when we already have rows to serve immediately.
+        # Firing both simultaneously duplicates hundreds of archive requests.
+        if df is None or df.empty:
+            try:
+                df = await self.get_historical(segment, start_date, end_date)
+                today_status, fetch_attempt = self._today_status(df, segment)
+            except Exception as e:
+                return self._empty_response(segment, f"Failed to fetch data: {e}")
+
+        # Fire background refresh only when cached rows exist (user is served
+        # immediately) and today's row is still missing after market close.
         if today_status == "fetching" and segment not in _refresh_in_progress:
             last_fail = _refresh_last_failed.get(segment, 0.0)
             elapsed = _time.time() - last_fail
@@ -807,14 +817,6 @@ class FiiDiiService:
                 asyncio.create_task(
                     self._background_refresh_segment(segment, start_date, end_date)
                 )
-
-        # ── Cold-start fallback: no cached rows at all → blocking fetch ───────
-        if df is None or df.empty:
-            try:
-                df = await self.get_historical(segment, start_date, end_date)
-                today_status, fetch_attempt = self._today_status(df, segment)
-            except Exception as e:
-                return self._empty_response(segment, f"Failed to fetch data: {e}")
 
         if df is None or df.empty:
             if segment == "equity":

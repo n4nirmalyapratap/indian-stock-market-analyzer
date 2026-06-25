@@ -673,15 +673,23 @@ def _load_heatmap_disk(cache_key: str) -> None:
             return
         raw: dict = json.loads(path.read_text())
         saved_at = float(raw.get("saved_at", 0))
-        market_open = mcache.is_market_open()
-        ttl = 600 if market_open else LONG_TTL
+        market_open_now = mcache.is_market_open()
+        ttl = 600 if market_open_now else LONG_TTL
         stale_window = ttl * 6
         if time.time() - saved_at > stale_window:
             return
+        # Reject intraday snapshots when the market has since closed: the
+        # performance data was live/partial and is now stale for the closed day.
+        saved_market_open: bool = bool(raw.get("market_open", True))
+        if saved_market_open and not market_open_now:
+            return
         data = raw.get("data")
         if data:
-            # Stamp with current version so _cache_get version-check passes
-            _cache[cache_key] = (saved_at, data, mcache.cache_version())
+            # Restore the version that was current when the snapshot was saved.
+            # This lets _cache_get's version-check correctly filter it out if
+            # the market state has changed since the file was written.
+            saved_ver = raw.get("cache_version", mcache.cache_version())
+            _cache[cache_key] = (saved_at, data, saved_ver)
     except Exception as exc:
         logger.debug("heatmap disk load %s failed: %s", cache_key, exc)
 
@@ -693,6 +701,8 @@ def _save_heatmap_disk(cache_key: str, data: Any) -> None:
         path = _HM_DISK_DIR / f"{cache_key.replace(':', '_')}.json"
         path.write_text(json.dumps({
             "saved_at": time.time(),
+            "market_open": mcache.is_market_open(),
+            "cache_version": mcache.cache_version(),
             "data": data,
         }))
     except Exception as exc:

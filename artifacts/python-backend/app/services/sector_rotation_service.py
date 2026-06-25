@@ -758,21 +758,16 @@ async def shortlist(sub_industry: Optional[str] = None, sector: Optional[str] = 
 
     async def _one(c: dict) -> dict:
         sym = c["symbol"]
-        # When market is closed, try the disk cache first regardless of
-        # eodSealed status — prices are frozen and any data on disk for
-        # today's trading date is valid.  This mirrors _yf_history's
-        # pattern and avoids all yfinance network calls on closed days.
+        # Always go through get_historical_data (which internally uses the same
+        # disk cache) so its eodSealed gate is respected.  Calling
+        # load_from_disk directly bypasses that gate and can serve intraday/
+        # unsealed snapshots as closed-market data.
         h: list[dict] = []
-        if _market_closed:
-            disk_rows = _disk.load_from_disk(sym, _fetch_days)
-            if disk_rows:
-                h = disk_rows
-        if not h:
-            async with sem:
-                try:
-                    h = await svc.price.get_historical_data(sym, _fetch_days)
-                except Exception:
-                    h = []
+        async with sem:
+            try:
+                h = await svc.price.get_historical_data(sym, _fetch_days)
+            except Exception:
+                h = []
         closes = [b["close"] for b in (h or []) if b.get("close")]
         stock_ret = _pct_return(closes, rs_lookback)
         rs = (stock_ret - nifty_ret) if (stock_ret is not None and nifty_ret is not None) else None

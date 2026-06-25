@@ -100,7 +100,7 @@ def upsert_nse(items: list[dict]) -> int:
     with _conn() as c:
         count = 0
         for it in items:
-            sym = (it.get("symbol") or "").strip()
+            sym = (it.get("symbol") or "").strip().upper()
             if not sym:
                 continue
             c.execute(
@@ -263,9 +263,9 @@ def mark_listed(symbol: str) -> bool:
 def delete(symbol: str) -> bool:
     """Hard-delete an IPO record. Returns True if a row was removed."""
     with _conn() as c:
-        c.execute("DELETE FROM ipos WHERE symbol=?", (symbol.upper(),))
+        cur = c.execute("DELETE FROM ipos WHERE symbol=?", (symbol.upper(),))
         c.commit()
-        return c.rowcount > 0
+        return cur.rowcount > 0
 
 
 def count() -> dict:
