@@ -649,6 +649,34 @@ _EXTRA_SECTOR_MAP: dict[str, str] = {
     "LIQUID1":     "ETF",            "LIQUID":      "ETF",
     "RUBICON":     "ETF",            "ACUTAAS":     "ETF",
     "SAMMAANCAP":  "ETF",
+    # ── Batch 1 — user-curated ────────────────────────────────────────────────
+    # Pharmaceuticals / Healthcare
+    "COHANCE":     "Pharmaceuticals", "VIYASH":     "Pharmaceuticals",
+    "SENORES":     "Pharmaceuticals", "ANTHEM":     "Pharmaceuticals",
+    "SAKAR":       "Pharmaceuticals",
+    # Energy
+    "BHARATCOAL":  "Energy",
+    # Chemicals
+    "KRISHANA":    "Chemicals",       "ANURAS":     "Chemicals",
+    "GRWRHITECH":  "Chemicals",
+    # FMCG
+    "RBA":         "FMCG",           "UFBL":       "FMCG",
+    "MANORAMA":    "FMCG",
+    # Capital Goods
+    "VMM":         "Capital Goods",  "JWL":        "Capital Goods",
+    "SKIPPER":     "Capital Goods",
+    # Infrastructure
+    "SHREEJISPG":  "Infrastructure", "KMEW":       "Infrastructure",
+    "DREDGECORP":  "Infrastructure",
+    # Defence
+    "PREMEXPLN":   "Defence",        "SHRINGARMS":  "Defence",
+    # Textiles
+    "SBC":         "Textiles",       "PDSL":       "Textiles",
+    "VINCOFE":     "Textiles",
+    # Consumer Durables
+    "TIMEX":       "Consumer Durables",
+    # Metals & Mining
+    "JAINREC":     "Metals & Mining",
 }
 
 
