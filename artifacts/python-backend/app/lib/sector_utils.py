@@ -136,6 +136,25 @@ _LOWER_TO_CANON: dict[str, str] = {s.lower(): s for s in _CANONICAL_SECTORS}
 # Covers stocks NOT in the live NSE index constituent lists (SECTOR_SYMBOLS).
 # Live SECTOR_SYMBOLS shrinks to actual index members (~12–25 per index);
 # this map ensures top-traded stocks always have a sector regardless.
+#
+# HOW TO ADD A STOCK — edit ONLY THIS FILE:
+#   1. Add  "SYMBOL": "Canonical Sector"  to _EXTRA_SECTOR_MAP below.
+#   2. Optionally add  "SYMBOL": "Sub-industry name"  to _EXTRA_SUBSECTOR_MAP
+#      (must match the sub_industry string used in the stocks DB / SUBSECTOR_TAXONOMY).
+#   3. Restart the backend — the change flows to:
+#        • Delivery drawer (sector label)
+#        • Sector Rotation Cockpit sector shortlist
+#        • Sector Rotation Cockpit sub-industry shortlist (if in _EXTRA_SUBSECTOR_MAP)
+#        • Any other caller of classify_sector() / get_sector_symbols()
+#
+# ── Sub-industry overrides — symbol → exact sub_industry string ───────────────
+# Optional.  The sub_industry string must match the value stored in the
+# `sub_industry_overrides` / `stocks` DB table (from SUBSECTOR_TAXONOMY or
+# Yahoo classification).  Leave blank if you only need the sector label.
+_EXTRA_SUBSECTOR_MAP: dict[str, str] = {
+    # Format: "SYMBOL": "Sub-industry name as in DB / SUBSECTOR_TAXONOMY"
+    # e.g.: "COHANCE": "CDMO / CRAMS",
+}
 # Add new symbols here; use canonical sector names from _RAW_TO_SECTOR values.
 # User-specified overrides go at the BOTTOM of each sector block.
 
@@ -768,6 +787,35 @@ def classify_sector(raw: str | None, symbol: str | None = None) -> str:
 
     # 4. Title-case the raw value — preserve whatever the data source gave us
     return cleaned.title()
+
+
+def get_sector_symbols(sector: str) -> list[str]:
+    """Return every symbol that belongs to *sector* from the centralized map.
+
+    Accepts both NSE index names ("NIFTY IT", "NIFTY PHARMA") and canonical
+    sector names ("Information Technology", "Pharmaceuticals").  The lookup
+    normalises via _RAW_TO_SECTOR so both spellings work identically.
+
+    This is the single authoritative query used by:
+      • The delivery drawer (label enrichment)
+      • sector_rotation_service.shortlist() — sector path
+      • Any future consumer that needs "who is in this sector?"
+    """
+    canonical = _RAW_TO_SECTOR.get(sector.lower(), sector)
+    return [sym for sym, sec in _stock_sector_map().items() if sec == canonical]
+
+
+def get_subsector_symbols(sub_industry: str) -> list[str]:
+    """Return every symbol tagged to *sub_industry* in _EXTRA_SUBSECTOR_MAP.
+
+    The sub_industry string must match what is stored in the stocks DB /
+    SUBSECTOR_TAXONOMY (e.g. "CDMO / CRAMS", "Software Products").
+    Returns an empty list when no curated entries exist yet.
+
+    Used by sector_rotation_service.shortlist() — sub-industry path — to
+    surface curated mid/small-caps that Yahoo Finance did not classify.
+    """
+    return [sym for sym, si in _EXTRA_SUBSECTOR_MAP.items() if si == sub_industry]
 
 
 def classify_market_cap(market_cap_inr: float | int | None) -> str:

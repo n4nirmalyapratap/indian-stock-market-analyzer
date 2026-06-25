@@ -642,14 +642,29 @@ async def shortlist(sub_industry: Optional[str] = None, sector: Optional[str] = 
     from ..lib.symbol_map import canonical_symbol         # noqa: PLC0415
     from ..lib import universe as _u                      # noqa: PLC0415
 
+    from ..lib import sector_utils as _su  # noqa: PLC0415
+
     if sector:
         label, kind = sector, "sector"
-        raw_consts = [{"symbol": s, "name": s, "weightPct": None}
-                      for s in _u.SECTOR_SYMBOLS.get(sector, [])]
+        # NSE index members (existing source — large-caps from live index)
+        nse_syms: set[str] = {
+            s.replace(".NS", "").replace(".BO", "")
+            for s in _u.SECTOR_SYMBOLS.get(sector, [])
+        }
+        raw_consts = [{"symbol": s, "name": s, "weightPct": None} for s in nse_syms]
+        # Centralized map — mid/small-caps curated in sector_utils._EXTRA_SECTOR_MAP
+        for sym in _su.get_sector_symbols(sector):
+            if sym not in nse_syms:
+                raw_consts.append({"symbol": sym, "name": sym, "weightPct": None})
     else:
         label, kind = (sub_industry or ""), "subindustry"
         dd = await asyncio.to_thread(_syn.get_drilldown, sub_industry, svc.yahoo)
-        raw_consts = dd.get("constituents", [])
+        raw_consts = list(dd.get("constituents", []))
+        # Centralized map — symbols tagged to this sub-industry in _EXTRA_SUBSECTOR_MAP
+        db_syms: set[str] = {c["symbol"] for c in raw_consts}
+        for sym in _su.get_subsector_symbols(sub_industry):
+            if sym not in db_syms:
+                raw_consts.append({"symbol": sym, "name": sym, "weightPct": None})
     if not raw_consts:
         return {"group": label, "kind": kind, "available": False, "stocks": []}
 
