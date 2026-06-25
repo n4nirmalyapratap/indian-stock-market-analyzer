@@ -3395,6 +3395,17 @@ async def get_top_deliveries(
         for r in primary_rows:
             if not r.get("sector"):
                 r["sector"] = _STOCK_SECTOR_MAP.get(r["symbol"])
+
+        # Final fallback: sectors learned at runtime from Yahoo Finance profiles.
+        # This fills in SME/obscure stocks that users have already looked up.
+        try:
+            from ..lib import sector_cache as _sc  # noqa: PLC0415
+            _yc = _sc.get_all()
+            for r in primary_rows:
+                if not r.get("sector"):
+                    r["sector"] = _yc.get(r["symbol"])
+        except Exception:
+            pass
         if scanx_rows:
             sources.append("scanx.trade")
     else:
@@ -3424,7 +3435,9 @@ async def get_top_deliveries(
     # ETF / index-fund symbol patterns — these are always excluded from the
     # delivery drawer because their delivery% is trivially high (AMC holdings).
     _ETF_SUFFIXES = ("BEES", "ETF", "IETF", "ADD", "BETA", "CASE",
-                     "NIFTY", "SENSEX", "GOLD", "SILVER", "LIQUID")
+                     "NIFTY", "SENSEX", "GOLD", "SILVER", "LIQUID", "FUND", "FOF")
+    # Substrings that only appear in ETF/index-fund tickers
+    _ETF_SUBSTRINGS = ("FANG", "NASDAQ", "SP500", "HANG", "CPSE")
     def _is_etf(sym: str) -> bool:
         if (_STOCK_SECTOR_MAP.get(sym) == "ETF"):
             return True
@@ -3434,6 +3447,8 @@ async def get_top_deliveries(
         if s.startswith("MON") and len(s) >= 5 and s[3:].isdigit():
             return True
         if any(s.endswith(suf) for suf in _ETF_SUFFIXES):
+            return True
+        if any(sub in s for sub in _ETF_SUBSTRINGS):  # e.g. MAFANG, NIFTY100BEES
             return True
         return False
 

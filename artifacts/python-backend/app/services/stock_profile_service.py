@@ -27,7 +27,7 @@ from typing import Optional
 
 from ..lib.sector_utils import classify_sector, get_sub_sector
 from ..lib.symbol_map import yahoo_candidates
-from ..lib import unclassified_log
+from ..lib import unclassified_log, sector_cache
 
 logger = logging.getLogger(__name__)
 
@@ -165,5 +165,9 @@ async def get_profile(symbol: str) -> dict:
         with _lock:
             cache[upper] = result_entry
             _persist()
+        # Also write to the runtime sector cache so the bhavcopy delivery
+        # table can look up sectors for stocks not in the static curated map.
+        if sector:
+            sector_cache.write(upper, sector, raw_industry)
 
     return _shape(upper, result_entry)
