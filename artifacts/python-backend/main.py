@@ -155,7 +155,7 @@ async def _rotation_prewarm_task() -> None:
     on every server start so the first cockpit click is instant regardless of
     whether the market is open or closed. Runs in parallel so total wait ≈ one
     timeframe (~20s) instead of three sequential builds (~60s)."""
-    await asyncio.sleep(10)  # let the server settle first
+    await asyncio.sleep(2)  # let the server settle first
     try:
         from app.services import sector_rotation_service as _srs  # noqa: PLC0415
         res = await _srs.prewarm_all()
