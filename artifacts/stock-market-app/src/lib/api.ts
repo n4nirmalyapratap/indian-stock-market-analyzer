@@ -804,11 +804,11 @@ export const api = {
   deliveryHistory: (symbol: string, days = 40) =>
     fetchApi<DeliveryHistoryResponse>(`/insights/delivery-history?symbol=${encodeURIComponent(symbol)}&days=${days}`),
 
-  sectorRotationShortlist: (params: { subIndustry?: string; sector?: string }) =>
+  sectorRotationShortlist: (params: { subIndustry?: string; sector?: string; timeframe?: string }) =>
     fetchApi<ShortlistResponse>(
       `/sector-rotation/shortlist?${params.sector
         ? `sector=${encodeURIComponent(params.sector)}`
-        : `subIndustry=${encodeURIComponent(params.subIndustry || "")}`}`,
+        : `subIndustry=${encodeURIComponent(params.subIndustry || "")}`}&timeframe=${params.timeframe ?? "short"}`,
     ),
 
   // ── Top Movers (Dashboard tab) ──
