@@ -515,15 +515,51 @@ async def _deep_history(symbol: str, days: int, needed: int, sem) -> list[tuple]
     return [(b["date"], b["close"]) for b in good]
 
 
+def _ema_series(closes: list[float], period: int) -> list[float]:
+    """Exponential moving average — same kernel used by the NSE breadth model."""
+    if not closes:
+        return []
+    k = 2.0 / (period + 1)
+    out = [closes[0]]
+    for p in closes[1:]:
+        out.append(p * k + out[-1] * (1 - k))
+    return out
+
+
+def _curated_composite(rs_pct: Optional[float], breadth_pct: Optional[float]) -> tuple[Optional[float], Optional[str]]:
+    """Blend 50-EMA breadth with RS% into the same -1→+1 composite scale the
+    NSE Market-Sectors model uses, so curated and indexed sectors are directly
+    comparable on the leaderboard bar chart.
+
+    breadth_pct : 0..100  (% of constituents above their 50-EMA)
+    rs_pct      : signed %, e.g. +3.2 means 3.2 pp outperformance vs Nifty
+    """
+    rs_score = (rs_pct / 15.0) if rs_pct is not None else 0.0
+    br_score = ((breadth_pct - 50.0) / 50.0) if breadth_pct is not None else rs_score
+    composite = round(0.5 * rs_score + 0.5 * br_score, 4)
+    if composite >= 0.20:
+        tier = "DEEP_GREEN"
+    elif composite >= 0.05:
+        tier = "LIGHT_GREEN"
+    elif composite >= -0.05:
+        tier = "YELLOW"
+    elif composite >= -0.20:
+        tier = "ORANGE"
+    else:
+        tier = "DEEP_RED"
+    return composite, tier
+
+
 async def _curated_sector_rrg_onthefly(
     sectors: list[str],
     bench_series: list[tuple],
     tf: dict,
     timeframe: str = "short",
 ) -> list[dict]:
-    """Compute RS/RRG on-the-fly for curated sectors that have no NSE Yahoo
-    ticker.  Uses the top-N constituents from _EXTRA_SECTOR_MAP (equal-weight,
-    rebased to 100) vs the Nifty benchmark already fetched by sector_rrg().
+    """Compute RS/RRG + real breadth on-the-fly for curated sectors that have
+    no NSE Yahoo ticker.  Uses the top-N constituents from _EXTRA_SECTOR_MAP.
+    Breadth = % of stocks above their 50-EMA, computed from the same price
+    bars already fetched for the RS calculation — no extra API calls.
     Returns a list of RRG entity dicts — same shape as Yahoo-sourced entities."""
     from ..lib import sector_utils as _su  # noqa: PLC0415
     from ..lib.symbol_map import canonical_symbol  # noqa: PLC0415
@@ -542,6 +578,8 @@ async def _curated_sector_rrg_onthefly(
                 *[_deep_history(s, 320, needed, fetch_sem) for s in syms],
                 return_exceptions=True,
             )
+
+        good_hists: list[list[tuple]] = []
         maps = []
         for h in hists:
             if isinstance(h, Exception) or not h or len(h) < 30:
@@ -549,9 +587,13 @@ async def _curated_sector_rrg_onthefly(
             base = h[0][1]
             if not base:
                 continue
+            good_hists.append(h)
             maps.append({d: c / base * 100.0 for d, c in h})
+
         if not maps:
             return None
+
+        # ── Equal-weight index series for RRG ────────────────────────────
         all_dates = sorted({d for m in maps for d in m})
         series = [
             (d, sum(m[d] for m in maps if d in m) / sum(1 for m in maps if d in m))
@@ -561,26 +603,27 @@ async def _curated_sector_rrg_onthefly(
         if not rrg:
             return None
         rs_pct = _rs_pct(series, bench_series, tf_obj["lookback"])
-        # Scale to match the NSE sector composite range (-1 → +1 z-score).
-        # ±15 % RS maps to ±1.0 composite.  Thresholds mirror _assign_tier().
-        composite: Optional[float] = round(rs_pct / 15.0, 4) if rs_pct is not None else None
-        if composite is None:
-            ti = None
-        elif composite >= 0.20:
-            ti = "DEEP_GREEN"
-        elif composite >= 0.05:
-            ti = "LIGHT_GREEN"
-        elif composite >= -0.05:
-            ti = "YELLOW"
-        elif composite >= -0.20:
-            ti = "ORANGE"
-        else:
-            ti = "DEEP_RED"
+
+        # ── 50-EMA breadth — same bars, no extra fetch ───────────────────
+        above = 0
+        total = 0
+        for h in good_hists:
+            closes = [c for _, c in h if c]
+            if len(closes) < 50:
+                continue
+            ema50 = _ema_series(closes, 50)
+            total += 1
+            if closes[-1] > ema50[-1]:
+                above += 1
+        breadth_pct: Optional[float] = (above / total * 100.0) if total > 0 else None
+
+        composite, tier = _curated_composite(rs_pct, breadth_pct)
         return {
             "name": canon, **rrg,
             "rsPct": rs_pct,
+            "breadth50emaPct": breadth_pct,
             "strengthScore": composite,
-            "tier": ti,
+            "tier": tier,
             "curated": True,
         }
 
