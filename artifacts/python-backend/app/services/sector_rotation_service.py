@@ -345,6 +345,22 @@ async def sector_rrg(timeframe: str = "short") -> dict:
     entities.sort(key=lambda e: (e.get("rsPct") is not None, e.get("rsPct") or -1e9), reverse=True)
     # Confluence: attach the Market-Sectors composite (the 'Strength' lens).
     await _attach_sector_strength(entities)
+
+    # Auto-inject curated sectors from _EXTRA_SECTOR_MAP that have no NSE Yahoo
+    # ticker (and therefore no RRG entry).  They appear at the bottom of the
+    # leaderboard with no RS/quadrant data but ARE clickable for the shortlist.
+    from ..lib import sector_utils as _su_rrg  # noqa: PLC0415
+    covered = {_su_rrg.classify_sector(e["name"]) for e in entities}
+    for canon in _su_rrg.get_all_extra_sectors():
+        if canon not in covered:
+            entities.append({
+                "name": canon,
+                "rs": None, "momentum": None, "quadrant": None,
+                "rsPct": None, "rsMomentum": None, "rsRatio": None,
+                "tail": [], "strengthScore": None, "tier": None,
+                "curated": True,
+            })
+
     out = {"level": "sector", "available": True, "benchmark": "NIFTY 50",
            "timeframe": timeframe, "entities": entities}
     _cache_set(cache_key, out)
@@ -434,6 +450,24 @@ async def subindustry_rrg(timeframe: str = "short") -> dict:
             bench_label = "NIFTY 50 (from price history)"
 
     entities.sort(key=lambda e: (e.get("rsPct") is not None, e.get("rsPct") or -1e9), reverse=True)
+
+    # Auto-inject curated sub-industries from _EXTRA_SUBSECTOR_MAP that the DB
+    # grid doesn't know about yet (e.g. brand-new mid/small-cap clusters added
+    # in a batch before the synthetic index has had time to accrue history).
+    # They appear at the bottom of the leaderboard with no RS data but ARE
+    # clickable — shortlist() will pull their constituents from _EXTRA_SUBSECTOR_MAP.
+    from ..lib import sector_utils as _su_si  # noqa: PLC0415
+    existing_subs = {e["name"] for e in entities}
+    for si in _su_si.get_all_extra_subsectors():
+        if si not in existing_subs:
+            entities.append({
+                "name": si,
+                "rs": None, "momentum": None, "quadrant": None,
+                "rsPct": None, "rsMomentum": None, "rsRatio": None,
+                "tail": [], "strengthScore": None, "tier": None,
+                "rs30d": None, "breadth50emaPct": None, "deliveryBuildup": None,
+                "curated": True,
+            })
 
     note = None
     if not entities:
