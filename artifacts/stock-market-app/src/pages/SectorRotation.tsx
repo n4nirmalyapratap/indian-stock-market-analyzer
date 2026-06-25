@@ -309,8 +309,44 @@ export default function SectorRotation() {
       </div>
 
       {isLoading && (
-        <div className="flex items-center justify-center py-24 text-gray-500 dark:text-gray-400">
-          <Loader2 className="w-5 h-5 animate-spin mr-2" /> Loading rotation…
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
+          <div className="lg:col-span-2 bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 p-4">
+            <div className="flex items-center justify-between mb-4">
+              <div className="h-4 w-48 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
+              <div className="h-7 w-36 bg-gray-200 dark:bg-gray-700 rounded-lg animate-pulse" />
+            </div>
+            <div className="space-y-0">
+              {Array.from({ length: 10 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-3 py-2.5 border-b border-gray-100 dark:border-gray-700/60 last:border-0">
+                  <div className="w-32 h-3.5 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" style={{ animationDelay: `${i * 60}ms` }} />
+                  <div className="flex-1 h-2 bg-gray-100 dark:bg-gray-700/50 rounded-full overflow-hidden">
+                    <div className="h-full bg-gray-200 dark:bg-gray-600 rounded-full animate-pulse" style={{ width: `${30 + Math.random() * 50}%`, animationDelay: `${i * 60}ms` }} />
+                  </div>
+                  <div className="w-16 h-3 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" style={{ animationDelay: `${i * 60}ms` }} />
+                  <div className="w-12 h-3 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" style={{ animationDelay: `${i * 60}ms` }} />
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 flex items-center gap-2 text-xs text-gray-400">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Computing sector strength from constituents…
+            </div>
+          </div>
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 p-4">
+            <div className="h-4 w-32 bg-gray-200 dark:bg-gray-700 rounded animate-pulse mb-3" />
+            <div className="space-y-2">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-2 py-1.5">
+                  <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 animate-pulse" />
+                  <div className="flex-1">
+                    <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded animate-pulse mb-1" style={{ width: `${50 + Math.random() * 40}%` }} />
+                    <div className="h-2.5 w-16 bg-gray-100 dark:bg-gray-600 rounded animate-pulse" />
+                  </div>
+                  <div className="h-3 w-10 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
       {isError && (

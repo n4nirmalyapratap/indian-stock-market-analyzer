@@ -560,9 +560,13 @@ async def _curated_sector_rrg_onthefly(
         rrg = compute_rrg(series, bench_series, smooth=tf_obj["smooth"])
         if not rrg:
             return None
+        rs_pct = _rs_pct(series, bench_series, tf_obj["lookback"])
+        sc, ti = _subind_strength(rs_pct, None)
         return {
             "name": canon, **rrg,
-            "rsPct": _rs_pct(series, bench_series, tf_obj["lookback"]),
+            "rsPct": rs_pct,
+            "strengthScore": sc,
+            "tier": ti,
             "curated": True,
         }
 
