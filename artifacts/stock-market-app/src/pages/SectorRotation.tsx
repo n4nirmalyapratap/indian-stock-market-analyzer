@@ -168,9 +168,10 @@ function Leaderboard({ entities, logic, selected, onPick }: {
 }
 
 /** RIGHT pane — the winning-stocks shortlist for the picked group. */
-function ShortlistPanel({ title, isLoading, data }: {
-  title: string; isLoading: boolean; data?: { available?: boolean; stocks?: ShortlistStock[] };
+function ShortlistPanel({ title, isLoading, data, tf }: {
+  title: string; isLoading: boolean; data?: { available?: boolean; stocks?: ShortlistStock[] }; tf: "short" | "mid" | "long";
 }) {
+  const rsLabel = tf === "long" ? "RS 6M" : tf === "mid" ? "RS 3M" : "RS 1M";
   return (
     <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 overflow-hidden lg:sticky lg:top-4">
       <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700 flex items-center gap-2">
@@ -197,7 +198,7 @@ function ShortlistPanel({ title, isLoading, data }: {
                 </div>
                 <div className="text-[10px] text-gray-500 tabular-nums flex items-center gap-2">
                   <span className={s.rs != null && s.rs >= 0 ? "text-emerald-600" : "text-rose-500"}>
-                    RS {s.rs != null ? fmtPct(s.rs) : "—"}
+                    {rsLabel} {s.rs != null ? fmtPct(s.rs) : "—"}
                   </span>
                   <span className="flex items-center gap-1" title="Delivery % (last ~12 sessions)">
                     Del {s.delivPct != null ? `${s.delivPct.toFixed(0)}%` : "—"}
@@ -238,8 +239,12 @@ export default function SectorRotation() {
   );
   const shortlistQ = useQuery(
     marketDataQueryOptions(
-      ["sector-rotation", "shortlist", level, selected ?? ""],
-      () => api.sectorRotationShortlist(level === "sector" ? { sector: selected as string } : { subIndustry: selected as string }),
+      ["sector-rotation", "shortlist", level, tf, selected ?? ""],
+      () => api.sectorRotationShortlist(
+        level === "sector"
+          ? { sector: selected as string, timeframe: tf }
+          : { subIndustry: selected as string, timeframe: tf }
+      ),
       { enabled: !!selected },
     ),
   );
@@ -438,7 +443,7 @@ export default function SectorRotation() {
           {/* RIGHT: winning stocks for the picked group */}
           <div className="lg:col-span-1">
             {selected ? (
-              <ShortlistPanel title={selected} isLoading={shortlistQ.isLoading} data={shortlistQ.data} />
+              <ShortlistPanel title={selected} isLoading={shortlistQ.isLoading} data={shortlistQ.data} tf={tf} />
             ) : (
               <div className="bg-white dark:bg-gray-800 rounded-xl border border-dashed border-gray-200 dark:border-gray-700 p-8 text-center text-sm text-gray-500 dark:text-gray-400 lg:sticky lg:top-4">
                 <MousePointerClick className="w-6 h-6 mx-auto mb-2 text-gray-400" />

@@ -454,17 +454,16 @@ async def subindustry_rrg(timeframe: str = "short") -> dict:
     existing_subs = {e["name"] for e in entities}
     uncovered_subs = [si for si in _su_si.get_all_extra_subsectors() if si not in existing_subs]
     if uncovered_subs:
-        # bench_iso may be empty when the stored Nifty series hasn't been built
-        # yet (source=onthefly path).  Fall back to a live price-history fetch —
-        # the same ^NSEI pull that _subindustry_rrg_onthefly already uses.
-        effective_bench = bench_iso
-        if not effective_bench:
-            _nifty_raw = await _deep_history(
-                "^NSEI", 320,
-                tf["lookback"] + tf["smooth"] * 2 + 5,
-                asyncio.Semaphore(2),
-            )
-            effective_bench = [(d, v) for d, v in _nifty_raw] if _nifty_raw else []
+        # Always use a DEEP Nifty fetch for curated-sub RRG — the stored bench_iso
+        # may only have a handful of days (young DB), which gives compute_rrg too few
+        # aligned points and silently drops every curated result.  _deep_history
+        # is disk-first when the market is closed so this costs zero network I/O.
+        _nifty_raw = await _deep_history(
+            "^NSEI", 320,
+            tf["lookback"] + tf["smooth"] * 2 + 5,
+            asyncio.Semaphore(2),
+        )
+        effective_bench = [(d, v) for d, v in _nifty_raw] if _nifty_raw else bench_iso
         if effective_bench:
             otf_subs = await _curated_sector_rrg_onthefly(
                 uncovered_subs, effective_bench, tf, timeframe,
@@ -788,7 +787,7 @@ async def funnel(timeframe: str = "short") -> dict:
 # ── Shortlist (winning stocks in a sub-industry) ─────────────────────────────
 
 async def shortlist(sub_industry: Optional[str] = None, sector: Optional[str] = None,
-                    concurrency: int = 20) -> dict:
+                    timeframe: str = "short", concurrency: int = 20) -> dict:
     """Rank a group's constituents into a winning-stocks shortlist — relative
     strength (stock ~1mo return minus Nifty), delivery %, and an above-50-EMA
     trend flag → composite score. The group is either a sub-industry (synthetic
@@ -799,9 +798,11 @@ async def shortlist(sub_industry: Optional[str] = None, sector: Optional[str] = 
     always included first; the curated extra-map fills the remaining slots.
     """
     _SECTOR_SHORTLIST_CAP = 50   # max symbols fetched per sector click
+    tf_obj = _tf(timeframe)
+    rs_lookback = tf_obj["lookback"]   # 21 / 63 / 126 for short / mid / long
 
-    # Fast path — return cached result if still fresh
-    _ck = f"shortlist:{'sector' if sector else 'sub'}:{sector or sub_industry}"
+    # Fast path — return cached result if still fresh (keyed per timeframe)
+    _ck = f"shortlist:{'sector' if sector else 'sub'}:{sector or sub_industry}:{timeframe}"
     _hit = _cache_get(_ck)
     if _hit is not None:
         return _hit
@@ -865,15 +866,20 @@ async def shortlist(sub_industry: Optional[str] = None, sector: Optional[str] = 
     # Recent delivery day-maps (shared, cached) → latest snapshot + per-stock trend.
     day_maps = await _deliv.get_recent_day_maps(days=12)
     deliv_map = day_maps[-1][1] if day_maps else {}
-    # Benchmark ~1-month return (21 trading days) for relative strength.
-    nifty = await _sa._yf_history("^NSEI", "3mo")
+    # Benchmark return over the selected timeframe window for relative strength.
+    # short=1M→3mo history, mid=3M→6mo, long=6M→1y
+    _hist_period = {"short": "3mo", "mid": "6mo", "long": "1y"}.get(timeframe, "3mo")
+    nifty = await _sa._yf_history("^NSEI", _hist_period)
     nifty_closes = [r["close"] for r in nifty if r.get("close")]
-    nifty_ret = _pct_return(nifty_closes, 21)
+    nifty_ret = _pct_return(nifty_closes, rs_lookback)
 
     from . import market_cache_service as _disk  # noqa: PLC0415
     _market_closed = not _disk.is_market_open()
 
     sem = asyncio.Semaphore(max(1, concurrency))
+
+    # Depth needed: lookback + 50 (for EMA50) + small buffer.
+    _fetch_days = max(120, rs_lookback + 60)
 
     async def _one(c: dict) -> dict:
         sym = c["symbol"]
@@ -883,17 +889,17 @@ async def shortlist(sub_industry: Optional[str] = None, sector: Optional[str] = 
         # pattern and avoids all yfinance network calls on closed days.
         h: list[dict] = []
         if _market_closed:
-            disk_rows = _disk.load_from_disk(sym, 120)
+            disk_rows = _disk.load_from_disk(sym, _fetch_days)
             if disk_rows:
                 h = disk_rows
         if not h:
             async with sem:
                 try:
-                    h = await svc.price.get_historical_data(sym, 120)
+                    h = await svc.price.get_historical_data(sym, _fetch_days)
                 except Exception:
                     h = []
         closes = [b["close"] for b in (h or []) if b.get("close")]
-        stock_ret = _pct_return(closes, 21)
+        stock_ret = _pct_return(closes, rs_lookback)
         rs = (stock_ret - nifty_ret) if (stock_ret is not None and nifty_ret is not None) else None
         ema50 = _ema_last(closes, 50)
         above = (closes[-1] > ema50) if (ema50 is not None and closes) else None
