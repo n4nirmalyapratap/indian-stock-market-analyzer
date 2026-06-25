@@ -30,6 +30,21 @@ export interface Drawing {
   shape: Record<string, unknown>;
 }
 
+// A detected chart pattern handed over from the screener, replayed as a
+// read-only overlay (like SMC). Geometry is date-anchored so it maps onto the
+// chart's own bars regardless of how many it loaded. Markers are pivots
+// (shoulders/tops/bottoms); lines are necklines / trendlines / the impulse pole.
+export interface PatternOverlay {
+  symbol: string;
+  pattern: string;
+  signal?: "CALL" | "PUT" | "WAIT";
+  // kind 'trigger' (with dir) renders an arrow on the signal bar (indicator
+  // patterns); otherwise a pivot dot. line kind 'candlebox' renders a highlight
+  // rect around a candle pattern's bars; other kinds are necklines/trendlines.
+  markers?: { date: string; price: number; label?: string; kind?: string; dir?: string }[];
+  lines?: { x0: string; y0: number; x1: string; y1: number; kind?: string }[];
+}
+
 export interface Candle {
   time: number;
   open: number;
@@ -58,6 +73,10 @@ interface Props {
   onDrawingDone?: () => void;
   onDrawingUpdate?: (id: string, shape: Record<string, unknown>) => void;
   theme: "dark" | "light";
+  /** Read-only pattern geometry handed over from the Chart Patterns screener. */
+  patternOverlay?: PatternOverlay | null;
+  /** Clears the pattern overlay (wired to the × on its indicator-row pill). */
+  onClearPatternOverlay?: () => void;
 }
 
 const DRAW_CLR = "#6366f1";
@@ -488,6 +507,93 @@ function smcDateIndex(candles: Candle[]): Map<string, number> {
   const m = new Map<string, number>();
   candles.forEach((c, i) => m.set(new Date(c.time * 1000).toISOString().slice(0, 10), i));
   return m;
+}
+
+// Screener pattern → SVG overlay: pivot dots + labels and the structural lines
+// (neckline / trendlines / pole), all anchored by trading date the same way the
+// SMC overlays are. Points whose date isn't in the loaded window are skipped.
+function buildPatternEls(ov: PatternOverlay, chart: echarts.ECharts, candles: Candle[]): SvgEl[] {
+  if (!candles.length) return [];
+  const idx = smcDateIndex(candles);
+  const toPx = (date: string, price: number): [number, number] | null => {
+    const i = idx.get(date);
+    if (i === undefined) return null;                 // point predates the loaded window
+    return chart.convertToPixel({ gridIndex: 0 }, [i, price]) as [number, number];
+  };
+  const lineColor = ov.signal === "CALL" ? "#16a34a" : ov.signal === "PUT" ? "#dc2626" : "#6366f1";
+  const fillRgb   = ov.signal === "CALL" ? "22,163,74" : ov.signal === "PUT" ? "220,38,38" : "99,102,241";
+  const dot = "#6366f1";
+  const els: SvgEl[] = [];
+
+  // Resolve geometry to pixels up front (skip points outside the loaded window).
+  // candlebox lines → highlight rects; the rest are structural lines.
+  const allLines = (ov.lines ?? [])
+    .map(ln => { const a = toPx(ln.x0, ln.y0), b = toPx(ln.x1, ln.y1); return a && b ? { a, b, kind: ln.kind } : null; })
+    .filter(Boolean) as { a: [number, number]; b: [number, number]; kind?: string }[];
+  const boxLines = allLines.filter(l => l.kind === "candlebox");
+  const linePx   = allLines.filter(l => l.kind !== "candlebox");
+  // trigger markers → arrows; the rest are pivot dots.
+  const allMarks = (ov.markers ?? [])
+    .map(m => { const p = toPx(m.date, m.price); return p ? { p, label: m.label, kind: m.kind, dir: m.dir } : null; })
+    .filter(Boolean) as { p: [number, number]; label?: string; kind?: string; dir?: string }[];
+  const trigMarks = allMarks.filter(m => m.kind === "trigger");
+  const markPx    = allMarks.filter(m => m.kind !== "trigger");
+
+  // ── Candle-highlight boxes (behind everything) ──────────────────────────────
+  for (const b of boxLines) {
+    const x = Math.min(b.a[0], b.b[0]), y = Math.min(b.a[1], b.b[1]);
+    const w = Math.max(8, Math.abs(b.b[0] - b.a[0])), h = Math.abs(b.b[1] - b.a[1]);
+    els.push({ type: "rect", x, y, w, h, fill: `rgba(${fillRgb},0.16)`, stroke: lineColor });
+  }
+
+  // ── Translucent zone (drawn first, behind the strokes) ──────────────────────
+  // Trendline patterns (triangle/wedge/rectangle) → fill the wedge between the
+  // two trendlines; pivot patterns (H&S, double/triple…) → fill between the
+  // pivots and the neckline. Tinted by signal (green bullish / red bearish).
+  const res = linePx.find(l => l.kind === "resistance");
+  const sup = linePx.find(l => l.kind === "support");
+  let poly: [number, number][] | null = null;
+  if (res && sup) {
+    poly = [res.a, res.b, sup.b, sup.a];
+  } else if (markPx.length >= 2 && linePx.length) {
+    const nl = linePx[0];
+    const right = nl.a[0] >= nl.b[0] ? nl.a : nl.b;
+    const left  = nl.a[0] >= nl.b[0] ? nl.b : nl.a;
+    const marks = [...markPx].sort((m1, m2) => m1.p[0] - m2.p[0]).map(m => m.p);
+    poly = [...marks, right, left];
+  }
+  if (poly && poly.length >= 3) {
+    const d = "M " + poly.map(p => `${p[0]} ${p[1]}`).join(" L ") + " Z";
+    els.push({ type: "path", d, fill: `rgba(${fillRgb},0.13)`, stroke: "none" });
+  }
+
+  // ── Structural strokes + pivot dots ─────────────────────────────────────────
+  for (const l of linePx) {
+    // Necklines & poles dashed (reference levels); trendlines solid.
+    const dash = l.kind === "neckline" || l.kind === "pole";
+    els.push({ type: "line", x1: l.a[0], y1: l.a[1], x2: l.b[0], y2: l.b[1], color: lineColor, dash, width: 1.8 });
+  }
+  for (const m of markPx) {
+    els.push({ type: "circle", cx: m.p[0], cy: m.p[1], r: 4, fill: dot });
+    if (m.label) els.push({ type: "text", x: m.p[0], y: m.p[1] - 8, text: m.label, anchor: "middle", size: 10, color: lineColor });
+  }
+
+  // ── Indicator trigger arrows ────────────────────────────────────────────────
+  for (const m of trigMarks) {
+    const [x, y] = m.p;
+    const up = m.dir === "up";
+    const down = m.dir === "down";
+    if (up || down) {
+      const s = down ? -1 : 1;                  // up arrow sits below the bar; down arrow above
+      const tip = y + s * 5, base = y + s * 13;
+      els.push({ type: "path", d: `M ${x} ${tip} L ${x - 5} ${base} L ${x + 5} ${base} Z`, fill: lineColor, stroke: "none" });
+      if (m.label) els.push({ type: "text", x, y: base + (down ? -4 : 11), text: m.label, anchor: "middle", size: 9, color: lineColor });
+    } else {
+      els.push({ type: "circle", cx: x, cy: y, r: 4, fill: dot });
+      if (m.label) els.push({ type: "text", x, y: y - 8, text: m.label, anchor: "middle", size: 9, color: lineColor });
+    }
+  }
+  return els;
 }
 
 interface OrderBlock {
@@ -1193,6 +1299,7 @@ export default function ChartPanel({
   symbol, symbolName, periodCfg, drawingTool, chartType, indicators,
   isActive, drawings, onDrawingAdd, onDrawingErase, onClearDrawings, onActivate,
   onDrawingDone, onDrawingUpdate, theme, onIndicatorRemove, onClearIndicators,
+  patternOverlay, onClearPatternOverlay,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef       = useRef<SVGSVGElement>(null);
@@ -1205,6 +1312,8 @@ export default function ChartPanel({
   const smcEqHighsRef = useRef<EqualLevel[]>([]);
   const smcEqLowsRef  = useRef<EqualLevel[]>([]);
   const smcSymbolRef  = useRef<string>("");   // symbol the SMC data was fetched for
+  const patternRef       = useRef<PatternOverlay | null>(null);  // screener pattern overlay
+  const patternSymbolRef = useRef<string>("");                   // symbol it was handed over for
   // SMC overlays — toggled from the Indicators menu; all come from one /smc fetch.
   const smcOn = indicators.has("smc_fvg") || indicators.has("smc_structure")
              || indicators.has("smc_ob") || indicators.has("smc_pd")
@@ -1305,6 +1414,13 @@ export default function ChartPanel({
       }
     }
 
+    // Read-only screener pattern overlay — drawn on top, symbol-guarded so a
+    // previous symbol's geometry is never painted onto new candles mid-switch.
+    if (patternSymbolRef.current === symbol && patternRef.current) {
+      const patEls = buildPatternEls(patternRef.current, chart, candles.current);
+      if (patEls.length) pixels.push({ id: "__pattern__", els: patEls });
+    }
+
     renderSvg(svg, pixels, preview, eraser, handles);
   }, [drawings, symbol, theme, indicators]);
 
@@ -1344,6 +1460,18 @@ export default function ChartPanel({
     })();
     return () => { cancelled = true; };
   }, [smcOn, symbol, periodCfg.i]);
+
+  // ── Screener pattern overlay ────────────────────────────────────────────────
+  // Daily-only (geometry is detected on daily bars) and only for the symbol it
+  // was handed over for. No fetch — the geometry rides in via props from the
+  // Chart Patterns screener. Repaints whenever it, the symbol, or the interval
+  // changes; clears off-daily or on symbol mismatch.
+  useEffect(() => {
+    const ok = !!patternOverlay && patternOverlay.symbol === symbol && periodCfg.i === "1d";
+    patternRef.current       = ok ? patternOverlay! : null;
+    patternSymbolRef.current = ok ? symbol : "";
+    paintSvgRef.current?.();
+  }, [patternOverlay, symbol, periodCfg.i]);
 
   // Repaint SVG when hover changes (show/hide handles)
   useEffect(() => {
@@ -2346,6 +2474,11 @@ export default function ChartPanel({
   };
 
   const hasAnyInd = indicators.size > 0;
+  // The screener pattern overlay shows as a pill alongside the indicators (same
+  // place, same × to remove) — only on its own symbol + daily, matching the draw.
+  const patternActive = !!patternOverlay && patternOverlay.symbol === symbol && periodCfg.i === "1d";
+  const patternColor = patternOverlay?.signal === "CALL" ? "#16a34a"
+                     : patternOverlay?.signal === "PUT"  ? "#dc2626" : "#6366f1";
   const TC = getThemeColors(theme);
 
   return (
@@ -2385,8 +2518,24 @@ export default function ChartPanel({
             </div>
           )}
           {/* Row 3: active indicator pills (TradingView-style) — click X to remove */}
-          {hasAnyInd && (
+          {(hasAnyInd || patternActive) && (
             <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+              {/* Screener pattern overlay — same pill treatment as an indicator */}
+              {patternActive && (
+                <span className="group flex items-center gap-1 text-[10px] rounded px-1.5 py-0.5 hover:bg-white/5">
+                  <span style={{ color: patternColor }} className="font-medium">{patternOverlay!.pattern}</span>
+                  <button
+                    type="button"
+                    title="Remove pattern overlay"
+                    onClick={(e) => { e.stopPropagation(); onClearPatternOverlay?.(); }}
+                    className="ml-0.5 w-3.5 h-3.5 flex items-center justify-center rounded-sm text-gray-500 hover:text-red-400 hover:bg-red-500/15 opacity-60 group-hover:opacity-100 transition-opacity"
+                  >
+                    <svg viewBox="0 0 10 10" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                      <path d="M2 2 L8 8 M8 2 L2 8" />
+                    </svg>
+                  </button>
+                </span>
+              )}
               {[...indicators].map(key => {
                 // SMC overlays have no IndicatorDef (they're drawn zones/lines,
                 // not a series), so render a custom pill so the user can see

@@ -445,7 +445,9 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd, theme }, r
           const info = prices[sym];
           const up   = (info?.pChange ?? 0) >= 0;
           const isOn = sym === activeSymbol;
-          const pct  = info?.pChange;
+          // Coerce — some providers send pChange as a string, which would crash
+          // `.toFixed` ("…toFixed is not a function"). null stays null (hidden).
+          const pct  = info?.pChange != null ? Number(info.pChange) : null;
 
           return (
             <div

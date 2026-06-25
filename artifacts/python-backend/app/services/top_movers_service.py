@@ -28,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from . import market_cache_service as _disk
@@ -42,6 +42,13 @@ logger = logging.getLogger("top_movers")
 # (most users won't notice 5-min lag in top-movers).
 _FALLBACK_TTL_SEC = 5 * 60
 _fallback_cache: dict[str, tuple[float, dict]] = {}
+
+# Per-segment cache of the closed-market disk leaderboard, keyed (value side) by
+# trading date. When the market is closed the sealed EOD bars are frozen for the
+# whole session, so the ranking is stable — caching by date means we compute it
+# ONCE per session instead of re-reading ~750 canonical snapshots from the
+# (SMB-mounted in prod) market_cache on every dashboard render.
+_disk_movers_cache: dict[str, tuple[str, dict]] = {}
 
 # Segment → (label, NSE index slug, cache key).  Cache key is namespaced
 # per-segment so the existing nse_service cache layer doesn't collide.
@@ -61,6 +68,23 @@ _CLOSED_TTL = 5 * 60
 
 def _ttl() -> int:
     return _OPEN_TTL if _disk.is_market_open() else _CLOSED_TTL
+
+
+def _last_close_ist() -> datetime:
+    """Return the datetime of the most-recent market close (15:30 IST on the
+    last trading weekday).  When the market is live, returns now instead so
+    the pill shows the current time."""
+    if _disk.is_market_open():
+        return _disk._now_ist()
+    now = _disk._now_ist()
+    candidate = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    # If today hasn't reached 15:30 yet (PRE_OPEN), step back one day first
+    if now < candidate:
+        candidate -= timedelta(days=1)
+    # Roll back over weekends
+    while candidate.weekday() >= 5:
+        candidate -= timedelta(days=1)
+    return candidate
 
 
 def _name_for(sym: str, provided: Optional[str]) -> str:
@@ -152,6 +176,19 @@ class TopMoversService:
         start before the post-close warmup has run), so the caller falls
         through to the live NSE/Yahoo path.
         """
+        # Session-frozen result cache: the sealed EOD bars don't change until the
+        # next session, so memoise the computed leaderboard keyed by trading date.
+        # A hit turns ~750 canonical-snapshot reads (over the SMB-mounted
+        # market_cache in prod) into one dict lookup — the dominant cost of the
+        # closed-market dashboard render. Only non-None results are cached (below),
+        # so a cold start keeps retrying until the post-close warmup has sealed
+        # enough of the segment.
+        td = _disk.last_trading_date()
+        cache_key = f"{segment}:{count}"
+        hit = _disk_movers_cache.get(cache_key)
+        if hit and hit[0] == td:
+            return hit[1]
+
         from ..lib import universe  # noqa: PLC0415
         universe_map = {
             "large": universe.NIFTY100,
@@ -209,18 +246,20 @@ class TopMoversService:
         gainers = sorted(rows, key=lambda r: r["pChange"], reverse=True)[:count]
         losers  = sorted(rows, key=lambda r: r["pChange"])[:count]
         label = SEGMENT_INDEX[segment][0]
-        return {
+        out = {
             "available":    True,
             "segment":      segment,
             "label":        label,
             "indexSlug":    SEGMENT_INDEX[segment][1],
-            "asOf":         as_of or _disk._now_ist().isoformat(),
+            "asOf":         _last_close_ist().isoformat(),
             "marketState":  _disk.current_market_state(),
             "totalScanned": len(rows),
             "gainers":      gainers,
             "losers":       losers,
             "servedFrom":   "DISK_EOD",
         }
+        _disk_movers_cache[cache_key] = (td, out)
+        return out
 
     async def _yahoo_fallback_scan(self, segment: str, count: int) -> Optional[dict]:
         """Per-stock Yahoo-backed fallback when the NSE bulk index endpoint
@@ -317,9 +356,9 @@ class TopMoversService:
         out = {
             "available":    True,
             "segment":      segment,
-            "label":        f"{label} (Yahoo fallback)",
+            "label":        label,
             "indexSlug":    SEGMENT_INDEX[segment][1],
-            "asOf":         _disk._now_ist().isoformat(),
+            "asOf":         _last_close_ist().isoformat(),
             "marketState":  _disk.current_market_state(),
             "totalScanned": len(rows),
             "gainers":      gainers,

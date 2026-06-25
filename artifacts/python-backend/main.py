@@ -39,6 +39,7 @@ from app.routes.user_broker_keys import router as user_broker_keys_router
 from app.routes.search import router as search_router
 from app.routes.email_digest import router as email_digest_router
 from app.routes.logos import router as logos_router
+from app.routes.earnings_scanner import router as earnings_scanner_router
 from app.lib.auth_store import ensure_primary_schema
 from app.services.log_buffer import setup_ring_buffer
 from app.services.market_cache_service import is_market_open, cache_status
@@ -109,6 +110,59 @@ async def _cache_warmup_task() -> None:
     except Exception as e:
         logger.warning("EOD seal failed: %s", e)
 
+    # Pre-warm sector detail pages so the first heatmap drilldown click is
+    # instant. Skips any sectors already in the in-memory cache.
+    try:
+        from app.services.sector_analytics_service import pre_warm_sector_details  # noqa: PLC0415
+        from app.services import registry as _reg  # noqa: PLC0415
+        res = await pre_warm_sector_details(_reg.sector_analytics)
+        logger.info("Sector detail pre-warm: %s", res)
+    except Exception as e:
+        logger.warning("Sector detail pre-warm failed: %s", e)
+
+
+async def _heatmap_prewarm_task() -> None:
+    """Pre-warm the top-5 heatmap combos at every startup so the first user
+    click is instant instead of paying the cold 5–20s compute."""
+    await asyncio.sleep(15)  # let price-service disk cache settle first
+    try:
+        from app.routes.insights import prewarm_heatmaps  # noqa: PLC0415
+        res = await prewarm_heatmaps()
+        logger.info("Heatmap prewarm complete: %s", res)
+    except Exception as e:
+        logger.warning("Heatmap prewarm failed: %s", e)
+
+
+async def _earnings_scanner_loop() -> None:
+    """Background loop: scan BSE result filings every 30 min and score them."""
+    try:
+        from app.services.earnings_scanner_service import earnings_scanner_loop  # noqa: PLC0415
+        from app.routes.telegram import get_service as _tg_svc  # noqa: PLC0415
+        try:
+            tg = _tg_svc()
+            svc = tg if tg.configured else None
+        except Exception:
+            svc = None
+        await earnings_scanner_loop(telegram_svc=svc)
+    except asyncio.CancelledError:
+        logger.info("Earnings scanner loop stopped.")
+    except Exception as exc:
+        logger.warning("Earnings scanner loop crashed: %s", exc)
+
+
+async def _rotation_prewarm_task() -> None:
+    """Unconditionally pre-warm all three rotation timeframes (short/mid/long)
+    on every server start so the first cockpit click is instant regardless of
+    whether the market is open or closed. Runs in parallel so total wait ≈ one
+    timeframe (~20s) instead of three sequential builds (~60s)."""
+    await asyncio.sleep(2)  # let the server settle first
+    try:
+        from app.services import sector_rotation_service as _srs  # noqa: PLC0415
+        res = await _srs.prewarm_all()
+        logger.info("Rotation prewarm_all complete: %s", res)
+    except Exception as e:
+        logger.warning("Rotation prewarm_all failed: %s", e)
+
 
 async def _market_state_transition_loop() -> None:
     """
@@ -169,6 +223,15 @@ async def _market_state_transition_loop() -> None:
                     )
                 except Exception as e:
                     logger.warning("Post-close full-universe warm failed: %s", e)
+                # Pre-build the sector-rotation cockpit caches now (off the EOD
+                # bars just sealed above), so the first cockpit load after close
+                # is a cache hit instead of a cold RRG/funnel build on-request.
+                try:
+                    from app.services import sector_rotation_service as _srs  # noqa: PLC0415
+                    res = await _srs.prewarm()
+                    logger.info("Post-close rotation prewarm: %s", res)
+                except Exception as e:
+                    logger.warning("Post-close rotation prewarm failed: %s", e)
 
             last_state = state
         except asyncio.CancelledError:
@@ -281,6 +344,9 @@ async def lifespan(app: FastAPI):
     # NSE master list with multi-source fallback. Run on startup +
     # once a day at 06:00 IST (after the overnight CSV refresh).
     registry_task   = asyncio.create_task(_security_registry_scheduler())
+    rotation_prewarm_task = asyncio.create_task(_rotation_prewarm_task())
+    heatmap_prewarm_task  = asyncio.create_task(_heatmap_prewarm_task())
+    earnings_task         = asyncio.create_task(_earnings_scanner_loop())
     try:
         yield
     finally:
@@ -288,7 +354,8 @@ async def lifespan(app: FastAPI):
                   fixer_task, rfr_task, bhav_task, alerts_task, backtest_task,
                   digest_sched_task, digest_worker_task, fii_dii_task, dhan_task,
                   pcr_task, synth_class_task, synth_metrics_task,
-                  synth_bootstrap_task, registry_task):
+                  synth_bootstrap_task, registry_task, rotation_prewarm_task,
+                  heatmap_prewarm_task, earnings_task):
             t.cancel()
             try:
                 await t
@@ -936,3 +1003,4 @@ app.include_router(user_broker_keys_router,    prefix="/api")
 app.include_router(search_router,              prefix="/api")
 app.include_router(email_digest_router,         prefix="/api")
 app.include_router(logos_router,                prefix="/api")
+app.include_router(earnings_scanner_router,     prefix="/api")

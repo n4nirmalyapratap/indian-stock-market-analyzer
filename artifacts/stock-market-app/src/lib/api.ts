@@ -804,11 +804,11 @@ export const api = {
   deliveryHistory: (symbol: string, days = 40) =>
     fetchApi<DeliveryHistoryResponse>(`/insights/delivery-history?symbol=${encodeURIComponent(symbol)}&days=${days}`),
 
-  sectorRotationShortlist: (params: { subIndustry?: string; sector?: string }) =>
+  sectorRotationShortlist: (params: { subIndustry?: string; sector?: string; timeframe?: string }) =>
     fetchApi<ShortlistResponse>(
       `/sector-rotation/shortlist?${params.sector
         ? `sector=${encodeURIComponent(params.sector)}`
-        : `subIndustry=${encodeURIComponent(params.subIndustry || "")}`}`,
+        : `subIndustry=${encodeURIComponent(params.subIndustry || "")}`}&timeframe=${params.timeframe ?? "short"}`,
     ),
 
   // ── Top Movers (Dashboard tab) ──
@@ -861,6 +861,12 @@ export const api = {
     fetchApi<{ message: string; scanInProgress?: boolean; scanProgress?: { done: number; total: number } | null; universeScanned?: number }>(
       "/patterns/scan",
       { method: "POST" },
+    ),
+
+  // Lightweight scan progress for the nav badge — no pattern payload.
+  patternsScanStatus: () =>
+    fetchApi<{ scanInProgress: boolean; scanProgress: { done: number; total: number } | null; cachedAt: string | null; universeSize: number }>(
+      "/patterns/status",
     ),
 
   scanners:      async () => {

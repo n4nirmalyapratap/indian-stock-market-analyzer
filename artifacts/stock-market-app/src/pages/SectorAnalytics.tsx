@@ -54,6 +54,8 @@ function Drilldown({ subIndustry, isDark }: { subIndustry: string; isDark: boole
   const { data, isLoading, isError } = useQuery({
     queryKey: ["synthetic-drilldown", subIndustry],
     queryFn: () => api.syntheticDrilldown(subIndustry),
+    staleTime: 5 * 60 * 1000,
+    gcTime:   30 * 60 * 1000,
   });
 
   const muTxt = isDark ? "#94a3b8" : "#6b7280";
@@ -110,6 +112,8 @@ export default function SectorAnalytics() {
   const { data, isLoading, isError } = useQuery({
     queryKey: ["synthetic-grid"],
     queryFn: () => api.syntheticGrid(),
+    staleTime: 5 * 60 * 1000,
+    gcTime:   30 * 60 * 1000,
   });
 
   const rows = useMemo(() => {

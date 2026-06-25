@@ -14,7 +14,6 @@ import InvestorCouncil from "@/pages/InvestorCouncil";
 import OptionsStrategyTester from "@/pages/OptionsStrategyTester";
 import SettingsPage from "@/pages/SettingsPage";
 import Portfolio from "@/pages/Portfolio";
-import DCF from "@/pages/DCF";
 import NotFound from "@/pages/not-found";
 import TradingPlatform from "@/pages/TradingPlatform";
 import SectorDetail from "@/pages/SectorDetail";
@@ -41,7 +40,14 @@ const queryClient = new QueryClient({
   // refetchOnWindowFocus defaults to true so any market-data query (even
   // ones not yet migrated to marketDataQueryOptions) re-validates against
   // the official close when the user returns to the tab.
-  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: true } },
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      refetchOnWindowFocus: true,
+      staleTime: 5 * 60 * 1000,   // treat data as fresh for 5 min — avoids
+      gcTime:   30 * 60 * 1000,   // keep cache entries for 30 min after unmount
+    },
+  },
 });
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -118,7 +124,6 @@ function AppRoutes() {
         <Route path="/ai-analyst"      component={AIAnalyst} />
         <Route path="/options"         component={OptionsStrategyTester} />
         <Route path="/portfolio"       component={Portfolio} />
-        <Route path="/dcf"             component={DCF} />
         <Route path="/settings"        component={SettingsPage} />
         <Route path="/email-digest"    component={EmailDigestSettings} />
         <Route path="/chart/:symbol"   component={ChartView} />

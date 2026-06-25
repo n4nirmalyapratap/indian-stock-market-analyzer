@@ -187,7 +187,10 @@ export default function Patterns() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="font-bold text-gray-900">{p.symbol}</span>
-                    <ChartButton symbol={p.symbol} />
+                    <ChartButton
+                      symbol={p.symbol}
+                      overlay={p.geometry ? { pattern: p.pattern, signal: p.signal, markers: p.geometry.markers, lines: p.geometry.lines } : undefined}
+                    />
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${SIG_COLORS[p.signal] ?? "bg-gray-100 text-gray-600"}`}>
                       {p.signal}
                     </span>

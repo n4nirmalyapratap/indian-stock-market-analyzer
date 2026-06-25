@@ -8,11 +8,13 @@ Provides deep-dive analytics for the "Sector Analytics" module:
     profitability, financial health, and constituent stocks table
 
 Data sources: NSE sectors service (live prices) + yfinance (historical + fundamentals)
-Cache: fundamentals 4h, performance 15 min, heatmap 5 min
+Cache: fundamentals 4h in-memory + 7d on disk, performance 15 min, heatmap 5 min
 """
 
 import asyncio
+import json
 import logging
+import pathlib
 import time
 from datetime import date, timedelta
 from typing import Any, Optional
@@ -136,6 +138,36 @@ SECTOR_YAHOO_TICKER: dict[str, str] = {
 _CACHE: dict[str, dict] = {}
 _CACHE_VERSION = 0  # tracks the market-state version of the entries above
 
+# Disk-level fundamentals cache — survives server restarts.
+# Stored in market_cache/fundamentals/<safe_ticker>.json, TTL 7 days.
+_FUND_CACHE_DIR = pathlib.Path("market_cache/fundamentals")
+_FUND_DISK_TTL  = 7 * 24 * 3600   # 7 days — fundamentals change slowly
+
+
+def _fund_ticker_slug(ticker: str) -> str:
+    return ticker.replace("/", "_").replace("^", "idx_").replace(".", "_")
+
+
+def _load_fund_disk(ticker: str) -> Optional[dict]:
+    p = _FUND_CACHE_DIR / f"{_fund_ticker_slug(ticker)}.json"
+    try:
+        if p.exists():
+            payload = json.loads(p.read_text())
+            if time.time() - payload.get("_t", 0) < _FUND_DISK_TTL:
+                return payload.get("d")
+    except Exception:
+        pass
+    return None
+
+
+def _save_fund_disk(ticker: str, data: dict) -> None:
+    try:
+        _FUND_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        p = _FUND_CACHE_DIR / f"{_fund_ticker_slug(ticker)}.json"
+        p.write_text(json.dumps({"_t": time.time(), "d": data}))
+    except Exception:
+        pass
+
 
 def _flush_if_state_changed() -> None:
     """Drop in-memory entries when market state has just transitioned (open↔closed)."""
@@ -166,6 +198,11 @@ async def _yf_info(ticker: str) -> dict:
     cached = _cache_get(f"yfi:{ticker}")
     if cached is not None:
         return cached
+    # Disk cache: fundamentals change at most weekly — survive restarts
+    disk = _load_fund_disk(ticker)
+    if disk is not None:
+        _cache_set(f"yfi:{ticker}", disk, 4 * 3600)
+        return disk
 
     def _empty(reason: Exception | None = None) -> dict:
         """Failure / missing-data shape — every numeric is None so the UI
@@ -228,6 +265,8 @@ async def _yf_info(ticker: str) -> dict:
 
     data = await asyncio.to_thread(_fetch)
     _cache_set(f"yfi:{ticker}", data, 4 * 3600)
+    if data and data.get("symbol"):  # only persist non-empty results
+        _save_fund_disk(ticker, data)
     return data
 
 
@@ -409,6 +448,32 @@ def _ytd_change(history: list[dict]) -> Optional[float]:
 
 
 # ── Main service class ────────────────────────────────────────────────────────
+
+async def pre_warm_sector_details(service: "SectorAnalyticsService") -> dict[str, Any]:
+    """Pre-compute all sector detail pages on startup so the first user click
+    is served from cache. Called as a background task ~60 s after boot once the
+    NSE live-price feed and the EOD disk cache have had time to settle.
+
+    Returns {warmed: N, skipped: N, errors: N}.
+    """
+    from .sectors_service import SECTOR_INDICES  # noqa: PLC0415
+
+    all_symbols = [s["symbol"] for s in SECTOR_INDICES if s["symbol"] in SECTOR_YAHOO_TICKER]
+    warmed = skipped = errors = 0
+    for sym in all_symbols:
+        try:
+            cached = _cache_get(f"detail:{sym}:1y")
+            if cached is not None:
+                skipped += 1
+                continue
+            await service.get_sector_detail(sym, "1y")
+            warmed += 1
+        except Exception as exc:
+            logger.debug("sector pre-warm skipped %s: %s", sym, exc)
+            errors += 1
+    logger.info("sector detail pre-warm: warmed=%d skipped=%d errors=%d", warmed, skipped, errors)
+    return {"warmed": warmed, "skipped": skipped, "errors": errors}
+
 
 class SectorAnalyticsService:
     def __init__(self, yahoo: YahooService, price=None):

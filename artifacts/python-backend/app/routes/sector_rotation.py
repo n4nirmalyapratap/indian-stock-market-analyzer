@@ -26,9 +26,14 @@ async def funnel(timeframe: str = Query("short", pattern="^(short|mid|long)$")):
 
 
 @router.get("/shortlist")
-async def shortlist(subIndustry: str = Query(None), sector: str = Query(None)):
-    """Ranked 'winning stocks' inside a sub-industry OR an NSE sector index
-    (relative strength + delivery + above-trend composite)."""
+async def shortlist(
+    subIndustry: str = Query(None),
+    sector: str = Query(None),
+    timeframe: str = Query("short", pattern="^(short|mid|long)$"),
+):
+    """Ranked 'winning stocks' inside a sub-industry OR an NSE sector index.
+    Relative strength lookback matches the selected timeframe:
+      short=1M (21 days), mid=3M (63 days), long=6M (126 days)."""
     if not subIndustry and not sector:
         return {"available": False, "stocks": [], "note": "Provide subIndustry or sector."}
-    return await svc.shortlist(sub_industry=subIndustry, sector=sector)
+    return await svc.shortlist(sub_industry=subIndustry, sector=sector, timeframe=timeframe)
