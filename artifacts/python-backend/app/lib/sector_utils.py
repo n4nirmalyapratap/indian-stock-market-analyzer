@@ -161,6 +161,7 @@ _EXTRA_SUBSECTOR_MAP: dict[str, str] = {
     "DCXINDIA":   "Defence & Aerospace",
     "ASTRAMICRO": "Defence & Aerospace",
     "PARAS":      "Defence & Aerospace",
+    "AVANTEL":    "Defence & Aerospace",
     # ── Agrochemicals & Fertilizers ───────────────────────────────────────────
     "DHANUKA":    "Agrochemicals & Fertilizers",
     "RALLIS":     "Agrochemicals & Fertilizers",
@@ -172,6 +173,8 @@ _EXTRA_SUBSECTOR_MAP: dict[str, str] = {
     "PARADEEP":   "Agrochemicals & Fertilizers",
     "PIIND":      "Agrochemicals & Fertilizers",
     "SUMICHEM":   "Agrochemicals & Fertilizers",
+    "MBAPL":      "Agrochemicals & Fertilizers",
+    "BAYERCROP":  "Agrochemicals & Fertilizers",
     # ── Specialty Chemicals ───────────────────────────────────────────────────
     "DEEPAKNTR":  "Specialty Chemicals",
     "PIDILITIND": "Specialty Chemicals",
@@ -181,6 +184,9 @@ _EXTRA_SUBSECTOR_MAP: dict[str, str] = {
     "ATUL":       "Specialty Chemicals",
     "VINATI":     "Specialty Chemicals",
     "NAVINFLUOR": "Specialty Chemicals",
+    "PRIVISCL":   "Specialty Chemicals",
+    "GANDHAR":    "Specialty Chemicals",
+    "STALLION":   "Specialty Chemicals",
     # ── Hospitals & Healthcare Services ──────────────────────────────────────
     "APOLLOHOSP": "Hospitals & Healthcare",
     "MAXHEALTH":  "Hospitals & Healthcare",
@@ -190,6 +196,7 @@ _EXTRA_SUBSECTOR_MAP: dict[str, str] = {
     "PARKHOSPS":  "Hospitals & Healthcare",
     "KIMS":       "Hospitals & Healthcare",
     "RAINBOW":    "Hospitals & Healthcare",
+    "JLHL":       "Hospitals & Healthcare",
     # ── Diagnostics & Labs ───────────────────────────────────────────────────
     "METROPOLIS": "Diagnostics & Labs",
     "THYROCARE":  "Diagnostics & Labs",
@@ -222,6 +229,8 @@ _EXTRA_SUBSECTOR_MAP: dict[str, str] = {
     "SHRIRAMFIN": "NBFCs & Consumer Finance",
     "SBICARD":    "NBFCs & Consumer Finance",
     "ABCAPITAL":  "NBFCs & Consumer Finance",
+    "AIIL":       "NBFCs & Consumer Finance",
+    "MUFIN":      "NBFCs & Consumer Finance",
     # ── Life Insurance ────────────────────────────────────────────────────────
     "HDFCLIFE":   "Life Insurance",
     "SBILIFE":    "Life Insurance",
@@ -242,6 +251,25 @@ _EXTRA_SUBSECTOR_MAP: dict[str, str] = {
     "JKCEMENT":   "Cement",
     "DALMIACEM":  "Cement",
     "RAMCOCEM":   "Cement",
+    # ── Steel Pipes & Tubes ───────────────────────────────────────────────────
+    "RATNAMANI":  "Steel Pipes & Tubes",
+    "JINDALSAW":  "Steel Pipes & Tubes",
+    "WELCORP":    "Steel Pipes & Tubes",
+    "VENUSPIPES": "Steel Pipes & Tubes",
+    "SAMBHV":     "Steel Pipes & Tubes",
+    "WELSPLSOL":  "Steel Pipes & Tubes",
+    # ── Non-Ferrous Metal Recycling ───────────────────────────────────────────
+    "GRAVITA":    "Non-Ferrous Metal Recycling",
+    "POCL":       "Non-Ferrous Metal Recycling",
+    # ── Commercial Real Estate ────────────────────────────────────────────────
+    "AWFIS":      "Commercial Real Estate",
+    "EFCIL":      "Commercial Real Estate",
+    # ── API & Pharma ──────────────────────────────────────────────────────────
+    "AHCL":       "API & Pharma",
+    "SAIPARENT":  "API & Pharma",
+    "SUVEN":      "API & Pharma",
+    "NEULANDLAB": "API & Pharma",
+    "BLUEJET":    "API & Pharma",
 }
 # Add new symbols here; use canonical sector names from _RAW_TO_SECTOR values.
 # User-specified overrides go at the BOTTOM of each sector block.
@@ -748,6 +776,62 @@ _EXTRA_SECTOR_MAP: dict[str, str] = {
     "TIMEX":       "Consumer Durables",
     # Metals & Mining
     "JAINREC":     "Metals & Mining",
+    # ── Batch 2 — user-curated ────────────────────────────────────────────────
+    # Metals & Mining
+    "ARFIN":       "Metals & Mining",  "VENUSPIPES":  "Metals & Mining",
+    "GRAVITA":     "Metals & Mining",  "POCL":        "Metals & Mining",
+    "SANDUMA":     "Metals & Mining",  "SAMBHV":      "Metals & Mining",
+    "ASHAPURMIN":  "Metals & Mining",  "WELSPLSOL":   "Metals & Mining",
+    "RHIM":        "Metals & Mining",
+    # Capital Goods
+    "GVPIL":       "Capital Goods",    "AEROENTER":   "Capital Goods",
+    "KSHINTL":     "Capital Goods",    "DIFFNKG":     "Capital Goods",
+    "HARDWYN":     "Capital Goods",    "TEXRAIL":     "Capital Goods",
+    "USHAMART":    "Capital Goods",
+    # Defence
+    "AVANTEL":     "Defence",
+    # Information Technology
+    "UNIECOM":     "Information Technology", "HEXT":    "Information Technology",
+    # Chemicals
+    "STALLION":    "Chemicals",        "PRIVISCL":    "Chemicals",
+    "GANDHAR":     "Chemicals",        "20MICRONS":   "Chemicals",
+    # Agriculture
+    "MBAPL":       "Agriculture",      "BAYERCROP":   "Agriculture",
+    # Pharmaceuticals
+    "AHCL":        "Pharmaceuticals",  "SAIPARENT":   "Pharmaceuticals",
+    # Healthcare
+    "JLHL":        "Healthcare",
+    # Automobiles
+    "ROLEXRINGS":  "Automobiles",      "TENNIND":     "Automobiles",
+    "CARRARO":     "Automobiles",      "UNIPARTS":    "Automobiles",
+    # Textiles
+    "SUMEETINDS":  "Textiles",         "MAFATIND":    "Textiles",
+    "ABCOTS":      "Textiles",
+    # FMCG
+    "KWIL":        "FMCG",             "HNDFDS":      "FMCG",
+    "GRMOVER":     "FMCG",
+    # Energy
+    "SAATVIKGL":   "Energy",           "TRUALT":      "Energy",
+    "RELTD":       "Energy",
+    # Real Estate
+    "SIGNATURE":   "Real Estate",      "EMBDL":       "Real Estate",
+    "AWFIS":       "Real Estate",      "EFCIL":       "Real Estate",
+    # Infrastructure
+    "URBANCO":     "Infrastructure",   "VIKRAN":      "Infrastructure",
+    "MARKOLINES":  "Infrastructure",   "BLUSPRING":   "Infrastructure",
+    "CEWATER":     "Infrastructure",   "ARSSBL":      "Infrastructure",
+    "SOUTHWEST":   "Infrastructure",
+    # Consumer Durables
+    "IGIL":        "Consumer Durables", "ABLBL":      "Consumer Durables",
+    "STOVEKRAFT":  "Consumer Durables", "SEIL":       "Consumer Durables",
+    "JARO":        "Consumer Durables", "AVL":        "Consumer Durables",
+    # Financial Services
+    "AIIL":        "Financial Services", "GCSL":      "Financial Services",
+    "TATAINVEST":  "Financial Services", "MUFIN":     "Financial Services",
+    # Oil & Gas
+    "ANTELOPUS":   "Oil & Gas",
+    # Media & Entertainment
+    "AQYLON":      "Media & Entertainment",
 }
 
 
