@@ -1121,6 +1121,77 @@ async def trigger_reclassify(request: Request):
         return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
 
+## ── IPO Manager ────────────────────────────────────────────────────────────
+
+
+@router.get("/admin/ipos")
+async def admin_list_ipos(request: Request):
+    """List all IPOs (active + listed) from the persistent store."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.services import ipo_store as _s  # noqa: PLC0415
+    return {"ipos": _s.get_all(), "counts": _s.count()}
+
+
+@router.post("/admin/ipos")
+async def admin_add_ipo(request: Request):
+    """Manually add or update an IPO record.
+
+    Body (all optional except companyName + symbol):
+      symbol, companyName, series, isSme, isReit,
+      openDate, closeDate, listingDate,
+      priceLow, priceHigh, lotSize, issueSizeCr
+    """
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON"})
+    name = (body.get("companyName") or "").strip()
+    sym  = (body.get("symbol") or "").strip().upper()
+    if not name:
+        return JSONResponse(status_code=400, content={"error": "companyName is required"})
+    if not sym:
+        import re  # noqa: PLC0415
+        sym = re.sub(r"[^A-Z0-9]", "", name.upper())[:24] or "MANUAL"
+    try:
+        from app.services import ipo_store as _s  # noqa: PLC0415
+        # Invalidate the in-process calendar cache so next load picks up the new entry.
+        from app.services import ipo_service as _is  # noqa: PLC0415
+        _is._RESULT_CACHE.clear()
+        record = _s.upsert_manual({**body, "symbol": sym})
+        return {"ok": True, "record": record}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
+@router.patch("/admin/ipos/{symbol}/mark-listed")
+async def admin_mark_ipo_listed(symbol: str, request: Request):
+    """Force an IPO into the 'listed' bucket (removes it from open/upcoming)."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.services import ipo_store as _s  # noqa: PLC0415
+    from app.services import ipo_service as _is  # noqa: PLC0415
+    _is._RESULT_CACHE.clear()
+    found = _s.mark_listed(symbol)
+    if not found:
+        return JSONResponse(status_code=404, content={"error": f"IPO {symbol!r} not found"})
+    return {"ok": True, "symbol": symbol.upper()}
+
+
+@router.delete("/admin/ipos/{symbol}")
+async def admin_delete_ipo(symbol: str, request: Request):
+    """Hard-delete an IPO record from the persistent store."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.services import ipo_store as _s  # noqa: PLC0415
+    from app.services import ipo_service as _is  # noqa: PLC0415
+    _is._RESULT_CACHE.clear()
+    removed = _s.delete(symbol)
+    return {"ok": removed, "symbol": symbol.upper()}
+
+
 @router.delete("/admin/macro/overrides/{indicator}")
 async def delete_macro_override(indicator: str, request: Request):
     """Remove an override so the macro service falls back to live sources."""

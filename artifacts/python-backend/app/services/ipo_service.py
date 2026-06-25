@@ -260,8 +260,9 @@ def _summarise_subscription(detail: dict) -> dict:
 
 
 class IpoService:
-    """Thin orchestration on top of NseService — pure read-through with TTL
-    cache so we never hammer NSE more than once per cache window."""
+    """Thin orchestration on top of NseService — read-through with TTL
+    cache. Successful NSE responses are persisted to the local SQLite
+    ipo_store so the calendar still works when NSE is blocked."""
 
     def __init__(self, nse: NseService):
         self._nse = nse
@@ -293,6 +294,8 @@ class IpoService:
             logger.debug("ipo calendar: serving from cache")
             return cached[1]
 
+        from . import ipo_store as _store  # noqa: PLC0415
+
         # NSE mainboard + ipowatch.in scrape concurrently.
         raw_main, gmp_table = await asyncio.gather(
             self._nse.fetch_nse(
@@ -319,9 +322,6 @@ class IpoService:
                 seen_names.add(_norm_name(norm.get("companyName") or ""))
 
         # ── Step 2: add SME / unknown issues from ipowatch.in ─────────────
-        # Any name in ipowatch that isn't already in NSE's list gets
-        # synthesised. SME issues land here exclusively because NSE
-        # doesn't publish them on the upcoming-issues endpoint.
         gmp_by_name = (gmp_table or {}).get("byName") or {}
         for _key, row in gmp_by_name.items():
             company = (row.get("name") or "").strip()
@@ -335,14 +335,60 @@ class IpoService:
             items.append(synth)
             seen_names.add(_norm_name(company))
 
+        # ── Step 3: persist to SQLite store (survives NSE blocks/restarts) ─
+        if items:
+            try:
+                saved = _store.upsert_nse(items)
+                logger.debug("ipo_store: saved/updated %d records", saved)
+            except Exception as e:
+                logger.warning("ipo_store write failed: %s", e)
+
+        # ── Step 4: fall back to store when NSE returned nothing ───────────
+        if not items:
+            try:
+                store_items = _store.get_active()
+                if store_items:
+                    logger.info("ipo calendar: NSE unavailable, serving %d items from store",
+                                len(store_items))
+                    items = [
+                        {
+                            "symbol":      r["symbol"],
+                            "companyName": r["companyName"],
+                            "series":      r["series"],
+                            "isSme":       r["isSme"],
+                            "isReit":      r["isReit"],
+                            "openDate":    r["openDate"],
+                            "closeDate":   r["closeDate"],
+                            "priceLow":    r["priceLow"],
+                            "priceHigh":   r["priceHigh"],
+                            "lotSize":     r["lotSize"],
+                            "issueSizeCr": r["issueSizeCr"],
+                            "status":      "open" if (r.get("openDate") or "9") <= datetime.utcnow().date().isoformat() else "upcoming",
+                            "fromGmpOnly": r["fromGmpOnly"],
+                            "fromCache":   True,
+                        }
+                        for r in store_items
+                    ]
+            except Exception as e:
+                logger.warning("ipo_store read failed: %s", e)
+
+        if not items:
+            # Also check for manually added IPOs
+            try:
+                manual = _store.get_active()
+                if manual:
+                    items = manual
+            except Exception:
+                pass
+
         if not items:
             return {"available": False, "message": "No IPO data available right now.",
-                    "open": [], "upcoming": []}
+                    "open": [], "upcoming": [], "listed": []}
 
         # Enrich OPEN issues with subscription multiples concurrently.
         open_items = [it for it in items if it["status"] == "open"]
         upcoming   = [it for it in items if it["status"] == "upcoming"]
-        if open_items:
+        if open_items and not any(it.get("fromCache") for it in open_items):
             details = await asyncio.gather(
                 *[self._fetch_detail(it["symbol"]) for it in open_items],
                 return_exceptions=True,
@@ -353,7 +399,9 @@ class IpoService:
                 else:
                     it["subscription"] = {"qib": None, "nii": None, "retail": None, "total": None}
 
-        # Tag every issue (open + upcoming) with GMP data when we can match.
+        # Tag every issue (open + upcoming) with live GMP data.
+        # GMP is NOT stored in the DB — it changes hourly and ipowatch
+        # already caches it for 10 min. We always merge it fresh here.
         for it in items:
             match = gmp_service.find_gmp(gmp_table, it["companyName"], it["symbol"])
             if match:
@@ -372,14 +420,34 @@ class IpoService:
         open_items.sort(key=lambda x: x.get("closeDate") or "9999")
         upcoming.sort(key=lambda x: x.get("openDate") or "9999")
 
+        # ── Step 5: recently listed (from persistent store) ────────────────
+        try:
+            listed = _store.get_listed(limit=20)
+            # Attach GMP for listed too (ipowatch shows closed status briefly)
+            for it in listed:
+                match = gmp_service.find_gmp(gmp_table, it["companyName"], it["symbol"])
+                it["gmp"] = {
+                    "premium":     match.get("gmp"),
+                    "estListing":  match.get("estListing"),
+                    "estGainPct":  match.get("estGainPct"),
+                    "lastUpdated": match.get("lastUpdated"),
+                    "matchedName": match.get("name"),
+                } if match else None
+        except Exception as e:
+            logger.warning("ipo_store listed read failed: %s", e)
+            listed = []
+
         result = {
             "available": True,
             "open":      open_items,
             "upcoming":  upcoming,
+            "listed":    listed,
             "fetchedAt": datetime.utcnow().isoformat() + "Z",
             "gmpSource": {
                 "url":       (gmp_table or {}).get("sourceUrl"),
                 "fetchedAt": (gmp_table or {}).get("fetchedAt"),
+                "note":      "GMP is live from ipowatch.in (refreshed every 10 min). "
+                             "It changes intra-day and drops to zero on listing day.",
             },
         }
         _RESULT_CACHE["result"] = (_time.monotonic(), result)
