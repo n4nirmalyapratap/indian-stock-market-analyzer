@@ -561,11 +561,25 @@ async def _curated_sector_rrg_onthefly(
         if not rrg:
             return None
         rs_pct = _rs_pct(series, bench_series, tf_obj["lookback"])
-        sc, ti = _subind_strength(rs_pct, None)
+        # Scale to match the NSE sector composite range (-1 → +1 z-score).
+        # ±15 % RS maps to ±1.0 composite.  Thresholds mirror _assign_tier().
+        composite: Optional[float] = round(rs_pct / 15.0, 4) if rs_pct is not None else None
+        if composite is None:
+            ti = None
+        elif composite >= 0.20:
+            ti = "DEEP_GREEN"
+        elif composite >= 0.05:
+            ti = "LIGHT_GREEN"
+        elif composite >= -0.05:
+            ti = "YELLOW"
+        elif composite >= -0.20:
+            ti = "ORANGE"
+        else:
+            ti = "DEEP_RED"
         return {
             "name": canon, **rrg,
             "rsPct": rs_pct,
-            "strengthScore": sc,
+            "strengthScore": composite,
             "tier": ti,
             "curated": True,
         }
