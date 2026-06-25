@@ -252,8 +252,10 @@ class ScanJob:
             # Daily/EOD features: never auto-scan during market hours (the EOD
             # data can't change intraday — serve the last sealed close), and once
             # closed a single post-close scan suffices for the whole session.
+            # Exception: a cold deploy (last is None) must still trigger the
+            # first scan even if the market is currently open.
             if market_open_now():
-                return True
+                return last is not None
             return bool(last) and last >= most_recent_nse_close()
         if not last:
             return False

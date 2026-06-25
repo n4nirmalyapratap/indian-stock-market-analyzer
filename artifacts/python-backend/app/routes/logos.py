@@ -124,11 +124,42 @@ async def admin_upload_logo(symbol: str, request: Request, file: UploadFile = Fi
         return JSONResponse(
             status_code=400,
             content={"error": f"Unsupported image type: {ct or 'unknown'}. "
-                              "Upload a PNG, JPEG, WebP, SVG, GIF or ICO."},
+                              "Upload a PNG, JPEG, WebP or GIF."},
+        )
+
+    # SVG is rejected: client-controlled XML that can embed scripts and be
+    # served back from the app origin — too high a risk even for admin uploads.
+    if ct == "image/svg+xml":
+        return JSONResponse(
+            status_code=400,
+            content={"error": "SVG uploads are not allowed for security reasons. "
+                               "Convert to PNG or WebP first."},
+        )
+
+    # Validate actual magic bytes so a mislabelled binary can't sneak through.
+    _MAGIC: dict[bytes, str] = {
+        b"\x89PNG":         "image/png",
+        b"\xff\xd8\xff":    "image/jpeg",
+        b"GIF8":            "image/gif",
+        b"\x00\x00\x01\x00": "image/x-icon",
+    }
+    sniffed: str | None = None
+    for sig, mime in _MAGIC.items():
+        if raw[: len(sig)] == sig:
+            sniffed = mime
+            break
+    # WebP: "RIFF" at [0:4] + "WEBP" at [8:12]
+    if sniffed is None and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        sniffed = "image/webp"
+    if sniffed is None:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "File contents do not match a recognised image format "
+                               "(PNG, JPEG, WebP, GIF or ICO)."},
         )
 
     result = await asyncio.to_thread(
-        save_uploaded_logo, symbol, raw, ct, updated_by=_admin_email(request)
+        save_uploaded_logo, symbol, raw, sniffed, updated_by=_admin_email(request)
     )
     return result
 

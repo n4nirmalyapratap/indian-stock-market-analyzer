@@ -567,9 +567,13 @@ async def scan_recent_results(
     """
     Full scan cycle:
       1. Poll NSE + BSE for recent result filers
-      2. For each, refresh XBRL data via financial_results_service
+      2. For each, refresh XBRL data via financial_results_service (concurrent)
       3. Score; upsert to earnings_alerts
       4. Fire Telegram alert if score >= threshold and not already sent
+
+    Concurrency: up to _XBRL_CONCURRENCY symbols are fetched in parallel,
+    bounded by a semaphore.  An overall _SCAN_DEADLINE_S wall-clock limit
+    ensures back-to-back scheduler invocations never overlap.
     """
     from ..services import financial_results_service as _frs  # noqa: PLC0415
 
@@ -584,42 +588,42 @@ async def scan_recent_results(
     filers = await _collect_filers()
     logger.info("Earnings scanner: %d unique filers (NSE+BSE)", len(filers))
 
-    scored = 0
-    alerted = 0
-    errors = 0
+    _XBRL_CONCURRENCY = 6    # parallel XBRL fetches
+    _SCAN_DEADLINE_S  = 90   # overall budget — fits inside the 120 s admin wait_for
 
-    for item in filers[:100]:
+    sem = asyncio.Semaphore(_XBRL_CONCURRENCY)
+    scored_list:  list[int] = []
+    alerted_list: list[int] = []
+    errors_list:  list[int] = []
+
+    async def _process_one(item: dict) -> None:
         symbol  = item["symbol"]
         company = item.get("company") or symbol
         try:
-            # Canonicalize symbol before any DB read/write so that the feed's
-            # raw symbol (which may differ in case or suffix) always maps to the
-            # same NSE ticker stored by financial_results_service.
             canon = canonical_symbol(symbol) or symbol
 
-            # Force-refresh XBRL data for each filer so a filing posted since
-            # the last 24 h cache is picked up immediately (not skipped).
-            try:
-                await asyncio.wait_for(
-                    _frs.get_financial_results(canon, basis="consolidated", quarters=6, force=True),
-                    timeout=20.0,
-                )
-            except asyncio.TimeoutError:
-                logger.debug("Earnings scanner: XBRL timeout %s", canon)
-            except Exception as exc:
-                logger.debug("Earnings scanner: XBRL error %s: %s", canon, str(exc)[:80])
+            # Force-refresh XBRL data so a filing posted since the last 24 h
+            # cache is picked up immediately (not skipped).
+            async with sem:
+                try:
+                    await asyncio.wait_for(
+                        _frs.get_financial_results(canon, basis="consolidated", quarters=6, force=True),
+                        timeout=20.0,
+                    )
+                except asyncio.TimeoutError:
+                    logger.debug("Earnings scanner: XBRL timeout %s", canon)
+                except Exception as exc:
+                    logger.debug("Earnings scanner: XBRL error %s: %s", canon, str(exc)[:80])
 
             quarters, actual_basis = _quarters_for_symbol(canon, "consolidated")
-            # Need at least current + one prior quarter for QoQ; YoY is optional
             if len(quarters) < 2:
-                continue
+                return
 
-            # period_end comes from the newest quarter in the DB (index 0)
-            period_end = quarters[0][0]   # date from (date, line_items) tuple
+            period_end     = quarters[0][0]
             period_end_str = period_end.isoformat()
 
             score, score_breakdown, key_metrics = _score_filing(quarters)
-            scored += 1
+            scored_list.append(1)
 
             should_telegram = (
                 score >= ALERT_THRESHOLD
@@ -635,7 +639,7 @@ async def scan_recent_results(
                     ok = await telegram_svc.send_message(telegram_chat_id, msg)
                     sent = bool(ok)
                     if sent:
-                        alerted += 1
+                        alerted_list.append(1)
                         logger.info("Earnings alert sent: %s score=%d/%d", canon, score, 10)
                 except Exception as tg_exc:
                     logger.warning("Earnings TG send failed %s: %s", canon, tg_exc)
@@ -644,10 +648,24 @@ async def scan_recent_results(
                           score, score_breakdown, key_metrics, sent)
 
         except Exception as exc:
-            errors += 1
+            errors_list.append(1)
             logger.debug("Earnings scanner: error %s: %s", symbol, str(exc)[:120])
 
-    result = {"scored": scored, "alerted": alerted, "errors": errors, "total": len(filers)}
+    tasks = [_process_one(item) for item in filers[:100]]
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=_SCAN_DEADLINE_S,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Earnings scanner: hit %ds deadline — partial results", _SCAN_DEADLINE_S)
+
+    result = {
+        "scored":  len(scored_list),
+        "alerted": len(alerted_list),
+        "errors":  len(errors_list),
+        "total":   len(filers),
+    }
     logger.info("Earnings scanner: done — %s", result)
     return result
 
