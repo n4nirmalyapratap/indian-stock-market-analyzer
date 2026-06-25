@@ -68,6 +68,17 @@ class AppAuthMiddleware(BaseHTTPMiddleware):
         if path.startswith("/api/logos/"):
             return await call_next(request)
 
+        # Aggregate/summary endpoints with no user-specific data — public so
+        # the dashboard card loads before the auth token is injected.
+        _PUBLIC_INSIGHTS = {
+            "/api/insights/volume-summary",
+            "/api/insights/global-indices",
+            "/api/insights/macro/strip",
+            "/api/insights/ipos",
+        }
+        if path in _PUBLIC_INSIGHTS:
+            return await call_next(request)
+
         if not path.startswith("/api") or path in self.SKIP_PATHS:
             return await call_next(request)
 
