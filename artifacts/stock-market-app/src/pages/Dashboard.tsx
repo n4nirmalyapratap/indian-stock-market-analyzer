@@ -898,7 +898,8 @@ export default function Dashboard() {
   const { data: newsData, isLoading: newsLoading } = useQuery({
     queryKey: ["news-dash"],
     queryFn:  () => api.newsFeed({ limit: 7 }),
-    staleTime: 5 * 60_000,
+    staleTime:       7 * 60_000,
+    refetchInterval: 7 * 60_000,
   });
 
   const { data: ipoData, isLoading: ipoLoading } = useQuery<any>({
