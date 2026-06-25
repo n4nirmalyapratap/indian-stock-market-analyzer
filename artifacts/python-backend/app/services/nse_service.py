@@ -68,7 +68,10 @@ HEADERS_BROWSER = {
     ),
     "Sec-Fetch-Site": "none",
     "Sec-Fetch-Mode": "navigate",
-    "Accept-Encoding": "gzip, deflate, br",
+    # Accept-Encoding intentionally omitted — httpx manages compression
+    # and decompression automatically when this header is absent. Setting
+    # it explicitly causes NSE's gzip responses to arrive as raw bytes
+    # that resp.json() cannot decode (UnicodeDecodeError 0xa0).
     "Accept-Language": "en-US,en;q=0.9,hi;q=0.8",
 }
 
@@ -82,7 +85,7 @@ HEADERS_API = {
     ),
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9,hi;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
+    # Accept-Encoding intentionally omitted — see HEADERS_BROWSER note above.
     "Referer": "https://www.nseindia.com",
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
