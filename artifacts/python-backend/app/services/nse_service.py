@@ -38,6 +38,12 @@ _CACHE_VERSION = 0
 
 _client: Optional[httpx.AsyncClient] = None
 _cookie_expiry: float = 0.0
+# After a failed cookie refresh, back off until this time before retrying. Stops
+# a persistent failure (e.g. corporate TLS interception / IP block) from
+# hammering NSE — and log-spamming — on every request. Calls just fall back to
+# Yahoo during the cooldown, as they already do on a cookie miss.
+_cookie_cooldown_until: float = 0.0
+_COOKIE_COOLDOWN_SEC = 120
 _refresh_lock = asyncio.Lock()
 
 NSE_BASE = "https://www.nseindia.com"
@@ -62,7 +68,10 @@ HEADERS_BROWSER = {
     ),
     "Sec-Fetch-Site": "none",
     "Sec-Fetch-Mode": "navigate",
-    "Accept-Encoding": "gzip, deflate, br",
+    # Accept-Encoding intentionally omitted — httpx manages compression
+    # and decompression automatically when this header is absent. Setting
+    # it explicitly causes NSE's gzip responses to arrive as raw bytes
+    # that resp.json() cannot decode (UnicodeDecodeError 0xa0).
     "Accept-Language": "en-US,en;q=0.9,hi;q=0.8",
 }
 
@@ -76,7 +85,7 @@ HEADERS_API = {
     ),
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9,hi;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
+    # Accept-Encoding intentionally omitted — see HEADERS_BROWSER note above.
     "Referer": "https://www.nseindia.com",
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
@@ -140,7 +149,7 @@ async def _refresh_cookies() -> None:
       2. GET https://www.nseindia.com/option-chain   (sets nsit, ak_bmsc, …)
     Using a persistent httpx.AsyncClient so cookies flow automatically.
     """
-    global _client, _cookie_expiry
+    global _client, _cookie_expiry, _cookie_cooldown_until
     try:
         new_client = httpx.AsyncClient(
             timeout=15.0,
@@ -160,15 +169,23 @@ async def _refresh_cookies() -> None:
         _cookie_expiry = time.time() + 20 * 60
         logger.debug("NSE cookies refreshed (two-page warm-up complete)")
     except Exception as exc:
-        logger.warning("NSE cookie refresh failed: %s", exc)
+        # Back off so we don't retry (and log) on every request while the
+        # failure persists. Logged once per cooldown window, not per attempt.
+        _cookie_cooldown_until = time.time() + _COOKIE_COOLDOWN_SEC
+        logger.warning("NSE cookie refresh failed (backing off %ds): %s",
+                       _COOKIE_COOLDOWN_SEC, exc)
 
 
 async def _ensure_cookies() -> None:
     global _cookie_expiry
     if _client and time.time() < _cookie_expiry:
         return
+    if time.time() < _cookie_cooldown_until:      # recent refresh failed — skip, use fallback
+        return
     async with _refresh_lock:
         if _client and time.time() < _cookie_expiry:
+            return
+        if time.time() < _cookie_cooldown_until:
             return
         await _refresh_cookies()
 

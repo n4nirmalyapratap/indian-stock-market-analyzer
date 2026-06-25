@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearch, useLocation, Link } from "wouter";
 import { api } from "@/lib/api";
-import { Search, TrendingUp, TrendingDown, AlertCircle, BarChart2, Activity, Users, ArrowLeft, Newspaper, Layers, PieChart } from "lucide-react";
+import { Search, TrendingUp, TrendingDown, AlertCircle, BarChart2, Activity, Users, ArrowLeft, Newspaper, Layers, PieChart, Calculator, GitBranch } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
 import AIAnalystButton from "@/components/AIAnalystButton";
 import StockFinancials from "@/components/financials/StockFinancials";
@@ -14,6 +14,8 @@ import { marketDataQueryOptions, pickMeta } from "@/lib/marketData";
 import StockLogo from "@/components/StockLogo";
 import TriFactorScoring from "@/components/TriFactorScoring";
 import ShareholdingPattern from "@/components/stock/ShareholdingPattern";
+import DCFView from "@/components/stock/DCFView";
+import EventAttribution from "@/components/stock/EventAttribution";
 
 const NIFTY100_QUICK = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","ITC","SBIN","BHARTIARTL","KOTAKBANK","BAJFINANCE","AXISBANK","MARUTI","HCLTECH","WIPRO","TITAN","SUNPHARMA"];
 
@@ -22,7 +24,7 @@ export default function StockLookup() {
   const [, navigate] = useLocation();
   const [input, setInput] = useState("");
   const [symbol, setSymbol] = useState("");
-  const [view, setView] = useState<"technicals" | "financials" | "news" | "scoring" | "shareholding">("technicals");
+  const [view, setView] = useState<"technicals" | "financials" | "news" | "scoring" | "shareholding" | "dcf" | "attribution">("technicals");
   // True only when ChartButton explicitly set the flag — cleared immediately so
   // coming back from Investor Council (or any other back-nav) never re-shows it.
   const cameFromLink = useRef((() => {
@@ -145,7 +147,9 @@ export default function StockLookup() {
                 <p className="text-2xl font-bold text-gray-900">₹{data.lastPrice?.toLocaleString("en-IN", { minimumFractionDigits: 2 }) || "—"}</p>
                 <p className={`text-sm font-medium flex items-center gap-1 justify-end ${(data.pChange || 0) >= 0 ? "text-green-600" : "text-red-500"}`}>
                   {(data.pChange || 0) >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                  {data.pChange >= 0 ? "+" : ""}{data.pChange?.toFixed(2) || "0"}% ({data.change >= 0 ? "+" : ""}{data.change?.toFixed(2) || "0"})
+                  {/* Coerce to Number — some providers return change/pChange as
+                      strings, which would crash `.toFixed` ("…toFixed is not a function"). */}
+                  {Number(data.pChange ?? 0) >= 0 ? "+" : ""}{Number(data.pChange ?? 0).toFixed(2)}% ({Number(data.change ?? 0) >= 0 ? "+" : ""}{Number(data.change ?? 0).toFixed(2)})
                 </p>
               </div>
             </div>
@@ -165,6 +169,11 @@ export default function StockLookup() {
                   {profile.industry && profile.industry !== profile.sector && (
                     <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700/50 text-gray-600 dark:text-gray-300">
                       {profile.industry}
+                    </span>
+                  )}
+                  {(profile as any).sub_sector && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-cyan-50 dark:bg-cyan-500/15 text-cyan-700 dark:text-cyan-300">
+                      {(profile as any).sub_sector}
                     </span>
                   )}
                 </div>
@@ -201,41 +210,55 @@ export default function StockLookup() {
           </div>
 
           {/* View toggle: Technicals | Financials | News */}
-          <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1 w-fit">
+          <div className="w-full overflow-x-auto">
+            <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1 w-fit min-w-max">
             <button
               onClick={() => setView("technicals")}
               data-testid="technicals-tab-btn"
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "technicals" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+              className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${view === "technicals" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
             >
-              <Activity className="w-3.5 h-3.5" /> Technicals
+              <Activity className="w-3.5 h-3.5 shrink-0" /> <span className="hidden sm:inline">Technicals</span>
             </button>
             <button
               onClick={() => setView("financials")}
               data-testid="financials-tab-btn"
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "financials" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+              className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${view === "financials" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
             >
-              <BarChart2 className="w-3.5 h-3.5" /> Financials
+              <BarChart2 className="w-3.5 h-3.5 shrink-0" /> <span className="hidden sm:inline">Financials</span>
             </button>
             <button
               onClick={() => setView("news")}
               data-testid="news-tab-btn"
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "news" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+              className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${view === "news" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
             >
-              <Newspaper className="w-3.5 h-3.5" /> News
+              <Newspaper className="w-3.5 h-3.5 shrink-0" /> <span className="hidden sm:inline">News</span>
             </button>
             <button
               onClick={() => setView("scoring")}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "scoring" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+              className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${view === "scoring" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
             >
-              <Layers className="w-3.5 h-3.5" /> Scoring
+              <Layers className="w-3.5 h-3.5 shrink-0" /> <span className="hidden sm:inline">Scoring</span>
             </button>
             <button
               onClick={() => setView("shareholding")}
               data-testid="shareholding-tab-btn"
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all ${view === "shareholding" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+              className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${view === "shareholding" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
             >
-              <PieChart className="w-3.5 h-3.5" /> Shareholding
+              <PieChart className="w-3.5 h-3.5 shrink-0" /> <span className="hidden sm:inline">Shareholding</span>
             </button>
+            <button
+              onClick={() => setView("dcf")}
+              className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${view === "dcf" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+            >
+              <Calculator className="w-3.5 h-3.5 shrink-0" /> <span className="hidden sm:inline">DCF Value</span>
+            </button>
+            <button
+              onClick={() => setView("attribution")}
+              className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${view === "attribution" ? "bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 shadow-sm" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+            >
+              <GitBranch className="w-3.5 h-3.5 shrink-0" /> <span className="hidden sm:inline">Attribution</span>
+            </button>
+            </div>
           </div>
 
           {/* Technicals view — TradingView-style Indicators Summary */}
@@ -261,6 +284,19 @@ export default function StockLookup() {
           {/* Shareholding pattern — quarterly Promoter / FII / DII / Public % */}
           {view === "shareholding" && (
             <ShareholdingPattern symbol={data.symbol} />
+          )}
+
+          {/* DCF Intrinsic Value */}
+          {view === "dcf" && (
+            <DCFView symbol={data.symbol} />
+          )}
+
+          {/* Event Attribution Timeline */}
+          {view === "attribution" && (
+            <EventAttribution
+              symbol={data.symbol}
+              companyName={data.companyName || data.symbol}
+            />
           )}
         </div>
       )}

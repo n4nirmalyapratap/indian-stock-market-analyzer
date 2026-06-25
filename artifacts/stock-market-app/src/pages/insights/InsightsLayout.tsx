@@ -2,7 +2,7 @@ import { useLocation } from "wouter";
 import {
   LayoutGrid, BarChart3, FileText, PieChart, Briefcase,
   Ban, Truck, LineChart, Rocket, CalendarClock,
-  Globe, ArrowLeft, ChevronRight,
+  Globe, ArrowLeft, ChevronRight, Zap,
 } from "lucide-react";
 import HeatmapTab from "./tabs/Heatmap";
 import FiiDiiTab from "./tabs/FiiDii";
@@ -15,6 +15,7 @@ import TopDeliveriesTab from "./tabs/TopDeliveries";
 import MarketValuationTab from "./tabs/MarketValuation";
 import IpoTab from "./tabs/Ipo";
 import MacroTab from "./tabs/Macro";
+import EarningsRadarTab from "./tabs/EarningsRadar";
 
 const TABS = [
   {
@@ -70,6 +71,15 @@ const TABS = [
     Component: CompanyFilingsTab,
     color: "text-emerald-500",
     bg: "bg-emerald-50 dark:bg-emerald-500/10"
+  },
+  {
+    slug: "earnings-radar",
+    label: "Earnings Radar",
+    description: "Live earnings beat/miss scanner — scores quarterly results on revenue, PAT, OPM and quality.",
+    icon: Zap,
+    Component: EarningsRadarTab,
+    color: "text-yellow-500",
+    bg: "bg-yellow-50 dark:bg-yellow-500/10"
   },
   {
     slug: "mf-holdings",

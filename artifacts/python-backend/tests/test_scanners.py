@@ -625,7 +625,7 @@ class TestEvalCondition:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestDefaultScanners:
-    """Each of the 8 built-in scanners must be structurally sound."""
+    """Each built-in scanner must be structurally sound."""
 
     REQUIRED_FIELDS = {"id", "name", "description", "universe", "logic", "conditions",
                        "createdAt", "updatedAt"}

@@ -24,9 +24,10 @@ import { Search } from "lucide-react";
 import { useCustomAuth } from "@/context/CustomAuthContext";
 
 export type StockSuggestion = {
-  symbol:   string;
-  name?:    string | null;
-  category?: string;
+  symbol:     string;
+  name?:      string | null;
+  category?:  string;
+  sub_sector?: string | null;
 };
 
 type Props = {
@@ -222,6 +223,9 @@ export function StockCombobox({
                 </div>
                 {s.name && (
                   <div className="text-xs text-gray-500 truncate">{s.name}</div>
+                )}
+                {s.sub_sector && (
+                  <div className="text-[10px] text-indigo-500 dark:text-indigo-400 truncate">{s.sub_sector}</div>
                 )}
               </div>
               {s.category && (

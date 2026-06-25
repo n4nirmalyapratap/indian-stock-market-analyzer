@@ -208,6 +208,42 @@ def refresh_logo(
     }
 
 
+# Images an admin may upload directly when Dhan has no logo.
+ALLOWED_UPLOAD_TYPES = {
+    "image/png", "image/jpeg", "image/webp",
+    "image/svg+xml", "image/gif", "image/x-icon", "image/vnd.microsoft.icon",
+}
+MAX_UPLOAD_BYTES = 2 * 1024 * 1024  # 2 MB — logos are tiny
+
+
+def save_uploaded_logo(
+    symbol: str,
+    image_data: bytes,
+    content_type: str,
+    *,
+    updated_by: str = "admin",
+) -> dict:
+    """Store an admin-uploaded logo image directly (no Dhan fetch).
+
+    Marks the row fetch_ok=TRUE so it serves immediately and the stale-miss
+    auto-retry never overwrites it. Returns the same summary shape as
+    `refresh_logo` for the admin UI.
+    """
+    ensure_primary_schema()
+    sym = _normalise(symbol)
+    if not sym:
+        raise ValueError("empty symbol")
+    ct = (content_type or "image/png").split(";")[0].strip().lower()
+    _upsert_logo(sym, sym, image_data, ct, True, updated_by=updated_by)
+    return {
+        "symbol": sym,
+        "fetch_symbol": sym,
+        "ok": True,
+        "bytes_size": len(image_data),
+        "content_type": ct,
+    }
+
+
 def list_logos(limit: int = 500, offset: int = 0) -> list[dict]:
     """Return cached logo rows ordered by symbol — for the admin table."""
     ensure_primary_schema()

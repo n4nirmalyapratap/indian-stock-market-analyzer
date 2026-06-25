@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchAdmin } from "@/lib/api";
 import {
   Layers, Plus, Trash2, RefreshCw, ChevronDown, ChevronRight,
-  CheckCircle2, AlertTriangle, Search, X,
+  CheckCircle2, AlertTriangle, Search, X, Bell,
 } from "lucide-react";
 
 type TaxonomyEntry = {
@@ -35,6 +35,15 @@ type SubsectorsResp = {
   overrides: OverrideRow[];
   totalSubIndustries: number;
   totalOverrides: number;
+};
+
+type UnclassifiedItem = {
+  symbol: string;
+  sector: string | null;
+  industry: string | null;
+  first_seen_ms: number;
+  last_seen_ms: number;
+  hit_count: number;
 };
 
 function fmtCap(v: number | null): string {
@@ -69,9 +78,26 @@ export default function SubsectorManagerPage() {
     setTimeout(() => setToast(null), 4000);
   }
 
+  const [tab, setTab] = useState<"taxonomy" | "unclassified">("taxonomy");
+
   const { data, isLoading, isError } = useQuery<SubsectorsResp>({
     queryKey: ["admin-subsectors"],
     queryFn: () => fetchAdmin<SubsectorsResp>("/admin/subsectors"),
+  });
+
+  const { data: unclassifiedData, refetch: refetchUnclassified } = useQuery<{ items: UnclassifiedItem[]; total: number }>({
+    queryKey: ["admin-unclassified"],
+    queryFn: () => fetchAdmin("/admin/subsectors/unclassified"),
+    refetchInterval: 30_000,
+  });
+
+  const dismissUnclassified = useMutation({
+    mutationFn: (sym: string) => fetchAdmin(`/admin/subsectors/unclassified/${sym}`, { method: "DELETE" }),
+    onSuccess: () => {
+      refetchUnclassified();
+      showToast(true, "Dismissed from queue.");
+    },
+    onError: (e: any) => showToast(false, e.message || "Dismiss failed"),
   });
 
   const reclassify = useMutation({
@@ -269,6 +295,92 @@ export default function SubsectorManagerPage() {
         </div>
       )}
 
+      {/* Tab bar */}
+      <div className="flex gap-1 bg-gray-100 rounded-xl p-1 w-fit">
+        <button
+          onClick={() => setTab("taxonomy")}
+          className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition ${tab === "taxonomy" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+        >
+          <Layers className="w-3.5 h-3.5" />
+          Taxonomy
+        </button>
+        <button
+          onClick={() => setTab("unclassified")}
+          className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition ${tab === "unclassified" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+        >
+          <Bell className="w-3.5 h-3.5" />
+          Needs Classification
+          {(unclassifiedData?.total ?? 0) > 0 && (
+            <span className="ml-0.5 px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-orange-500 text-white">
+              {unclassifiedData!.total}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* ── Needs Classification tab ───────────────────────────────────────────── */}
+      {tab === "unclassified" && (
+        <div className="space-y-3">
+          <p className="text-xs text-gray-500">
+            Stocks that users have looked up but have no sub-sector classification yet. Click <strong>Classify</strong> to assign one, or <strong>Dismiss</strong> to skip it permanently for this session.
+          </p>
+          {(unclassifiedData?.items ?? []).length === 0 ? (
+            <div className="rounded-xl border border-gray-100 bg-gray-50 p-10 text-center text-sm text-gray-400">
+              No unclassified stocks in queue. Great coverage!
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+              <div className="grid grid-cols-12 gap-3 px-5 py-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400 border-b border-gray-100">
+                <div className="col-span-3">Symbol</div>
+                <div className="col-span-3">Sector</div>
+                <div className="col-span-3">Industry</div>
+                <div className="col-span-2 text-right">Views</div>
+                <div className="col-span-1" />
+              </div>
+              {(unclassifiedData?.items ?? []).map(item => (
+                <div key={item.symbol} className="grid grid-cols-12 gap-3 px-5 py-3 items-center border-b border-gray-50 last:border-b-0 hover:bg-gray-50 transition">
+                  <div className="col-span-3 font-mono font-semibold text-sm text-gray-800">{item.symbol}</div>
+                  <div className="col-span-3 text-xs text-gray-500 truncate">{item.sector || "—"}</div>
+                  <div className="col-span-3 text-xs text-gray-500 truncate">{item.industry || "—"}</div>
+                  <div className="col-span-2 text-right">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-orange-50 text-orange-700">
+                      {item.hit_count}×
+                    </span>
+                  </div>
+                  <div className="col-span-1 flex justify-end items-center gap-1">
+                    <button
+                      title="Classify this stock"
+                      onClick={() => {
+                        setAddSymbol(item.symbol);
+                        setAddSector(item.sector || "");
+                        setAddIndustry(item.industry || "");
+                        setAddSub("");
+                        setAddNote("Auto-detected as unclassified");
+                        setAddOpen(true);
+                      }}
+                      className="p-1 rounded text-gray-300 hover:text-indigo-600 hover:bg-indigo-50 transition"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      title="Dismiss from queue"
+                      onClick={() => dismissUnclassified.mutate(item.symbol)}
+                      disabled={dismissUnclassified.isPending}
+                      className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Taxonomy tab ──────────────────────────────────────────────────────── */}
+      {tab === "taxonomy" && <>
+
       {/* Search */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -421,6 +533,7 @@ export default function SubsectorManagerPage() {
         Admin overrides let you add any NSE symbol that Yahoo, BSE or NSE data providers miss.
         The symbol will appear in the drill-down immediately; it contributes to the market-cap-weighted index calculation once Yahoo fills in its market cap (tap <em>Reclassify</em> to trigger this now rather than waiting for the weekly scheduler).
       </div>
+      </>}
     </div>
   );
 }

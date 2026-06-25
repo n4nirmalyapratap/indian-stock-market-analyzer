@@ -37,13 +37,30 @@ interface IpoIssue {
   fromGmpOnly?: boolean;   // true for BSE/SME IPOs not on NSE's feed
 }
 
+interface ListedIssue {
+  symbol:      string;
+  companyName: string;
+  series:      string;
+  isSme:       boolean;
+  isReit:      boolean;
+  openDate:    string | null;
+  closeDate:   string | null;
+  priceLow:    number | null;
+  priceHigh:   number | null;
+  lotSize:     number | null;
+  issueSizeCr: number | null;
+  source:      string;
+  gmp?:        Gmp | null;
+}
+
 interface IpoResponse {
   available: boolean;
   message?:  string;
   open:      IpoIssue[];
   upcoming:  IpoIssue[];
+  listed:    ListedIssue[];
   fetchedAt?: string;
-  gmpSource?: { url: string | null; fetchedAt: string | null };
+  gmpSource?: { url: string | null; fetchedAt: string | null; note?: string | null };
 }
 
 const fmtDate = (iso: string | null) => {
@@ -283,6 +300,40 @@ const UpcomingIssueCard = ({ issue }: { issue: IpoIssue }) => {
   );
 };
 
+const ListedIssueCard = ({ issue }: { issue: ListedIssue }) => (
+  <Card className="p-4 flex flex-col gap-3">
+    <div className="flex items-start justify-between gap-2">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 mb-1">
+          <SeriesBadge issue={issue as any} />
+          <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400">
+            Listed
+          </span>
+        </div>
+        <h3 className="text-sm font-bold text-gray-900 dark:text-white truncate" title={issue.companyName}>
+          {issue.companyName}
+        </h3>
+        <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate">{issue.symbol}</p>
+      </div>
+    </div>
+    <div className="grid grid-cols-3 gap-2 text-center">
+      <div>
+        <p className="text-[10px] uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold">Price Band</p>
+        <p className="text-xs font-bold text-gray-900 dark:text-white tabular-nums">{fmtBand(issue.priceLow, issue.priceHigh)}</p>
+      </div>
+      <div>
+        <p className="text-[10px] uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold">Issue Size</p>
+        <p className="text-xs font-bold text-gray-900 dark:text-white tabular-nums">{fmtMoney(issue.issueSizeCr)}</p>
+      </div>
+      <div>
+        <p className="text-[10px] uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold">Closed</p>
+        <p className="text-xs font-bold text-gray-900 dark:text-white tabular-nums">{fmtDate(issue.closeDate)}</p>
+      </div>
+    </div>
+    {issue.gmp && <GmpBlock gmp={issue.gmp} />}
+  </Card>
+);
+
 export default function Ipo() {
   const [tab, setTab] = useState<Tab>("open");
 
@@ -297,7 +348,7 @@ export default function Ipo() {
   const counts = useMemo(() => ({
     open:     data?.open?.length     ?? 0,
     upcoming: data?.upcoming?.length ?? 0,
-    listed:   0,
+    listed:   data?.listed?.length   ?? 0,
   }), [data]);
 
   // Derived stats for the small "Top Picks"-style strip above the cards.
@@ -318,7 +369,8 @@ export default function Ipo() {
     { value: "listed",   label: "Recently Listed" },
   ];
 
-  const items = tab === "open" ? data?.open ?? [] : tab === "upcoming" ? data?.upcoming ?? [] : [];
+  const items    = tab === "open" ? data?.open ?? [] : tab === "upcoming" ? data?.upcoming ?? [] : [];
+  const listedItems = data?.listed ?? [];
 
   return (
     <div>
@@ -373,12 +425,18 @@ export default function Ipo() {
 
       {isLoading && <Loading label="Fetching IPO calendar…" />}
 
-      {!isLoading && tab === "listed" && (
+      {!isLoading && tab === "listed" && listedItems.length === 0 && (
         <EmptyState
           icon={<Calendar className="w-10 h-10" />}
-          title="Recently listed history coming soon"
-          message="NSE doesn't expose a public listed-IPO endpoint. We're evaluating a Chittorgarh integration to power this tab."
+          title="No recently listed IPOs yet"
+          message="IPOs automatically move here 7 days after their subscription window closes. Check back after the next listing cycle."
         />
+      )}
+
+      {!isLoading && tab === "listed" && listedItems.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          {listedItems.map(it => <ListedIssueCard key={it.symbol} issue={it} />)}
+        </div>
       )}
 
       {!isLoading && tab !== "listed" && items.length === 0 && (

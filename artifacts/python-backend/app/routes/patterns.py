@@ -33,6 +33,12 @@ router.add_api_route("",  _get_patterns, methods=["GET"])
 router.add_api_route("/", _get_patterns, methods=["GET"])
 
 
+@router.get("/status")
+async def scan_status():
+    """Lightweight scan progress for the nav badge — no pattern payload."""
+    return svc.patterns.scan_status()
+
+
 @router.post("/scan")
 async def trigger_scan():
     return await svc.patterns.trigger_scan()

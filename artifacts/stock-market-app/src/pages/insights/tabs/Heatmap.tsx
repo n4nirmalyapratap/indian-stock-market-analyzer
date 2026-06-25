@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { fetchApi } from "@/lib/api";
 import { Loading, ErrorState, EmptyState, MenuDropdown } from "../_shared";
-import { LayoutGrid, Zap, ArrowLeft } from "lucide-react";
+import { LayoutGrid, Zap, ArrowLeft, ChevronDown, ChevronUp } from "lucide-react";
 import { motion, AnimatePresence, useMotionValue, useTransform, useReducedMotion } from "framer-motion";
 import DataFreshness from "@/components/DataFreshness";
 import { pickMeta, marketDataQueryOptions } from "@/lib/marketData";
@@ -180,11 +180,12 @@ export default function Heatmap() {
   );
   const heatmapMeta = pickMeta(data);
 
-  // Clear hover/click state whenever the underlying tiles change so transient
-  // animations never play on stale or vanished tiles.
+  // Clear hover/click/expand state whenever the underlying tiles change so
+  // transient animations never play on stale or vanished tiles.
   useEffect(() => {
     setHoverItem(null);
     setClicked(null);
+    setExpanded(false);
     navigatingRef.current = false;
   }, [index, perf, data?.items]);
 
@@ -213,20 +214,43 @@ export default function Heatmap() {
     return Math.max(-1, Math.min(1, avg / 2)); // ±2% saturates
   }, [items]);
 
-  const [containerRef, containerW, containerH] = useElementSize<HTMLDivElement>();
+  // Max tiles shown in the compact (non-expanded) view.
+  const INITIAL_LIMIT = 30;
+  const [expanded, setExpanded] = useState(false);
+
+  // Measure the scroll viewport — not the canvas — so containerH stays
+  // constant regardless of how tall the expanded canvas is.
+  const [scrollRef, scrollW, scrollH] = useElementSize<HTMLDivElement>();
+
+  // Tiles actually rendered: top-30 when compact, all when expanded.
+  const displayItems = useMemo(
+    () => expanded ? items : items.slice(0, INITIAL_LIMIT),
+    [items, expanded]
+  );
+
+  // When the expanded canvas is taller than the viewport, the ratio of
+  // (all items / 30) tells us how many "screens" tall it should be so
+  // each tile stays roughly the same physical size as the compact view.
+  const canvasH = useMemo(() => {
+    if (!scrollH) return scrollH;
+    if (!expanded) return scrollH;
+    return Math.ceil(items.length / INITIAL_LIMIT) * scrollH;
+  }, [expanded, items.length, scrollH]);
+
+  const hasMore = items.length > INITIAL_LIMIT;
 
   const rects = useMemo(() => {
-    if (!containerW || !containerH || items.length === 0) return null;
-    
+    if (!scrollW || !canvasH || displayItems.length === 0) return null;
+
     // Visibility Scaling for large indices
-    const isLarge = items.length > 100;
-    const weightFor = sortBy === "marketCap" 
-      ? (it: HeatmapItem) => isLarge ? Math.pow(it.marketCap, 0.45) : it.marketCap 
-      : sortBy === "change" 
-      ? (it: HeatmapItem) => Math.abs(it.changePct) + 0.5 
+    const isLarge = displayItems.length > 100;
+    const weightFor = sortBy === "marketCap"
+      ? (it: HeatmapItem) => isLarge ? Math.pow(it.marketCap, 0.45) : it.marketCap
+      : sortBy === "change"
+      ? (it: HeatmapItem) => Math.abs(it.changePct) + 0.5
       : () => 1;
 
-    let results = squarify(items, containerW, containerH, weightFor);
+    const results = squarify(displayItems, scrollW, canvasH, weightFor);
 
     // Physical Floor to ensure tiles are at least 4x4
     return results.map(r => ({
@@ -234,7 +258,7 @@ export default function Heatmap() {
       w: Math.max(r.w, 4),
       h: Math.max(r.h, 4)
     }));
-  }, [items, sortBy, containerW, containerH]);
+  }, [displayItems, sortBy, scrollW, canvasH]);
 
   return (
     <div className="h-full min-h-0 flex flex-col overflow-hidden relative bg-slate-100 dark:bg-slate-950">
@@ -346,14 +370,20 @@ export default function Heatmap() {
       {isLoading && <div className="flex-1 flex items-center justify-center"><Loading label="Generating aesthetic heatmap..." /></div>}
       {error && <ErrorState message={(error as Error).message} />}
 
-      {/* The Heatmap Canvas */}
-      <div ref={containerRef} className="flex-1 min-h-0 relative m-2 md:m-4 rounded-3xl overflow-hidden border border-slate-200 dark:border-white/5 shadow-2xl bg-white/40 dark:bg-black/20">
+      {/* The Heatmap Canvas — scroll wrapper measures the visible viewport;
+          the inner canvas div can be taller than the viewport when expanded. */}
+      <div
+        ref={scrollRef}
+        className={`flex-1 min-h-0 relative m-2 md:m-4 rounded-3xl border border-slate-200 dark:border-white/5 shadow-2xl bg-white/40 dark:bg-black/20 ${expanded ? "overflow-y-auto" : "overflow-hidden"}`}
+      >
+        {/* Inner canvas — absolute children are positioned within this */}
+        <div className="relative w-full" style={{ height: canvasH || "100%" }}>
         {/* Keying the AnimatePresence by index+perf forces every tile to
             unmount/remount when the user switches index or timeframe, so
             the wave-stagger entrance animation always replays — even when
             data comes back instantly from cache. Sort changes keep the
             same key so tiles re-flow smoothly without re-entering. */}
-        <AnimatePresence mode="popLayout" key={`${index}-${perf}`}>
+        <AnimatePresence mode="popLayout" key={`${index}-${perf}-${expanded}`}>
           {rects?.map(({ x, y, w, h, item }, idx) => {
             const style = bucket(item.changePct);
             const isSmall = w < 70 || h < 50;
@@ -367,7 +397,7 @@ export default function Heatmap() {
             // unfurls outward like a shockwave. Tiles closer to the corner
             // land first; the farthest tile is delayed by ~280ms.
             const dist = (x + y);
-            const maxDist = (containerW + containerH) || 1;
+            const maxDist = (scrollW + (canvasH || scrollH)) || 1;
             const fanDelay = reduced ? 0 : (dist / maxDist) * 0.28;
 
             return (
@@ -497,7 +527,7 @@ export default function Heatmap() {
                       className={`font-black tracking-tighter uppercase leading-none mb-0.5 ${style.text} drop-shadow-sm`}
                       style={{ fontSize: Math.max(9, Math.min(24, Math.floor(Math.min(w, h) / 4))) }}
                     >
-                      {cleanSymbol}
+                      {item.name || cleanSymbol}
                     </span>
                     {!isSmall && (
                       <motion.div
@@ -516,11 +546,47 @@ export default function Heatmap() {
             );
           })}
         </AnimatePresence>
-      </div>
+        </div>{/* ← inner canvas */}
+
+        {/* Unavailability overlay — covers the scroll wrapper */}
+        {data?.available === false && (
+          <div className="absolute inset-0 flex items-center justify-center z-40 bg-slate-100/80 dark:bg-slate-950/80 backdrop-blur-md">
+            <EmptyState title="Index unavailable" message={data.message || "This index doesn't support heatmap visualization yet."} icon={<LayoutGrid className="w-10 h-10 text-indigo-500/50"/>} />
+          </div>
+        )}
+
+        {/* Expand / Collapse pill — sticky at bottom of scroll viewport.
+            Only rendered when the selected index has more than 30 stocks. */}
+        {hasMore && !isLoading && (
+          <div className={`${expanded ? "sticky" : "absolute"} bottom-4 left-0 right-0 flex justify-center z-30 pointer-events-none`}>
+            <motion.button
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.35, duration: 0.3 }}
+              onClick={() => setExpanded(e => !e)}
+              className="pointer-events-auto flex items-center gap-1.5 px-4 py-2 rounded-full bg-slate-900/85 dark:bg-black/75 backdrop-blur-xl border border-white/15 shadow-xl text-white text-[11px] font-black tracking-wide hover:bg-slate-800/90 hover:border-white/30 active:scale-95 transition-all"
+            >
+              {expanded ? (
+                <>
+                  <ChevronUp className="w-3.5 h-3.5 text-indigo-400" />
+                  Less data
+                  <ChevronUp className="w-3.5 h-3.5 text-indigo-400" />
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="w-3.5 h-3.5 text-indigo-400" />
+                  +{items.length - INITIAL_LIMIT} more
+                  <ChevronDown className="w-3.5 h-3.5 text-indigo-400" />
+                </>
+              )}
+            </motion.button>
+          </div>
+        )}
+      </div>{/* ← scroll wrapper */}
 
       {/* Floating tooltip — spring-animated, follows cursor via motion values
           (no parent re-render on mousemove). Mounts/unmounts only when the
-          hovered *item* changes. */}
+          hovered *item* changes. Fixed position so it escapes the scroll wrapper. */}
       <AnimatePresence>
         {hoverItem && (() => {
           const cleanSymbol = hoverItem.symbol.split(".")[0];
@@ -572,12 +638,6 @@ export default function Heatmap() {
           );
         })()}
       </AnimatePresence>
-
-      {data?.available === false && (
-        <div className="absolute inset-0 flex items-center justify-center z-40 bg-slate-100/80 dark:bg-slate-950/80 backdrop-blur-md">
-          <EmptyState title="Index unavailable" message={data.message || "This index doesn't support heatmap visualization yet."} icon={<LayoutGrid className="w-10 h-10 text-indigo-500/50"/>} />
-        </div>
-      )}
     </div>
   );
 }

@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { useSearch } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type ConditionSide, type Condition, type Scanner, type ScanResult, type ScannerCreateInput } from "@/lib/api";
 import {
@@ -553,6 +554,7 @@ type RightPanel = "empty" | "builder" | "results";
 
 export default function Scanners() {
   const qc = useQueryClient();
+  const search = useSearch();
 
   // State
   const [rightPanel, setRightPanel] = useState<RightPanel>("empty");
@@ -564,6 +566,23 @@ export default function Scanners() {
   // Active category filter. "All" → grouped view with sticky headers.
   // A specific category → flat filtered list.
   const [categoryFilter, setCategoryFilter] = useState<string>("All");
+
+  // Deep-link: ?preset=volume-spike → auto-load Volume Spike template
+  const presetApplied = useRef(false);
+  useEffect(() => {
+    if (presetApplied.current) return;
+    const params = new URLSearchParams(search);
+    const preset = params.get("preset");
+    if (preset === "volume-spike") {
+      const tpl = TEMPLATES.find(t => t.label === "Volume Spike 2×");
+      if (tpl) {
+        const conds: Condition[] = tpl.conditions.map(c => ({ ...c, id: uid() } as Condition));
+        setDraft({ ...blankDraft(), name: "Volume Surge", conditions: conds });
+        setRightPanel("builder");
+        presetApplied.current = true;
+      }
+    }
+  }, [search]);
 
   const { data: scannersResp, isLoading } = useQuery(
     marketDataQueryOptions(["scanners"], api.scannersWithMeta),
@@ -743,10 +762,10 @@ export default function Scanners() {
       )}
 
       {/* Split layout */}
-      <div className="flex gap-5 flex-1 min-h-0">
+      <div className="flex flex-col lg:flex-row gap-5 flex-1 min-h-0">
 
         {/* ── LEFT: Scanner List ────────────────────────────────────────────── */}
-        <div className="w-80 flex-shrink-0 flex flex-col overflow-hidden">
+        <div className="w-full lg:w-80 lg:flex-shrink-0 flex flex-col overflow-hidden">
           {/* Category filter pills — sticky at the top of the column.
               Shows All / each category with the scanner count per group.
               Clicking a pill switches between "All grouped" and "single
@@ -775,7 +794,7 @@ export default function Scanners() {
             </div>
           )}
 
-          <div className="flex-1 flex flex-col gap-3 overflow-y-auto pb-4 pr-1">
+          <div className="max-h-[55vh] lg:max-h-none flex-1 flex flex-col gap-3 overflow-y-auto pb-4 pr-1">
             {isLoading ? (
               [...Array(3)].map((_, i) => <div key={i} className="h-36 bg-gray-100 animate-pulse rounded-xl" />)
             ) : scanners.length === 0 ? (

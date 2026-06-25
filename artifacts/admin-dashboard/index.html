@@ -4,15 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
     <title>Admin Dashboard</title>
-    <!-- Dynamic Runtime Environment Variables -->
-    <script>
-      (function() {
-        var s = document.createElement('script');
-        s.src = '/admin/env.js';
-        s.async = false;
-        document.head.appendChild(s);
-      })();
-    </script>
+    <!-- Dynamic Runtime Environment Variables.
+         Loaded as a parser-blocking classic script so window.__ENV__ is
+         GUARANTEED to be set before the deferred app module (type="module")
+         executes. A dynamically-injected script (even with async=false) is not
+         ordered against deferred module scripts, which caused a startup race
+         where the app read VITE_GOOGLE_CLIENT_ID before env.js had run. -->
+    <script src="/admin/env.js"></script>
     <link rel="icon" type="image/png" href="/niftynodes-logo-transparent.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

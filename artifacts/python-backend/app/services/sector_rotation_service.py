@@ -51,11 +51,32 @@ def _cache_get(key: str) -> Optional[Any]:
     return None
 
 
+def _seconds_until_next_open() -> int:
+    """Seconds from now until the next NSE open (next weekday 09:15 IST).
+
+    Used as the closed-market cache TTL so a build done after the close stays
+    fresh for the WHOLE closed session instead of rebuilding every few hours
+    (the old flat 4h TTL forced repeated cold rebuilds overnight and across
+    weekends). The data is frozen between closes, so the only real invalidator
+    is the market reopening — and `_flush_if_state_changed` already drops the
+    cache precisely on that transition. This bound is the backstop. Skips
+    weekends; holidays at worst cause one extra rebuild on the holiday morning.
+    """
+    from . import market_cache_service as _disk  # noqa: PLC0415
+    now = _disk._now_ist()
+    nxt = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    if now >= nxt:
+        nxt += dt.timedelta(days=1)
+    while nxt.weekday() >= 5:   # Sat=5, Sun=6 → roll to Monday
+        nxt += dt.timedelta(days=1)
+    return max(600, int((nxt - now).total_seconds()))
+
+
 def _cache_set(key: str, data: Any, ttl: Optional[int] = None) -> None:
     _flush_if_state_changed()
     from . import market_cache_service as _disk  # noqa: PLC0415
     if ttl is None:
-        ttl = 600 if _disk.is_market_open() else 4 * 3600
+        ttl = 600 if _disk.is_market_open() else _seconds_until_next_open()
     _cache[key] = {"data": data, "expiry": time.time() + ttl}
 
 # ── RRG math (pure) ──────────────────────────────────────────────────────────
@@ -324,115 +345,90 @@ async def sector_rrg(timeframe: str = "short") -> dict:
     entities.sort(key=lambda e: (e.get("rsPct") is not None, e.get("rsPct") or -1e9), reverse=True)
     # Confluence: attach the Market-Sectors composite (the 'Strength' lens).
     await _attach_sector_strength(entities)
+
+    # Auto-inject curated sectors from _EXTRA_SECTOR_MAP that have no NSE Yahoo
+    # ticker. Compute on-the-fly RS% from their constituent stocks (equal-weight)
+    # so they appear with real gaining/fading/quadrant data, not "no data yet".
+    from ..lib import sector_utils as _su_rrg  # noqa: PLC0415
+    covered = {_su_rrg.classify_sector(e["name"]) for e in entities}
+    uncovered = [c for c in _su_rrg.get_all_extra_sectors() if c not in covered]
+    if uncovered and bench_series:
+        otf = await _curated_sector_rrg_onthefly(uncovered, bench_series, tf, timeframe)
+        entities.extend(otf)
+
     out = {"level": "sector", "available": True, "benchmark": "NIFTY 50",
            "timeframe": timeframe, "entities": entities}
     _cache_set(cache_key, out)
     return out
 
 
-def _equal_weight_benchmark(series_by_sub: dict[str, list]) -> list:
-    """Synthesise a benchmark = equal-weight average of all sub-industry index
-    levels per date (they're all base-1000 chained, so comparable). Used when
-    the stored __NIFTY50__ benchmark row is missing."""
-    acc: dict[Any, list[float]] = {}
-    for s in series_by_sub.values():
-        for d, v in s:
-            acc.setdefault(d, []).append(v)
-    return [(d, sum(vs) / len(vs)) for d, vs in sorted(acc.items())]
-
 
 async def subindustry_rrg(timeframe: str = "short") -> dict:
-    """RRG + RS%-over-timeframe for sub-industries vs Nifty 50. Uses the stored
-    synthetic index series when enough history has accrued, else reconstructs
-    from months of constituent price history. Ranked by RS% over the timeframe."""
+    """RRG + RS%-over-timeframe for all curated sub-industries vs Nifty 50.
+
+    Sources (merged, no DB required):
+      • SUBSECTOR_TAXONOMY (universe.py) — ~72 India-specific sub-industries
+      • _EXTRA_SUBSECTOR_MAP (sector_utils.py) — additional curated groupings
+    When a sub-industry name appears in both, _EXTRA_SUBSECTOR_MAP wins
+    (our hand-picked stock lists take priority over the taxonomy defaults).
+
+    To add a new sub-industry: add it to either source and restart.
+    """
     tf = _tf(timeframe)
     cache_key = f"rrg:subindustry:{timeframe}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
-    from . import synthetic_sectors_service as _syn  # noqa: PLC0415
 
+    from ..lib import sector_utils as _su_si  # noqa: PLC0415
+    from ..lib.universe import SUBSECTOR_TAXONOMY  # noqa: PLC0415
     t0 = time.perf_counter()
-    latest = await asyncio.to_thread(_syn._latest_metric_date)
-    if latest is None:
-        return {"level": "subindustry", "available": False, "entities": [],
-                "note": "No sub-industry metrics yet — they build up after each market close."}
-    since = latest - dt.timedelta(days=180)
 
-    grid = await asyncio.to_thread(_syn.get_grid)
-    grid_rows = grid.get("rows", [])
-    row_by_sub = {r["subIndustry"]: r for r in grid_rows}
+    # Build merged symbol lookup: taxonomy base, curated overrides on name clash.
+    # _EXTRA_SUBSECTOR_MAP is symbol→name; invert to name→[symbols].
+    extra_by_name: dict[str, list[str]] = {}
+    for sym, sub in _su_si._EXTRA_SUBSECTOR_MAP.items():
+        extra_by_name.setdefault(sub, []).append(sym)
 
-    # Each sub-industry's stored index series + the Nifty benchmark in ONE query
-    # (was 1 + N sequential round-trips, one pooled connection per sub-industry).
-    all_series = await asyncio.to_thread(_syn._all_index_series_since, since)
-    series_by_sub: dict[str, list] = {
-        row["subIndustry"]: all_series[row["subIndustry"]]
-        for row in grid_rows if all_series.get(row["subIndustry"])
+    merged: dict[str, list[str]] = {
+        name: list(entry["symbols"]) for name, entry in SUBSECTOR_TAXONOMY.items()
     }
+    merged.update(extra_by_name)   # curated wins on name conflicts
 
-    # Benchmark: prefer stored Nifty 50; else equal-weight sub-industry average.
-    nifty = all_series.get("__NIFTY50__") or []
-    bench_label = "NIFTY 50"
-    if not nifty:
-        nifty = _equal_weight_benchmark(series_by_sub)
-        bench_label = "Sub-industry average"
-    bench_iso = [(d.isoformat(), v) for d, v in nifty]
+    all_subs = sorted(merged.keys())
+    sym_getter = lambda name: merged.get(name, [])  # noqa: E731
 
-    # Light path: use the stored synthetic series. The z-score window is adapted
-    # DOWN to the history actually stored, so a still-maturing table renders on
-    # this FAST path (a shorter smooth = slightly noisier RRG) instead of bailing
-    # to the slow per-request deep-history reconstruction. The full tf window is
-    # used once enough sessions accrue; on-the-fly only runs for a near-empty table.
-    eff_smooth = min(tf["smooth"], (len(bench_iso) - 2) // 2)
-    entities: list[dict] = []
-    if eff_smooth >= 8:
-        for sub, s in series_by_sub.items():
-            ent_iso = [(d.isoformat(), v) for d, v in s]
-            rrg = compute_rrg(ent_iso, bench_iso, smooth=eff_smooth)
-            if rrg:
-                r = row_by_sub.get(sub, {})
-                _sc, _ti = _subind_strength(r.get("rs30d"), r.get("breadth50emaPct"))
-                entities.append({
-                    "name": sub, **rrg,
-                    "rsPct": _rs_pct(ent_iso, bench_iso, tf["lookback"]),
-                    "deliveryBuildup": r.get("deliveryBuildup"),
-                    "breadth50emaPct": r.get("breadth50emaPct"),
-                    "rs30d": r.get("rs30d"),
-                    "strengthScore": _sc, "tier": _ti,
-                })
-    source = "stored"
+    # Deep Nifty benchmark — disk-first, zero network I/O when market is closed.
+    needed = tf["lookback"] + tf["smooth"] * 2 + 5
+    _nifty_raw = await _deep_history("^NSEI", 320, needed, asyncio.Semaphore(2))
+    if not _nifty_raw:
+        return {"level": "subindustry", "available": False, "entities": [],
+                "note": "Nifty benchmark unavailable — try again after a market close."}
+    bench_series = [(d, v) for d, v in _nifty_raw]
 
-    # Young-table fallback: build each sub-industry's series on the fly from its
-    # constituents' price history (disk-EOD-cached), so the graph works today.
-    if not entities:
-        ot = await _subindustry_rrg_onthefly(grid_rows, row_by_sub, timeframe)
-        if ot:
-            entities = ot
-            source = "onthefly"
-            bench_label = "NIFTY 50 (from price history)"
+    entities = await _curated_sector_rrg_onthefly(
+        all_subs, bench_series, tf, timeframe,
+        sym_getter=sym_getter,
+    )
 
     entities.sort(key=lambda e: (e.get("rsPct") is not None, e.get("rsPct") or -1e9), reverse=True)
 
-    note = None
-    if not entities:
-        note = ("Rotation graph unavailable — not enough stored history "
-                f"({len(bench_iso)} day(s)) and constituent price history could "
-                "not be fetched. Try again after a market close.")
+    note = None if entities else (
+        "Rotation graph unavailable — constituent price history could not be "
+        "fetched. Try again after a market close."
+    )
     out = {
         "level": "subindustry",
         "available": bool(entities),
-        "benchmark": bench_label,
+        "benchmark": "NIFTY 50",
         "timeframe": timeframe,
-        "asOf": grid.get("asOf"),
         "entities": entities,
         "note": note,
-        "diag": {"latest": str(latest), "subs": len(grid_rows),
-                 "benchPoints": len(bench_iso), "effSmooth": eff_smooth,
-                 "rendered": len(entities), "source": source},
+        "diag": {"subs": len(all_subs), "rendered": len(entities),
+                 "benchPoints": len(bench_series), "source": "merged"},
     }
-    logger.info("subindustry_rrg tf=%s source=%s subs=%d rendered=%d in %.2fs",
-                timeframe, source, len(grid_rows), len(entities), time.perf_counter() - t0)
+    logger.info("subindustry_rrg tf=%s subs=%d rendered=%d in %.2fs",
+                timeframe, len(all_subs), len(entities), time.perf_counter() - t0)
     _cache_set(cache_key, out)
     return out
 
@@ -465,72 +461,164 @@ async def _deep_history(symbol: str, days: int, needed: int, sem) -> list[tuple]
     return [(b["date"], b["close"]) for b in good]
 
 
-async def _subindustry_rrg_onthefly(grid_rows: list[dict], row_by_sub: dict,
-                                    timeframe: str = "short") -> list[dict]:
-    """Reconstruct sub-industry RRG from REAL, deep constituent price history vs
-    Nifty 50 — forcing a one-time deep pull when the cache is shallow, so the
-    chosen timeframe always has genuine full-window data (never fabricated)."""
-    from . import synthetic_sectors_service as _syn   # noqa: PLC0415
-    from . import sector_analytics_service as _sa     # noqa: PLC0415
-    from . import registry as svc                     # noqa: PLC0415
-    from ..lib.symbol_map import canonical_symbol     # noqa: PLC0415
-
-    tf = _tf(timeframe)
-    needed = tf["lookback"] + tf["smooth"] * 2 + 5
-    fetch_sem = asyncio.Semaphore(6)   # bounds provider hits across the whole build
-    sub_sem = asyncio.Semaphore(4)
-
-    bench = await _deep_history("^NSEI", 320, needed, fetch_sem)
-    if len(bench) < tf["smooth"] * 2 + 2:              # last-resort fallback
-        nifty = await _sa._yf_history("^NSEI", "1y")
-        bench = [(r["date"], r["close"]) for r in nifty if r.get("close")]
-    if len(bench) < tf["smooth"] * 2 + 2:
+def _ema_series(closes: list[float], period: int) -> list[float]:
+    """Exponential moving average — same kernel used by the NSE breadth model."""
+    if not closes:
         return []
+    k = 2.0 / (period + 1)
+    out = [closes[0]]
+    for p in closes[1:]:
+        out.append(p * k + out[-1] * (1 - k))
+    return out
 
-    async def _one(row: dict) -> Optional[dict]:
-        async with sub_sem:
-            sub = row["subIndustry"]
-            dd = await asyncio.to_thread(_syn.get_drilldown, sub, svc.yahoo)
-            syms = []
-            for c in dd.get("constituents", []):
-                raw = (c.get("symbol") or "").strip()
-                if raw:
-                    syms.append(canonical_symbol(raw))
-            syms = syms[:5]
+
+def _curated_composite(rs_pct: Optional[float], breadth_pct: Optional[float]) -> tuple[Optional[float], Optional[str]]:
+    """Blend 50-EMA breadth with RS% into the same -1→+1 composite scale the
+    NSE Market-Sectors model uses, so curated and indexed sectors are directly
+    comparable on the leaderboard bar chart.
+
+    breadth_pct : 0..100  (% of constituents above their 50-EMA)
+    rs_pct      : signed %, e.g. +3.2 means 3.2 pp outperformance vs Nifty
+    """
+    rs_score = (rs_pct / 15.0) if rs_pct is not None else 0.0
+    br_score = ((breadth_pct - 50.0) / 50.0) if breadth_pct is not None else rs_score
+    composite = round(0.5 * rs_score + 0.5 * br_score, 4)
+    if composite >= 0.20:
+        tier = "DEEP_GREEN"
+    elif composite >= 0.05:
+        tier = "LIGHT_GREEN"
+    elif composite >= -0.05:
+        tier = "YELLOW"
+    elif composite >= -0.20:
+        tier = "ORANGE"
+    else:
+        tier = "DEEP_RED"
+    return composite, tier
+
+
+async def _curated_sector_rrg_onthefly(
+    sectors: list[str],
+    bench_series: list[tuple],
+    tf: dict,
+    timeframe: str = "short",
+    sym_getter=None,
+) -> list[dict]:
+    """Compute RS/RRG + real breadth on-the-fly for curated sectors/sub-industries
+    that have no NSE Yahoo ticker.  Uses the top-N constituents from
+    _EXTRA_SECTOR_MAP (or _EXTRA_SUBSECTOR_MAP when sym_getter is provided).
+    Breadth = % of stocks above their 50-EMA, computed from the same price
+    bars already fetched for the RS calculation — no extra API calls.
+    Returns a list of RRG entity dicts — same shape as Yahoo-sourced entities."""
+    from ..lib import sector_utils as _su  # noqa: PLC0415
+    from ..lib.symbol_map import canonical_symbol  # noqa: PLC0415
+
+    _get_syms = sym_getter or _su.get_sector_symbols
+
+    tf_obj = _tf(timeframe)
+    needed = tf_obj["lookback"] + tf_obj["smooth"] * 2 + 5
+    fetch_sem = asyncio.Semaphore(6)
+    sector_sem = asyncio.Semaphore(4)
+
+    async def _one(canon: str) -> Optional[dict]:
+        async with sector_sem:
+            syms = [canonical_symbol(s) for s in _get_syms(canon)][:8]
             if not syms:
                 return None
-            hists = await asyncio.gather(*[_deep_history(s, 320, needed, fetch_sem) for s in syms])
-        # Equal-weight, rebased-to-100 index from the real constituent closes.
+            hists = await asyncio.gather(
+                *[_deep_history(s, 320, needed, fetch_sem) for s in syms],
+                return_exceptions=True,
+            )
+
+        good_hists: list[list[tuple]] = []
         maps = []
-        for s in hists:
-            if len(s) < 30 or not s[0][1]:
+        for h in hists:
+            if isinstance(h, Exception) or not h or len(h) < 30:
                 continue
-            base = s[0][1]
-            maps.append({d: c / base * 100.0 for d, c in s})
+            base = h[0][1]
+            if not base:
+                continue
+            good_hists.append(h)
+            maps.append({d: c / base * 100.0 for d, c in h})
+
         if not maps:
             return None
+
+        # ── Equal-weight index series for RRG ────────────────────────────
         all_dates = sorted({d for m in maps for d in m})
-        series = [(d, sum(m[d] for m in maps if d in m) / sum(1 for m in maps if d in m))
-                  for d in all_dates]
-        rrg = compute_rrg(series, bench, smooth=tf["smooth"])
+        series = [
+            (d, sum(m[d] for m in maps if d in m) / sum(1 for m in maps if d in m))
+            for d in all_dates
+        ]
+        rrg = compute_rrg(series, bench_series, smooth=tf_obj["smooth"])
         if not rrg:
             return None
-        _sc, _ti = _subind_strength(row.get("rs30d"), row.get("breadth50emaPct"))
+        rs_pct = _rs_pct(series, bench_series, tf_obj["lookback"])
+
+        # ── 50-EMA breadth — same bars, no extra fetch ───────────────────
+        above = 0
+        total = 0
+        for h in good_hists:
+            closes = [c for _, c in h if c]
+            if len(closes) < 50:
+                continue
+            ema50 = _ema_series(closes, 50)
+            total += 1
+            if closes[-1] > ema50[-1]:
+                above += 1
+        breadth_pct: Optional[float] = (above / total * 100.0) if total > 0 else None
+
+        composite, tier = _curated_composite(rs_pct, breadth_pct)
         return {
-            "name": sub, **rrg,
-            "rsPct": _rs_pct(series, bench, tf["lookback"]),
-            "deliveryBuildup": row.get("deliveryBuildup"),
-            "breadth50emaPct": row.get("breadth50emaPct"),
-            "rs30d": row.get("rs30d"),
-            "strengthScore": _sc, "tier": _ti,
+            "name": canon, **rrg,
+            "rsPct": rs_pct,
+            "breadth50emaPct": breadth_pct,
+            "strengthScore": composite,
+            "tier": tier,
+            "curated": True,
         }
 
-    results = await asyncio.gather(*[_one(r) for r in grid_rows], return_exceptions=True)
-    return [e for e in results if isinstance(e, dict)]
+    results = await asyncio.gather(*[_one(s) for s in sectors], return_exceptions=True)
+    return [r for r in results if isinstance(r, dict)]
+
 
 
 async def get_rrg(level: str = "sector", timeframe: str = "short") -> dict:
     return await (subindustry_rrg(timeframe) if level == "subindustry" else sector_rrg(timeframe))
+
+
+async def prewarm(timeframe: str = "short") -> dict:
+    """Pre-build caches for a single timeframe (funnel + subindustry RRG).
+    Safe to call repeatedly — later calls are cache hits."""
+    out: dict[str, bool] = {}
+    for label, coro in (("funnel", funnel(timeframe)), ("subindustry", subindustry_rrg(timeframe))):
+        try:
+            await coro
+            out[label] = True
+        except Exception as exc:  # noqa: BLE001 — pre-warm is best-effort
+            logger.warning("rotation prewarm %s/%s failed: %s", label, timeframe, exc)
+            out[label] = False
+    return out
+
+
+async def prewarm_all() -> dict:
+    """Pre-build caches for ALL three timeframes (short/mid/long) in parallel.
+    Runs each timeframe's funnel+subindustry concurrently so total time ≈ one
+    timeframe instead of three sequential builds (~20s vs ~60s)."""
+    results = await asyncio.gather(
+        prewarm("short"),
+        prewarm("mid"),
+        prewarm("long"),
+        return_exceptions=True,
+    )
+    labels = ("short", "mid", "long")
+    out: dict[str, Any] = {}
+    for tf, res in zip(labels, results):
+        if isinstance(res, Exception):
+            logger.warning("rotation prewarm_all %s failed: %s", tf, res)
+            out[tf] = False
+        else:
+            out[tf] = res
+    return out
 
 
 # ── Funnel ───────────────────────────────────────────────────────────────────
@@ -574,11 +662,26 @@ async def funnel(timeframe: str = "short") -> dict:
 # ── Shortlist (winning stocks in a sub-industry) ─────────────────────────────
 
 async def shortlist(sub_industry: Optional[str] = None, sector: Optional[str] = None,
-                    concurrency: int = 8) -> dict:
+                    timeframe: str = "short", concurrency: int = 20) -> dict:
     """Rank a group's constituents into a winning-stocks shortlist — relative
     strength (stock ~1mo return minus Nifty), delivery %, and an above-50-EMA
     trend flag → composite score. The group is either a sub-industry (synthetic
-    drilldown) or an NSE sector index (SECTOR_SYMBOLS membership)."""
+    drilldown) or an NSE sector index (SECTOR_SYMBOLS membership).
+
+    For sectors the universe is capped at _SECTOR_SHORTLIST_CAP symbols to
+    keep response time under ~3 s.  NSE live-index members (large-caps) are
+    always included first; the curated extra-map fills the remaining slots.
+    """
+    _SECTOR_SHORTLIST_CAP = 50   # max symbols fetched per sector click
+    tf_obj = _tf(timeframe)
+    rs_lookback = tf_obj["lookback"]   # 21 / 63 / 126 for short / mid / long
+
+    # Fast path — return cached result if still fresh (keyed per timeframe)
+    _ck = f"shortlist:{'sector' if sector else 'sub'}:{sector or sub_industry}:{timeframe}"
+    _hit = _cache_get(_ck)
+    if _hit is not None:
+        return _hit
+
     from . import synthetic_sectors_service as _syn       # noqa: PLC0415
     from . import delivery_service as _deliv              # noqa: PLC0415
     from . import sector_analytics_service as _sa         # noqa: PLC0415
@@ -586,14 +689,34 @@ async def shortlist(sub_industry: Optional[str] = None, sector: Optional[str] = 
     from ..lib.symbol_map import canonical_symbol         # noqa: PLC0415
     from ..lib import universe as _u                      # noqa: PLC0415
 
+    from ..lib import sector_utils as _su  # noqa: PLC0415
+
     if sector:
         label, kind = sector, "sector"
-        raw_consts = [{"symbol": s, "name": s, "weightPct": None}
-                      for s in _u.SECTOR_SYMBOLS.get(sector, [])]
+        # NSE index members first (large-caps from live index) — always included
+        nse_syms: set[str] = {
+            s.replace(".NS", "").replace(".BO", "")
+            for s in _u.SECTOR_SYMBOLS.get(sector, [])
+        }
+        raw_consts = [{"symbol": s, "name": s, "weightPct": None} for s in nse_syms]
+        # Curated extra-map — fill remaining slots up to the cap
+        slots_left = _SECTOR_SHORTLIST_CAP - len(raw_consts)
+        if slots_left > 0:
+            for sym in _su.get_sector_symbols(sector):
+                if sym not in nse_syms:
+                    raw_consts.append({"symbol": sym, "name": sym, "weightPct": None})
+                    slots_left -= 1
+                    if slots_left <= 0:
+                        break
     else:
         label, kind = (sub_industry or ""), "subindustry"
         dd = await asyncio.to_thread(_syn.get_drilldown, sub_industry, svc.yahoo)
-        raw_consts = dd.get("constituents", [])
+        raw_consts = list(dd.get("constituents", []))
+        # Centralized map — symbols tagged to this sub-industry in _EXTRA_SUBSECTOR_MAP
+        db_syms: set[str] = {c["symbol"] for c in raw_consts}
+        for sym in _su.get_subsector_symbols(sub_industry):
+            if sym not in db_syms:
+                raw_consts.append({"symbol": sym, "name": sym, "weightPct": None})
     if not raw_consts:
         return {"group": label, "kind": kind, "available": False, "stocks": []}
 
@@ -618,22 +741,35 @@ async def shortlist(sub_industry: Optional[str] = None, sector: Optional[str] = 
     # Recent delivery day-maps (shared, cached) → latest snapshot + per-stock trend.
     day_maps = await _deliv.get_recent_day_maps(days=12)
     deliv_map = day_maps[-1][1] if day_maps else {}
-    # Benchmark ~1-month return (21 trading days) for relative strength.
-    nifty = await _sa._yf_history("^NSEI", "3mo")
+    # Benchmark return over the selected timeframe window for relative strength.
+    # short=1M→3mo history, mid=3M→6mo, long=6M→1y
+    _hist_period = {"short": "3mo", "mid": "6mo", "long": "1y"}.get(timeframe, "3mo")
+    nifty = await _sa._yf_history("^NSEI", _hist_period)
     nifty_closes = [r["close"] for r in nifty if r.get("close")]
-    nifty_ret = _pct_return(nifty_closes, 21)
+    nifty_ret = _pct_return(nifty_closes, rs_lookback)
+
+    from . import market_cache_service as _disk  # noqa: PLC0415
+    _market_closed = not _disk.is_market_open()
 
     sem = asyncio.Semaphore(max(1, concurrency))
 
+    # Depth needed: lookback + 50 (for EMA50) + small buffer.
+    _fetch_days = max(120, rs_lookback + 60)
+
     async def _one(c: dict) -> dict:
         sym = c["symbol"]
+        # Always go through get_historical_data (which internally uses the same
+        # disk cache) so its eodSealed gate is respected.  Calling
+        # load_from_disk directly bypasses that gate and can serve intraday/
+        # unsealed snapshots as closed-market data.
+        h: list[dict] = []
         async with sem:
             try:
-                h = await svc.price.get_historical_data(sym, 120)
+                h = await svc.price.get_historical_data(sym, _fetch_days)
             except Exception:
                 h = []
         closes = [b["close"] for b in (h or []) if b.get("close")]
-        stock_ret = _pct_return(closes, 21)
+        stock_ret = _pct_return(closes, rs_lookback)
         rs = (stock_ret - nifty_ret) if (stock_ret is not None and nifty_ret is not None) else None
         ema50 = _ema_last(closes, 50)
         above = (closes[-1] > ema50) if (ema50 is not None and closes) else None
@@ -654,7 +790,9 @@ async def shortlist(sub_industry: Optional[str] = None, sector: Optional[str] = 
     usable = [r for r in raw
               if r and (r["rs"] is not None or r["delivPct"] is not None or r["aboveTrend"] is not None)]
     ranked = rank_shortlist(usable)
-    return {"group": label, "kind": kind, "available": True,
-            "benchmark": "NIFTY 50", "stocks": ranked,
-            "diag": {"constituents": len(raw_consts), "scored": len(usable),
-                     "dropped": len(canon) - len(usable)}}
+    out = {"group": label, "kind": kind, "available": True,
+           "benchmark": "NIFTY 50", "stocks": ranked,
+           "diag": {"constituents": len(raw_consts), "scored": len(usable),
+                    "dropped": len(canon) - len(usable)}}
+    _cache_set(_ck, out)
+    return out

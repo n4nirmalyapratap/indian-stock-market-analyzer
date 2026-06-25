@@ -25,6 +25,7 @@ result is cached for 5 minutes.
 from __future__ import annotations
 import asyncio
 import logging
+import pathlib
 import time
 import os
 import re
@@ -626,6 +627,91 @@ def _quote_from_closes(
 _MCAP_TTL = 24 * 60 * 60
 _mcap_cache: dict[str, tuple[float, float]] = {}
 
+# ── Disk persistence paths ──────────────────────────────────────────────────
+_MCAP_DISK   = pathlib.Path("market_cache/mcap_cache.json")
+_HM_DISK_DIR = pathlib.Path("market_cache/heatmap_tiles")
+
+
+def _load_mcap_disk() -> None:
+    """Load persisted market-cap cache from disk on startup.
+    Entries older than 24 h are silently dropped."""
+    try:
+        if not _MCAP_DISK.exists():
+            return
+        raw: dict = json.loads(_MCAP_DISK.read_text())
+        now = time.time()
+        loaded = 0
+        for sym, entry in raw.items():
+            ts, mc = float(entry.get("ts", 0)), float(entry.get("mc", 0))
+            if now - ts < _MCAP_TTL:
+                _mcap_cache[sym] = (ts, mc)
+                loaded += 1
+        if loaded:
+            logger.info("mcap disk cache loaded: %d symbols", loaded)
+    except Exception as exc:
+        logger.debug("mcap disk cache load failed: %s", exc)
+
+
+def _save_mcap_disk() -> None:
+    """Persist current market-cap cache to disk (best-effort)."""
+    try:
+        _MCAP_DISK.parent.mkdir(parents=True, exist_ok=True)
+        payload = {sym: {"ts": ts, "mc": mc} for sym, (ts, mc) in _mcap_cache.items()}
+        _MCAP_DISK.write_text(json.dumps(payload))
+    except Exception as exc:
+        logger.debug("mcap disk cache save failed: %s", exc)
+
+
+def _load_heatmap_disk(cache_key: str) -> None:
+    """Load a heatmap result from disk into the in-memory _cache.
+    Respects the same stale_window logic as the live path: within TTL it counts
+    as fresh; within stale_window it triggers a background refresh on the next
+    request; outside stale_window it is ignored and fresh data is computed."""
+    try:
+        path = _HM_DISK_DIR / f"{cache_key.replace(':', '_')}.json"
+        if not path.exists():
+            return
+        raw: dict = json.loads(path.read_text())
+        saved_at = float(raw.get("saved_at", 0))
+        market_open_now = mcache.is_market_open()
+        ttl = 600 if market_open_now else LONG_TTL
+        stale_window = ttl * 6
+        if time.time() - saved_at > stale_window:
+            return
+        # Reject intraday snapshots when the market has since closed: the
+        # performance data was live/partial and is now stale for the closed day.
+        saved_market_open: bool = bool(raw.get("market_open", True))
+        if saved_market_open and not market_open_now:
+            return
+        data = raw.get("data")
+        if data:
+            # Restore the version that was current when the snapshot was saved.
+            # This lets _cache_get's version-check correctly filter it out if
+            # the market state has changed since the file was written.
+            saved_ver = raw.get("cache_version", mcache.cache_version())
+            _cache[cache_key] = (saved_at, data, saved_ver)
+    except Exception as exc:
+        logger.debug("heatmap disk load %s failed: %s", cache_key, exc)
+
+
+def _save_heatmap_disk(cache_key: str, data: Any) -> None:
+    """Persist a heatmap result to disk (best-effort)."""
+    try:
+        _HM_DISK_DIR.mkdir(parents=True, exist_ok=True)
+        path = _HM_DISK_DIR / f"{cache_key.replace(':', '_')}.json"
+        path.write_text(json.dumps({
+            "saved_at": time.time(),
+            "market_open": mcache.is_market_open(),
+            "cache_version": mcache.cache_version(),
+            "data": data,
+        }))
+    except Exception as exc:
+        logger.debug("heatmap disk save %s failed: %s", cache_key, exc)
+
+
+# ── Load mcap disk cache at import time (best-effort) ───────────────────────
+_load_mcap_disk()
+
 
 def _market_cap_cached(sym: str) -> float:
     # Use the symbol as-is — all tickers already carry the correct Yahoo
@@ -673,6 +759,7 @@ async def _prefetch_market_caps(symbols: list[str]) -> None:
         if isinstance(r, tuple):
             ysym, mc = r
             _mcap_cache[ysym] = (ts, mc)
+    _save_mcap_disk()
 
 
 async def _fetch_one_quote_async(sym: str, period_yf: str, performance: str) -> dict | None:
@@ -689,14 +776,38 @@ async def _fetch_one_quote_async(sym: str, period_yf: str, performance: str) -> 
     `performance` selects the comparison-base offset (1d=prev close, 1w=5d
     back, 1m=22d back, 1y=earliest in window) so the % change actually
     matches the timeframe label the user picked.
+
+    Bare US tickers (no dot suffix, e.g. "AAPL") bypass PriceService because
+    symbol_map.to_yahoo_ticker appends .NS to dotless symbols, causing Yahoo
+    to return Indian data or nothing. For those we fall back to yfinance direct.
+    Suffixed global tickers (.HK, .T, .L, .DE, …) pass through PriceService
+    unchanged and reach Yahoo correctly.
     """
     days = _PERIOD_DAYS.get(period_yf, 7)
     try:
         rows = await svc.price.get_historical_data(sym, days)
     except Exception as e:
         logger.debug("heatmap PriceService.get_historical_data %s failed: %s", sym, e)
-        return None
+        rows = []
     closes = _closes_from_history(rows)
+
+    # If PriceService returned nothing AND the symbol has no exchange suffix,
+    # it was likely mangled to <SYM>.NS by symbol_map. Retry with yfinance
+    # using the bare ticker (handles US stocks like AAPL, MSFT, NVDA, etc.).
+    if len(closes) < 2 and "." not in sym:
+        import yfinance as yf
+        loop = asyncio.get_running_loop()
+        yf_period = period_yf  # already in yfinance format ("5d","1mo","3mo","1y")
+        def _yf_sync() -> list[float]:
+            try:
+                hist = yf.Ticker(sym).history(period=yf_period, auto_adjust=False)
+                if hist.empty:
+                    return []
+                return [float(c) for c in hist["Close"].dropna().tolist()]
+            except Exception:
+                return []
+        closes = await loop.run_in_executor(None, _yf_sync)
+
     if len(closes) < 2:
         return None
 
@@ -823,6 +934,7 @@ async def _compute_heatmap_fresh(code: str, performance: str, cache_key: str) ->
         "meta": _meta("HEATMAP_ENGINE"),
     }
     _cache_set(cache_key, response)
+    _save_heatmap_disk(cache_key, response)
     _HEATMAP_IN_FLIGHT.pop(cache_key, None)
     return response
 
@@ -863,19 +975,86 @@ async def get_heatmap(
                 )
             return stale_val
 
-    # ── 3. In-flight deduplication ───────────────────────────────────────────
+    # ── 3. Disk fallback — survives server restarts ───────────────────────────
+    # On first request after a restart the in-memory cache is empty. Load from
+    # disk; if valid, it populates _cache so step 1/2 serve it on the next call.
+    # We also kick off a background refresh so the disk data is freshened soon.
+    if cache_key not in _cache:
+        _load_heatmap_disk(cache_key)
+        hit = _cache.get(cache_key)
+        if hit:
+            _ts, disk_val, _ver = hit
+            inf = _HEATMAP_IN_FLIGHT.get(cache_key)
+            if inf is None or inf.done():
+                _HEATMAP_IN_FLIGHT[cache_key] = asyncio.ensure_future(
+                    _compute_heatmap_fresh(code, performance, cache_key)
+                )
+            return disk_val
+
+    # ── 4. In-flight deduplication ───────────────────────────────────────────
     # If another request is already computing this exact heatmap, wait for it
     # instead of spawning a duplicate set of 500 concurrent fetches.
     inf = _HEATMAP_IN_FLIGHT.get(cache_key)
     if inf is not None and not inf.done():
         return await inf
 
-    # ── 4. True cold miss — compute, cache, return ───────────────────────────
+    # ── 5. True cold miss — compute, cache, return ───────────────────────────
     task = asyncio.ensure_future(
         _compute_heatmap_fresh(code, performance, cache_key)
     )
     _HEATMAP_IN_FLIGHT[cache_key] = task
     return await task
+
+
+async def prewarm_heatmaps() -> dict:
+    """Pre-warm the most-visited heatmap combinations so the first user request
+    after a restart is always a cache hit. Runs the top indices × 1d in parallel
+    (they share the same price-service disk cache so subsequent timeframes are
+    fast too). Called from _heatmap_prewarm_task() in main.py on every startup."""
+    top = [
+        # India — broad (most visited)
+        ("NIFTY50",              "1d"),
+        ("SENSEX",               "1d"),
+        ("FNO",                  "1d"),
+        ("NIFTY100",             "1d"),
+        ("NIFTYNEXT50",          "1d"),
+        ("NIFTY500",             "1d"),
+        ("NIFTY200",             "1d"),
+        ("NIFTYLARGEMIDCAP250",  "1d"),
+        ("NIFTYSMALLCAP250",     "1d"),
+        # Global — Americas
+        ("DOW30",                "1d"),
+        ("NASDAQ100",            "1d"),
+        ("SP500",                "1d"),
+        # Global — Europe
+        ("FTSE100",              "1d"),
+        ("DAX40",                "1d"),
+        ("CAC40",                "1d"),
+        ("EUROSTOXX50",          "1d"),
+        # Global — Asia Pacific
+        ("NIKKEI225",            "1d"),
+        ("HANGSENG",             "1d"),
+        ("KOSPI",                "1d"),
+        ("ASX200",               "1d"),
+        ("SSE50",                "1d"),
+    ]
+    results: dict[str, bool] = {}
+
+    async def _one(code: str, perf: str) -> None:
+        key = f"heatmap:{code}:{perf}"
+        if _cache_get(key, ttl=LONG_TTL) is not None:
+            results[key] = True  # already warm
+            return
+        try:
+            await _compute_heatmap_fresh(code, perf, key)
+            results[key] = True
+        except Exception as exc:
+            logger.debug("heatmap prewarm %s/%s failed: %s", code, perf, exc)
+            results[key] = False
+
+    await asyncio.gather(*[_one(c, p) for c, p in top], return_exceptions=True)
+    logger.info("heatmap prewarm complete: %s", results)
+    return results
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -3226,6 +3405,17 @@ async def get_top_deliveries(
         for r in primary_rows:
             if not r.get("sector"):
                 r["sector"] = _STOCK_SECTOR_MAP.get(r["symbol"])
+
+        # Final fallback: sectors learned at runtime from Yahoo Finance profiles.
+        # This fills in SME/obscure stocks that users have already looked up.
+        try:
+            from ..lib import sector_cache as _sc  # noqa: PLC0415
+            _yc = _sc.get_all()
+            for r in primary_rows:
+                if not r.get("sector"):
+                    r["sector"] = _yc.get(r["symbol"])
+        except Exception:
+            pass
         if scanx_rows:
             sources.append("scanx.trade")
     else:
@@ -3252,14 +3442,37 @@ async def get_top_deliveries(
         if syms:
             universe = {_pretty(s).upper() for s in syms}
 
+    # ETF / index-fund symbol patterns — these are always excluded from the
+    # delivery drawer because their delivery% is trivially high (AMC holdings).
+    _ETF_SUFFIXES = ("BEES", "ETF", "IETF", "ADD", "BETA", "CASE",
+                     "NIFTY", "SENSEX", "GOLD", "SILVER", "LIQUID", "FUND", "FOF")
+    # Substrings that only appear in ETF/index-fund tickers
+    _ETF_SUBSTRINGS = ("FANG", "NASDAQ", "SP500", "HANG", "CPSE")
+    def _is_etf(sym: str) -> bool:
+        if (_STOCK_SECTOR_MAP.get(sym) == "ETF"):
+            return True
+        s = sym.upper()
+        if s.startswith("GROWW"):          # Groww fund house ETFs
+            return True
+        if s.startswith("MON") and len(s) >= 5 and s[3:].isdigit():
+            return True
+        if any(s.endswith(suf) for suf in _ETF_SUFFIXES):
+            return True
+        if any(sub in s for sub in _ETF_SUBSTRINGS):  # e.g. MAFANG, NIFTY100BEES
+            return True
+        return False
+
     def keep(r: dict) -> bool:
-        if universe is not None and r["symbol"] not in universe:
+        sym = r["symbol"]
+        if _is_etf(sym):
+            return False
+        if universe is not None and sym not in universe:
             return False
         if (r.get("delivPct") or 0.0) < minDelivPct:
             return False
         if search:
             q = search.lower().strip()
-            if q not in (r.get("symbol") or "").lower() and q not in (r.get("name") or "").lower():
+            if q not in (sym or "").lower() and q not in (r.get("name") or "").lower():
                 return False
         return True
 
@@ -3329,6 +3542,64 @@ async def get_top_deliveries(
     }
 
 
+@router.get("/volume-summary")
+async def get_volume_summary():
+    """Lightweight dashboard card: unusual-volume stock count, top sector theme, trend."""
+    cache_key = "volume_summary"
+    cached = _cache_get(cache_key, ttl=1800)
+    if cached is not None:
+        return cached
+
+    (nse_rows, trade_date), scanx_rows = await asyncio.gather(
+        _fetch_nse_bhavdata(),
+        _fetch_scanx_top_deliveries(),
+    )
+
+    if not nse_rows:
+        result = {"available": False, "unusualCount": 0, "totalStocks": 0,
+                  "topSector": None, "trend": "neutral", "tradeDate": trade_date}
+        _cache_set(cache_key, result)
+        return result
+
+    # Enrich with sector from scanx
+    scanx_meta: dict[str, dict] = {r["symbol"]: r for r in scanx_rows}
+    for r in nse_rows:
+        sx = scanx_meta.get(r["symbol"])
+        if sx and sx.get("sector"):
+            r["sector"] = sx["sector"]
+        if not r.get("sector"):
+            r["sector"] = _STOCK_SECTOR_MAP.get(r["symbol"])
+
+    # Unusual volume = high-conviction delivery (≥ 65% delivery pct)
+    unusual = [r for r in nse_rows if (r.get("delivPct") or 0) >= 65]
+
+    # Top sector by count of unusual-volume stocks
+    from collections import Counter
+    sector_counts = Counter(r.get("sector") for r in unusual if r.get("sector"))
+    top_entry = sector_counts.most_common(1)
+    top_sector = top_entry[0][0] if top_entry else None
+    top_sector_count = top_entry[0][1] if top_entry else 0
+
+    # Trend direction
+    up   = sum(1 for r in unusual if (r.get("changePct") or 0) >= 0)
+    down = len(unusual) - up
+    trend = "bullish" if up > down else "bearish" if down > up else "neutral"
+
+    result = {
+        "available": True,
+        "unusualCount": len(unusual),
+        "totalStocks": len(nse_rows),
+        "topSector": top_sector,
+        "topSectorCount": top_sector_count,
+        "trend": trend,
+        "upCount": up,
+        "downCount": down,
+        "tradeDate": trade_date,
+    }
+    _cache_set(cache_key, result)
+    return result
+
+
 @router.get("/delivery-history")
 async def get_delivery_history(symbol: str = Query(..., min_length=1), days: int = Query(40, ge=5, le=120)):
     """Per-stock delivery % over the last `days` trading sessions, reconstructed
@@ -3342,13 +3613,20 @@ async def get_delivery_history(symbol: str = Query(..., min_length=1), days: int
 
 
 @router.get("/fii-dii")
-async def get_fii_dii(segment: str = Query("equity"), days: int = Query(365, ge=7, le=1500)):
+async def get_fii_dii(
+    segment: str = Query("equity"),
+    days: int = Query(365, ge=7, le=1500),
+    force: bool = Query(False),
+):
     """FII/DII activity. Equity is real NSE data with a rolling local history.
-    F&O segments fetch historical data using the NSE FNO participant endpoint."""
+    F&O segments fetch historical data using the NSE FNO participant endpoint.
+
+    force=true resets the per-segment retry counter and cooldown immediately,
+    triggering a fresh 5-attempt cycle for today's data (user-initiated retry)."""
     from app.services.fii_dii_service import FiiDiiService
     svc = FiiDiiService()
     seg = (segment or "equity").lower().strip()
-    return await svc.get_flows(seg, days=days)
+    return await svc.get_flows(seg, days=days, force=bool(force))
 
 
 @router.post("/fii-dii/backfill")

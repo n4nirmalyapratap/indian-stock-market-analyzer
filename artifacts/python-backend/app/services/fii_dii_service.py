@@ -57,6 +57,33 @@ SEGMENT_MAP = {
 
 _db_lock = threading.Lock()
 
+# In-process guard: tracks which segments have a background refresh flying.
+# asyncio.create_task() re-uses the same event loop, so a plain set is safe.
+_refresh_in_progress: set[str] = set()
+
+# Per-segment retry state for today's data fetch.
+#
+# Logic:
+#   - Up to MAX_TODAY_RETRIES attempts are fired, spaced _RETRY_INTERVAL_S apart.
+#   - After MAX_TODAY_RETRIES consecutive failures the segment enters a
+#     _REFRESH_COOLDOWN_S (30-minute) cooldown.  After that cooldown expires the
+#     retry counter resets and a fresh 5-attempt cycle begins.
+#   - A force-refresh (user clicks Retry) resets both counters immediately.
+_refresh_last_failed: dict[str, float] = {}
+_refresh_fail_count: dict[str, int] = {}
+
+MAX_TODAY_RETRIES = 5          # attempts before entering long cooldown
+_RETRY_INTERVAL_S = 60        # seconds between individual retry attempts
+_REFRESH_COOLDOWN_S = 30 * 60  # 30-minute cooldown after all retries exhausted
+
+
+def reset_today_fetch(segment: str) -> None:
+    """Reset the per-segment retry counter and cooldown (force-refresh path).
+    Called when the user explicitly requests a retry from the UI."""
+    _refresh_fail_count.pop(segment, None)
+    _refresh_last_failed.pop(segment, None)
+    logger.info("Today-fetch state reset (force) — segment=%s", segment)
+
 def date_chunks(start: datetime, end: datetime, chunk_days: int = NSE_CHUNK_DAYS):
     current = start
     while current < end:
@@ -570,14 +597,226 @@ class FiiDiiService:
             await loop.run_in_executor(None, save_to_db, df, table)
         return df
 
-    async def get_flows(self, segment: str, days: int = 365) -> dict:
+    async def _load_cache_only(self, segment: str, start: datetime, end: datetime) -> pd.DataFrame:
+        """Read only what PostgreSQL (or old JSON) already has — no live NSE fetch.
+        Used by get_flows() so the first paint is always fast."""
+        table = f"fii_dii_{segment}"
+        loop = asyncio.get_running_loop()
+
+        cached_min, _ = await loop.run_in_executor(None, get_cached_date_range, table)
+
+        cached_df: pd.DataFrame | None = None
+        if segment == "equity" and not cached_min:
+            # One-time migration path: pull old JSON history into PG on first load.
+            cached_df = await loop.run_in_executor(None, _load_old_json_history)
+            if cached_df is not None and not cached_df.empty:
+                await loop.run_in_executor(None, save_to_db, cached_df, table)
+        else:
+            cached_df = await loop.run_in_executor(None, load_from_db, table)
+
+        if cached_df is None or cached_df.empty:
+            return pd.DataFrame()
+
+        cached_df["date"] = pd.to_datetime(cached_df["date"])
+        mask = (cached_df["date"] >= pd.Timestamp(start)) & (cached_df["date"] <= pd.Timestamp(end))
+        return cached_df[mask].copy()
+
+    async def _background_refresh_segment(self, segment: str, start: datetime, end: datetime) -> None:
+        """Fetch any missing date ranges from NSE and persist to the cache.
+        Runs as a fire-and-forget asyncio task so get_flows() never blocks on it."""
+        global _refresh_in_progress, _refresh_last_failed
+        if segment in _refresh_in_progress:
+            return
+        _refresh_in_progress.add(segment)
+        found_today = False
+        try:
+            table = f"fii_dii_{segment}"
+            loop = asyncio.get_running_loop()
+
+            cached_min, cached_max = await loop.run_in_executor(None, get_cached_date_range, table)
+
+            fetch_ranges: list[tuple[datetime, datetime]] = []
+            if cached_min and cached_max:
+                if start < cached_min:
+                    fetch_ranges.append((start, cached_min - timedelta(days=1)))
+                if end > cached_max:
+                    fetch_ranges.append((cached_max + timedelta(days=1), end))
+            else:
+                fetch_ranges.append((start, end))
+
+            if not fetch_ranges:
+                return
+
+            new_dfs: list[pd.DataFrame] = []
+            for rs, re in fetch_ranges:
+                try:
+                    if segment == "equity":
+                        ndf = await self.fetch_equity_historical(rs, re)
+                    else:
+                        ndf = await self.fetch_fno_historical(segment, rs, re)
+                    if not ndf.empty:
+                        new_dfs.append(ndf)
+                except Exception as exc:
+                    logger.warning("Background refresh failed for segment=%s range=%s→%s: %s",
+                                   segment, rs.date(), re.date(), exc)
+
+            if not new_dfs:
+                return
+
+            cached_df = await loop.run_in_executor(None, load_from_db, table)
+            all_dfs = ([cached_df] if cached_df is not None and not cached_df.empty else []) + new_dfs
+            combined = pd.concat(all_dfs, ignore_index=True)
+            combined["date"] = pd.to_datetime(combined["date"])
+            combined = combined.sort_values("date").drop_duplicates("date").reset_index(drop=True)
+            await loop.run_in_executor(None, save_to_db, combined, table)
+
+            # Check whether today's row was actually obtained so _today_status
+            # can flip to "available" on the next request.
+            import time as _time  # noqa: PLC0415
+            try:
+                import zoneinfo  # noqa: PLC0415
+                _ist = zoneinfo.ZoneInfo("Asia/Kolkata")
+            except Exception:
+                _ist = None  # type: ignore[assignment]
+            from datetime import timezone as _tz  # noqa: PLC0415
+            _now_ist = datetime.now(_ist) if _ist else datetime.now(_tz.utc)
+            today_iso = _now_ist.strftime("%Y-%m-%d")
+            if not combined.empty:
+                dates_got = set(combined["date"].dt.strftime("%Y-%m-%d").tolist())
+                found_today = today_iso in dates_got
+
+            logger.info("Background refresh done — segment=%s, %d new rows added, today=%s",
+                        segment, sum(len(d) for d in new_dfs), "yes" if found_today else "no")
+        except Exception as exc:
+            logger.warning("Background refresh error — segment=%s: %s", segment, exc)
+        finally:
+            _refresh_in_progress.discard(segment)
+            import time as _t  # noqa: PLC0415
+            if found_today:
+                # Success — reset the retry counter so we're clean for tomorrow.
+                _refresh_fail_count.pop(segment, None)
+                _refresh_last_failed.pop(segment, None)
+            else:
+                # This attempt didn't find today's data. Increment counter and
+                # record when it finished so _today_status can enforce the retry
+                # interval before firing the next task.
+                prev = _refresh_fail_count.get(segment, 0)
+                _refresh_fail_count[segment] = prev + 1
+                _refresh_last_failed[segment] = _t.time()
+                attempt = _refresh_fail_count[segment]
+                if attempt >= MAX_TODAY_RETRIES:
+                    logger.info(
+                        "FII/DII today-fetch exhausted %d/%d attempts for %s — "
+                        "entering %d-min cooldown.",
+                        attempt, MAX_TODAY_RETRIES, segment, _REFRESH_COOLDOWN_S // 60,
+                    )
+                else:
+                    logger.info(
+                        "FII/DII today-fetch attempt %d/%d failed for %s — "
+                        "retrying in %ds.",
+                        attempt, MAX_TODAY_RETRIES, segment, _RETRY_INTERVAL_S,
+                    )
+
+    @staticmethod
+    def _today_status(df: pd.DataFrame, segment: str) -> tuple[str, int]:
+        """Return (status, attempt_number) for today's data.
+
+        status values:
+          'available' — today's row is already in the cached DataFrame.
+          'fetching'  — a background task is running OR we are within the
+                        MAX_TODAY_RETRIES retry budget (task will fire shortly).
+          'not_yet'   — market hasn't closed yet, it's a weekend, OR all
+                        MAX_TODAY_RETRIES attempts failed and the 30-min
+                        cooldown hasn't elapsed.
+
+        attempt_number — how many fetch attempts have been made so far
+                         (0 = none yet, 5 = exhausted).
+        """
+        import time as _time  # noqa: PLC0415
+        try:
+            import zoneinfo  # noqa: PLC0415
+            ist = zoneinfo.ZoneInfo("Asia/Kolkata")
+        except Exception:
+            ist = None  # type: ignore[assignment]
+
+        from datetime import timezone as _tz  # noqa: PLC0415
+        now_ist = datetime.now(ist) if ist else datetime.now(_tz.utc)
+        today_iso = now_ist.strftime("%Y-%m-%d")
+
+        if df is not None and not df.empty:
+            dates = set(df["date"].dt.strftime("%Y-%m-%d").tolist())
+            if today_iso in dates:
+                return "available", 0
+
+        # Only eligible on weekdays after 16:00 IST.
+        is_weekday = now_ist.weekday() < 5
+        after_close = now_ist.hour >= 16
+        if not (is_weekday and after_close):
+            return "not_yet", 0
+
+        # Task actively running — report fetching so frontend keeps polling.
+        if segment in _refresh_in_progress:
+            return "fetching", _refresh_fail_count.get(segment, 0)
+
+        fail_count = _refresh_fail_count.get(segment, 0)
+        last_fail = _refresh_last_failed.get(segment, 0.0)
+        elapsed = _time.time() - last_fail
+
+        if fail_count < MAX_TODAY_RETRIES:
+            # Still within the retry budget.  Return "fetching" so the frontend
+            # shows the amber chip throughout the sequence.  get_flows() will
+            # only fire a new task when _RETRY_INTERVAL_S has elapsed.
+            return "fetching", fail_count
+
+        # All retries exhausted — apply the long cooldown.
+        if elapsed < _REFRESH_COOLDOWN_S:
+            return "not_yet", fail_count
+
+        # Cooldown expired — ready for a fresh 5-attempt cycle.
+        # Reset the counter here so _background_refresh_segment starts clean.
+        _refresh_fail_count.pop(segment, None)
+        _refresh_last_failed.pop(segment, None)
+        return "fetching", 0
+
+    async def get_flows(self, segment: str, days: int = 365, force: bool = False) -> dict:
+        import time as _time  # noqa: PLC0415
         end_date = datetime.today()
         start_date = end_date - timedelta(days=days)
-        
+
+        # Force-refresh: the user explicitly clicked Retry → reset counters so
+        # the full 5-attempt cycle starts fresh regardless of cooldown state.
+        if force:
+            reset_today_fetch(segment)
+
+        # ── Fast path: serve from cache immediately ───────────────────────────
+        df: pd.DataFrame = pd.DataFrame()
         try:
-            df = await self.get_historical(segment, start_date, end_date)
-        except Exception as e:
-            return self._empty_response(segment, f"Failed to fetch data: {e}")
+            df = await self._load_cache_only(segment, start_date, end_date)
+        except Exception as exc:
+            logger.warning("Cache-only load failed for segment=%s: %s — will attempt live fetch", segment, exc)
+
+        today_status, fetch_attempt = self._today_status(df, segment)
+
+        # ── Cold-start fallback: no cached rows at all → blocking fetch ───────
+        # Must run BEFORE the background-refresh decision so we only fire a
+        # background task when we already have rows to serve immediately.
+        # Firing both simultaneously duplicates hundreds of archive requests.
+        if df is None or df.empty:
+            try:
+                df = await self.get_historical(segment, start_date, end_date)
+                today_status, fetch_attempt = self._today_status(df, segment)
+            except Exception as e:
+                return self._empty_response(segment, f"Failed to fetch data: {e}")
+
+        # Fire background refresh only when cached rows exist (user is served
+        # immediately) and today's row is still missing after market close.
+        if today_status == "fetching" and segment not in _refresh_in_progress:
+            last_fail = _refresh_last_failed.get(segment, 0.0)
+            elapsed = _time.time() - last_fail
+            if last_fail == 0.0 or elapsed >= _RETRY_INTERVAL_S:
+                asyncio.create_task(
+                    self._background_refresh_segment(segment, start_date, end_date)
+                )
 
         if df is None or df.empty:
             if segment == "equity":
@@ -678,6 +917,13 @@ class FiiDiiService:
             "monthly": monthly,
             "totalDays": len(rows),
             "rangeDays": days,
+            # 'available' = today's row in cache
+            # 'fetching'  = within the MAX_TODAY_RETRIES budget, task will fire
+            # 'not_yet'   = market open/weekend OR cooldown after exhausting retries
+            "todayStatus": today_status,
+            # Retry progress — lets the frontend show "Attempt 2 of 5"
+            "todayFetchAttempt": fetch_attempt,
+            "todayMaxAttempts": MAX_TODAY_RETRIES,
         }
 
     @staticmethod

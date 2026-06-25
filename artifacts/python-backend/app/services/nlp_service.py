@@ -224,6 +224,26 @@ INTENT_PHRASES: dict[str, list[str]] = {
         "top movers", "top gainers", "top losers", "market data",
         "breadth history", "pattern stats",
     ],
+    "council_query": [
+        "investor council", "what do investors think", "legendary investors",
+        "buffett on", "what does warren think", "council verdict",
+        "investor verdict", "which investors like", "who likes this stock",
+    ],
+    "holders_query": [
+        "shareholding pattern", "who owns", "promoter stake", "fii holding",
+        "dii holding", "promoter holding", "institutional holding",
+        "ownership pattern", "pledge percentage", "promoter pledge",
+    ],
+    "cockpit_query": [
+        "sector cockpit", "rotation cockpit", "leading sectors today",
+        "which sector is leading", "sector momentum", "top sector now",
+        "best sector today", "where is money flowing",
+    ],
+    "fundas_query": [
+        "fundamentals of", "key ratios", "pe ratio of", "roe of",
+        "valuation of", "balance sheet of", "profitability of",
+        "financial ratios", "earnings margin", "debt equity",
+    ],
 }
 
 # Individual word patterns (lower weight — 1 point each)
@@ -250,6 +270,21 @@ INTENT_WORDS: dict[str, list[str]] = {
     "analytics": [
         "heatmap", "gainers", "losers", "movers",
         "correlation", "analytics", "statistics",
+    ],
+    "council_query": [
+        "council", "investors", "verdict", "buffett", "lynch", "graham",
+        "jhunjhunwala", "damani", "personas",
+    ],
+    "holders_query": [
+        "holders", "shareholding", "promoter", "pledge", "ownership",
+        "institutional", "fii", "dii",
+    ],
+    "cockpit_query": [
+        "cockpit", "leading", "rotation", "momentum", "flowing",
+    ],
+    "fundas_query": [
+        "fundamentals", "fundas", "ratios", "financials", "margins",
+        "valuation", "roe", "pe", "pb", "debt",
     ],
 }
 

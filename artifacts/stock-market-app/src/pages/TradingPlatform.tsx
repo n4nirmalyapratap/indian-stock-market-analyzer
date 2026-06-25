@@ -6,7 +6,7 @@ import {
   LayoutTemplate, PanelRight, X, Search,
   ChevronDown, Calendar,
 } from "lucide-react";
-import ChartPanel, { type DrawingTool, type Drawing, type ChartType } from "@/components/trading/ChartPanel";
+import ChartPanel, { type DrawingTool, type Drawing, type ChartType, type PatternOverlay } from "@/components/trading/ChartPanel";
 import { INDICATOR_CATALOG } from "@/lib/indicator-catalog";
 import WatchlistPanel, { type WatchlistPanelHandle } from "@/components/trading/WatchlistPanel";
 import LeftDrawingBar from "@/components/trading/LeftDrawingBar";
@@ -600,6 +600,16 @@ export default function TradingPlatform() {
     const valid = new Set(INDICATOR_CATALOG.map(i => i.key));
     return new Set(raw.split(",").map(s => s.trim().toLowerCase()).filter(k => valid.has(k)));
   });
+  // Pattern overlay handed over from the Chart Patterns screener (?overlay=1).
+  // Read once from sessionStorage and consume it so a reload starts clean.
+  const [patternOverlay, setPatternOverlay] = useState<PatternOverlay | null>(() => {
+    if (new URLSearchParams(window.location.search).get("overlay") !== "1") return null;
+    try {
+      const raw = sessionStorage.getItem("_patternOverlay");
+      sessionStorage.removeItem("_patternOverlay");
+      return raw ? (JSON.parse(raw) as PatternOverlay) : null;
+    } catch { return null; }
+  });
   const [showWatchlist, setShowWatchlist] = useState(true);
   const [showLayouts, setShowLayouts] = useState(false);
   const [showIndMenu, setShowIndMenu] = useState(false);
@@ -648,6 +658,14 @@ export default function TradingPlatform() {
       return prev.map(p => p.id === active.id ? { ...p, symbol: sym } : p);
     });
   }, [search]);
+
+  // Drop the screener pattern overlay once no panel shows its symbol anymore
+  // (user switched symbols) — it's only meaningful on the stock it was drawn for.
+  useEffect(() => {
+    if (patternOverlay && !panels.some(p => p.symbol === patternOverlay.symbol)) {
+      setPatternOverlay(null);
+    }
+  }, [panels, patternOverlay]);
 
   // ── Live IST clock ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1063,6 +1081,8 @@ export default function TradingPlatform() {
                   onActivate={() => setActivePanelId(panel.id)}
                   onDrawingDone={() => setDrawingTool("none")}
                   theme={theme}
+                  patternOverlay={patternOverlay?.symbol === panel.symbol ? patternOverlay : null}
+                  onClearPatternOverlay={() => setPatternOverlay(null)}
                 />
               </div>
             ))}
