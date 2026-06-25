@@ -126,18 +126,21 @@ class ScanJob:
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("PRAGMA synchronous=NORMAL")   # WAL+NORMAL: durable enough, faster writes
+        # Guarantee schema on every connection so a WAL-discard or a fresh
+        # sqlite_cache/ (e.g. after a container restart) self-heals without
+        # needing a full server restart.
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS results ("
+            "symbol TEXT PRIMARY KEY, data TEXT, updated_at REAL NOT NULL)"
+        )
+        c.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+        c.commit()
         return c
 
     def _init_db(self) -> None:
         conn = self._conn()
         try:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS results ("
-                "symbol TEXT PRIMARY KEY, data TEXT, updated_at REAL NOT NULL)"
-            )
-            conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
-            conn.commit()
-            # Warm the in-memory mirror from disk once at construction.
+            # Schema is already guaranteed by _conn(); just warm the memory mirror.
             for row in conn.execute("SELECT symbol, data FROM results").fetchall():
                 try:
                     self._results[row["symbol"]] = json.loads(row["data"])

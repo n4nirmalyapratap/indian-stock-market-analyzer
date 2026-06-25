@@ -883,6 +883,7 @@ export default function Dashboard() {
     queryKey: ["patterns-overview"],
     queryFn:  () => api.patterns(),
     staleTime: 10 * 60_000,
+    placeholderData: (prev: any) => prev,
     refetchInterval: (query) => {
       const d = (query as any).state?.data;
       return d?.scanInProgress ? 3000 : false;
@@ -893,16 +894,21 @@ export default function Dashboard() {
     queryKey: ["fii-dash-equity"],
     queryFn:  () => fetchApi("/insights/fii-dii?segment=equity&days=30"),
     staleTime: 10 * 60_000,
+    placeholderData: (prev: any) => prev,
   });
 
   const { data: rotation, isLoading: rotLoading } = useQuery(
-    marketDataQueryOptions(["sector-rotation-dash"], api.sectorRotation, { staleTime: 5 * 60_000 }),
+    marketDataQueryOptions(["sector-rotation-dash"], api.sectorRotation, {
+      staleTime: 5 * 60_000,
+      placeholderData: (prev: any) => prev,
+    }),
   );
 
   const { data: newsData, isLoading: newsLoading } = useQuery({
     queryKey: ["news-dash"],
     queryFn:  () => api.newsFeed({ limit: 7 }),
     staleTime:       7 * 60_000,
+    placeholderData: (prev: any) => prev,
     refetchInterval: 7 * 60_000,
   });
 
@@ -910,6 +916,7 @@ export default function Dashboard() {
     queryKey: ["ipo-dash"],
     queryFn:  () => fetchApi("/insights/ipos"),
     staleTime: 10 * 60_000,
+    placeholderData: (prev: any) => prev,
   });
 
   // Macro strip — same query key as MacroStrip component → deduplicates via cache
@@ -917,6 +924,7 @@ export default function Dashboard() {
     queryKey: ["macro-strip"],
     queryFn:  api.macroStrip,
     staleTime: 15 * 60_000,
+    placeholderData: (prev: any) => prev,
   });
 
   // Volume Activity summary
@@ -924,6 +932,7 @@ export default function Dashboard() {
     queryKey: ["volume-summary-dash"],
     queryFn:  () => fetchApi("/insights/volume-summary"),
     staleTime: 30 * 60_000,
+    placeholderData: (prev: any) => prev,
   });
 
   // Sentiment — 15-min cache, same data as /sentiment page
@@ -931,6 +940,7 @@ export default function Dashboard() {
     queryKey: ["sentiment-market"],
     queryFn:  () => fetchApi("/sentiment/market"),
     staleTime: 15 * 60_000,
+    placeholderData: (prev: any) => prev,
   });
 
   const scanInProgress = patterns?.scanInProgress ?? false;
