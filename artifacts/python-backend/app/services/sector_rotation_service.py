@@ -362,135 +362,64 @@ async def sector_rrg(timeframe: str = "short") -> dict:
     return out
 
 
-def _equal_weight_benchmark(series_by_sub: dict[str, list]) -> list:
-    """Synthesise a benchmark = equal-weight average of all sub-industry index
-    levels per date (they're all base-1000 chained, so comparable). Used when
-    the stored __NIFTY50__ benchmark row is missing."""
-    acc: dict[Any, list[float]] = {}
-    for s in series_by_sub.values():
-        for d, v in s:
-            acc.setdefault(d, []).append(v)
-    return [(d, sum(vs) / len(vs)) for d, vs in sorted(acc.items())]
-
 
 async def subindustry_rrg(timeframe: str = "short") -> dict:
-    """RRG + RS%-over-timeframe for sub-industries vs Nifty 50. Uses the stored
-    synthetic index series when enough history has accrued, else reconstructs
-    from months of constituent price history. Ranked by RS% over the timeframe."""
+    """RRG + RS%-over-timeframe for curated sub-industries vs Nifty 50.
+
+    Single source of truth: _EXTRA_SUBSECTOR_MAP in sector_utils.py.
+    To add or change a sub-industry, edit that map only — no DB migration,
+    no SUBSECTOR_TAXONOMY entry, no separate seeding step required.
+
+    Computation mirrors the curated-sector path: deep Nifty history fetched
+    once (disk-first when market is closed), then equal-weight price series
+    built per sub-industry from its constituent stocks.
+    Ranked by RS% over the selected timeframe.
+    """
     tf = _tf(timeframe)
     cache_key = f"rrg:subindustry:{timeframe}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
-    from . import synthetic_sectors_service as _syn  # noqa: PLC0415
 
+    from ..lib import sector_utils as _su_si  # noqa: PLC0415
     t0 = time.perf_counter()
-    latest = await asyncio.to_thread(_syn._latest_metric_date)
-    if latest is None:
+
+    all_subs = _su_si.get_all_extra_subsectors()
+    if not all_subs:
         return {"level": "subindustry", "available": False, "entities": [],
-                "note": "No sub-industry metrics yet — they build up after each market close."}
-    since = latest - dt.timedelta(days=180)
+                "note": "No sub-industries defined in _EXTRA_SUBSECTOR_MAP."}
 
-    grid = await asyncio.to_thread(_syn.get_grid)
-    grid_rows = grid.get("rows", [])
-    row_by_sub = {r["subIndustry"]: r for r in grid_rows}
+    # Deep Nifty benchmark — disk-first, zero network I/O when market is closed.
+    needed = tf["lookback"] + tf["smooth"] * 2 + 5
+    _nifty_raw = await _deep_history("^NSEI", 320, needed, asyncio.Semaphore(2))
+    if not _nifty_raw:
+        return {"level": "subindustry", "available": False, "entities": [],
+                "note": "Nifty benchmark unavailable — try again after a market close."}
+    bench_series = [(d, v) for d, v in _nifty_raw]
 
-    # Each sub-industry's stored index series + the Nifty benchmark in ONE query
-    # (was 1 + N sequential round-trips, one pooled connection per sub-industry).
-    all_series = await asyncio.to_thread(_syn._all_index_series_since, since)
-    series_by_sub: dict[str, list] = {
-        row["subIndustry"]: all_series[row["subIndustry"]]
-        for row in grid_rows if all_series.get(row["subIndustry"])
-    }
-
-    # Benchmark: prefer stored Nifty 50; else equal-weight sub-industry average.
-    nifty = all_series.get("__NIFTY50__") or []
-    bench_label = "NIFTY 50"
-    if not nifty:
-        nifty = _equal_weight_benchmark(series_by_sub)
-        bench_label = "Sub-industry average"
-    bench_iso = [(d.isoformat(), v) for d, v in nifty]
-
-    # Light path: use the stored synthetic series. The z-score window is adapted
-    # DOWN to the history actually stored, so a still-maturing table renders on
-    # this FAST path (a shorter smooth = slightly noisier RRG) instead of bailing
-    # to the slow per-request deep-history reconstruction. The full tf window is
-    # used once enough sessions accrue; on-the-fly only runs for a near-empty table.
-    eff_smooth = min(tf["smooth"], (len(bench_iso) - 2) // 2)
-    entities: list[dict] = []
-    if eff_smooth >= 8:
-        for sub, s in series_by_sub.items():
-            ent_iso = [(d.isoformat(), v) for d, v in s]
-            rrg = compute_rrg(ent_iso, bench_iso, smooth=eff_smooth)
-            if rrg:
-                r = row_by_sub.get(sub, {})
-                _sc, _ti = _subind_strength(r.get("rs30d"), r.get("breadth50emaPct"))
-                entities.append({
-                    "name": sub, **rrg,
-                    "rsPct": _rs_pct(ent_iso, bench_iso, tf["lookback"]),
-                    "deliveryBuildup": r.get("deliveryBuildup"),
-                    "breadth50emaPct": r.get("breadth50emaPct"),
-                    "rs30d": r.get("rs30d"),
-                    "strengthScore": _sc, "tier": _ti,
-                })
-    source = "stored"
-
-    # Young-table fallback: build each sub-industry's series on the fly from its
-    # constituents' price history (disk-EOD-cached), so the graph works today.
-    if not entities:
-        ot = await _subindustry_rrg_onthefly(grid_rows, row_by_sub, timeframe)
-        if ot:
-            entities = ot
-            source = "onthefly"
-            bench_label = "NIFTY 50 (from price history)"
+    entities = await _curated_sector_rrg_onthefly(
+        all_subs, bench_series, tf, timeframe,
+        sym_getter=_su_si.get_subsector_symbols,
+    )
 
     entities.sort(key=lambda e: (e.get("rsPct") is not None, e.get("rsPct") or -1e9), reverse=True)
 
-    # Auto-inject curated sub-industries from _EXTRA_SUBSECTOR_MAP that the DB
-    # grid doesn't know about yet.  Compute RS/breadth on-the-fly from their
-    # constituent stocks — same approach as curated sectors — so they get real
-    # gaining/fading/quadrant data instead of "no data yet" stubs.
-    from ..lib import sector_utils as _su_si  # noqa: PLC0415
-    existing_subs = {e["name"] for e in entities}
-    uncovered_subs = [si for si in _su_si.get_all_extra_subsectors() if si not in existing_subs]
-    if uncovered_subs:
-        # Always use a DEEP Nifty fetch for curated-sub RRG — the stored bench_iso
-        # may only have a handful of days (young DB), which gives compute_rrg too few
-        # aligned points and silently drops every curated result.  _deep_history
-        # is disk-first when the market is closed so this costs zero network I/O.
-        _nifty_raw = await _deep_history(
-            "^NSEI", 320,
-            tf["lookback"] + tf["smooth"] * 2 + 5,
-            asyncio.Semaphore(2),
-        )
-        effective_bench = [(d, v) for d, v in _nifty_raw] if _nifty_raw else bench_iso
-        if effective_bench:
-            otf_subs = await _curated_sector_rrg_onthefly(
-                uncovered_subs, effective_bench, tf, timeframe,
-                sym_getter=_su_si.get_subsector_symbols,
-            )
-            entities.extend(otf_subs)
-
-    note = None
-    if not entities:
-        note = ("Rotation graph unavailable — not enough stored history "
-                f"({len(bench_iso)} day(s)) and constituent price history could "
-                "not be fetched. Try again after a market close.")
-    n_curated = sum(1 for e in entities if e.get("curated"))
+    note = None if entities else (
+        "Rotation graph unavailable — constituent price history could not be "
+        "fetched. Try again after a market close."
+    )
     out = {
         "level": "subindustry",
         "available": bool(entities),
-        "benchmark": bench_label,
+        "benchmark": "NIFTY 50",
         "timeframe": timeframe,
-        "asOf": grid.get("asOf"),
         "entities": entities,
         "note": note,
-        "diag": {"latest": str(latest), "subs": len(grid_rows),
-                 "benchPoints": len(bench_iso), "effSmooth": eff_smooth,
-                 "rendered": len(entities), "curated": n_curated, "source": source},
+        "diag": {"subs": len(all_subs), "rendered": len(entities),
+                 "benchPoints": len(bench_series), "source": "curated"},
     }
-    logger.info("subindustry_rrg tf=%s source=%s subs=%d curated=%d rendered=%d in %.2fs",
-                timeframe, source, len(grid_rows), n_curated, len(entities), time.perf_counter() - t0)
+    logger.info("subindustry_rrg tf=%s subs=%d rendered=%d in %.2fs",
+                timeframe, len(all_subs), len(entities), time.perf_counter() - t0)
     _cache_set(cache_key, out)
     return out
 
@@ -642,69 +571,6 @@ async def _curated_sector_rrg_onthefly(
     results = await asyncio.gather(*[_one(s) for s in sectors], return_exceptions=True)
     return [r for r in results if isinstance(r, dict)]
 
-
-async def _subindustry_rrg_onthefly(grid_rows: list[dict], row_by_sub: dict,
-                                    timeframe: str = "short") -> list[dict]:
-    """Reconstruct sub-industry RRG from REAL, deep constituent price history vs
-    Nifty 50 — forcing a one-time deep pull when the cache is shallow, so the
-    chosen timeframe always has genuine full-window data (never fabricated)."""
-    from . import synthetic_sectors_service as _syn   # noqa: PLC0415
-    from . import sector_analytics_service as _sa     # noqa: PLC0415
-    from . import registry as svc                     # noqa: PLC0415
-    from ..lib.symbol_map import canonical_symbol     # noqa: PLC0415
-
-    tf = _tf(timeframe)
-    needed = tf["lookback"] + tf["smooth"] * 2 + 5
-    fetch_sem = asyncio.Semaphore(6)   # bounds provider hits across the whole build
-    sub_sem = asyncio.Semaphore(4)
-
-    bench = await _deep_history("^NSEI", 320, needed, fetch_sem)
-    if len(bench) < tf["smooth"] * 2 + 2:              # last-resort fallback
-        nifty = await _sa._yf_history("^NSEI", "1y")
-        bench = [(r["date"], r["close"]) for r in nifty if r.get("close")]
-    if len(bench) < tf["smooth"] * 2 + 2:
-        return []
-
-    async def _one(row: dict) -> Optional[dict]:
-        async with sub_sem:
-            sub = row["subIndustry"]
-            dd = await asyncio.to_thread(_syn.get_drilldown, sub, svc.yahoo)
-            syms = []
-            for c in dd.get("constituents", []):
-                raw = (c.get("symbol") or "").strip()
-                if raw:
-                    syms.append(canonical_symbol(raw))
-            syms = syms[:5]
-            if not syms:
-                return None
-            hists = await asyncio.gather(*[_deep_history(s, 320, needed, fetch_sem) for s in syms])
-        # Equal-weight, rebased-to-100 index from the real constituent closes.
-        maps = []
-        for s in hists:
-            if len(s) < 30 or not s[0][1]:
-                continue
-            base = s[0][1]
-            maps.append({d: c / base * 100.0 for d, c in s})
-        if not maps:
-            return None
-        all_dates = sorted({d for m in maps for d in m})
-        series = [(d, sum(m[d] for m in maps if d in m) / sum(1 for m in maps if d in m))
-                  for d in all_dates]
-        rrg = compute_rrg(series, bench, smooth=tf["smooth"])
-        if not rrg:
-            return None
-        _sc, _ti = _subind_strength(row.get("rs30d"), row.get("breadth50emaPct"))
-        return {
-            "name": sub, **rrg,
-            "rsPct": _rs_pct(series, bench, tf["lookback"]),
-            "deliveryBuildup": row.get("deliveryBuildup"),
-            "breadth50emaPct": row.get("breadth50emaPct"),
-            "rs30d": row.get("rs30d"),
-            "strengthScore": _sc, "tier": _ti,
-        }
-
-    results = await asyncio.gather(*[_one(r) for r in grid_rows], return_exceptions=True)
-    return [e for e in results if isinstance(e, dict)]
 
 
 async def get_rrg(level: str = "sector", timeframe: str = "short") -> dict:
