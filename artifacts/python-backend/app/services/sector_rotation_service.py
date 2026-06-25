@@ -347,19 +347,14 @@ async def sector_rrg(timeframe: str = "short") -> dict:
     await _attach_sector_strength(entities)
 
     # Auto-inject curated sectors from _EXTRA_SECTOR_MAP that have no NSE Yahoo
-    # ticker (and therefore no RRG entry).  They appear at the bottom of the
-    # leaderboard with no RS/quadrant data but ARE clickable for the shortlist.
+    # ticker. Compute on-the-fly RS% from their constituent stocks (equal-weight)
+    # so they appear with real gaining/fading/quadrant data, not "no data yet".
     from ..lib import sector_utils as _su_rrg  # noqa: PLC0415
     covered = {_su_rrg.classify_sector(e["name"]) for e in entities}
-    for canon in _su_rrg.get_all_extra_sectors():
-        if canon not in covered:
-            entities.append({
-                "name": canon,
-                "rs": None, "momentum": None, "quadrant": None,
-                "rsPct": None, "rsMomentum": None, "rsRatio": None,
-                "tail": [], "strengthScore": None, "tier": None,
-                "curated": True,
-            })
+    uncovered = [c for c in _su_rrg.get_all_extra_sectors() if c not in covered]
+    if uncovered and bench_series:
+        otf = await _curated_sector_rrg_onthefly(uncovered, bench_series, tf, timeframe)
+        entities.extend(otf)
 
     out = {"level": "sector", "available": True, "benchmark": "NIFTY 50",
            "timeframe": timeframe, "entities": entities}
@@ -518,6 +513,61 @@ async def _deep_history(symbol: str, days: int, needed: int, sem) -> list[tuple]
         except Exception:
             good = []
     return [(b["date"], b["close"]) for b in good]
+
+
+async def _curated_sector_rrg_onthefly(
+    sectors: list[str],
+    bench_series: list[tuple],
+    tf: dict,
+    timeframe: str = "short",
+) -> list[dict]:
+    """Compute RS/RRG on-the-fly for curated sectors that have no NSE Yahoo
+    ticker.  Uses the top-N constituents from _EXTRA_SECTOR_MAP (equal-weight,
+    rebased to 100) vs the Nifty benchmark already fetched by sector_rrg().
+    Returns a list of RRG entity dicts — same shape as Yahoo-sourced entities."""
+    from ..lib import sector_utils as _su  # noqa: PLC0415
+    from ..lib.symbol_map import canonical_symbol  # noqa: PLC0415
+
+    tf_obj = _tf(timeframe)
+    needed = tf_obj["lookback"] + tf_obj["smooth"] * 2 + 5
+    fetch_sem = asyncio.Semaphore(6)
+    sector_sem = asyncio.Semaphore(4)
+
+    async def _one(canon: str) -> Optional[dict]:
+        async with sector_sem:
+            syms = [canonical_symbol(s) for s in _su.get_sector_symbols(canon)][:8]
+            if not syms:
+                return None
+            hists = await asyncio.gather(
+                *[_deep_history(s, 320, needed, fetch_sem) for s in syms],
+                return_exceptions=True,
+            )
+        maps = []
+        for h in hists:
+            if isinstance(h, Exception) or not h or len(h) < 30:
+                continue
+            base = h[0][1]
+            if not base:
+                continue
+            maps.append({d: c / base * 100.0 for d, c in h})
+        if not maps:
+            return None
+        all_dates = sorted({d for m in maps for d in m})
+        series = [
+            (d, sum(m[d] for m in maps if d in m) / sum(1 for m in maps if d in m))
+            for d in all_dates
+        ]
+        rrg = compute_rrg(series, bench_series, smooth=tf_obj["smooth"])
+        if not rrg:
+            return None
+        return {
+            "name": canon, **rrg,
+            "rsPct": _rs_pct(series, bench_series, tf_obj["lookback"]),
+            "curated": True,
+        }
+
+    results = await asyncio.gather(*[_one(s) for s in sectors], return_exceptions=True)
+    return [r for r in results if isinstance(r, dict)]
 
 
 async def _subindustry_rrg_onthefly(grid_rows: list[dict], row_by_sub: dict,
