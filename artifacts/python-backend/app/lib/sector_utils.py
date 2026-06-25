@@ -628,10 +628,6 @@ _EXTRA_SECTOR_MAP: dict[str, str] = {
     # Chemicals
     "POLYPLEX":    "Chemicals",      "FCL":         "Chemicals",
     "ROSSTECH":    "Chemicals",
-    # ETF (additional)
-    "LIQUID1":     "ETF",            "LIQUID":      "ETF",
-    "RUBICON":     "ETF",            "ACUTAAS":     "ETF",
-    "SAMMAANCAP":  "ETF",
     # ── Batch 1 — user-curated ────────────────────────────────────────────────
     # Pharmaceuticals / Healthcare
     "COHANCE":     "Pharmaceuticals", "VIYASH":     "Pharmaceuticals",

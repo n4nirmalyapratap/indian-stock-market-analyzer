@@ -124,7 +124,8 @@ function Leaderboard({ entities, logic, selected, onPick }: {
           const z = zoneOf(e, logic);
           const col = zoneColor(z, logic);
           const metric = metricOf(e, logic);
-          const gaining = e.rsMomentum >= 100;
+          const hasRrg = e.rsMomentum != null;
+          const gaining = hasRrg && e.rsMomentum >= 100;
           const confColor = logic === "strength" ? QUAD_COLOR[e.quadrant] : (e.tier ? TIER_COLOR[e.tier] : null);
           const confTitle = logic === "strength"
             ? `Rotation: ${e.quadrant}`
@@ -147,10 +148,10 @@ function Leaderboard({ entities, logic, selected, onPick }: {
                 </div>
               </div>
               <span className={`flex items-center gap-1 text-xs font-semibold flex-shrink-0 w-[68px] justify-end ${
-                gaining ? "text-emerald-600 dark:text-emerald-400" : "text-rose-500"
+                !hasRrg ? "text-gray-400 dark:text-gray-500" : gaining ? "text-emerald-600 dark:text-emerald-400" : "text-rose-500"
               }`}>
-                {gaining ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
-                {gaining ? "gaining" : "fading"}
+                {hasRrg ? (gaining ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />) : null}
+                {hasRrg ? (gaining ? "gaining" : "fading") : "no data yet"}
               </span>
               <span className="text-[11px] text-gray-500 dark:text-gray-400 w-20 text-right tabular-nums flex-shrink-0 hidden sm:inline">
                 {logic === "strength"
