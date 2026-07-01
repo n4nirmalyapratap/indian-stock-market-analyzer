@@ -1,6 +1,2 @@
-- [Backend test running](backend-testing.md) — pytest isn't preinstalled; full suite is huge & network-bound — run targeted subsets with DISABLE_AUTH=1.
-- [Synthetic sector rotation](synthetic-sector-rotation.md) — how the sub-industry rotation engine is structured and the non-obvious math contracts (RS windowing, 20-DMA gating).
-- [Sub-industry taxonomy](sub-industry-taxonomy.md) — comprehensive 50+ Indian sub-sector taxonomy in universe.py; admin override table; TradingView rule.
-- [Sector analytics caching](sector-analytics-caching.md) — 4-layer cache strategy: MarketTTLCache for grid/drilldown, disk JSON for yf fundamentals, TanStack staleTime, startup pre-warm.
-- [Sector Analytics ban](sector-analytics-ban.md) — NEVER work on sector analytics / hyper-granular rotation — user explicitly and repeatedly forbidden it.
-- [Python package install location](python-package-install-location.md) — install Python pkgs via `pip install --target .pythonlibs/lib/python3.11/site-packages`; uv/installLanguagePackages fail on read-only nix store.
+- [NSE Bhav Copy URL](nse-bhavcopy-url.md) — CM equity URL needs `_0000` suffix; without it NSE returns 404
+- [NSE cloud blocking](nse-cloud-blocking.md) — Akamai blocks NSE live API from cloud IPs; archives subdomain is unprotected
