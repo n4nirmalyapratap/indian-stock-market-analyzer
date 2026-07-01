@@ -38,6 +38,7 @@ What's intentionally NOT here
 """
 from __future__ import annotations
 
+import asyncio
 import importlib
 import logging
 from abc import ABC, abstractmethod
@@ -289,6 +290,88 @@ class UserBrokerProvider(PriceProvider):
                              broker, symbol, str(exc)[:120])
                 continue
         return []
+
+
+# ── Provider: NSE Bhav Copy (EOD archive) ────────────────────────────────────
+
+
+class NseBhavcopyProvider(PriceProvider):
+    """NSE official EOD data sourced from the CM Bhav Copy archives.
+
+    Behaviour is market-state-aware:
+
+      • Market CLOSED  — returns bars from the local SQLite store built by
+                         nightly archive downloads.  Fast, zero network call
+                         at query time.  Sits before NSE live and Yahoo in the
+                         chain, so it wins every historical request when the
+                         exchange is shut.
+
+      • Market OPEN    — returns [] so the chain falls through to Yahoo, which
+                         has today's intraday candle.  We never want yesterday's
+                         EOD close as the "last" bar while the market is live.
+
+      • get_quote      — always None (EOD only; live quotes go to BSE/Yahoo).
+
+    Indices are skipped — they are not in the CM bhav copy files.
+    """
+
+    name             = "NSE_BHAV"
+    skip_for_indices = True   # indices not present in CM bhav copy
+    min_history_rows = 10
+    disk_cache_safe  = True
+
+    async def get_quote(self, symbol, *, user_id=None):
+        return None  # EOD only; live quotes fall through to BSE/Yahoo
+
+    async def get_historical(self, symbol, days, *, user_id=None):
+        from .market_cache_service import is_market_open                  # noqa: PLC0415
+        if is_market_open():
+            # Market is live — Yahoo has today's intraday candle; we don't.
+            return []
+
+        from . import nse_equity_bhavcopy_service as _bhav               # noqa: PLC0415
+        from datetime import date, timedelta                              # noqa: PLC0415
+
+        today = date.today()
+
+        # ── Staleness guard ──────────────────────────────────────────────
+        # NSE publishes the CM bhav copy ~2 hours after close (~17:30 IST).
+        # Between market close (15:30) and ingestion there is a window where
+        # is_market_open() is False but today's close is NOT in the DB yet.
+        # Falling through to Yahoo here keeps charts accurate during that gap.
+        # Once the nightly scheduler ingests today's bhav, latest_date()==today
+        # and this guard no longer fires.
+        if today.weekday() < 5:                              # weekday only
+            latest = await asyncio.to_thread(_bhav.latest_date)
+            if latest is None or latest < today:
+                # Today's close not yet ingested → let Yahoo handle it.
+                return []
+
+        to_date   = today
+        from_date = today - timedelta(days=days + 14)  # +14 buffer for holidays
+
+        try:
+            rows = await asyncio.to_thread(
+                _bhav.get_bars, symbol, from_date, to_date
+            )
+        except Exception as exc:
+            logger.debug("NseBhavcopyProvider.get_bars(%s) error: %s", symbol, exc)
+            return []
+
+        if not rows:
+            return []
+
+        return [
+            Bar(
+                date   = r["trade_date"],
+                open   = float(r["open"]   or 0),
+                high   = float(r["high"]   or 0),
+                low    = float(r["low"]    or 0),
+                close  = float(r["close"]  or 0),
+                volume = int(r["volume"]   or 0),
+            )
+            for r in rows
+        ]
 
 
 # ── Provider: NSE ───────────────────────────────────────────────────────────

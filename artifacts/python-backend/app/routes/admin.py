@@ -3,7 +3,7 @@ import sys
 import time
 import logging
 import uuid
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, UploadFile, File
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from app.lib.auth_store import get_conn, list_users, upsert_google_user
@@ -982,6 +982,165 @@ async def fii_dii_refresh(request: Request):
     except Exception as exc:
         return JSONResponse(status_code=500, content={
             "ok": False, "error": f"FII/DII refresh failed: {exc}"})
+
+
+@router.post("/admin/fii-dii/upsert")
+async def fii_dii_upsert(request: Request):
+    """Manually insert or overwrite FII/DII data for one or more dates.
+
+    Body: { "segment": str, "rows": [{ "date": "YYYY-MM-DD", <flow fields> }] }
+
+    Segment values: equity | index_future | index_option | stock_future | stock_option
+    Equity fields : fii_buy, fii_sell, fii_net, dii_buy, dii_sell, dii_net
+    F&O fields    : fii_long, fii_short, dii_long, dii_short,
+                    client_long, client_short, pro_long, pro_short
+    fii_net / dii_net are auto-calculated from buy-sell or long-short if omitted.
+    All rows use ON CONFLICT UPDATE — safe to re-submit.
+    """
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+
+    import pandas as pd  # noqa: PLC0415
+    from app.services.fii_dii_service import _pg_upsert_rows  # noqa: PLC0415
+
+    VALID_SEGMENTS = {"equity", "index_future", "index_option", "stock_future", "stock_option"}
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON body."})
+
+    segment = (body.get("segment") or "").strip()
+    if segment not in VALID_SEGMENTS:
+        return JSONResponse(status_code=400, content={
+            "error": f"Invalid segment {segment!r}. Must be one of: {sorted(VALID_SEGMENTS)}"})
+
+    rows = body.get("rows") or []
+    if not rows:
+        return JSONResponse(status_code=400, content={"error": "No rows provided."})
+
+    # Auto-calculate net fields if omitted
+    cleaned = []
+    for r in rows:
+        row = dict(r)
+        if not row.get("date"):
+            continue
+        if segment == "equity":
+            fb = row.get("fii_buy") or 0
+            fs = row.get("fii_sell") or 0
+            db = row.get("dii_buy") or 0
+            ds = row.get("dii_sell") or 0
+            if row.get("fii_net") is None:
+                row["fii_net"] = round(float(fb) - float(fs), 4)
+            if row.get("dii_net") is None:
+                row["dii_net"] = round(float(db) - float(ds), 4)
+        else:
+            fl = row.get("fii_long") or 0
+            fs = row.get("fii_short") or 0
+            dl = row.get("dii_long") or 0
+            ds = row.get("dii_short") or 0
+            if row.get("fii_net") is None:
+                row["fii_net"] = round(float(fl) - float(fs), 4)
+            if row.get("dii_net") is None:
+                row["dii_net"] = round(float(dl) - float(ds), 4)
+        cleaned.append(row)
+
+    if not cleaned:
+        return JSONResponse(status_code=400, content={"error": "All rows were missing a date field."})
+
+    try:
+        df = pd.DataFrame(cleaned)
+        written = await asyncio.to_thread(_pg_upsert_rows, segment, df)
+        return {"ok": True, "segment": segment, "written": written}
+    except Exception as exc:
+        logger.error("FII/DII upsert failed: %s", exc)
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+
+
+@router.post("/admin/fii-dii/upload-csv")
+async def fii_dii_upload_csv(request: Request, file: UploadFile = File(...)):
+    """Batch-ingest FII/DII data from a CSV upload.
+
+    Expected CSV columns (all optional except segment and date):
+      segment, date,
+      fii_buy, fii_sell, fii_net, dii_buy, dii_sell, dii_net,
+      fii_long, fii_short, dii_long, dii_short,
+      client_long, client_short, pro_long, pro_short
+
+    Returns: { written, skipped, errors }
+    """
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+
+    import csv as _csv  # noqa: PLC0415
+    import io as _io    # noqa: PLC0415
+    import pandas as pd  # noqa: PLC0415
+    from app.services.fii_dii_service import _pg_upsert_rows  # noqa: PLC0415
+
+    VALID_SEGMENTS = {"equity", "index_future", "index_option", "stock_future", "stock_option"}
+    NUMERIC_COLS = [
+        "fii_buy", "fii_sell", "fii_net", "dii_buy", "dii_sell", "dii_net",
+        "fii_long", "fii_short", "dii_long", "dii_short",
+        "client_long", "client_short", "pro_long", "pro_short",
+    ]
+
+    try:
+        raw = await file.read()
+        text = raw.decode("utf-8-sig", errors="replace")
+        reader = _csv.DictReader(_io.StringIO(text))
+        rows_by_seg: dict[str, list[dict]] = {}
+        errors: list[str] = []
+        skipped = 0
+
+        for i, row in enumerate(reader, start=2):  # 2 = first data line
+            row = {k.strip(): (v or "").strip() for k, v in row.items() if k}
+            seg = row.get("segment", "").strip().lower()
+            date_val = row.get("date", "").strip()
+            if not seg or not date_val:
+                errors.append(f"Row {i}: missing segment or date — skipped")
+                skipped += 1
+                continue
+            if seg not in VALID_SEGMENTS:
+                errors.append(f"Row {i}: unknown segment {seg!r} — skipped")
+                skipped += 1
+                continue
+
+            clean: dict[str, object] = {"date": date_val}
+            for col in NUMERIC_COLS:
+                v = row.get(col, "")
+                if v:
+                    try:
+                        clean[col] = float(v)
+                    except ValueError:
+                        errors.append(f"Row {i}: {col}={v!r} is not a number — set to null")
+                        clean[col] = None
+                else:
+                    clean[col] = None
+
+            # Auto-calc net if blank
+            if seg == "equity":
+                if clean.get("fii_net") is None and clean.get("fii_buy") is not None:
+                    clean["fii_net"] = round(float(clean["fii_buy"] or 0) - float(clean["fii_sell"] or 0), 4)
+                if clean.get("dii_net") is None and clean.get("dii_buy") is not None:
+                    clean["dii_net"] = round(float(clean["dii_buy"] or 0) - float(clean["dii_sell"] or 0), 4)
+            else:
+                if clean.get("fii_net") is None and clean.get("fii_long") is not None:
+                    clean["fii_net"] = round(float(clean["fii_long"] or 0) - float(clean["fii_short"] or 0), 4)
+                if clean.get("dii_net") is None and clean.get("dii_long") is not None:
+                    clean["dii_net"] = round(float(clean["dii_long"] or 0) - float(clean["dii_short"] or 0), 4)
+
+            rows_by_seg.setdefault(seg, []).append(clean)
+
+        written = 0
+        for seg, seg_rows in rows_by_seg.items():
+            df = pd.DataFrame(seg_rows)
+            written += await asyncio.to_thread(_pg_upsert_rows, seg, df)
+
+        return {"ok": True, "written": written, "skipped": skipped, "errors": errors}
+
+    except Exception as exc:
+        logger.error("FII/DII CSV upload failed: %s", exc)
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc), "written": 0, "skipped": 0, "errors": []})
 
 
 @router.get("/admin/subsectors")
