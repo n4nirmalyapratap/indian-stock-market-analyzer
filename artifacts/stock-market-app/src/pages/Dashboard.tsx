@@ -891,7 +891,9 @@ export default function Dashboard() {
   });
 
   const { data: fiiData, isLoading: fiiLoading } = useQuery<any>({
-    queryKey: ["fii-dash-equity"],
+    // Shared key with the FII/DII insights tab (equity, 30-day range) so both
+    // pages always read from — and write to — the same cache slot.
+    queryKey: ["insights/fii-dii", "equity", "30d"],
     queryFn:  () => fetchApi("/insights/fii-dii?segment=equity&days=30"),
     staleTime: 10 * 60_000,
     placeholderData: (prev: any) => prev,
@@ -951,7 +953,7 @@ export default function Dashboard() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["patterns-overview"] }),
         queryClient.invalidateQueries({ queryKey: ["sector-rotation-dash"] }),
-        queryClient.invalidateQueries({ queryKey: ["fii-dash-equity"] }),
+        queryClient.invalidateQueries({ queryKey: ["insights/fii-dii", "equity", "30d"] }),
         queryClient.invalidateQueries({ queryKey: ["news-dash"] }),
         queryClient.invalidateQueries({ queryKey: ["global-indices"] }),
         queryClient.invalidateQueries({ queryKey: ["ipo-dash"] }),
