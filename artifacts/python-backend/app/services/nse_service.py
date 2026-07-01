@@ -46,6 +46,18 @@ _cookie_cooldown_until: float = 0.0
 _COOKIE_COOLDOWN_SEC = 120
 _refresh_lock = asyncio.Lock()
 
+# ── Historical-endpoint circuit breaker ──────────────────────────────────────
+# NSE's /api/historical/* returns 503 when Akamai rate-limits this IP.
+# Rather than issuing one warning per stock and hammering the endpoint,
+# we open a circuit after _HIST_CB_THRESHOLD consecutive non-200 responses:
+# the caller gets an empty list immediately (and falls back to Yahoo), and
+# we log exactly once when the circuit opens and once when it closes.
+# After _HIST_CB_COOLDOWN_SEC the circuit resets and we try NSE again.
+_hist_cb_failures: int = 0          # consecutive non-200 count
+_hist_cb_open_until: float = 0.0    # epoch-seconds; 0 = circuit closed
+_HIST_CB_THRESHOLD   = 3            # open after this many consecutive failures
+_HIST_CB_COOLDOWN_SEC = 300         # stay open for 5 minutes
+
 NSE_BASE = "https://www.nseindia.com"
 
 # ── Headers (nsepython-style — full browser fingerprint) ─────────────────────
@@ -155,6 +167,11 @@ async def _refresh_cookies() -> None:
             timeout=15.0,
             follow_redirects=True,
             headers=HEADERS_BROWSER,
+            # HTTP/2 is the key to bypassing Akamai on cloud/VPS IPs.
+            # Without it, httpx sends an HTTP/1.1 fingerprint that Akamai's
+            # bot-check flags as non-browser.  h2 package must be installed.
+            # Ref: github.com/BennyThadikaran/NseIndiaApi v1.2.0 server mode.
+            http2=True,
         )
         # Step 1 — homepage
         await new_client.get(f"{NSE_BASE}/")
@@ -567,7 +584,14 @@ class NseService:
         Fetch daily OHLCV from NSE India historical API.
         Warms the session by hitting the equity quote page first (browser does
         this before issuing the XHR) — aligns with nsepython's two-step pattern.
+
+        A module-level circuit breaker (_hist_cb_*) silences per-stock 503 log
+        spam: after _HIST_CB_THRESHOLD consecutive failures the circuit opens for
+        _HIST_CB_COOLDOWN_SEC seconds and this method returns [] immediately so
+        the caller falls back to Yahoo without touching NSE at all.
         """
+        global _hist_cb_failures, _hist_cb_open_until
+
         from datetime import datetime, timedelta
         import json as _json
 
@@ -575,6 +599,11 @@ class NseService:
         cached = _get_cache(cache_key)
         if cached is not None:
             return cached
+
+        # ── Circuit-breaker check (open → skip NSE entirely) ─────────────────
+        now = time.time()
+        if now < _hist_cb_open_until:
+            return []
 
         to_date   = datetime.utcnow()
         from_date = to_date - timedelta(days=days)
@@ -614,10 +643,20 @@ class NseService:
                 resp = await _client.get(f"{NSE_BASE}{path}", headers=headers)
 
             if resp.status_code != 200:
-                logger.warning(
-                    "NSE historical %s for %s — falling back to Yahoo",
-                    resp.status_code, symbol,
-                )
+                _hist_cb_failures += 1
+                if _hist_cb_failures >= _HIST_CB_THRESHOLD:
+                    _hist_cb_open_until = time.time() + _HIST_CB_COOLDOWN_SEC
+                    logger.info(
+                        "NSE historical circuit OPEN after %d consecutive %s responses "
+                        "— skipping NSE for %ds, Yahoo fallback active",
+                        _hist_cb_failures, resp.status_code, _HIST_CB_COOLDOWN_SEC,
+                    )
+                    _hist_cb_failures = 0
+                else:
+                    logger.debug(
+                        "NSE historical %s for %s (failure %d/%d) — falling back to Yahoo",
+                        resp.status_code, symbol, _hist_cb_failures, _HIST_CB_THRESHOLD,
+                    )
                 return []
 
             raw  = resp.json()
@@ -643,6 +682,10 @@ class NseService:
             data.sort(key=lambda x: x["date"])
             if data:
                 _set_cache(cache_key, data, 1800)
+                # Success — reset circuit breaker failure streak.
+                if _hist_cb_failures > 0:
+                    logger.info("NSE historical circuit: success for %s — failure streak reset", symbol)
+                    _hist_cb_failures = 0
             return data
 
         except Exception as exc:

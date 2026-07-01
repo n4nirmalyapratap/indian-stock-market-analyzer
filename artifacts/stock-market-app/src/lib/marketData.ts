@@ -69,11 +69,14 @@ export function isMarketOpenIST(now: Date = new Date()): boolean {
  * Build React-Query options for a market-data query.
  *
  *   Open   market → 60s stale, 60s background refresh
- *   Closed market → 5min stale, 5min background refresh (so a freshly
- *                   sealed EOD overlay propagates to all pages quickly)
+ *   Closed market → 1h stale, NO background polling
  *
- * `refetchOnWindowFocus` is ALWAYS true: when the user comes back to the
- * tab we want to re-validate so close-boundary transitions converge.
+ * When closed there is no point polling — EOD bars are frozen until next
+ * session. `useMarketStateBoundary` (mounted at the app root) already fires
+ * every 30s and invalidates ALL queries the moment the market transitions
+ * CLOSED→OPEN, so the first trade of the day is always reflected quickly.
+ * `refetchOnWindowFocus: true` handles the user returning to the tab after
+ * an overnight gap.
  */
 export function marketDataQueryOptions<TData, TOpts extends Record<string, unknown> = Record<string, never>>(
   queryKey: QueryKey,
@@ -84,8 +87,8 @@ export function marketDataQueryOptions<TData, TOpts extends Record<string, unkno
   return {
     queryKey,
     queryFn,
-    staleTime:            open ? 60_000     : 5 * 60_000,
-    refetchInterval:      open ? 60_000     : 5 * 60_000,
+    staleTime:            open ? 60_000 : 60 * 60_000,  // 1h when closed — data is frozen
+    refetchInterval:      open ? 60_000 : false,          // no polling after close
     refetchOnWindowFocus: true,
     refetchOnReconnect:   true,
     ...(overrides ?? ({} as TOpts)),

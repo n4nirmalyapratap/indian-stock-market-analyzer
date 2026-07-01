@@ -329,6 +329,7 @@ async def lifespan(app: FastAPI):
     fixer_task      = asyncio.create_task(_bug_fixer_loop())
     rfr_task        = asyncio.create_task(_risk_free_rate_scheduler())
     bhav_task       = asyncio.create_task(_bhavcopy_refresh_scheduler())
+    eq_bhav_task    = asyncio.create_task(_equity_bhavcopy_scheduler())
     alerts_task     = asyncio.create_task(_bot_alerts_tick_loop())
     backtest_task   = asyncio.create_task(_ai_backtest_scheduler())
     digest_sched_task  = asyncio.create_task(_email_digest_scheduler())
@@ -351,11 +352,11 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         for t in (poll_task, universe_task, warmup_task, transition_task,
-                  fixer_task, rfr_task, bhav_task, alerts_task, backtest_task,
-                  digest_sched_task, digest_worker_task, fii_dii_task, dhan_task,
-                  pcr_task, synth_class_task, synth_metrics_task,
-                  synth_bootstrap_task, registry_task, rotation_prewarm_task,
-                  heatmap_prewarm_task, earnings_task):
+                  fixer_task, rfr_task, bhav_task, eq_bhav_task, alerts_task,
+                  backtest_task, digest_sched_task, digest_worker_task,
+                  fii_dii_task, dhan_task, pcr_task, synth_class_task,
+                  synth_metrics_task, synth_bootstrap_task, registry_task,
+                  rotation_prewarm_task, heatmap_prewarm_task, earnings_task):
             t.cancel()
             try:
                 await t
@@ -518,6 +519,55 @@ async def _bhavcopy_refresh_scheduler() -> None:
             await asyncio.sleep(24 * 3600)
         except asyncio.CancelledError:
             logger.info("Bhavcopy scheduler stopped.")
+            break
+
+
+async def _equity_bhavcopy_scheduler() -> None:
+    """Download NSE CM (equity) Bhav Copy archives once a day.
+
+    Schedule:
+      • Boot: 10 s settle, then backfill the last 90 trading days that are
+        missing from the local SQLite store.  On a fresh install this takes
+        ~2-3 minutes; subsequent boots are instant (already cached).
+      • Loop: every 2 h, refresh the last 3 calendar days.  The short tick
+        is deliberate — NSE publishes the CM bhav copy ~2 h after market
+        close (≈17:30 IST).  A 2 h tick guarantees today's close lands in
+        the DB by 20:00 IST at the latest, closing the staleness gap that
+        exists between 15:30 and publication.  Off-hours ticks are cheap:
+        download_for_date() is idempotent (no-op if already cached).
+
+    The store powers NseBhavcopyProvider which becomes the primary
+    historical data source when the market is closed — replacing the Yahoo
+    Finance fallback with NSE's own official EOD candles.
+    """
+    from app.services import nse_equity_bhavcopy_service as _bhav
+    await asyncio.sleep(10)
+    first_run = True
+    while True:
+        try:
+            if first_run:
+                results = await asyncio.to_thread(_bhav.backfill, 90)
+                ok      = sum(1 for s in results.values() if s == "ok")
+                skipped = sum(1 for s in results.values() if s == "skipped")
+                logger.info(
+                    "Equity bhavcopy backfill: %d new days ingested, "
+                    "%d already cached (%d total checked)",
+                    ok, skipped, len(results),
+                )
+            else:
+                # Short-interval refresh — last 3 days catches today's close
+                # after NSE publishes it (~17:30 IST) and any retry failures.
+                results = await asyncio.to_thread(_bhav.backfill, 3)
+                ok      = sum(1 for s in results.values() if s == "ok")
+                if ok:
+                    logger.info("Equity bhavcopy tick: %d new day(s) ingested", ok)
+        except Exception as exc:
+            logger.warning("Equity bhavcopy scheduler tick failed: %s", exc)
+        first_run = False
+        try:
+            await asyncio.sleep(2 * 3600)   # 2 h — picks up today's close by ~20:00 IST
+        except asyncio.CancelledError:
+            logger.info("Equity bhavcopy scheduler stopped.")
             break
 
 
