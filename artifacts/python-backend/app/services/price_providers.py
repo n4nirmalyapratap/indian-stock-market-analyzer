@@ -326,14 +326,29 @@ class NseBhavcopyProvider(PriceProvider):
     async def get_historical(self, symbol, days, *, user_id=None):
         from .market_cache_service import is_market_open                  # noqa: PLC0415
         if is_market_open():
-            # Yield to Yahoo — it has today's live intraday bars; we don't.
+            # Market is live — Yahoo has today's intraday candle; we don't.
             return []
 
         from . import nse_equity_bhavcopy_service as _bhav               # noqa: PLC0415
         from datetime import date, timedelta                              # noqa: PLC0415
 
-        to_date   = date.today()
-        from_date = to_date - timedelta(days=days + 14)  # +14 buffer for holidays
+        today = date.today()
+
+        # ── Staleness guard ──────────────────────────────────────────────
+        # NSE publishes the CM bhav copy ~2 hours after close (~17:30 IST).
+        # Between market close (15:30) and ingestion there is a window where
+        # is_market_open() is False but today's close is NOT in the DB yet.
+        # Falling through to Yahoo here keeps charts accurate during that gap.
+        # Once the nightly scheduler ingests today's bhav, latest_date()==today
+        # and this guard no longer fires.
+        if today.weekday() < 5:                              # weekday only
+            latest = await asyncio.to_thread(_bhav.latest_date)
+            if latest is None or latest < today:
+                # Today's close not yet ingested → let Yahoo handle it.
+                return []
+
+        to_date   = today
+        from_date = today - timedelta(days=days + 14)  # +14 buffer for holidays
 
         try:
             rows = await asyncio.to_thread(

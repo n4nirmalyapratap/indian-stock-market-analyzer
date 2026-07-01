@@ -529,8 +529,12 @@ async def _equity_bhavcopy_scheduler() -> None:
       • Boot: 10 s settle, then backfill the last 90 trading days that are
         missing from the local SQLite store.  On a fresh install this takes
         ~2-3 minutes; subsequent boots are instant (already cached).
-      • Loop: every 24 h refresh the last 3 calendar days to pick up any
-        previously-failed dates (holidays return HTTP 404 and are skipped).
+      • Loop: every 2 h, refresh the last 3 calendar days.  The short tick
+        is deliberate — NSE publishes the CM bhav copy ~2 h after market
+        close (≈17:30 IST).  A 2 h tick guarantees today's close lands in
+        the DB by 20:00 IST at the latest, closing the staleness gap that
+        exists between 15:30 and publication.  Off-hours ticks are cheap:
+        download_for_date() is idempotent (no-op if already cached).
 
     The store powers NseBhavcopyProvider which becomes the primary
     historical data source when the market is closed — replacing the Yahoo
@@ -551,17 +555,17 @@ async def _equity_bhavcopy_scheduler() -> None:
                     ok, skipped, len(results),
                 )
             else:
-                # Nightly refresh — just the last 3 days to catch the
-                # previous trading session and any prior retry failures.
+                # Short-interval refresh — last 3 days catches today's close
+                # after NSE publishes it (~17:30 IST) and any retry failures.
                 results = await asyncio.to_thread(_bhav.backfill, 3)
                 ok      = sum(1 for s in results.values() if s == "ok")
                 if ok:
-                    logger.info("Equity bhavcopy nightly tick: %d new day(s) ingested", ok)
+                    logger.info("Equity bhavcopy tick: %d new day(s) ingested", ok)
         except Exception as exc:
             logger.warning("Equity bhavcopy scheduler tick failed: %s", exc)
         first_run = False
         try:
-            await asyncio.sleep(24 * 3600)
+            await asyncio.sleep(2 * 3600)   # 2 h — picks up today's close by ~20:00 IST
         except asyncio.CancelledError:
             logger.info("Equity bhavcopy scheduler stopped.")
             break
