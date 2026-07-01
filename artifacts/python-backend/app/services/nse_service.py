@@ -167,6 +167,11 @@ async def _refresh_cookies() -> None:
             timeout=15.0,
             follow_redirects=True,
             headers=HEADERS_BROWSER,
+            # HTTP/2 is the key to bypassing Akamai on cloud/VPS IPs.
+            # Without it, httpx sends an HTTP/1.1 fingerprint that Akamai's
+            # bot-check flags as non-browser.  h2 package must be installed.
+            # Ref: github.com/BennyThadikaran/NseIndiaApi v1.2.0 server mode.
+            http2=True,
         )
         # Step 1 — homepage
         await new_client.get(f"{NSE_BASE}/")
