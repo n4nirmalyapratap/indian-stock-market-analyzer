@@ -3,6 +3,7 @@ import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { hydrateDashboardCache, prefetchDashboardQueries, saveDashboardCache } from "@/lib/dashboardPrefetch";
 import ChartView from "@/pages/ChartView";
 import Dashboard from "@/pages/Dashboard";
 import Sectors from "@/pages/Sectors";
@@ -49,6 +50,12 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// ── Instant dashboard: hydrate from localStorage before first render ──────────
+// This runs synchronously at module evaluation time so the QueryClient is
+// pre-populated before any component mounts.  The Dashboard's useQuery calls
+// will find their data already present and render immediately without a skeleton.
+hydrateDashboardCache(queryClient);
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -143,7 +150,28 @@ function TokenInjector() {
     // the closure. Without this, the API client kept returning the previous
     // token after logout for one render cycle.
     setTokenGetter(async () => token);
+
+    // As soon as a token is available, eagerly prefetch all dashboard data.
+    // By the time the user navigates to "/" the cache is already warm so the
+    // Dashboard renders with real data instead of skeletons.
+    if (token) {
+      prefetchDashboardQueries(queryClient);
+    } else {
+      // On logout clear the persisted snapshot so stale data isn't shown on
+      // the next user's login.
+      try { localStorage.removeItem("nn_dash_v2"); } catch {}
+    }
   }, [token]);
+  return null;
+}
+
+// Periodically flush the in-memory cache to localStorage so a tab refresh
+// always starts with up-to-date data even without a new prefetch cycle.
+function DashboardCacheSaver() {
+  useEffect(() => {
+    const id = setInterval(() => saveDashboardCache(queryClient), 90_000);
+    return () => clearInterval(id);
+  }, []);
   return null;
 }
 
@@ -197,6 +225,7 @@ function AuthGate() {
   return (
     <>
       <TokenInjector />
+      <DashboardCacheSaver />
       <AuthErrorListener />
       <MarketStateBoundary />
       <AppRoutes />

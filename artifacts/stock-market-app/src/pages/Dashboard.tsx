@@ -24,7 +24,7 @@ function fmtCr(v: number | null | undefined): string {
   const sign = v >= 0 ? "+" : "−";
   const abs  = Math.abs(v);
   if (abs >= 10_000) return `${sign}₹${(abs / 10_000).toFixed(1)}K Cr`;
-  if (abs >= 100)    return `${sign}₹${(abs / 100).toFixed(1)}K`;
+  if (abs >= 1_000)  return `${sign}₹${(abs / 1_000).toFixed(2)}K`;
   return `${sign}₹${abs.toFixed(0)}`;
 }
 
@@ -883,6 +883,7 @@ export default function Dashboard() {
     queryKey: ["patterns-overview"],
     queryFn:  () => api.patterns(),
     staleTime: 10 * 60_000,
+    placeholderData: (prev: any) => prev,
     refetchInterval: (query) => {
       const d = (query as any).state?.data;
       return d?.scanInProgress ? 3000 : false;
@@ -890,19 +891,26 @@ export default function Dashboard() {
   });
 
   const { data: fiiData, isLoading: fiiLoading } = useQuery<any>({
-    queryKey: ["fii-dash-equity"],
+    // Shared key with the FII/DII insights tab (equity, 30-day range) so both
+    // pages always read from — and write to — the same cache slot.
+    queryKey: ["insights/fii-dii", "equity", "30d"],
     queryFn:  () => fetchApi("/insights/fii-dii?segment=equity&days=30"),
     staleTime: 10 * 60_000,
+    placeholderData: (prev: any) => prev,
   });
 
   const { data: rotation, isLoading: rotLoading } = useQuery(
-    marketDataQueryOptions(["sector-rotation-dash"], api.sectorRotation, { staleTime: 5 * 60_000 }),
+    marketDataQueryOptions(["sector-rotation-dash"], api.sectorRotation, {
+      staleTime: 5 * 60_000,
+      placeholderData: (prev: any) => prev,
+    }),
   );
 
   const { data: newsData, isLoading: newsLoading } = useQuery({
     queryKey: ["news-dash"],
     queryFn:  () => api.newsFeed({ limit: 7 }),
     staleTime:       7 * 60_000,
+    placeholderData: (prev: any) => prev,
     refetchInterval: 7 * 60_000,
   });
 
@@ -910,6 +918,7 @@ export default function Dashboard() {
     queryKey: ["ipo-dash"],
     queryFn:  () => fetchApi("/insights/ipos"),
     staleTime: 10 * 60_000,
+    placeholderData: (prev: any) => prev,
   });
 
   // Macro strip — same query key as MacroStrip component → deduplicates via cache
@@ -917,6 +926,7 @@ export default function Dashboard() {
     queryKey: ["macro-strip"],
     queryFn:  api.macroStrip,
     staleTime: 15 * 60_000,
+    placeholderData: (prev: any) => prev,
   });
 
   // Volume Activity summary
@@ -924,6 +934,7 @@ export default function Dashboard() {
     queryKey: ["volume-summary-dash"],
     queryFn:  () => fetchApi("/insights/volume-summary"),
     staleTime: 30 * 60_000,
+    placeholderData: (prev: any) => prev,
   });
 
   // Sentiment — 15-min cache, same data as /sentiment page
@@ -931,6 +942,7 @@ export default function Dashboard() {
     queryKey: ["sentiment-market"],
     queryFn:  () => fetchApi("/sentiment/market"),
     staleTime: 15 * 60_000,
+    placeholderData: (prev: any) => prev,
   });
 
   const scanInProgress = patterns?.scanInProgress ?? false;
@@ -941,7 +953,7 @@ export default function Dashboard() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["patterns-overview"] }),
         queryClient.invalidateQueries({ queryKey: ["sector-rotation-dash"] }),
-        queryClient.invalidateQueries({ queryKey: ["fii-dash-equity"] }),
+        queryClient.invalidateQueries({ queryKey: ["insights/fii-dii", "equity", "30d"] }),
         queryClient.invalidateQueries({ queryKey: ["news-dash"] }),
         queryClient.invalidateQueries({ queryKey: ["global-indices"] }),
         queryClient.invalidateQueries({ queryKey: ["ipo-dash"] }),
