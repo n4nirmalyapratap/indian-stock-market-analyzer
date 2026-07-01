@@ -63,6 +63,10 @@ class PriceService:
         # the historical chain when every live source is empty.
         self._chain = _pp.PriceProviderChain([
             _pp.UserBrokerProvider(),
+            # NSE_BHAV: official EOD from bhav copy archives.
+            #   • Market CLOSED → wins historical chain (fast local SQLite)
+            #   • Market OPEN   → skips itself so Yahoo serves intraday candle
+            _pp.NseBhavcopyProvider(),
             _pp.NseProvider(self.nse),
             _pp.BseProvider(),
             _pp.YahooProvider(self.yahoo),
