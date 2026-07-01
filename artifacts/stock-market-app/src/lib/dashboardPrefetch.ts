@@ -23,7 +23,7 @@ const MAX_AGE_MS = 30 * 60 * 1000;
 
 export const DASHBOARD_KEYS = [
   ["patterns-overview"],
-  ["fii-dash-equity"],
+  ["insights/fii-dii", "equity", "30d"],
   ["sector-rotation-dash"],
   ["news-dash"],
   ["ipo-dash"],
@@ -44,7 +44,7 @@ const PREFETCH_CONFIGS: Array<{ key: KeyTuple; fn: () => Promise<unknown>; stale
   { key: ["ipo-dash"],              fn: () => fetchApi("/insights/ipos"),                           staleTime: 10 * 60_000 },
   { key: ["sentiment-market"],      fn: () => fetchApi("/sentiment/market"),                        staleTime: 15 * 60_000 },
   { key: ["news-dash"],             fn: () => api.newsFeed({ limit: 7 }),                          staleTime: 7 * 60_000  },
-  { key: ["fii-dash-equity"],       fn: () => fetchApi("/insights/fii-dii?segment=equity&days=30"),staleTime: 10 * 60_000 },
+  { key: ["insights/fii-dii", "equity", "30d"], fn: () => fetchApi("/insights/fii-dii?segment=equity&days=30"), staleTime: 10 * 60_000 },
   { key: ["sector-rotation-dash"],  fn: api.sectorRotation,                                         staleTime: 5 * 60_000  },
   { key: ["patterns-overview"],     fn: api.patterns,                                               staleTime: 10 * 60_000 },
 ];
