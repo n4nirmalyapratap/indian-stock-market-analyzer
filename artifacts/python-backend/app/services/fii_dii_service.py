@@ -808,15 +808,50 @@ class FiiDiiService:
             except Exception as e:
                 return self._empty_response(segment, f"Failed to fetch data: {e}")
 
-        # Fire background refresh only when cached rows exist (user is served
-        # immediately) and today's row is still missing after market close.
-        if today_status == "fetching" and segment not in _refresh_in_progress:
+        # ── Background refresh decision ───────────────────────────────────────
+        # Two independent triggers — only ever one task at a time:
+        #
+        # 1. HISTORICAL GAP: any confirmed trading day before *yesterday* is
+        #    missing from the cache.  These rows are already published by NSE;
+        #    there is no reason to wait for market close.  Fire unconditionally,
+        #    bypassing the _RETRY_INTERVAL_S throttle.
+        #
+        # 2. TODAY'S DATA: today's row is missing after market close
+        #    (today_status=="fetching").  Gated by the per-segment retry
+        #    throttle so we don't hammer NSE on every request.
+        #
+        # The two triggers are OR-ed so a single task covers both cases in one
+        # pass (fetch_ranges in _background_refresh_segment spans the full gap).
+        if segment not in _refresh_in_progress:
+            loop_bg = asyncio.get_running_loop()
+            _, _cached_max_bg = await loop_bg.run_in_executor(
+                None, get_cached_date_range, f"fii_dii_{segment}"
+            )
+            from datetime import date as _date  # noqa: PLC0415
+            _yesterday = datetime.utcnow().date() - timedelta(days=1)
+            has_historical_gap = (
+                _cached_max_bg is not None
+                and pd.Timestamp(_cached_max_bg).date() < _yesterday
+            )
+
             last_fail = _refresh_last_failed.get(segment, 0.0)
-            elapsed = _time.time() - last_fail
-            if last_fail == 0.0 or elapsed >= _RETRY_INTERVAL_S:
+            elapsed   = _time.time() - last_fail
+            today_due = today_status == "fetching" and (
+                last_fail == 0.0 or elapsed >= _RETRY_INTERVAL_S
+            )
+
+            if has_historical_gap or today_due:
                 asyncio.create_task(
                     self._background_refresh_segment(segment, start_date, end_date)
                 )
+                if has_historical_gap:
+                    logger.info(
+                        "FII/DII historical gap detected for segment=%s "
+                        "(cache ends %s, yesterday=%s) — firing gap-fill",
+                        segment,
+                        pd.Timestamp(_cached_max_bg).date() if _cached_max_bg else "none",
+                        _yesterday,
+                    )
 
         if df is None or df.empty:
             if segment == "equity":
