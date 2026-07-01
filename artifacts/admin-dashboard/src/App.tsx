@@ -20,9 +20,10 @@ import MacroOverridesPage from "@/pages/MacroOverridesPage";
 import LogoCachePage from "@/pages/LogoCachePage";
 import SubsectorManagerPage from "@/pages/SubsectorManagerPage";
 import IpoManagerPage from "@/pages/IpoManagerPage";
+import FiiDiiPage from "@/pages/FiiDiiPage";
 import {
   Activity, Users, Terminal, MessageCircle, Send,
-  ChevronLeft, ChevronRight, LogOut, ShieldAlert, ShieldCheck, Bug, KeyRound, Layers, Brain, LineChart, Image, Network, Rocket,
+  ChevronLeft, ChevronRight, LogOut, ShieldAlert, ShieldCheck, Bug, KeyRound, Layers, Brain, LineChart, Image, Network, Rocket, TrendingUp,
 } from "lucide-react";
 
 const queryClient = new QueryClient({
@@ -52,6 +53,7 @@ const NAV = [
   { path: "/logos",     label: "Logo Cache",   icon: Image         },
   { path: "/subsectors", label: "Sub-Industries", icon: Network      },
   { path: "/ipos",       label: "IPO Manager",    icon: Rocket       },
+  { path: "/fii-dii",   label: "FII/DII Data",   icon: TrendingUp   },
 ];
 
 function NavLink({ path, label, icon: Icon, open }: {
@@ -176,6 +178,7 @@ function AppRoutes({ onSignOut }: { onSignOut: () => void }) {
         <Route path="/logos"      component={LogoCachePage} />
         <Route path="/subsectors" component={SubsectorManagerPage} />
         <Route path="/ipos"       component={IpoManagerPage} />
+        <Route path="/fii-dii"    component={FiiDiiPage} />
         <Route component={NotFound} />
       </Switch>
     </Layout>
