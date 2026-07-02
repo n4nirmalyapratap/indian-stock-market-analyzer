@@ -83,10 +83,12 @@ interface Props {
   activeSymbol: string;
   onRequestAdd: () => void;
   theme: "dark" | "light";
+  /** Fill the parent (mobile full-screen sheet) instead of the fixed 230px side rail */
+  mobile?: boolean;
 }
 
 const WatchlistPanel = forwardRef<WatchlistPanelHandle, Props>(
-function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd, theme }, ref) {
+function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd, theme, mobile }, ref) {
   const d = theme === "dark";
 
   const C = {
@@ -276,7 +278,9 @@ function WatchlistPanel({ onSymbolSelect, activeSymbol, onRequestAdd, theme }, r
   return (
     <div
       className="flex flex-col h-full select-none"
-      style={{ width: 230, background: C.bg, borderLeft: `1px solid ${C.panelBor}` }}
+      style={mobile
+        ? { width: "100%", background: C.bg }
+        : { width: 230, background: C.bg, borderLeft: `1px solid ${C.panelBor}` }}
     >
 
       {/* ── Header ── */}

@@ -5,12 +5,14 @@ import {
   BarChart2,
   LayoutTemplate, PanelRight, X, Search,
   ChevronDown, Calendar,
+  Pencil, Eraser, Undo2, Trash2,
 } from "lucide-react";
 import ChartPanel, { type DrawingTool, type Drawing, type ChartType, type PatternOverlay } from "@/components/trading/ChartPanel";
 import { INDICATOR_CATALOG } from "@/lib/indicator-catalog";
 import WatchlistPanel, { type WatchlistPanelHandle } from "@/components/trading/WatchlistPanel";
-import LeftDrawingBar from "@/components/trading/LeftDrawingBar";
+import LeftDrawingBar, { TOOL_GROUPS } from "@/components/trading/LeftDrawingBar";
 import { useTheme } from "@/context/ThemeContext";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 // ─── Symbol catalogue ────────────────────────────────────────────────────────
 const SYMBOLS = [
@@ -409,10 +411,12 @@ function ChartTypeSelector({
   chartType,
   onSelect,
   theme,
+  isMobile,
 }: {
   chartType: ChartType;
   onSelect: (t: ChartType) => void;
   theme: "dark" | "light";
+  isMobile?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -438,7 +442,7 @@ function ChartTypeSelector({
   }, []);
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative shrink-0">
       <button
         onClick={() => setOpen(v => !v)}
         title="Chart type"
@@ -451,10 +455,17 @@ function ChartTypeSelector({
         <ChevronDown size={11} className={`transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
 
+      {open && isMobile && (
+        <div className="fixed inset-0 z-[199]" style={{ background: "rgba(0,0,0,0.45)" }}
+          onPointerDown={() => setOpen(false)} />
+      )}
       {open && (
         <div
-          className="absolute top-full left-0 mt-1 z-50 rounded-lg shadow-2xl min-w-[200px]"
-          style={{ background: C.dropBg, border: `1px solid ${C.dropBor}` }}
+          className={isMobile
+            ? "fixed left-0 right-0 bottom-0 z-[200] rounded-t-2xl shadow-2xl max-h-[70vh] overflow-y-auto"
+            : "absolute top-full left-0 mt-1 z-50 rounded-lg shadow-2xl min-w-[200px]"}
+          style={{ background: C.dropBg, border: `1px solid ${C.dropBor}`,
+                   ...(isMobile ? { paddingBottom: "env(safe-area-inset-bottom)" } : {}) }}
         >
           <div className="px-4 pt-3 pb-2" style={{ borderBottom: `1px solid ${C.dropBor}` }}>
             <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: C.secTxt }}>Chart Type</span>
@@ -490,10 +501,12 @@ function IntervalSelector({
   intervalIdx,
   onSelect,
   theme,
+  isMobile,
 }: {
   intervalIdx: number;
   onSelect: (idx: number) => void;
   theme: "dark" | "light";
+  isMobile?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -518,7 +531,7 @@ function IntervalSelector({
   }, []);
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative shrink-0">
       {/* Trigger button */}
       <button
         onClick={() => setOpen(v => !v)}
@@ -531,11 +544,21 @@ function IntervalSelector({
         <ChevronDown size={11} className={`transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
 
+      {/* Backdrop (mobile bottom-sheet mode) */}
+      {open && isMobile && (
+        <div className="fixed inset-0 z-[199]" style={{ background: "rgba(0,0,0,0.45)" }}
+          onPointerDown={() => setOpen(false)} />
+      )}
       {/* Dropdown panel */}
       {open && (
         <div
-          className="absolute top-full left-0 mt-1 z-50 rounded-lg shadow-2xl"
-          style={{ background: C.dropBg, border: `1px solid ${C.dropBor}`, minWidth: 260 }}
+          className={isMobile
+            ? "fixed left-0 right-0 bottom-0 z-[200] rounded-t-2xl shadow-2xl max-h-[70vh] overflow-y-auto"
+            : "absolute top-full left-0 mt-1 z-50 rounded-lg shadow-2xl"}
+          style={{ background: C.dropBg, border: `1px solid ${C.dropBor}`,
+                   ...(isMobile
+                     ? { paddingBottom: "env(safe-area-inset-bottom)" }
+                     : { minWidth: 260 }) }}
         >
           {/* Header */}
           <div className="px-4 pt-3 pb-2" style={{ borderBottom: `1px solid ${C.dropBor}` }}>
@@ -610,7 +633,13 @@ export default function TradingPlatform() {
       return raw ? (JSON.parse(raw) as PatternOverlay) : null;
     } catch { return null; }
   });
-  const [showWatchlist, setShowWatchlist] = useState(true);
+  // Mobile: TradingView-app-style layout — watchlist starts hidden and opens
+  // as a full-screen sheet; drawing tools live in a bottom sheet.
+  const isMobile = useIsMobile();
+  const [showWatchlist, setShowWatchlist] = useState(
+    () => typeof window === "undefined" || window.innerWidth >= 768
+  );
+  const [showDrawSheet, setShowDrawSheet] = useState(false);
   const [showLayouts, setShowLayouts] = useState(false);
   const [showIndMenu, setShowIndMenu] = useState(false);
   const indMenuRef = useRef<HTMLDivElement | null>(null);
@@ -717,9 +746,7 @@ export default function TradingPlatform() {
       if ((e.ctrlKey || e.metaKey) && e.key === "z") {
         if (inInput) return;
         e.preventDefault();
-        setPanels(prev => prev.map(p =>
-          p.id === activePanelId ? { ...p, drawings: p.drawings.slice(0, -1) } : p
-        ));
+        undoLastDrawing();
         return;
       }
 
@@ -782,6 +809,12 @@ export default function TradingPlatform() {
     ));
   }
 
+  function undoLastDrawing() {
+    setPanels(prev => prev.map(p =>
+      p.id === activePanelId ? { ...p, drawings: p.drawings.slice(0, -1) } : p
+    ));
+  }
+
   function updateDrawing(panelId: string, id: string, shape: Record<string, unknown>) {
     setPanels(prev => prev.map(p =>
       p.id === panelId
@@ -798,9 +831,11 @@ export default function TradingPlatform() {
     });
   }
 
-  const visiblePanels = panels.slice(0, LAYOUTS.find(l => l.mode === layoutMode)!.panels);
+  // Mobile always shows a single panel — multi-chart grids don't fit a phone.
+  const visiblePanels = panels.slice(0, isMobile ? 1 : LAYOUTS.find(l => l.mode === layoutMode)!.panels);
 
   function getGridClass() {
+    if (isMobile) return "flex flex-col";
     if (layoutMode === "2h") return "flex flex-row gap-1";
     if (layoutMode === "2v") return "flex flex-col gap-1";
     if (layoutMode === "4")  return "grid grid-cols-2 grid-rows-2 gap-1";
@@ -826,43 +861,49 @@ export default function TradingPlatform() {
   return (
     <div className="flex flex-col h-full" style={{ background: PT.rootBg }}>
       {/* ── Toolbar ─────────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-2 px-3 py-1.5 shrink-0 flex-wrap" style={{ background: PT.barBg, borderBottom: `1px solid ${PT.barBor}` }}>
+      <div
+        className={`flex items-center shrink-0 ${isMobile
+          ? "gap-1.5 px-2 py-1.5 overflow-x-auto"
+          : "gap-2 px-3 py-1.5 flex-wrap"}`}
+        style={{ background: PT.barBg, borderBottom: `1px solid ${PT.barBor}`,
+                 ...(isMobile ? { scrollbarWidth: "none" as const } : {}) }}
+      >
 
         {/* Back button — only when opened via ?symbol= from another page */}
         {cameFromLink.current && (
           <button
             onClick={() => window.history.back()}
             title="Go back"
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors shrink-0"
             style={{ background: PT.btnBg, border: `1px solid ${PT.btnBor}`, color: PT.btnTxt }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M19 12H5M12 5l-7 7 7 7"/>
             </svg>
-            Back
+            {!isMobile && "Back"}
           </button>
         )}
 
         {/* Symbol name button — opens modal search (chart mode) */}
         <button
           onClick={() => searchRef.current?.open({ mode: "chart" })}
-          className="flex items-center gap-2 rounded px-3 py-1.5 transition-colors"
+          className={`flex items-center gap-2 rounded transition-colors shrink-0 ${isMobile ? "px-2.5 py-1" : "px-3 py-1.5"}`}
           style={{ background: PT.btnBg, border: `1px solid ${PT.btnBor}` }}
         >
-          <span className="text-sm font-bold tracking-wide" style={{ color: PT.btnTxt }}>{activePanel?.symbol ?? "—"}</span>
+          <span className={`font-bold tracking-wide ${isMobile ? "text-xs max-w-[110px] truncate" : "text-sm"}`} style={{ color: PT.btnTxt }}>{activePanel?.symbol ?? "—"}</span>
           <Search size={12} style={{ color: PT.iconTxt }} />
         </button>
 
         {/* Interval selector — dropdown like TradingView */}
-        <IntervalSelector intervalIdx={intervalIdx} onSelect={handleIntervalSelect} theme={theme} />
+        <IntervalSelector intervalIdx={intervalIdx} onSelect={handleIntervalSelect} theme={theme} isMobile={isMobile} />
 
         {/* Chart type selector */}
-        <ChartTypeSelector chartType={chartType} onSelect={setChartType} theme={theme} />
+        <ChartTypeSelector chartType={chartType} onSelect={setChartType} theme={theme} isMobile={isMobile} />
 
-        <div className="w-px h-5" style={{ background: PT.divider }} />
+        {!isMobile && <div className="w-px h-5" style={{ background: PT.divider }} />}
 
         {/* Indicators */}
-        <div className="relative" ref={indMenuRef}>
+        <div className="relative shrink-0" ref={indMenuRef}>
           <button
             onClick={() => setShowIndMenu(v => !v)}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors"
@@ -873,8 +914,17 @@ export default function TradingPlatform() {
               <span className="bg-indigo-500 text-white text-[10px] rounded-full px-1.5 py-0.5">{indicators.size}</span>
             )}
           </button>
+          {showIndMenu && isMobile && (
+            <div className="fixed inset-0 z-[199]" style={{ background: "rgba(0,0,0,0.45)" }}
+              onPointerDown={() => setShowIndMenu(false)} />
+          )}
           {showIndMenu && (
-            <div className="absolute top-full left-0 mt-1 z-50 rounded shadow-2xl p-3 w-64 max-h-[70vh] overflow-y-auto" style={{ background: PT.dropBg, border: `1px solid ${PT.dropBor}` }}>
+            <div
+              className={isMobile
+                ? "fixed left-0 right-0 bottom-0 z-[200] rounded-t-2xl shadow-2xl p-3 max-h-[70vh] overflow-y-auto"
+                : "absolute top-full left-0 mt-1 z-50 rounded shadow-2xl p-3 w-64 max-h-[70vh] overflow-y-auto"}
+              style={{ background: PT.dropBg, border: `1px solid ${PT.dropBor}`,
+                       ...(isMobile ? { paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" } : {}) }}>
               {IND_GROUPS.map((g, gi) => (
                 <div key={g.name} className={gi > 0 ? "mt-3 pt-2" : ""} style={gi > 0 ? { borderTop: `1px solid ${PT.dropBor}` } : {}}>
                   <div className="text-[11px] font-semibold mb-1.5" style={{ color: PT.secTxt }}>{g.name}</div>
@@ -925,7 +975,8 @@ export default function TradingPlatform() {
           )}
         </div>
 
-        {/* Layout selector */}
+        {/* Layout selector — multi-chart layouts are a desktop feature */}
+        {!isMobile && (
         <div className="relative" ref={layoutMenuRef}>
           <button
             onClick={() => setShowLayouts(v => !v)}
@@ -950,7 +1001,10 @@ export default function TradingPlatform() {
             </div>
           )}
         </div>
+        )}
 
+        {/* Watchlist toggle lives in the bottom action bar on mobile */}
+        {!isMobile && (
         <div className="ml-auto flex items-center gap-1">
           {/* Watchlist toggle — TradingView-style icon button */}
           <button
@@ -967,26 +1021,29 @@ export default function TradingPlatform() {
             )}
           </button>
         </div>
+        )}
       </div>
 
       {/* ── Chart area ──────────────────────────────────────────────────────── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
 
-        {/* Left drawing sidebar */}
-        <LeftDrawingBar
-          activeTool={drawingTool}
-          onToolSelect={setDrawingTool}
-          onClearDrawings={clearDrawings}
-          hasDrawings={!!(activePanel?.drawings?.length)}
-          isDark={isDark}
-        />
+        {/* Left drawing sidebar — desktop only; mobile uses the bottom Draw sheet */}
+        {!isMobile && (
+          <LeftDrawingBar
+            activeTool={drawingTool}
+            onToolSelect={setDrawingTool}
+            onClearDrawings={clearDrawings}
+            hasDrawings={!!(activePanel?.drawings?.length)}
+            isDark={isDark}
+          />
+        )}
 
         {/* Chart column: grid + bottom bar (clock stays inside chart area) */}
         <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
           {/* Charts grid */}
           <div className={`flex-1 min-w-0 min-h-0 ${getGridClass()} p-1 gap-1`}>
             {visiblePanels.map((panel) => (
-              <div key={panel.id} className={layoutMode === "4" ? "min-h-0 min-w-0 overflow-hidden" : "flex-1 min-h-0 min-w-0 overflow-hidden"}>
+              <div key={panel.id} className={!isMobile && layoutMode === "4" ? "min-h-0 min-w-0 overflow-hidden" : "flex-1 min-h-0 min-w-0 overflow-hidden"}>
                 <ChartPanel
                   panelId={panel.id}
                   symbol={panel.symbol}
@@ -1091,12 +1148,15 @@ export default function TradingPlatform() {
           {/* ── Bottom range bar (chart area only — clock lives here) ── */}
           <div className="relative flex items-center justify-between px-3 py-1 shrink-0" style={{ background: PT.barBg, borderTop: `1px solid ${PT.barBor}` }}>
             {/* Range buttons + calendar */}
-            <div className="flex items-center gap-0.5">
+            <div
+              className={`flex items-center gap-0.5 ${isMobile ? "overflow-x-auto flex-1 min-w-0" : ""}`}
+              style={isMobile ? { scrollbarWidth: "none" as const } : undefined}
+            >
               {RANGES.map(r => (
                 <button
                   key={r.label}
                   onClick={() => applyRange(r)}
-                  className="px-2 py-0.5 rounded text-[11px] font-medium transition-colors"
+                  className="px-2 py-0.5 rounded text-[11px] font-medium transition-colors shrink-0"
                   style={activeRange === r.label
                     ? { background: "#6366f1", color: "#ffffff" }
                     : { color: PT.iconTxt }}
@@ -1104,7 +1164,7 @@ export default function TradingPlatform() {
                   {r.label}
                 </button>
               ))}
-              <div className="relative ml-1">
+              <div className="relative ml-1 shrink-0">
                 <button
                   onClick={() => setShowCalendar(v => !v)}
                   title="Custom date range"
@@ -1115,8 +1175,19 @@ export default function TradingPlatform() {
                 >
                   <Calendar size={12} />
                 </button>
+                {showCalendar && isMobile && (
+                  <div className="fixed inset-0 z-[199]" style={{ background: "rgba(0,0,0,0.45)" }}
+                    onPointerDown={() => setShowCalendar(false)} />
+                )}
                 {showCalendar && (
-                  <div className="absolute bottom-full mb-2 left-0 z-50 rounded shadow-2xl p-3 flex flex-col gap-2" style={{ minWidth: 240, background: PT.dropBg, border: `1px solid ${PT.dropBor}` }}>
+                  <div
+                    className={isMobile
+                      ? "fixed left-0 right-0 bottom-0 z-[200] rounded-t-2xl shadow-2xl p-4 flex flex-col gap-2"
+                      : "absolute bottom-full mb-2 left-0 z-50 rounded shadow-2xl p-3 flex flex-col gap-2"}
+                    style={{ background: PT.dropBg, border: `1px solid ${PT.dropBor}`,
+                             ...(isMobile
+                               ? { paddingBottom: "calc(1rem + env(safe-area-inset-bottom))" }
+                               : { minWidth: 240 }) }}>
                     <div className="text-xs font-medium" style={{ color: PT.secTxt }}>Custom range</div>
                     <div className="flex items-center gap-2">
                       <label className="text-[11px] w-10" style={{ color: PT.secTxt }}>From</label>
@@ -1148,16 +1219,18 @@ export default function TradingPlatform() {
               </div>
             </div>
 
-            {/* Live IST clock — now inside chart panel area, not watchlist */}
-            <div className="flex items-center gap-2 select-none">
-              <span className="font-mono text-[12px] tracking-wide tabular-nums" style={{ color: PT.itemTxt }}>{clock}</span>
-              <span className="font-mono text-[12px]" style={{ color: PT.secTxt }}>UTC+5:30</span>
-            </div>
+            {/* Live IST clock — desktop only; too cramped on phones */}
+            {!isMobile && (
+              <div className="flex items-center gap-2 select-none">
+                <span className="font-mono text-[12px] tracking-wide tabular-nums" style={{ color: PT.itemTxt }}>{clock}</span>
+                <span className="font-mono text-[12px]" style={{ color: PT.secTxt }}>UTC+5:30</span>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Watchlist */}
-        {showWatchlist && (
+        {/* Watchlist — desktop side rail; on mobile it opens as a full-screen sheet below */}
+        {showWatchlist && !isMobile && (
           <WatchlistPanel
             ref={watchlistRef}
             onSymbolSelect={setSymbolForActivePanel}
@@ -1167,6 +1240,128 @@ export default function TradingPlatform() {
           />
         )}
       </div>
+
+      {/* ── Mobile bottom action bar (TradingView-app style) ─────────────── */}
+      {isMobile && (
+        <div
+          className="flex items-stretch shrink-0"
+          style={{ background: PT.barBg, borderTop: `1px solid ${PT.barBor}`,
+                   paddingBottom: "env(safe-area-inset-bottom)" }}
+        >
+          <button
+            onClick={() => setShowDrawSheet(true)}
+            className="flex-1 flex flex-col items-center justify-center gap-0.5 py-1.5 text-[10px] font-medium"
+            style={{ color: drawingTool !== "none" && drawingTool !== "eraser" ? "#818cf8" : PT.iconTxt }}
+          >
+            <Pencil size={16} />
+            Draw
+          </button>
+          <button
+            onClick={() => setDrawingTool(drawingTool === "eraser" ? "none" : "eraser")}
+            className="flex-1 flex flex-col items-center justify-center gap-0.5 py-1.5 text-[10px] font-medium"
+            style={{ color: drawingTool === "eraser" ? "#818cf8" : PT.iconTxt }}
+          >
+            <Eraser size={16} />
+            Eraser
+          </button>
+          <button
+            onClick={undoLastDrawing}
+            disabled={!activePanel?.drawings?.length}
+            className="flex-1 flex flex-col items-center justify-center gap-0.5 py-1.5 text-[10px] font-medium disabled:opacity-35"
+            style={{ color: PT.iconTxt }}
+          >
+            <Undo2 size={16} />
+            Undo
+          </button>
+          <button
+            onClick={clearDrawings}
+            disabled={!activePanel?.drawings?.length}
+            className="flex-1 flex flex-col items-center justify-center gap-0.5 py-1.5 text-[10px] font-medium disabled:opacity-35"
+            style={{ color: activePanel?.drawings?.length ? "#f87171" : PT.iconTxt }}
+          >
+            <Trash2 size={16} />
+            Clear
+          </button>
+          <button
+            onClick={() => setShowWatchlist(true)}
+            className="flex-1 flex flex-col items-center justify-center gap-0.5 py-1.5 text-[10px] font-medium"
+            style={{ color: PT.iconTxt }}
+          >
+            <PanelRight size={16} />
+            Watchlist
+          </button>
+        </div>
+      )}
+
+      {/* ── Mobile drawing-tools bottom sheet ─────────────────────────────── */}
+      {isMobile && showDrawSheet && (
+        <>
+          <div className="fixed inset-0 z-[199]" style={{ background: "rgba(0,0,0,0.45)" }}
+            onPointerDown={() => setShowDrawSheet(false)} />
+          <div
+            className="fixed left-0 right-0 bottom-0 z-[200] rounded-t-2xl shadow-2xl flex flex-col"
+            style={{ background: PT.dropBg, border: `1px solid ${PT.dropBor}`, maxHeight: "70vh" }}
+          >
+            <div className="flex items-center justify-between px-4 py-3 shrink-0" style={{ borderBottom: `1px solid ${PT.dropBor}` }}>
+              <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: PT.secTxt }}>Drawing Tools</span>
+              <button onClick={() => setShowDrawSheet(false)} className="w-7 h-7 flex items-center justify-center rounded" style={{ color: PT.iconTxt }}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-3" style={{ paddingBottom: "calc(1rem + env(safe-area-inset-bottom))" }}>
+              {TOOL_GROUPS.map(g => (
+                <div key={g.id} className="mt-3">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: PT.secTxt }}>{g.categoryLabel}</div>
+                  <div className="grid grid-cols-4 gap-1">
+                    {g.tools.map(t => {
+                      const active = drawingTool === t.tool;
+                      return (
+                        <button
+                          key={t.tool as string}
+                          onClick={() => { setDrawingTool(t.tool as string); setShowDrawSheet(false); }}
+                          className="flex flex-col items-center gap-1 rounded-lg px-1 py-2"
+                          style={active
+                            ? { background: "#6366f1", color: "#ffffff" }
+                            : { color: PT.itemTxt, background: PT.btnBg }}
+                        >
+                          <span className="shrink-0">{t.icon}</span>
+                          <span className="text-[9px] leading-tight text-center">{t.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── Mobile watchlist — full-screen sheet ──────────────────────────── */}
+      {isMobile && showWatchlist && (
+        <div className="fixed inset-0 z-[190] flex flex-col" style={{ background: PT.rootBg }}>
+          <div className="flex items-center justify-between px-4 py-2.5 shrink-0" style={{ background: PT.barBg, borderBottom: `1px solid ${PT.barBor}` }}>
+            <span className="text-sm font-bold" style={{ color: PT.btnTxt }}>Watchlist</span>
+            <button
+              onClick={() => setShowWatchlist(false)}
+              className="w-8 h-8 flex items-center justify-center rounded"
+              style={{ color: PT.iconTxt }}
+            >
+              <X size={18} />
+            </button>
+          </div>
+          <div className="flex-1 min-h-0">
+            <WatchlistPanel
+              ref={watchlistRef}
+              mobile
+              onSymbolSelect={(sym) => { setSymbolForActivePanel(sym); setShowWatchlist(false); }}
+              activeSymbol={activePanel?.symbol ?? ""}
+              onRequestAdd={() => searchRef.current?.open({ mode: "watchlist" })}
+              theme={theme}
+            />
+          </div>
+        </div>
+      )}
 
       {/* ── Symbol Search Modal (shared — chart mode or watchlist-add mode) ── */}
       <SearchModal
