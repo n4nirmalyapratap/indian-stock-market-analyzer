@@ -119,10 +119,10 @@ function Leaderboard({ entities, logic, selected, onPick }: {
       {filtered.length === 0 ? (
         <div className="py-12 text-center text-sm text-gray-400">No matches.</div>
       ) : (
-      {/* Inner scroll only in the side-by-side (lg) layout. Stacked on mobile,
-          a nested 460px scroll area makes long sub-industry lists miserable to
-          navigate — let the list flow and use the page's own scroll instead
-          (the zone chips + search above narrow it down). */}
+      /* Inner scroll only in the side-by-side (lg) layout. Stacked on mobile,
+         a nested 460px scroll area makes long sub-industry lists miserable to
+         navigate — let the list flow and use the page's own scroll instead
+         (the zone chips + search above narrow it down). */
       <div className="lg:max-h-[460px] lg:overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700/60 pr-1">
         {filtered.map(e => {
           const z = zoneOf(e, logic);
