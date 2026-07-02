@@ -114,12 +114,16 @@ function Leaderboard({ entities, logic, selected, onPick }: {
           </button>
         ))}
         <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search…"
-          className="ml-auto text-xs px-2 py-1 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-700 dark:text-gray-200 w-32 focus:outline-none focus:ring-1 focus:ring-indigo-400" />
+          className="ml-auto text-xs px-2 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-700 dark:text-gray-200 w-full sm:w-32 focus:outline-none focus:ring-1 focus:ring-indigo-400" />
       </div>
       {filtered.length === 0 ? (
         <div className="py-12 text-center text-sm text-gray-400">No matches.</div>
       ) : (
-      <div className="max-h-[460px] overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700/60 pr-1">
+      {/* Inner scroll only in the side-by-side (lg) layout. Stacked on mobile,
+          a nested 460px scroll area makes long sub-industry lists miserable to
+          navigate — let the list flow and use the page's own scroll instead
+          (the zone chips + search above narrow it down). */}
+      <div className="lg:max-h-[460px] lg:overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700/60 pr-1">
         {filtered.map(e => {
           const z = zoneOf(e, logic);
           const col = zoneColor(z, logic);
@@ -130,6 +134,9 @@ function Leaderboard({ entities, logic, selected, onPick }: {
           const confTitle = logic === "strength"
             ? `Rotation: ${e.quadrant}`
             : `Strength: ${e.tier ? (TIER_LABEL[e.tier] || e.tier) : "—"}`;
+          // Every sector index starts with "NIFTY " — dropping it for display
+          // (like the Sector Heat Map does) keeps names readable on phones.
+          const dispName = e.name.replace(/^NIFTY\s+/i, "");
           return (
             <button key={e.name} onClick={() => onPick(e.name)}
               className={`w-full flex items-center gap-3 px-1.5 py-2 text-left transition ${
@@ -137,7 +144,7 @@ function Leaderboard({ entities, logic, selected, onPick }: {
               }`}>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-semibold text-gray-900 dark:text-white truncate">{e.name}</span>
+                  <span className="text-sm font-semibold text-gray-900 dark:text-white truncate" title={e.name}>{dispName}</span>
                   <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded flex-shrink-0"
                         style={{ color: col, backgroundColor: col + "22" }}>{zoneLabel(z, logic)}</span>
                   {confColor && <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: confColor }} title={confTitle} />}
@@ -147,11 +154,15 @@ function Leaderboard({ entities, logic, selected, onPick }: {
                   <div className="h-full rounded-full" style={{ width: `${barPct(metric)}%`, backgroundColor: col }} />
                 </div>
               </div>
-              <span className={`flex items-center gap-1 text-xs font-semibold flex-shrink-0 w-[68px] justify-end ${
+              {/* Icon-only below sm — the "gaining/fading" word ate the name's
+                  space on phones; the colour + arrow carry the same signal. */}
+              <span className={`flex items-center gap-1 text-xs font-semibold flex-shrink-0 sm:w-[68px] justify-end ${
                 !hasRrg ? "text-gray-400 dark:text-gray-500" : gaining ? "text-emerald-600 dark:text-emerald-400" : "text-rose-500"
-              }`}>
+              }`}
+                title={hasRrg ? (gaining ? "gaining momentum vs NIFTY" : "fading momentum vs NIFTY") : "no data yet"}>
                 {hasRrg ? (gaining ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />) : null}
-                {hasRrg ? (gaining ? "gaining" : "fading") : "no data yet"}
+                <span className="hidden sm:inline">{hasRrg ? (gaining ? "gaining" : "fading") : "no data yet"}</span>
+                {!hasRrg && <span className="sm:hidden">—</span>}
               </span>
               <span className="text-[11px] text-gray-500 dark:text-gray-400 w-20 text-right tabular-nums flex-shrink-0 hidden sm:inline">
                 {logic === "strength"
@@ -258,7 +269,17 @@ export default function SectorRotation() {
   const selectedEntity = entities.find(e => e.name === selected);
   const tail = (selectedEntity?.tail ?? []).map(p => ({ x: p.rsRatio, y: p.rsMomentum, name: selectedEntity?.name, quadrant: p.quadrant }));
 
-  const onPick = (name: string) => setSelected(prev => (prev === name ? null : name));
+  const onPick = (name: string) => {
+    const next = selected === name ? null : name;
+    setSelected(next);
+    // Stacked layout (below lg): the shortlist renders below a potentially
+    // long leaderboard — bring it into view so the tap visibly answers.
+    if (next && window.matchMedia("(max-width: 1023px)").matches) {
+      setTimeout(() => {
+        document.getElementById("rotation-shortlist")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 80);
+    }
+  };
   const switchLevel = (l: Level) => { setLevel(l); setSelected(null); };
 
   return (
@@ -368,9 +389,11 @@ export default function SectorRotation() {
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-bold text-gray-900 dark:text-white">
                   {view === "rrg" ? "Relative Rotation Graph" : "Strength leaderboard"}
-                  <span className="font-normal text-gray-400"> · vs NIFTY 50</span>
+                  {/* nowrap: on narrow screens this drops to the next line as a
+                      unit instead of breaking mid-phrase ("vs NIFTY / 50") */}
+                  <span className="font-normal text-gray-400 whitespace-nowrap"> · vs NIFTY 50</span>
                 </h2>
-                <span className="text-[11px] text-gray-400">{entities.length} {level === "sector" ? "sectors" : "sub-industries"}</span>
+                <span className="text-[11px] text-gray-400 whitespace-nowrap">{entities.length} {level === "sector" ? "sectors" : "sub-industries"}</span>
               </div>
               <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-900/60 rounded-lg p-0.5">
                 {(["leaderboard", "rrg"] as const).map(v => (
@@ -441,7 +464,7 @@ export default function SectorRotation() {
           </div>
 
           {/* RIGHT: winning stocks for the picked group */}
-          <div className="lg:col-span-1">
+          <div className="lg:col-span-1 scroll-mt-4" id="rotation-shortlist">
             {selected ? (
               <ShortlistPanel title={selected} isLoading={shortlistQ.isLoading} data={shortlistQ.data} tf={tf} />
             ) : (
