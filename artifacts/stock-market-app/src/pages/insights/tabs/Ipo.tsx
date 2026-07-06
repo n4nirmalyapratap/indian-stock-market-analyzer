@@ -372,6 +372,12 @@ export default function Ipo() {
   const items    = tab === "open" ? data?.open ?? [] : tab === "upcoming" ? data?.upcoming ?? [] : [];
   const listedItems = data?.listed ?? [];
 
+  // GMP is merged from several sources now — attribute whichever one served.
+  const gmpHost = useMemo(() => {
+    try { return new URL(data?.gmpSource?.url ?? "https://ipowatch.in/").hostname.replace(/^www\./, ""); }
+    catch { return "ipowatch.in"; }
+  }, [data?.gmpSource?.url]);
+
   return (
     <div>
       <PageHeader title="IPO Center"
@@ -471,7 +477,7 @@ export default function Ipo() {
             <span>
               Grey Market Premium is an unofficial pre-listing indicator sourced from{" "}
               <a href={data?.gmpSource?.url ?? "https://ipowatch.in/"} target="_blank" rel="noreferrer"
-                 className="text-blue-600 dark:text-blue-400 underline">ipowatch.in</a>
+                 className="text-blue-600 dark:text-blue-400 underline">{gmpHost}</a>
               {data?.gmpSource?.fetchedAt && <> · last fetched {data.gmpSource.fetchedAt.replace("T"," ").replace("Z"," UTC")}</>}.
               Estimated listing = issue price + GMP. Treat it as sentiment, not a forecast.
             </span>
