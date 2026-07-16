@@ -1534,6 +1534,19 @@ export default function ChartPanel({
       });
     };
 
+    // Touch pointers are implicitly captured by the element they went down on
+    // (the ECharts canvas). Once we start a drag the overlay div mounts on top
+    // and must receive the subsequent pointermove/pointerup — release the
+    // implicit capture so hit-testing retargets to the overlay. No-op for mouse.
+    const releaseImplicitCapture = (e: MouseEvent) => {
+      try {
+        if (!("pointerId" in e)) return;
+        const pe = e as PointerEvent;
+        const t = pe.target as Element | null;
+        if (t?.hasPointerCapture?.(pe.pointerId)) t.releasePointerCapture(pe.pointerId);
+      } catch { /* released already / unsupported */ }
+    };
+
     const onNativeDown = (e: MouseEvent) => {
       if (drawingToolRef.current !== "none") return;
       if (!drawingsRef.current.length) return;
@@ -1567,6 +1580,7 @@ export default function ChartPanel({
           const near = hls?.find(h => Math.hypot(h.px - px, h.py - py) < HANDLE_R);
           if (near) {
             e.stopPropagation(); e.preventDefault();
+            releaseImplicitCapture(e);
             dragDrawingState.current = { id: hoveredDrawingIdRef.current!, kind: near.kind, startPx: px, startPy: py, origShape: { ...hd.shape } };
             setIsDraggingDrawing(true);
             return;
@@ -1578,6 +1592,7 @@ export default function ChartPanel({
       const hitId = hitTestDrawings(px, py, drawingsRef.current, chart, candles.current);
       if (hitId) {
         e.stopPropagation(); e.preventDefault();
+        releaseImplicitCapture(e);
         const hd = drawingsRef.current.find(d => d.id === hitId)!;
         dragDrawingState.current = { id: hitId, kind: "move", startPx: px, startPy: py, origShape: { ...hd.shape } };
         hoveredDrawingIdRef.current = hitId;
@@ -1597,13 +1612,33 @@ export default function ChartPanel({
       if (hitId) e.preventDefault();
     };
 
-    // capture: true for mousedown so we intercept before ECharts' ZRender
+    // Touch/pen never produce a compatibility mousedown for drags, so listen
+    // to pointerdown as well — but only for non-mouse pointers (mouse keeps
+    // going through mousedown exactly as before, since ZRender also listens
+    // to mouse events and both paths must stay in sync).
+    const onNativePointerDown = (e: PointerEvent) => {
+      if (e.pointerType === "mouse") return;
+      onNativeDown(e);
+    };
+
+    // While a drawing drag is active, swallow touchstart before ZRender sees
+    // it — otherwise ECharts starts panning the chart underneath the drag.
+    // preventDefault also stops the page from scrolling during the gesture.
+    const onNativeTouchStart = (e: TouchEvent) => {
+      if (dragDrawingState.current) { e.stopPropagation(); e.preventDefault(); }
+    };
+
+    // capture: true for mousedown/pointerdown so we intercept before ECharts' ZRender
     container.addEventListener("mousemove", onNativeMove);
     container.addEventListener("mousedown", onNativeDown, { capture: true });
+    container.addEventListener("pointerdown", onNativePointerDown, { capture: true });
+    container.addEventListener("touchstart", onNativeTouchStart, { capture: true, passive: false });
     container.addEventListener("contextmenu", onContextMenu);
     return () => {
       container.removeEventListener("mousemove", onNativeMove);
       container.removeEventListener("mousedown", onNativeDown, { capture: true });
+      container.removeEventListener("pointerdown", onNativePointerDown, { capture: true });
+      container.removeEventListener("touchstart", onNativeTouchStart, { capture: true } as EventListenerOptions);
       container.removeEventListener("contextmenu", onContextMenu);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2597,6 +2632,9 @@ export default function ChartPanel({
         className="flex-1 relative min-h-0"
         onContextMenu={e => {
           e.preventDefault();
+          // Long-press fires contextmenu on touch — don't pop the menu while
+          // a drawing tool is armed or a drawing is being dragged.
+          if (drawingTool !== "none" || isDraggingDrawing) return;
           onActivate();
           const r = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
           setCtxMenu({ x: e.clientX - r.left, y: e.clientY - r.top });
@@ -2622,25 +2660,33 @@ export default function ChartPanel({
         )}
         <svg ref={svgRef} className="absolute inset-0" style={{ pointerEvents: "none", zIndex: 10 }} />
         {/* Overlay: only shown while actively drawing or dragging a drawing.
-            ECharts handles the mouse natively at all other times → smooth crosshair. */}
+            ECharts handles the mouse natively at all other times → smooth crosshair.
+            Pointer events (not mouse events) so touch screens can draw too;
+            touchAction none stops the page from scrolling mid-gesture. */}
         {(drawingTool !== "none" || isDraggingDrawing) && (
           <div
             className="absolute inset-0"
             style={{
               zIndex: 20,
+              touchAction: "none",
               cursor: drawingTool === "eraser" ? "none"
                 : isDraggingDrawing ? "grabbing"
                 : "crosshair",
             }}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={(e) => {
+            onPointerDown={handleMouseDown}
+            onPointerMove={handleMouseMove}
+            onPointerUp={handleMouseUp}
+            onPointerLeave={(e) => {
+              // For touch, pointerleave fires after every pointerup (implicit
+              // capture ends) — don't wipe the phase-2 preview the gesture
+              // just painted; repaint its base line instead.
               eraserPos.current = null;
               if (dragStart.current) { dragStart.current = null; }
               if (dragDrawingState.current) { dragDrawingState.current = null; setIsDraggingDrawing(false); }
               if (hoveredDrawingId) { hoveredDrawingIdRef.current = null; setHoveredDrawingId(null); }
-              paintSvg();
+              const p2 = phase2State.current;
+              if (p2) paintSvg([{ type: "line", x1: p2.px0, y1: p2.py0, x2: p2.px1, y2: p2.py1 }]);
+              else paintSvg();
               const canvas = containerRef.current?.querySelector("canvas");
               if (canvas) canvas.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, clientX: e.clientX, clientY: e.clientY }));
             }}

@@ -68,7 +68,7 @@ const ICONS = {
 
 // ─── Tool catalogue ───────────────────────────────────────────────────────────
 export interface SidebarTool { tool: DrawingTool | string; label: string; shortcut?: string; icon: React.ReactNode }
-interface ToolGroup {
+export interface ToolGroup {
   id: string;
   categoryIcon: React.ReactNode;
   categoryLabel: string;
@@ -76,7 +76,8 @@ interface ToolGroup {
   tools: SidebarTool[];
 }
 
-const TOOL_GROUPS: ToolGroup[] = [
+// Exported so the mobile drawing sheet (TradingPlatform) can reuse the same catalogue
+export const TOOL_GROUPS: ToolGroup[] = [
   {
     id: "cursor", categoryIcon: ICONS.cross, categoryLabel: "Cursor",
     tools: [

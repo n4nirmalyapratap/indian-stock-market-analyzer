@@ -1,17 +1,28 @@
 """Persistent SQLite store for IPO calendar data.
 
-Every IPO seen from NSE or added manually is persisted here. Surviving
-server restarts and NSE blocks. Key behaviours:
+This is the **system of record** the /insights/ipos endpoint serves from —
+requests never wait on NSE or scrapers. A background refresher (see
+IpoService.refresh + main._ipo_refresh_scheduler) writes here; reads are
+local-disk SQLite and return in milliseconds.
 
-  • `upsert_nse(items)`   — bulk-save what the NSE scrape returned.
-  • `upsert_manual(item)` — admin adds a record that NSE doesn't know about.
-  • `get_active()`        — open + upcoming IPOs (close_date ≥ today-7d).
-  • `get_listed()`        — IPOs whose subscription window closed >7 days ago.
-  • `delete(symbol)`      — hard-delete (admin only).
-  • `mark_listed(symbol)` — force-promote to listed status.
+Key behaviours:
 
-GMP is intentionally NOT stored here — it shifts hourly and ipowatch.in
-already caches it for 10 min. We merge GMP at query time in IpoService.
+  • `upsert_nse(items)`      — bulk-save what the refresher scraped.
+  • `upsert_manual(item)`    — admin adds a record the feeds don't know about.
+  • `set_subscriptions(map)` — persist live QIB/NII/Retail multiples per symbol.
+  • `set_gmps(map)`          — persist last-known GMP per symbol (never blanked
+                               by a failed scrape — stale GMP beats no GMP).
+  • `get_active()`           — open + upcoming IPOs (close_date ≥ today-7d).
+  • `get_listed()`           — IPOs whose subscription window closed >7 days ago.
+  • `delete(symbol)`         — hard-delete (admin only).
+  • `mark_listed(symbol)`    — force-promote to listed status.
+
+The DB lives on LOCAL disk via app.lib.db_paths.local_db_path — NEVER under
+market_cache/, which in production is an SMB mount where WAL-mode SQLite
+fails with "database is locked". (The store used to live there, which is
+why the NSE-block fallback never worked in prod.) On first run we migrate
+any rows we can still read out of the legacy file so admin-entered IPOs
+survive the move.
 """
 from __future__ import annotations
 
@@ -23,10 +34,16 @@ import time
 from datetime import date, timedelta
 from typing import Optional
 
+from ..lib.db_paths import local_db_path
+
 logger = logging.getLogger("ipo_store")
 
-_DB_DIR  = os.path.join(os.path.dirname(__file__), "..", "..", "market_cache")
-_DB_PATH = os.path.join(_DB_DIR, "ipo_store.db")
+_DB_PATH = str(local_db_path("ipo_store.db"))
+
+# Legacy location (pre-2026-07): the SMB-mounted cache dir. Read-only source
+# for the one-time migration below; we never write here again.
+_LEGACY_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "market_cache")
+_LEGACY_DB  = os.path.join(_LEGACY_DIR, "ipo_store.db")  # sqlite-on-mount-ok: read-only legacy migration source
 
 _CREATE_SQL = """
 CREATE TABLE IF NOT EXISTS ipos (
@@ -50,16 +67,74 @@ CREATE TABLE IF NOT EXISTS ipos (
 );
 """
 
+# Columns added after the first release — applied via ALTER TABLE so existing
+# DBs upgrade in place. subscription/gmp are JSON blobs in the exact shape the
+# frontend consumes.
+_EXTRA_COLS: dict[str, str] = {
+    "issue_shares":   "INTEGER",
+    "raw_status":     "TEXT",
+    "subscription":   "TEXT",   # JSON {"qib":..,"nii":..,"retail":..,"total":..}
+    "sub_updated_at": "TEXT",
+    "gmp":            "TEXT",   # JSON {"premium":..,"estListing":..,...}
+    "gmp_updated_at": "TEXT",
+    "last_seen_at":   "TEXT",   # last time a live feed returned this row
+}
+
 _LISTED_GRACE_DAYS = 7   # close_date + N days → auto-promote to listed
+
+_schema_ready = False
+
+
+def _ensure_schema(c: sqlite3.Connection) -> None:
+    c.execute(_CREATE_SQL)
+    have = {row[1] for row in c.execute("PRAGMA table_info(ipos)").fetchall()}
+    for col, typ in _EXTRA_COLS.items():
+        if col not in have:
+            c.execute(f"ALTER TABLE ipos ADD COLUMN {col} {typ}")
+
+
+def _migrate_legacy(c: sqlite3.Connection) -> None:
+    """One-time best-effort copy from the old market_cache/ DB. Reads may
+    fail on the SMB mount (that's the bug that forced the move) — any error
+    just skips the migration; live feeds repopulate within minutes."""
+    try:
+        if c.execute("SELECT COUNT(*) FROM ipos").fetchone()[0] > 0:
+            return
+        if not os.path.exists(_LEGACY_DB):
+            return
+        src = sqlite3.connect(f"file:{_LEGACY_DB}?mode=ro", uri=True)
+        try:
+            src.row_factory = sqlite3.Row
+            rows = src.execute("SELECT * FROM ipos").fetchall()
+        finally:
+            src.close()
+        have = {r[1] for r in c.execute("PRAGMA table_info(ipos)").fetchall()}
+        n = 0
+        for row in rows:
+            d = {k: row[k] for k in row.keys() if k in have}
+            if not d.get("symbol"):
+                continue
+            cols = ",".join(d.keys())
+            ph   = ",".join("?" * len(d))
+            c.execute(f"INSERT OR IGNORE INTO ipos ({cols}) VALUES ({ph})",
+                      tuple(d.values()))
+            n += 1
+        if n:
+            logger.info("ipo_store: migrated %d rows from legacy market_cache DB", n)
+    except Exception as e:
+        logger.warning("ipo_store: legacy migration skipped: %s", e)
 
 
 def _conn() -> sqlite3.Connection:
-    os.makedirs(_DB_DIR, exist_ok=True)
+    global _schema_ready
     c = sqlite3.connect(_DB_PATH, check_same_thread=False)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
-    c.execute(_CREATE_SQL)
-    c.commit()
+    if not _schema_ready:
+        _ensure_schema(c)
+        _migrate_legacy(c)
+        c.commit()
+        _schema_ready = True
     return c
 
 
@@ -86,8 +161,22 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     d["priceHigh"]   = d.pop("price_high", None)
     d["lotSize"]     = d.pop("lot_size", None)
     d["issueSizeCr"] = d.pop("issue_size_cr", None)
+    d["issueShares"] = d.pop("issue_shares", None)
+    d["rawStatus"]   = d.pop("raw_status", None)
     d["createdAt"]   = d.pop("created_at", None)
     d["updatedAt"]   = d.pop("updated_at", None)
+    d["lastSeenAt"]  = d.pop("last_seen_at", None)
+    d["subUpdatedAt"] = d.pop("sub_updated_at", None)
+    d["gmpUpdatedAt"] = d.pop("gmp_updated_at", None)
+    for key in ("subscription", "gmp"):
+        raw = d.pop(key, None)
+        parsed = None
+        if raw:
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, ValueError):
+                parsed = None
+        d[key] = parsed
     return d
 
 
@@ -107,22 +196,26 @@ def upsert_nse(items: list[dict]) -> int:
                 """INSERT INTO ipos
                     (symbol, company_name, series, is_sme, is_reit,
                      open_date, close_date, price_low, price_high,
-                     lot_size, issue_size_cr, source, from_gmp_only,
-                     is_listed, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,'nse',?,0,?,?)
+                     lot_size, issue_size_cr, issue_shares, raw_status,
+                     source, from_gmp_only, is_listed,
+                     created_at, updated_at, last_seen_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'nse',?,0,?,?,?)
                    ON CONFLICT(symbol) DO UPDATE SET
                      company_name  = excluded.company_name,
                      series        = excluded.series,
                      is_sme        = excluded.is_sme,
                      is_reit       = excluded.is_reit,
-                     open_date     = excluded.open_date,
-                     close_date    = excluded.close_date,
-                     price_low     = excluded.price_low,
-                     price_high    = excluded.price_high,
-                     lot_size      = excluded.lot_size,
-                     issue_size_cr = excluded.issue_size_cr,
+                     open_date     = COALESCE(excluded.open_date,  ipos.open_date),
+                     close_date    = COALESCE(excluded.close_date, ipos.close_date),
+                     price_low     = COALESCE(excluded.price_low,  ipos.price_low),
+                     price_high    = COALESCE(excluded.price_high, ipos.price_high),
+                     lot_size      = COALESCE(excluded.lot_size,   ipos.lot_size),
+                     issue_size_cr = COALESCE(excluded.issue_size_cr, ipos.issue_size_cr),
+                     issue_shares  = COALESCE(excluded.issue_shares,  ipos.issue_shares),
+                     raw_status    = COALESCE(excluded.raw_status,    ipos.raw_status),
                      from_gmp_only = excluded.from_gmp_only,
-                     updated_at    = excluded.updated_at
+                     updated_at    = excluded.updated_at,
+                     last_seen_at  = excluded.last_seen_at
                    WHERE ipos.is_listed = 0""",
                 (
                     sym,
@@ -136,9 +229,12 @@ def upsert_nse(items: list[dict]) -> int:
                     it.get("priceHigh"),
                     it.get("lotSize"),
                     it.get("issueSizeCr"),
+                    it.get("issueShares"),
+                    it.get("rawStatus"),
                     1 if it.get("fromGmpOnly") else 0,
                     now,  # created_at (only used on INSERT)
                     now,  # updated_at
+                    now,  # last_seen_at
                 ),
             )
             count += c.rowcount
@@ -195,6 +291,50 @@ def upsert_manual(item: dict) -> dict:
         c.commit()
         row = c.execute("SELECT * FROM ipos WHERE symbol=?", (sym,)).fetchone()
     return _row_to_dict(row)
+
+
+def set_subscriptions(subs: dict[str, dict]) -> int:
+    """Persist live subscription multiples per symbol ({sym: {qib,nii,...}}).
+    Only non-empty payloads are written, so a failed NSE detail fetch never
+    wipes the last known numbers. Returns rows updated."""
+    if not subs:
+        return 0
+    now = _now_iso()
+    with _conn() as c:
+        n = 0
+        for sym, sub in subs.items():
+            if not sym or not isinstance(sub, dict) or not sub:
+                continue
+            cur = c.execute(
+                "UPDATE ipos SET subscription=?, sub_updated_at=?, updated_at=? "
+                "WHERE symbol=?",
+                (json.dumps(sub), now, now, sym.strip().upper()),
+            )
+            n += cur.rowcount
+        c.commit()
+    return n
+
+
+def set_gmps(gmps: dict[str, dict]) -> int:
+    """Persist last-known GMP per symbol ({sym: gmp_payload}). Only non-empty
+    payloads are written — a failed scrape keeps yesterday's GMP visible.
+    Returns rows updated."""
+    if not gmps:
+        return 0
+    now = _now_iso()
+    with _conn() as c:
+        n = 0
+        for sym, gmp in gmps.items():
+            if not sym or not isinstance(gmp, dict) or not gmp:
+                continue
+            cur = c.execute(
+                "UPDATE ipos SET gmp=?, gmp_updated_at=?, updated_at=? "
+                "WHERE symbol=?",
+                (json.dumps(gmp), now, now, sym.strip().upper()),
+            )
+            n += cur.rowcount
+        c.commit()
+    return n
 
 
 def _auto_promote(c: sqlite3.Connection) -> None:

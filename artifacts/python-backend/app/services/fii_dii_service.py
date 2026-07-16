@@ -41,7 +41,6 @@ _FNO_SEGMENT_COLS = {
 }
 
 _CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "market_cache"
-_DB_FILE = _CACHE_DIR / "fii_dii_cache.db"
 _OLD_HISTORY_FILE = _CACHE_DIR / "fii_dii" / "history.json"
 
 NSE_CHUNK_DAYS = 85
@@ -1145,9 +1144,8 @@ class FiiDiiService:
         }
 
     async def backfill_all(self, days: int = 400) -> dict:
-        """One-shot backfill of every supported segment into the local SQLite cache.
-        Returns a summary dict with row counts per segment so the caller can
-        confirm the cache file is ready to commit."""
+        """One-shot backfill of every supported segment into the PG history
+        table. Returns a summary dict with row counts per segment."""
         end_date = datetime.today()
         start_date = end_date - timedelta(days=days)
         results = {}
@@ -1166,7 +1164,6 @@ class FiiDiiService:
             "from": start_date.strftime("%Y-%m-%d"),
             "to":   end_date.strftime("%Y-%m-%d"),
             "segments": results,
-            "cacheFile": str(_DB_FILE),
         }
 
     def _empty_response(self, segment: str, message: str) -> dict:

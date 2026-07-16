@@ -5,7 +5,7 @@ import { api, type ConditionSide, type Condition, type Scanner, type ScanResult,
 import {
   Play, Plus, Trash2, Save, TrendingUp, TrendingDown,
   Zap, AlertCircle, CheckCircle2, X, Copy, Edit2,
-  Filter, BarChart2, Loader2, Target,
+  Filter, BarChart2, Loader2, Target, ArrowLeft,
 } from "lucide-react";
 import ChartButton from "@/components/ChartButton";
 import DataFreshness from "@/components/DataFreshness";
@@ -351,8 +351,9 @@ function ConditionRow({ condition, index, logic, onChange, onDelete, total }: {
 
   return (
     <div className="relative bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
-      {/* Logic badge */}
-      <div className="absolute -left-3 top-1/2 -translate-y-1/2">
+      {/* Logic badge — top-aligned on phones (the stacked card is tall, so
+          centring would strand it mid-air), vertically centred from `sm`. */}
+      <div className="absolute -left-3 top-8 sm:top-1/2 -translate-y-1/2">
         {index === 0 ? (
           <span className="text-xs font-bold text-gray-500 bg-gray-100 border border-gray-200 rounded-full px-2 py-0.5">IF</span>
         ) : (
@@ -364,12 +365,14 @@ function ConditionRow({ condition, index, logic, onChange, onDelete, total }: {
         )}
       </div>
 
-      <div className="flex items-start gap-3 pl-2">
+      {/* Stacks vertically on phones (two pickers + operator can't share a
+          375px row), returns to the one-line layout from `sm` up. */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-start gap-3 pl-2">
         {/* Left indicator */}
         <IndicatorPicker side={condition.left} label="Indicator" onChange={left => onChange({ ...condition, left })} />
 
         {/* Operator */}
-        <div className="flex-shrink-0 pt-1">
+        <div className="flex-shrink-0 pt-1 w-full sm:w-auto">
           <p className="text-xs font-medium text-gray-400 mb-1 text-center">Condition</p>
           <select
             value={condition.operator}
@@ -384,11 +387,12 @@ function ConditionRow({ condition, index, logic, onChange, onDelete, total }: {
         {/* Right indicator */}
         <IndicatorPicker side={condition.right} label="Compare to" onChange={right => onChange({ ...condition, right })} />
 
-        {/* Delete */}
+        {/* Delete — inline at the row's end on ≥sm; pinned to the card's
+            top-right corner on phones where the row stacks vertically. */}
         <button
           onClick={onDelete}
           disabled={total <= 1}
-          className="mt-6 p-1.5 rounded-lg text-gray-300 hover:text-red-400 hover:bg-red-50 disabled:opacity-20 transition flex-shrink-0"
+          className="absolute top-2 right-2 sm:static sm:mt-6 p-1.5 rounded-lg text-gray-300 hover:text-red-400 hover:bg-red-50 disabled:opacity-20 transition flex-shrink-0"
           title="Remove condition"
         >
           <X className="w-4 h-4" />
@@ -566,6 +570,14 @@ export default function Scanners() {
   // Active category filter. "All" → grouped view with sticky headers.
   // A specific category → flat filtered list.
   const [categoryFilter, setCategoryFilter] = useState<string>("All");
+
+  // Mobile is a master–detail SWAP (list ⇄ detail), not a split: below `lg`
+  // exactly one of the two columns renders, keyed off `rightPanel`. When the
+  // detail panel changes content, snap its scroll back to the top — the
+  // element is reused across builder/results so scroll position would
+  // otherwise leak from one view into the next.
+  const rightColRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { rightColRef.current?.scrollTo({ top: 0 }); }, [rightPanel]);
 
   // Deep-link: ?preset=volume-spike → auto-load Volume Spike template
   const presetApplied = useRef(false);
@@ -764,21 +776,24 @@ export default function Scanners() {
       {/* Split layout */}
       <div className="flex flex-col lg:flex-row gap-5 flex-1 min-h-0">
 
-        {/* ── LEFT: Scanner List ────────────────────────────────────────────── */}
-        <div className="w-full lg:w-80 lg:flex-shrink-0 flex flex-col overflow-hidden">
+        {/* ── LEFT: Scanner List ────────────────────────────────────────────
+            On phones this column IS the page while rightPanel is "empty";
+            opening a builder/results view hides it (full-screen detail).
+            From `lg` up both columns render side by side as before. */}
+        <div className={`${rightPanel === "empty" ? "flex" : "hidden lg:flex"} w-full lg:w-80 lg:flex-shrink-0 flex-col overflow-hidden`}>
           {/* Category filter pills — sticky at the top of the column.
               Shows All / each category with the scanner count per group.
               Clicking a pill switches between "All grouped" and "single
               category flat" modes. */}
           {!isLoading && scanners.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 pb-3 sticky top-0 bg-inherit z-10">
+            <div className="flex gap-1.5 pb-3 overflow-x-auto lg:flex-wrap lg:overflow-x-visible sticky top-0 bg-inherit z-10">
               {categoryPills.map(p => {
                 const active = categoryFilter === p.key;
                 return (
                   <button
                     key={p.key}
                     onClick={() => setCategoryFilter(p.key)}
-                    className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition border ${
+                    className={`flex-shrink-0 whitespace-nowrap px-2.5 py-1 rounded-full text-[11px] font-semibold transition border ${
                       active
                         ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
                         : "bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100 dark:bg-gray-800/60 dark:text-gray-300 dark:border-gray-700 dark:hover:bg-gray-700"
@@ -794,7 +809,7 @@ export default function Scanners() {
             </div>
           )}
 
-          <div className="max-h-[55vh] lg:max-h-none flex-1 flex flex-col gap-3 overflow-y-auto pb-4 pr-1">
+          <div className="flex-1 flex flex-col gap-3 overflow-y-auto pb-4 pr-1">
             {isLoading ? (
               [...Array(3)].map((_, i) => <div key={i} className="h-36 bg-gray-100 animate-pulse rounded-xl" />)
             ) : scanners.length === 0 ? (
@@ -855,8 +870,25 @@ export default function Scanners() {
           </div>
         </div>
 
-        {/* ── RIGHT: Builder or Results ─────────────────────────────────────── */}
-        <div className="flex-1 min-w-0 overflow-y-auto pb-4">
+        {/* ── RIGHT: Builder or Results ─────────────────────────────────────
+            On phones this column replaces the list whenever a detail view
+            (builder / live scan / results) is open; the empty state only
+            exists on desktop where both columns are visible. */}
+        <div ref={rightColRef} className={`${rightPanel === "empty" ? "hidden lg:block" : "block"} flex-1 min-w-0 overflow-y-auto pb-4`}>
+
+          {/* Mobile back bar — the list is hidden while a detail view is
+              open, so give phones an explicit way back to it. Closing a
+              panel this way matches the existing ✕ buttons (results stay
+              in memory; the card-level progress bar keeps showing any
+              scan that's still running). */}
+          {rightPanel !== "empty" && (
+            <button
+              onClick={() => setRightPanel("empty")}
+              className="lg:hidden mb-3 inline-flex items-center gap-1.5 text-sm font-medium text-gray-600 hover:text-gray-900 bg-white border border-gray-200 rounded-lg px-3 py-1.5 shadow-sm transition"
+            >
+              <ArrowLeft className="w-4 h-4" /> All scanners
+            </button>
+          )}
 
           {/* ── BUILDER ──────────────────────────────────────────────────────── */}
           {rightPanel === "builder" && (
@@ -1010,7 +1042,7 @@ export default function Scanners() {
                 <button
                   onClick={() => testMut.mutate(draft)}
                   disabled={!canSave || !!runningId}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold transition disabled:opacity-60 shadow-sm"
+                  className="flex-1 sm:flex-initial flex items-center justify-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold transition disabled:opacity-60 shadow-sm"
                 >
                   {runningId === "adhoc" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
                   {runningId === "adhoc" ? "Scanning…" : "Test Run (don't save)"}
@@ -1019,7 +1051,7 @@ export default function Scanners() {
                 <button
                   onClick={() => saveMut.mutate({ ...draft, ...(editingId ? { id: editingId } : {}) })}
                   disabled={!canSave || saveMut.isPending}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition disabled:opacity-60 shadow-sm"
+                  className="flex-1 sm:flex-initial flex items-center justify-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition disabled:opacity-60 shadow-sm"
                 >
                   {saveMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                   {saveMut.isPending ? "Saving…" : editingId ? "Update Scanner" : "Save Scanner"}
@@ -1113,8 +1145,8 @@ export default function Scanners() {
                   </div>
                   <div className="divide-y divide-gray-50 dark:divide-slate-800/80">
                     {scanJob.partialMatches.map((r: any, i: number) => (
-                      <div key={`${r.symbol}-${i}`} className="px-5 py-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition">
-                        <div className="flex items-center justify-between gap-4">
+                      <div key={`${r.symbol}-${i}`} className="px-4 sm:px-5 py-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition">
+                        <div className="flex items-center justify-between gap-3 sm:gap-4">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-3 flex-wrap">
                               <span className="font-bold text-gray-900 dark:text-white text-base">{r.symbol}</span>
@@ -1143,7 +1175,7 @@ export default function Scanners() {
                             </div>
                           </div>
                           <div className="text-right flex-shrink-0">
-                            <p className="font-bold text-gray-900 dark:text-white text-lg">₹{r.lastPrice?.toFixed(2)}</p>
+                            <p className="font-bold text-gray-900 dark:text-white text-base sm:text-lg">₹{r.lastPrice?.toFixed(2)}</p>
                             <p className="text-xs text-indigo-600 dark:text-indigo-400 mt-0.5 font-medium">{r.score}% match</p>
                           </div>
                         </div>
@@ -1266,8 +1298,8 @@ export default function Scanners() {
                   </div>
                   <div className="divide-y divide-gray-50 dark:divide-slate-800/80">
                     {result.results.map((r: any, i: number) => (
-                      <div key={i} className="px-5 py-4 hover:bg-gray-50 transition">
-                        <div className="flex items-center justify-between gap-4">
+                      <div key={i} className="px-4 sm:px-5 py-4 hover:bg-gray-50 transition">
+                        <div className="flex items-center justify-between gap-3 sm:gap-4">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-3 flex-wrap">
                               <span className="font-bold text-gray-900 text-base">{r.symbol}</span>
@@ -1305,9 +1337,9 @@ export default function Scanners() {
                           </div>
 
                           <div className="text-right flex-shrink-0">
-                            <p className="font-bold text-gray-900 text-lg">₹{r.lastPrice?.toFixed(2)}</p>
+                            <p className="font-bold text-gray-900 text-base sm:text-lg">₹{r.lastPrice?.toFixed(2)}</p>
                             <div className="mt-1">
-                              <div className="w-20 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                              <div className="w-16 sm:w-20 h-1.5 bg-gray-100 rounded-full overflow-hidden">
                                 <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${r.score}%` }} />
                               </div>
                               <p className="text-xs text-indigo-600 mt-0.5 font-medium">{r.score}% match</p>

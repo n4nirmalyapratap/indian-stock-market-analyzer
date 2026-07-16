@@ -476,6 +476,24 @@ class _FakeNse:
 
 
 class TestIpoServiceFailureModes:
+    """get_calendar is now store-backed (a background refresh writes SQLite,
+    requests read a snapshot) — so these tests isolate the module snapshot
+    and point the store at a throwaway tmp DB before each scenario."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_ipo_state(self, monkeypatch, tmp_path):
+        from app.services import ipo_store as store
+        monkeypatch.setattr(store, "_DB_PATH", str(tmp_path / "ipo_test.db"))
+        monkeypatch.setattr(store, "_schema_ready", False)
+        monkeypatch.setattr(ipo, "_refresh_task", None)
+        monkeypatch.setattr(ipo, "_last_refresh_attempt", float("-inf"))
+        monkeypatch.setattr(ipo, "_last_refresh_iso", None)
+        ipo._SNAPSHOT.clear()
+        ipo._GMP_META.clear()
+        yield
+        ipo._SNAPSHOT.clear()
+        ipo._GMP_META.clear()
+
     def test_get_calendar_returns_unavailable_when_nse_fails(self, monkeypatch):
         async def fake_gmp():
             return {"byName": {}, "fetchedAt": None, "sourceUrl": ""}
@@ -499,21 +517,50 @@ class TestIpoServiceFailureModes:
         assert out["available"] is False
 
     def test_get_calendar_works_when_gmp_fails(self, monkeypatch):
-        """If ipowatch is down, IPO calendar must still render — every issue
-        just gets gmp=None."""
+        """If every GMP source is down, IPO calendar must still render —
+        every issue just gets gmp=None."""
         async def fake_gmp():
-            raise RuntimeError("ipowatch down")
+            raise RuntimeError("gmp sources down")
         monkeypatch.setattr(gmp, "fetch_gmp_table", fake_gmp)
 
+        # Dates must be in the future: buckets are recomputed from the bid
+        # window at serve time, so a hard-coded past window would be
+        # classified closed/listed instead of upcoming.
+        from datetime import date, timedelta
+        open_d  = (date.today() + timedelta(days=3)).strftime("%d-%b-%Y")
+        close_d = (date.today() + timedelta(days=5)).strftime("%d-%b-%Y")
         nse_payload = [{
             "symbol":"FOO","companyName":"Foo Limited","series":"EQ",
-            "issueStartDate":"01-May-2026","issueEndDate":"03-May-2026",
+            "issueStartDate":open_d,"issueEndDate":close_d,
             "status":"Forthcoming","issueSize":"1000","issuePrice":"Rs.100",
         }]
-        # We need fetch_nse to return the list for the first call (upcoming
-        # list) and not be called again because there are no Active items.
         svc = ipo.IpoService(_FakeNse(return_value=nse_payload))
         out = asyncio.run(svc.get_calendar())
         assert out["available"] is True
         assert len(out["upcoming"]) == 1
         assert out["upcoming"][0]["gmp"] is None
+
+    def test_calendar_survives_nse_outage_after_first_good_refresh(self, monkeypatch):
+        """The reliability contract: once an IPO is in the store, a later
+        NSE + GMP outage must NOT blank the calendar — it keeps serving
+        the persisted rows."""
+        async def fake_gmp():
+            raise RuntimeError("gmp down")
+        monkeypatch.setattr(gmp, "fetch_gmp_table", fake_gmp)
+
+        from datetime import date, timedelta
+        open_d  = (date.today() + timedelta(days=3)).strftime("%d-%b-%Y")
+        close_d = (date.today() + timedelta(days=5)).strftime("%d-%b-%Y")
+        nse_payload = [{
+            "symbol":"FOO","companyName":"Foo Limited","series":"EQ",
+            "issueStartDate":open_d,"issueEndDate":close_d,
+            "status":"Forthcoming","issueSize":"1000","issuePrice":"Rs.100",
+        }]
+        # First refresh: NSE healthy → store populated.
+        asyncio.run(ipo.IpoService(_FakeNse(return_value=nse_payload)).refresh())
+        # Total outage afterwards + fresh process (no snapshot).
+        ipo._SNAPSHOT.clear()
+        monkeypatch.setattr(ipo, "_refresh_task", None)
+        out = asyncio.run(ipo.IpoService(_FakeNse(raise_=RuntimeError("blocked"))).get_calendar())
+        assert out["available"] is True
+        assert [x["symbol"] for x in out["upcoming"]] == ["FOO"]
