@@ -406,7 +406,7 @@ function ConditionRow({ condition, index, logic, onChange, onDelete, total }: {
 
 function ScannerCard({
   scanner, isRunning, isSelected, onRun, onEdit, onDuplicate, onDelete, onSelect,
-  progress, starting,
+  progress, starting, busy,
 }: {
   scanner: Scanner; isRunning: boolean; isSelected: boolean;
   onRun: () => void; onEdit: () => void; onDuplicate: () => void; onDelete: () => void; onSelect: () => void;
@@ -419,6 +419,11 @@ function ScannerCard({
    *  Run, BEFORE the background job's first poll arrives. Without this,
    *  the user clicks and sees no visual change for 1-3 seconds. */
   starting?: boolean;
+  /** True when ANY scan is occupying the single-job hook (this card or
+   *  another). The run-job backend + useScanJob track exactly one active
+   *  job, so a second Run would silently orphan the first scan's polling —
+   *  disable every card's Run button until the current one finishes. */
+  busy?: boolean;
 }) {
   return (
     <div
@@ -536,12 +541,13 @@ function ScannerCard({
       ) : (
         <div className="flex items-center gap-1.5 mt-3">
           <button
-            onClick={e => { e.stopPropagation(); onRun(); }}
-            disabled={isRunning}
-            className="flex items-center gap-1.5 flex-1 justify-center py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold transition disabled:opacity-60"
+            onClick={e => { e.stopPropagation(); if (!busy) onRun(); }}
+            disabled={isRunning || busy}
+            title={busy && !isRunning ? "Another scan is running — wait for it to finish" : undefined}
+            className="flex items-center gap-1.5 flex-1 justify-center py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold transition disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {isRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
-            {isRunning ? "Running…" : "Run Scan"}
+            {isRunning ? "Running…" : busy ? "Scan in progress…" : "Run Scan"}
           </button>
           <button onClick={e => { e.stopPropagation(); onEdit(); }}    title="Edit"      className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 border border-gray-200 transition"><Edit2  className="w-3.5 h-3.5" /></button>
           <button onClick={e => { e.stopPropagation(); onDuplicate();}} title="Duplicate" className="p-1.5 rounded-lg text-gray-400 hover:text-amber-600 hover:bg-amber-50  border border-gray-200 transition"><Copy   className="w-3.5 h-3.5" /></button>
@@ -727,6 +733,11 @@ export default function Scanners() {
 
   const canSave = draft.name.trim().length > 0 && draft.conditions.length > 0 && draft.universe.length > 0;
 
+  // The scan hook tracks ONE job at a time. While it's occupied (POST in
+  // flight OR a job actively polling), every card's Run button is disabled so
+  // a second scan can't silently orphan the first's polling.
+  const scanBusy = scanJob.starting || !!scanJob.activeScannerId;
+
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
@@ -858,10 +869,18 @@ export default function Scanners() {
                       }}
                       progress={runningId === s.id ? scanJob.progress : null}
                       starting={scanJob.starting && selectedId === s.id}
+                      busy={scanBusy}
                       onEdit={() => startEdit(s)}
                       onDuplicate={() => duplicate(s)}
                       onDelete={() => { if (confirm(`Delete "${s.name}"?`)) deleteMut.mutate(s.id); }}
-                      onSelect={() => setSelectedId(s.id)}
+                      onSelect={() => {
+                        setSelectedId(s.id);
+                        // A running card's Run button is replaced by a
+                        // progress bar, so tapping the card (esp. after the
+                        // mobile back button) is the only way back to its
+                        // live view — reopen results for it.
+                        if (runningId === s.id) setRightPanel("results");
+                      }}
                     />
                   ))}
                 </div>
@@ -1067,6 +1086,37 @@ export default function Scanners() {
                     <AlertCircle className="w-3.5 h-3.5" /> Name required
                   </span>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* ── SCAN ERROR ───────────────────────────────────────────────────
+              If the start POST fails (or a poll errors out), the hook clears
+              its active job and `starting` — leaving no result and no live
+              job. Without this branch the results pane would sit blank. Show
+              the error with a way back so the user isn't stuck. */}
+          {rightPanel === "results" && !result && !scanJob.starting && !scanJob.activeScannerId && scanJob.error && (
+            <div className="bg-white dark:bg-gray-900 rounded-xl border border-rose-200 dark:border-rose-700/40 p-6 shadow-sm">
+              <div className="flex items-start gap-2 text-rose-600 dark:text-rose-400">
+                <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                  <p className="font-semibold text-gray-900 dark:text-white">Scan couldn't start</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 break-words">{scanJob.error}</p>
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {selectedId && (
+                      <button
+                        onClick={() => { setResult(null); scanJob.startScan(selectedId); }}
+                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition"
+                      >
+                        Retry
+                      </button>
+                    )}
+                    <button onClick={() => setRightPanel("empty")}
+                      className="px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition">
+                      Back
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           )}

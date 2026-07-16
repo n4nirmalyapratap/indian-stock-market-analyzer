@@ -485,6 +485,10 @@ class TestIpoServiceFailureModes:
         from app.services import ipo_store as store
         monkeypatch.setattr(store, "_DB_PATH", str(tmp_path / "ipo_test.db"))
         monkeypatch.setattr(store, "_schema_ready", False)
+        # Point the legacy-migration source at a path that can't exist, so a
+        # real ipo_store.db on the test host never bleeds rows into these
+        # isolated scenarios.
+        monkeypatch.setattr(store, "_LEGACY_DB", str(tmp_path / "no_legacy.db"))
         monkeypatch.setattr(ipo, "_refresh_task", None)
         monkeypatch.setattr(ipo, "_last_refresh_attempt", float("-inf"))
         monkeypatch.setattr(ipo, "_last_refresh_iso", None)
@@ -558,7 +562,15 @@ class TestIpoServiceFailureModes:
         }]
         # First refresh: NSE healthy → store populated.
         asyncio.run(ipo.IpoService(_FakeNse(return_value=nse_payload)).refresh())
-        # Total outage afterwards + fresh process (no snapshot).
+        # Now explicitly run a refresh under a total outage and confirm it does
+        # NOT wipe the store (reset the throttle + in-flight task so this run
+        # actually executes rather than being deduped/gap-skipped).
+        ipo._SNAPSHOT.clear()
+        monkeypatch.setattr(ipo, "_refresh_task", None)
+        monkeypatch.setattr(ipo, "_last_refresh_attempt", float("-inf"))
+        outage = asyncio.run(ipo.IpoService(_FakeNse(raise_=RuntimeError("blocked"))).refresh())
+        assert outage is False  # nothing fresh persisted
+        # Fresh process (no snapshot) still serves the persisted rows.
         ipo._SNAPSHOT.clear()
         monkeypatch.setattr(ipo, "_refresh_task", None)
         out = asyncio.run(ipo.IpoService(_FakeNse(raise_=RuntimeError("blocked"))).get_calendar())

@@ -78,13 +78,34 @@ def _names(node: ast.AST) -> set[str]:
     return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
 
 
+def _attr_names(node: ast.AST) -> set[str]:
+    """Attribute accessors within `node`, e.g. `db_paths.MOUNTED_CACHE_DIR`
+    contributes 'MOUNTED_CACHE_DIR' — so a module-qualified reference to the
+    mount is caught, not just a bare imported name."""
+    return {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)}
+
+
+def _mount_import_aliases(tree: ast.AST) -> set[str]:
+    """Local names bound to a mount symbol via `from … import MOUNTED_CACHE_DIR`
+    — including `... as alias`, so the aliased name is tainted too."""
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for a in node.names:
+                if a.name in _MOUNT_NAMES:
+                    aliases.add(a.asname or a.name)
+    return aliases
+
+
 def find_mount_db_offences(source: str) -> list[int]:
     """Line numbers where a SQLite filename is combined with the mount.
 
     Rules:
       1. taint — a variable assigned from anything referencing the mount
-         (literal segment / MOUNTED_CACHE_DIR / tainted var) is itself a
-         mount reference; propagated to a fixpoint so chains resolve.
+         (literal segment / a mount name / a tainted var) is itself a mount
+         reference; propagated to a fixpoint so chains resolve. Mount names
+         include MOUNTED_CACHE_DIR, any `import … as alias` of it, and any
+         module-qualified access (`db_paths.MOUNTED_CACHE_DIR`).
       2. combination — a Call / BinOp / f-string that references the mount
          AND contains a *.db/*.sqlite literal is an offence (os.path.join,
          Path joins with '/', string concat/format alike).
@@ -106,11 +127,14 @@ def find_mount_db_offences(source: str) -> list[int]:
             if isinstance(node.target, ast.Name) and node.value is not None:
                 assigns.append(({node.target.id}, node.value))
 
-    tainted: set[str] = set(_MOUNT_NAMES)
+    # Seed taint with the base mount name, its import aliases, and treat any
+    # `*.MOUNTED_CACHE_DIR` attribute access as a mount reference.
+    tainted: set[str] = set(_MOUNT_NAMES) | _mount_import_aliases(tree)
 
     def refs_mount(node: ast.AST) -> bool:
         return (any(_is_mount_path_literal(s) for s in _str_constants(node))
-                or bool(_names(node) & tainted))
+                or bool(_names(node) & tainted)
+                or bool(_attr_names(node) & _MOUNT_NAMES))
 
     changed = True
     while changed:
@@ -184,6 +208,22 @@ class TestScannerCatchesEvasions:
 
     def test_mounted_cache_dir_name_is_caught(self):
         src = 'from app.lib.db_paths import MOUNTED_CACHE_DIR\np = MOUNTED_CACHE_DIR / "foo.db"\n'
+        assert find_mount_db_offences(src) == [2]
+
+    def test_aliased_mount_import_is_caught(self):
+        # `import … as alias` must taint the alias, not just the base name.
+        src = (
+            "from app.lib.db_paths import MOUNTED_CACHE_DIR as cache_dir\n"
+            'p = cache_dir / "foo.db"\n'
+        )
+        assert find_mount_db_offences(src) == [2]
+
+    def test_module_qualified_mount_ref_is_caught(self):
+        # `db_paths.MOUNTED_CACHE_DIR` (attribute access) must be caught.
+        src = (
+            "from app.lib import db_paths\n"
+            'p = db_paths.MOUNTED_CACHE_DIR / "foo.db"\n'
+        )
         assert find_mount_db_offences(src) == [2]
 
     def test_single_combined_literal_is_caught(self):

@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 import time
 from datetime import date, timedelta
 from typing import Optional
@@ -83,6 +84,11 @@ _EXTRA_COLS: dict[str, str] = {
 _LISTED_GRACE_DAYS = 7   # close_date + N days → auto-promote to listed
 
 _schema_ready = False
+# Serialises the one-time schema init/migration. Without it, two threads
+# opening the store for the first time (WAL allows concurrent connections)
+# can both see a missing column and race into the same ALTER TABLE, which
+# fails the loser with "duplicate column name".
+_schema_lock = threading.Lock()
 
 
 def _ensure_schema(c: sqlite3.Connection) -> None:
@@ -90,7 +96,13 @@ def _ensure_schema(c: sqlite3.Connection) -> None:
     have = {row[1] for row in c.execute("PRAGMA table_info(ipos)").fetchall()}
     for col, typ in _EXTRA_COLS.items():
         if col not in have:
-            c.execute(f"ALTER TABLE ipos ADD COLUMN {col} {typ}")
+            try:
+                c.execute(f"ALTER TABLE ipos ADD COLUMN {col} {typ}")
+            except sqlite3.OperationalError as e:
+                # Belt-and-suspenders behind _schema_lock: tolerate a
+                # duplicate-column add if another path already applied it.
+                if "duplicate column" not in str(e).lower():
+                    raise
 
 
 def _migrate_legacy(c: sqlite3.Connection) -> None:
@@ -131,10 +143,12 @@ def _conn() -> sqlite3.Connection:
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
     if not _schema_ready:
-        _ensure_schema(c)
-        _migrate_legacy(c)
-        c.commit()
-        _schema_ready = True
+        with _schema_lock:
+            if not _schema_ready:   # re-check under the lock
+                _ensure_schema(c)
+                _migrate_legacy(c)
+                c.commit()
+                _schema_ready = True
     return c
 
 
@@ -192,7 +206,7 @@ def upsert_nse(items: list[dict]) -> int:
             sym = (it.get("symbol") or "").strip().upper()
             if not sym:
                 continue
-            c.execute(
+            cur = c.execute(
                 """INSERT INTO ipos
                     (symbol, company_name, series, is_sme, is_reit,
                      open_date, close_date, price_low, price_high,
@@ -237,7 +251,10 @@ def upsert_nse(items: list[dict]) -> int:
                     now,  # last_seen_at
                 ),
             )
-            count += c.rowcount
+            # rowcount lives on the CURSOR, not the Connection — reading
+            # c.rowcount here raised AttributeError, which rolled back the
+            # whole batch and silently persisted nothing.
+            count += cur.rowcount
         c.commit()
     return count
 
@@ -304,6 +321,11 @@ def set_subscriptions(subs: dict[str, dict]) -> int:
         n = 0
         for sym, sub in subs.items():
             if not sym or not isinstance(sub, dict) or not sub:
+                continue
+            # _summarise_subscription always returns a 4-key dict; when NSE's
+            # detail response was empty every value is None. Persisting that
+            # would erase the last-known multiples — skip all-null snapshots.
+            if not any(v is not None for v in sub.values()):
                 continue
             cur = c.execute(
                 "UPDATE ipos SET subscription=?, sub_updated_at=?, updated_at=? "
