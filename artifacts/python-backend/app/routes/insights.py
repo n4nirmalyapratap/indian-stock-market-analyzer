@@ -3661,18 +3661,19 @@ async def get_mtf():
 
 @router.get("/ipos")
 async def get_ipos():
-    """Live IPO calendar — open + upcoming mainboard/SME issues from NSE.
+    """IPO calendar — open + upcoming mainboard/SME issues + recently listed.
 
-    Each OPEN issue carries live subscription multiples (QIB / NII / Retail /
-    Total) so the UI can show progress bars without a second round-trip.
-    Recently-listed history is not yet wired (NSE has no public endpoint and
-    chittorgarh scraping is fragile)."""
+    Served from the store-backed snapshot that a background scheduler keeps
+    fresh (see IpoService) — this handler never waits on NSE or the GMP
+    scrapers, so it responds in milliseconds and stays consistent across
+    requests. Each OPEN issue carries the last-known subscription multiples
+    (QIB / NII / Retail / Total) and every issue carries last-known GMP."""
     try:
         data = await _ipo.get_calendar()
     except Exception as e:
         logger.warning("ipo calendar failed: %s", str(e)[:160])
         data = {"available": False, "message": "IPO feed temporarily unavailable.",
-                "open": [], "upcoming": []}
+                "open": [], "upcoming": [], "listed": []}
     return {**data, "meta": _meta(served_from="IPO_CALENDAR")}
 
 

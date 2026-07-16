@@ -1343,9 +1343,9 @@ async def admin_add_ipo(request: Request):
         sym = re.sub(r"[^A-Z0-9]", "", name.upper())[:24] or "MANUAL"
     try:
         from app.services import ipo_store as _s  # noqa: PLC0415
-        # Invalidate the in-process calendar cache so next load picks up the new entry.
+        # Invalidate the served snapshot so next load picks up the new entry.
         from app.services import ipo_service as _is  # noqa: PLC0415
-        _is._RESULT_CACHE.clear()
+        _is.invalidate_snapshot()
         record = _s.upsert_manual({**body, "symbol": sym})
         return {"ok": True, "record": record}
     except Exception as e:
@@ -1359,7 +1359,7 @@ async def admin_mark_ipo_listed(symbol: str, request: Request):
         return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
     from app.services import ipo_store as _s  # noqa: PLC0415
     from app.services import ipo_service as _is  # noqa: PLC0415
-    _is._RESULT_CACHE.clear()
+    _is.invalidate_snapshot()
     found = _s.mark_listed(symbol)
     if not found:
         return JSONResponse(status_code=404, content={"error": f"IPO {symbol!r} not found"})
@@ -1373,9 +1373,25 @@ async def admin_delete_ipo(symbol: str, request: Request):
         return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
     from app.services import ipo_store as _s  # noqa: PLC0415
     from app.services import ipo_service as _is  # noqa: PLC0415
-    _is._RESULT_CACHE.clear()
+    _is.invalidate_snapshot()
     removed = _s.delete(symbol)
     return {"ok": removed, "symbol": symbol.upper()}
+
+
+@router.post("/admin/ipos/refresh")
+async def admin_refresh_ipos(request: Request):
+    """Force an immediate IPO + GMP refresh (normally the background
+    scheduler handles this every few minutes)."""
+    if not _require_admin(request):
+        return JSONResponse(status_code=401, content={"error": "Admin authentication required."})
+    from app.services import ipo_store as _s  # noqa: PLC0415
+    from app.services import registry as _svc  # noqa: PLC0415
+    from app.services.ipo_service import IpoService  # noqa: PLC0415
+    try:
+        ok = await IpoService(_svc.nse).refresh()
+        return {"ok": bool(ok), "counts": _s.count()}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
 
 @router.delete("/admin/macro/overrides/{indicator}")
