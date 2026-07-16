@@ -71,11 +71,6 @@ function quarterLabel(iso: string): string {
   return `${months[parseInt(m, 10) - 1]} ${y}`;
 }
 
-function quarterLabelShort(iso: string): string {
-  const [y, m] = iso.split("-");
-  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  return `${months[parseInt(m, 10) - 1]} '${y.slice(2)}`;
-}
 
 function holderDelta(
   holder: ShareholdingNamedHolder,
@@ -120,6 +115,7 @@ function CountCell({ value }: { value: number | null }) {
 
 
 // ── Mobile: quarter picker ────────────────────────────────────────────────
+// Simple prev/next navigator — no scrollable pill strip that goes off-screen.
 
 function QuarterPicker({
   rows,
@@ -130,43 +126,41 @@ function QuarterPicker({
   selectedIdx: number;
   onSelect: (i: number) => void;
 }) {
-  const canPrev = selectedIdx < rows.length - 1;
-  const canNext = selectedIdx > 0;
+  const canOlder = selectedIdx < rows.length - 1;
+  const canNewer = selectedIdx > 0;
+  const current = rows[selectedIdx];
   return (
-    <div className="flex items-center justify-between gap-2 px-4 py-2 bg-gray-50 dark:bg-gray-900/60 border-b border-gray-100 dark:border-gray-700">
+    <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-gray-50 dark:bg-gray-900/60 border-b border-gray-100 dark:border-gray-700">
+      {/* ← Older */}
       <button
-        disabled={!canPrev}
+        disabled={!canOlder}
         onClick={() => onSelect(selectedIdx + 1)}
-        className="p-1.5 rounded-md disabled:opacity-30 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+        className="flex items-center gap-1 text-xs font-medium px-2 py-1.5 rounded-md disabled:opacity-30 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
         aria-label="Older quarter"
       >
-        <ChevronLeft className="w-4 h-4 text-gray-600 dark:text-gray-300" />
+        <ChevronLeft className="w-3.5 h-3.5" />
+        Older
       </button>
 
-      {/* Scrollable quarter pills */}
-      <div className="flex-1 flex gap-1.5 overflow-x-auto scrollbar-none py-0.5 justify-center">
-        {rows.map((r, i) => (
-          <button
-            key={r.asOnDate}
-            onClick={() => onSelect(i)}
-            className={`shrink-0 text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors ${
-              i === selectedIdx
-                ? "bg-indigo-600 text-white shadow-sm"
-                : "bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
-            }`}
-          >
-            {quarterLabelShort(r.asOnDate)}
-          </button>
-        ))}
+      {/* Current quarter label + counter */}
+      <div className="flex flex-col items-center">
+        <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+          {current ? quarterLabel(current.asOnDate) : "—"}
+        </span>
+        <span className="text-[10px] text-gray-400 dark:text-gray-500 tabular-nums">
+          {selectedIdx + 1} / {rows.length}
+        </span>
       </div>
 
+      {/* Newer → */}
       <button
-        disabled={!canNext}
+        disabled={!canNewer}
         onClick={() => onSelect(selectedIdx - 1)}
-        className="p-1.5 rounded-md disabled:opacity-30 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+        className="flex items-center gap-1 text-xs font-medium px-2 py-1.5 rounded-md disabled:opacity-30 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
         aria-label="Newer quarter"
       >
-        <ChevronRight className="w-4 h-4 text-gray-600 dark:text-gray-300" />
+        Newer
+        <ChevronRight className="w-3.5 h-3.5" />
       </button>
     </div>
   );
