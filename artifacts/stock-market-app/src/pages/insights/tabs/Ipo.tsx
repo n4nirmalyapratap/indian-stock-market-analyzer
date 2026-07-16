@@ -373,9 +373,18 @@ export default function Ipo() {
   const listedItems = data?.listed ?? [];
 
   // GMP is merged from several sources now — attribute whichever one served.
-  const gmpHost = useMemo(() => {
-    try { return new URL(data?.gmpSource?.url ?? "https://ipowatch.in/").hostname.replace(/^www\./, ""); }
-    catch { return "ipowatch.in"; }
+  // Derive href AND host from ONE validated URL so they never disagree: an
+  // empty/malformed server URL must fall back to ipowatch for both, not show
+  // "ipowatch.in" while linking to "" (which would reload the current page).
+  const gmpSource = useMemo(() => {
+    const FALLBACK = "https://ipowatch.in/";
+    try {
+      const u = new URL(data?.gmpSource?.url ?? FALLBACK);
+      if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("non-http");
+      return { href: u.href, host: u.hostname.replace(/^www\./, "") };
+    } catch {
+      return { href: FALLBACK, host: "ipowatch.in" };
+    }
   }, [data?.gmpSource?.url]);
 
   return (
@@ -476,8 +485,8 @@ export default function Ipo() {
             <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
             <span>
               Grey Market Premium is an unofficial pre-listing indicator sourced from{" "}
-              <a href={data?.gmpSource?.url ?? "https://ipowatch.in/"} target="_blank" rel="noreferrer"
-                 className="text-blue-600 dark:text-blue-400 underline">{gmpHost}</a>
+              <a href={gmpSource.href} target="_blank" rel="noreferrer"
+                 className="text-blue-600 dark:text-blue-400 underline">{gmpSource.host}</a>
               {data?.gmpSource?.fetchedAt && <> · last fetched {data.gmpSource.fetchedAt.replace("T"," ").replace("Z"," UTC")}</>}.
               Estimated listing = issue price + GMP. Treat it as sentiment, not a forecast.
             </span>

@@ -316,13 +316,17 @@ def _status_for(open_iso: Optional[str], close_iso: Optional[str],
     serve time, so issues flip buckets on the right day even when no
     refresh has run since midnight. Falls back to the feed's own status
     when dates are missing."""
+    rs = (raw_status or "").lower()
     if open_iso:
         if today_iso < open_iso:
             return "upcoming"
-        if close_iso is None or today_iso <= close_iso:
-            return "open"
-        return "closed"
-    rs = (raw_status or "").lower()
+        if close_iso is not None:
+            return "open" if today_iso <= close_iso else "closed"
+        # Open date passed but no close date on record: don't assume "open
+        # forever" — trust an explicit closed/listed feed status if we have one.
+        if rs in ("closed", "listed"):
+            return "closed"
+        return "open"
     if rs in ("active", "open"):
         return "open"
     if rs == "closed":
@@ -395,26 +399,45 @@ class IpoService:
             "gmpSource": {"url": gmp_service.GMP_URL, "fetchedAt": None, "note": None},
         }
 
+    def _ensure_refresh_task(self) -> asyncio.Task:
+        """Return the single shared in-flight refresh task, creating it if
+        none is running. This is the ONE place a refresh task is spawned, so
+        every entry point (scheduler, admin route, stale-triggered request)
+        collapses onto a single run instead of racing — an older run can no
+        longer finish late and clobber a newer run's store writes/snapshot."""
+        global _refresh_task
+        if _refresh_task is None or _refresh_task.done():
+            _refresh_task = asyncio.ensure_future(self._refresh_impl())
+            _refresh_task.add_done_callback(_log_refresh_outcome)
+        return _refresh_task
+
     def _kick_refresh(self) -> Optional[asyncio.Task]:
-        """Start a background refresh unless one is running or one ran
-        moments ago. Returns the in-flight task when there is one."""
-        global _refresh_task, _last_refresh_attempt
+        """Throttled fire-and-forget refresh for the request path: reuse a
+        live run, else honour the min-gap before starting one."""
+        global _last_refresh_attempt
         if _refresh_task is not None and not _refresh_task.done():
             return _refresh_task
         if _time.monotonic() - _last_refresh_attempt < _MIN_REFRESH_GAP:
             return _refresh_task
         _last_refresh_attempt = _time.monotonic()
-        _refresh_task = asyncio.create_task(self.refresh())
-        _refresh_task.add_done_callback(_log_refresh_outcome)
-        return _refresh_task
+        return self._ensure_refresh_task()
 
     # ── write path (network) ────────────────────────────────────────────────
     async def refresh(self) -> bool:
+        """Single-flight refresh entry point for the scheduler and admin route.
+        Concurrent callers await the SAME in-flight run rather than launching
+        overlapping ones. Returns True when the run contributed fresh data."""
+        try:
+            return bool(await asyncio.shield(self._ensure_refresh_task()))
+        except Exception as exc:
+            logger.warning("ipo refresh failed: %s", str(exc)[:160])
+            return False
+
+    async def _refresh_impl(self) -> bool:
         """Pull every source, persist into the store, rebuild the snapshot.
-        Safe to call from the scheduler, admin routes and stale-triggered
-        requests concurrently (request-path calls are deduped through
-        _kick_refresh; store writes are idempotent upserts). Returns True
-        when at least one source contributed fresh data."""
+        Never call directly — go through `refresh()` / `_kick_refresh()` so
+        runs stay single-flight. Returns True when a source contributed fresh
+        data (so callers/metadata don't treat a total outage as a fetch)."""
         global _last_refresh_attempt, _last_refresh_iso
         _last_refresh_attempt = _time.monotonic()
         from . import ipo_store as _store  # noqa: PLC0415
@@ -524,13 +547,20 @@ class IpoService:
                 logger.warning("ipo refresh: gmp persist failed: %s", e)
 
         # ── rebuild the served snapshot from the store ──────────────────────
-        _last_refresh_iso = datetime.utcnow().isoformat() + "Z"
+        # Only advance the user-facing "fetched at" when we actually pulled
+        # something fresh upstream. If both NSE and every GMP source failed,
+        # we're re-serving persisted rows — stamping them with `now` would lie
+        # about their freshness. `_last_refresh_attempt` (above) still tracks
+        # when we last TRIED, which is what the throttle needs.
+        got_fresh = bool(items) or bool(gmp_by_name)
+        if got_fresh:
+            _last_refresh_iso = datetime.utcnow().isoformat() + "Z"
         try:
             data = self._assemble_from_store()
             _SNAPSHOT.update({"at": _time.monotonic(), "data": data})
         except Exception as e:
             logger.warning("ipo snapshot rebuild failed: %s", e)
-        return bool(items)
+        return got_fresh
 
     # ── assembly (store → response, no network) ─────────────────────────────
     def _assemble_from_store(self) -> dict:

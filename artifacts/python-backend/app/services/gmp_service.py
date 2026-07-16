@@ -178,13 +178,17 @@ def _parse_est_listing(s: str) -> tuple[Optional[float], Optional[float]]:
     price: Optional[float] = None
     pct:   Optional[float] = None
     if has_price and nums:
-        try: price = float(nums[0])
-        except ValueError: pass
+        try:
+            price = float(nums[0])
+        except ValueError:
+            pass
     # Percentage is always the last number followed by '%' in the cell.
     pct_match = _PCT_RE.search(s)
     if pct_match:
-        try: pct = float(pct_match.group(1))
-        except ValueError: pass
+        try:
+            pct = float(pct_match.group(1))
+        except ValueError:
+            pass
     return (price, pct)
 
 
@@ -382,8 +386,10 @@ async def _fetch_investorgain(client: httpx.AsyncClient) -> list[dict]:
         pct = None
         pm = _PCT_RE.search(gmp_txt)
         if pm:
-            try: pct = float(pm.group(1))
-            except ValueError: pass
+            try:
+                pct = float(pm.group(1))
+            except ValueError:
+                pass
         if pct is None:
             pct = _to_float(el.get("~gmp_percent_calc"))
         price = _to_float(el.get("Price (₹)") or el.get("Price"))
