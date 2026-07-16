@@ -1,2 +1,3 @@
 - [NSE Bhav Copy URL](nse-bhavcopy-url.md) — CM equity URL needs `_0000` suffix; without it NSE returns 404
 - [NSE cloud blocking](nse-cloud-blocking.md) — Akamai blocks NSE live API from cloud IPs; archives subdomain is unprotected
+- [Git commit ownership](git-commit-ownership.md) — user manages all git commits themselves; never make explicit git commits

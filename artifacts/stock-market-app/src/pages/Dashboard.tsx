@@ -111,20 +111,19 @@ function SentimentFlow({ score, label, components }: {
     return () => clearTimeout(t);
   }, [score]);
 
-  // Hub color palette
+  // Hub color — driven by the label (authoritative) not raw score thresholds.
+  // Bullish → green, Bearish → red, anything else (Neutral etc.) → slate.
+  const lowerLabel = label.toLowerCase();
   const hubColor =
-    score == null ? "#64748b"
-    : score >= 20  ? "#22c55e"
-    : score >= 5   ? "#4ade80"
-    : score > -5   ? "#94a3b8"
-    : score > -20  ? "#fb923c"
-    : "#f87171";
+    score == null     ? "#64748b"
+    : lowerLabel.includes("bullish") ? "#22c55e"
+    : lowerLabel.includes("bearish") ? "#f87171"
+    : "#64748b";
 
   function compAccent(sc: number | null): string {
     if (sc == null) return "#64748b";
-    if (sc >= 10) return "#22c55e";
-    if (sc >= 0)  return "#4ade80";
-    if (sc > -10) return "#94a3b8";
+    if (sc >= 10)  return "#22c55e";
+    if (sc > -10)  return "#94a3b8";
     return "#f87171";
   }
 
