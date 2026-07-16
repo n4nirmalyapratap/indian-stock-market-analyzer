@@ -351,6 +351,8 @@ async def lifespan(app: FastAPI):
     # IPO calendar + GMP: background refresh into the local store so
     # /insights/ipos serves instantly without touching NSE/scrapers inline.
     ipo_task              = asyncio.create_task(_ipo_refresh_scheduler())
+    # Business profiles (About section): slow trickle across the universe.
+    profile_warm_task     = asyncio.create_task(_stock_profile_warmup_scheduler())
     try:
         yield
     finally:
@@ -360,7 +362,7 @@ async def lifespan(app: FastAPI):
                   fii_dii_task, dhan_task, pcr_task, synth_class_task,
                   synth_metrics_task, synth_bootstrap_task, registry_task,
                   rotation_prewarm_task, heatmap_prewarm_task, earnings_task,
-                  ipo_task):
+                  ipo_task, profile_warm_task):
             t.cancel()
             try:
                 await t
@@ -474,6 +476,40 @@ async def _security_registry_scheduler() -> None:
             await asyncio.sleep(24 * 3600)
         except asyncio.CancelledError:
             logger.info("Security registry scheduler stopped.")
+            break
+
+
+async def _stock_profile_warmup_scheduler() -> None:
+    """Trickle-fill the per-stock business-profile cache (the Stock Lookup
+    "About" section: description + sector/industry) across the FULL universe.
+
+    Why: profiles were only fetched on-demand when a user opened a stock, and
+    Yahoo rate-limits cloud IPs — so only a handful of symbols ever got an
+    About section. This loop walks all ~2.4k universe symbols at ~1 Yahoo
+    call / 40 s (≈1.7k/day → full coverage in under two days), persists to
+    market_cache/stock_profile_cache.json, then idles — only new listings
+    and daily retries of still-missing descriptions remain.
+    """
+    from app.services.stock_profile_service import warm_profiles
+    await asyncio.sleep(120)   # let boot + universe cache settle first
+    while True:
+        try:
+            stats = await warm_profiles(batch=60, delay_sec=40)
+            if stats["fetched"]:
+                logger.info(
+                    "stock-profile warmup: +%d profiles (%d with description), %d still pending",
+                    stats["fetched"], stats["withDescription"], stats["pending"],
+                )
+            idle = stats["fetched"] == 0
+        except Exception as exc:
+            logger.warning("stock-profile warmup tick failed: %s", exc)
+            idle = True
+        try:
+            # Nothing pending → check back in 6h (new listings / daily
+            # retries). Otherwise a short breather between batches.
+            await asyncio.sleep(6 * 3600 if idle else 600)
+        except asyncio.CancelledError:
+            logger.info("Stock-profile warmup scheduler stopped.")
             break
 
 
