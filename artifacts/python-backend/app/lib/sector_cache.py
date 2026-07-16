@@ -10,12 +10,15 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
-from pathlib import Path
 from threading import Lock
+
+from .db_paths import local_db_path
 
 logger = logging.getLogger("sector_cache")
 
-_DB = Path(__file__).resolve().parent.parent.parent / "market_cache" / "sector_cache.db"
+# Local disk, NOT market_cache/ — SQLite cannot run on the SMB mount (see
+# app/lib/db_paths.py). Rebuildable cache: repopulates from Yahoo profiles.
+_DB = local_db_path("sector_cache.db")
 _lock = Lock()
 _mem: dict[str, str] = {}   # symbol → sector (fast in-memory read path)
 
@@ -46,7 +49,6 @@ def write(symbol: str, sector: str, industry: str | None = None) -> None:
     if _mem.get(sym) == sector:
         return
     with _lock:
-        _mem[sym] = sector
         with sqlite3.connect(_DB) as conn:
             conn.execute(
                 """
@@ -57,6 +59,10 @@ def write(symbol: str, sector: str, industry: str | None = None) -> None:
                 (sym, sector, industry, int(time.time() * 1000)),
             )
             conn.commit()
+        # Publish to the in-memory fast path only after the row is committed,
+        # so a failed write doesn't leave _mem claiming a value that isn't
+        # persisted (the early-return above would then never retry it).
+        _mem[sym] = sector
 
 
 def get_all() -> dict[str, str]:

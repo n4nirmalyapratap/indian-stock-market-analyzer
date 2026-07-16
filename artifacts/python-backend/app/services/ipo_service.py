@@ -1,21 +1,41 @@
 """IPO Center data service.
 
-Wraps the public NSE IPO endpoints (no auth required, cookie-bootstrap handled
-by `NseService.fetch_nse`) and normalises the payloads into a single shape the
-frontend can render directly. Subscription details for OPEN issues are fetched
-in parallel via /api/ipo-detail and aggregated into the per-category multiples
-the IPO Center cards display.
+Architecture (rebuilt for speed + consistency):
+
+  ┌ background ────────────────────────────────────────────────────────────┐
+  │ refresh()  — the ONLY network path. Runs from main._ipo_refresh_       │
+  │ scheduler every few minutes (and admin force-refresh):                 │
+  │   NSE /api/all-upcoming-issues  +  multi-source GMP scrape (parallel)  │
+  │   → normalise → upsert into the SQLite ipo_store                       │
+  │   → NSE /api/ipo-detail per OPEN issue → persist subscription          │
+  │   → fuzzy-match GMP per stored IPO → persist gmp payload               │
+  │   → rebuild the in-memory response snapshot from the store             │
+  └────────────────────────────────────────────────────────────────────────┘
+  ┌ request path ──────────────────────────────────────────────────────────┐
+  │ get_calendar() — never touches the network. Serves the in-memory       │
+  │ snapshot (µs); if stale, serves it anyway and kicks a background       │
+  │ refresh (stale-while-revalidate). On a cold process it assembles       │
+  │ straight from SQLite (ms). Only a brand-new instance with an empty     │
+  │ store briefly waits (≤ _COLD_WAIT_SEC) for the first refresh.          │
+  └────────────────────────────────────────────────────────────────────────┘
+
+Because serving is store-backed, an NSE block or scraper outage degrades to
+"data a few minutes old" instead of empty/flickering lists, and the open ⇄
+upcoming ⇄ listed buckets are recomputed from dates on every assembly so
+day-boundary transitions happen even between refreshes.
 
 Sources:
   * NSE  /api/all-upcoming-issues?category=ipo  → Open + Forthcoming list
   * NSE  /api/ipo-detail?symbol=XXX             → live subscription multiples
+  * gmp_service (ipowatch / investorgain / niftytrader) → GMP + SME coverage
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import re
-from datetime import datetime
+import time as _time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from .nse_service import NseService
@@ -23,15 +43,41 @@ from . import gmp_service
 
 logger = logging.getLogger("ipo")
 
-# How many minutes the response stays cached before we re-hit NSE.
-OPEN_TTL_SEC     = 5 * 60      # subscription numbers refresh ~every 5 min
-UPCOMING_TTL_SEC = 30 * 60     # forthcoming list rarely changes intra-day
+_IST = timezone(timedelta(hours=5, minutes=30))
 
-# Top-level result cache so repeated page loads don't re-run the full
-# NSE + GMP + subscription pipeline.  5 min TTL matches OPEN_TTL_SEC.
-import time as _time  # noqa: E402
-_RESULT_CACHE: dict = {}
-_RESULT_CACHE_TTL = 5 * 60   # seconds
+# Snapshot staleness at which a request triggers a background refresh. The
+# scheduler normally refreshes first (5 min while the market is open); this
+# is the self-healing backstop if the scheduler ever dies.
+SNAPSHOT_TTL_SEC   = 10 * 60
+# Never start refreshes closer together than this (protects NSE + scrapers
+# from thundering herds when the feeds are down and the store is empty).
+_MIN_REFRESH_GAP   = 60
+# How long a cold, empty instance waits for the first refresh before giving
+# the visitor a "warming up" response.
+_COLD_WAIT_SEC     = 12
+# Bounds on the network legs of one refresh, so a hanging NSE session can't
+# stall the pipeline (the next tick simply retries).
+_NSE_LIST_TIMEOUT  = 25
+_NSE_DETAIL_TIMEOUT = 20
+OPEN_TTL_SEC       = 5 * 60   # nse_service response-cache TTL for IPO calls
+
+# ── module-level snapshot shared by every IpoService instance ───────────────
+# NOTE: deliberately no asyncio.Lock here — a module-level Lock binds to the
+# first event loop that touches it and breaks any later loop (tests, reloads).
+# Single-flight is enforced by the _refresh_task dedup in _kick_refresh; a
+# rare direct-refresh overlap (scheduler + admin) is harmless because every
+# store write is an idempotent upsert.
+_SNAPSHOT: dict = {}          # {"at": monotonic, "data": response_dict}
+_GMP_META: dict = {}          # {"url":…, "fetchedAt":…, "sources": […]} from last refresh
+_refresh_task: Optional[asyncio.Task] = None
+_last_refresh_attempt: float = float("-inf")   # monotonic; -inf = never
+_last_refresh_iso: Optional[str] = None
+
+
+def invalidate_snapshot() -> None:
+    """Drop the served snapshot so the next request re-assembles from the
+    store. Called by admin routes after manual add/delete/mark-listed."""
+    _SNAPSHOT.clear()
 
 
 def _to_int(v: Any) -> Optional[int]:
@@ -81,10 +127,14 @@ def _parse_iso(d: Any) -> Optional[str]:
     return None
 
 
+def _today_ist() -> str:
+    return datetime.now(_IST).date().isoformat()
+
+
 def _classify(item: dict) -> str:
     """NSE marks both Active and Forthcoming in the same feed. We split them
     into 'open' (currently accepting bids) vs 'upcoming' (bid window not yet
-    started) — the two tabs the UI surfaces separately."""
+    started); serve-time recomputation from dates happens in _status_for."""
     status = (item.get("status") or "").lower()
     if status == "active":
         return "open"
@@ -93,70 +143,67 @@ def _classify(item: dict) -> str:
 
 def _norm_name(name: str) -> str:
     """Lowercase + strip suffixes/punctuation so the same company spelled
-    slightly differently across NSE and ipowatch collapses to one key.
-    Used to deduplicate the two sources when we merge them in
-    `IpoService.get_calendar`.
-    """
-    import re  # noqa: PLC0415
+    slightly differently across NSE and the GMP sources collapses to one
+    key. Used to deduplicate sources when we merge them."""
     s = (name or "").lower()
     s = re.sub(r"\b(limited|ltd|pvt|private|co\.?|inc\.?|corp\.?|company)\b", "", s)
     s = re.sub(r"[^\w\s]", " ", s)
     return re.sub(r"\s+", " ", s).strip()
 
 
-_DATE_RANGE_RE = None
+_DATE_RANGE_RE = re.compile(
+    # Matches '21-25 May' OR '21 May-25 May' OR '21 May - 25 May'
+    r"(\d{1,2})\s*(?:([A-Za-z]+))?\s*[-–to]+\s*(\d{1,2})\s*([A-Za-z]+)",
+    re.I,
+)
 
 
 def _parse_gmp_date_range(s: str) -> tuple[Optional[str], Optional[str]]:
     """ipowatch.in dates come as `21-25 May` or `26 May - 29 May` style
     strings. We pull out the open / close ISO dates best-effort.
 
-    Returns (openIso, closeIso). Either may be None when the string can't
-    be parsed — the UI is defensive about missing dates.
-    """
-    import re  # noqa: PLC0415
-    from datetime import date as _date  # noqa: PLC0415
-    global _DATE_RANGE_RE
-    if _DATE_RANGE_RE is None:
-        # Matches '21-25 May' OR '21 May-25 May' OR '21 May - 25 May'
-        _DATE_RANGE_RE = re.compile(
-            r"(\d{1,2})\s*(?:([A-Za-z]+))?\s*[-–to]+\s*(\d{1,2})\s*([A-Za-z]+)",
-            re.I,
-        )
+    Year-less strings get the year that lands the open date within ±6
+    months of today (IST) so December windows parsed in January don't jump
+    a year. Returns (openIso, closeIso); either may be None."""
     if not s or not isinstance(s, str):
         return (None, None)
     m = _DATE_RANGE_RE.search(s)
     if not m:
         return (None, None)
     d1, m1, d2, m2 = m.groups()
-    months = {"jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
-              "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12}
+    months = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+              "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
     mn1 = months.get((m1 or m2 or "").lower()[:3])
     mn2 = months.get((m2 or "").lower()[:3])
     if not mn1 or not mn2:
         return (None, None)
-    today = _date.today()
-    year = today.year
+    from datetime import date as _date  # noqa: PLC0415
+    today = datetime.now(_IST).date()
     try:
-        d_open  = _date(year, mn1, int(d1)).isoformat()
-        d_close = _date(year, mn2, int(d2)).isoformat()
-        return (d_open, d_close)
+        d_open = _date(today.year, mn1, int(d1))
+        if (d_open - today).days > 183:
+            d_open = d_open.replace(year=d_open.year - 1)
+        elif (today - d_open).days > 183:
+            d_open = d_open.replace(year=d_open.year + 1)
+        d_close = _date(d_open.year, mn2, int(d2))
+        if d_close < d_open:  # '28 Dec - 2 Jan' rolls into the next year
+            d_close = d_close.replace(year=d_close.year + 1)
+        return (d_open.isoformat(), d_close.isoformat())
     except (ValueError, TypeError):
         return (None, None)
 
 
 def _synth_issue_from_gmp(row: dict) -> Optional[dict]:
-    """Convert an ipowatch.in row into the same flat IpoIssue shape that
+    """Convert a GMP-table row into the same flat IpoIssue shape that
     `_normalise_issue` produces from NSE rows.
 
-    Used for IPOs that ipowatch tracks but NSE doesn't return — the bulk
+    Used for IPOs the GMP sources track but NSE doesn't return — the bulk
     of SME issues (BSE SME entirely, and many NSE EMERGE issues missing
     from the public upcoming-issues feed). Subscription multiples are
     absent because only NSE exposes them; the UI handles that gracefully.
 
     Returns None when the row lacks the bare minimum (name + status) to
-    be useful.
-    """
+    be useful."""
     name = (row.get("name") or "").strip()
     if not name:
         return None
@@ -171,11 +218,15 @@ def _synth_issue_from_gmp(row: dict) -> Optional[dict]:
     # Synth a stable symbol slug from the name so the frontend's key={symbol}
     # doesn't collide across rows. Pure cosmetic — these slugs aren't real
     # NSE/BSE tickers.
-    import re  # noqa: PLC0415
     slug = re.sub(r"[^A-Z0-9]", "", name.upper())[:24] or name.upper()[:24]
-    # Price band: ipowatch only stores the cap price, treat it as priceHigh.
+    # Price band: GMP sources only store the cap price, treat it as priceHigh.
     price_high = row.get("priceBand")
-    open_iso, close_iso = _parse_gmp_date_range(row.get("date") or "")
+    # Prefer explicit ISO dates (investorgain / niftytrader ship them);
+    # fall back to parsing ipowatch's '21-25 May' range strings.
+    open_iso  = row.get("openDate")
+    close_iso = row.get("closeDate")
+    if not open_iso and not close_iso:
+        open_iso, close_iso = _parse_gmp_date_range(row.get("date") or "")
     return {
         "symbol":       slug,
         "companyName":  name,
@@ -186,12 +237,12 @@ def _synth_issue_from_gmp(row: dict) -> Optional[dict]:
         "closeDate":    close_iso,
         "priceLow":     None,
         "priceHigh":    float(price_high) if isinstance(price_high, (int, float)) else None,
-        "lotSize":      None,
+        "lotSize":      _to_int(row.get("lotSize")),
         "issueSizeCr":  None,
         "issueShares":  None,
         "status":       "open" if status == "open" else "upcoming",
         "rawStatus":    status,
-        # Mark provenance so the UI can show a small "ipowatch source" hint
+        # Mark provenance so the UI can show a small "GMP source" hint
         # if it ever wants to.
         "fromGmpOnly":  True,
     }
@@ -259,83 +310,182 @@ def _summarise_subscription(detail: dict) -> dict:
     return out
 
 
+def _status_for(open_iso: Optional[str], close_iso: Optional[str],
+                raw_status: Optional[str], today_iso: str) -> str:
+    """'open' / 'upcoming' / 'closed' recomputed from the bid window at
+    serve time, so issues flip buckets on the right day even when no
+    refresh has run since midnight. Falls back to the feed's own status
+    when dates are missing."""
+    rs = (raw_status or "").lower()
+    if open_iso:
+        if today_iso < open_iso:
+            return "upcoming"
+        if close_iso is not None:
+            return "open" if today_iso <= close_iso else "closed"
+        # Open date passed but no close date on record: don't assume "open
+        # forever" — trust an explicit closed/listed feed status if we have one.
+        if rs in ("closed", "listed"):
+            return "closed"
+        return "open"
+    if rs in ("active", "open"):
+        return "open"
+    if rs == "closed":
+        return "closed"
+    return "upcoming"
+
+
+def _issue_from_store_row(r: dict) -> dict:
+    """Store row (camelCase, JSON columns already parsed) → response issue."""
+    return {
+        "symbol":       r.get("symbol"),
+        "companyName":  r.get("companyName"),
+        "series":       r.get("series") or "EQ",
+        "isSme":        bool(r.get("isSme")),
+        "isReit":       bool(r.get("isReit")),
+        "openDate":     r.get("openDate"),
+        "closeDate":    r.get("closeDate"),
+        "priceLow":     r.get("priceLow"),
+        "priceHigh":    r.get("priceHigh"),
+        "lotSize":      r.get("lotSize"),
+        "issueSizeCr":  r.get("issueSizeCr"),
+        "issueShares":  r.get("issueShares"),
+        "rawStatus":    r.get("rawStatus"),
+        "fromGmpOnly":  bool(r.get("fromGmpOnly")),
+        "gmp":          r.get("gmp") or None,
+    }
+
+
 class IpoService:
-    """Thin orchestration on top of NseService — read-through with TTL
-    cache. Successful NSE responses are persisted to the local SQLite
-    ipo_store so the calendar still works when NSE is blocked."""
+    """Store-backed IPO calendar. `get_calendar` is the read path (no
+    network); `refresh` is the write path (scheduler/admin only)."""
 
     def __init__(self, nse: NseService):
         self._nse = nse
 
+    # ── read path ───────────────────────────────────────────────────────────
     async def get_calendar(self) -> dict:
-        """Build the combined open+upcoming IPO list.
+        snap = _SNAPSHOT.get("data")
+        if snap is not None:
+            if _time.monotonic() - _SNAPSHOT.get("at", 0) >= SNAPSHOT_TTL_SEC:
+                self._kick_refresh()  # stale-while-revalidate
+            return snap
 
-        Two sources:
-          1. **NSE mainboard** via `/api/all-upcoming-issues?category=ipo` —
-             authoritative for NSE-listed mainboard issues, ships subscription
-             multiples for OPEN issues.
-          2. **ipowatch.in** GMP table — covers BSE SME, NSE SME (EMERGE),
-             and mainboard. SME IPOs are listed here but NOT on NSE's public
-             upcoming-issues feed, so this is the only practical source for
-             the bulk of SME activity.
+        # Cold process: assemble from the persistent store (local SQLite, ms).
+        try:
+            data = self._assemble_from_store()
+        except Exception as e:
+            logger.warning("ipo store assembly failed: %s", e)
+            data = None
+        task = self._kick_refresh()
+        if data and (data["open"] or data["upcoming"] or data["listed"]):
+            _SNAPSHOT.update({"at": _time.monotonic(), "data": data})
+            return data
 
-        Strategy: NSE rows are the spine (richer data). For every ipowatch
-        row whose company name isn't already in the NSE list, we synthesise
-        a thinner IpoIssue with whatever ipowatch gives us (name, gmp,
-        priceBand, type=SME/Mainboard, status). The user gets a complete
-        IPO calendar instead of the silently-truncated mainboard-only list.
+        # Brand-new instance with an empty store — give the first refresh a
+        # bounded chance to finish so the very first visitor still sees data.
+        if task is not None and not task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=_COLD_WAIT_SEC)
+            except Exception:
+                pass
+        snap = _SNAPSHOT.get("data")
+        if snap is not None:
+            return snap
+        return {
+            "available": False,
+            "message":   "IPO data is warming up — try again in a few seconds.",
+            "open": [], "upcoming": [], "listed": [],
+            "fetchedAt": datetime.utcnow().isoformat() + "Z",
+            "gmpSource": {"url": gmp_service.GMP_URL, "fetchedAt": None, "note": None},
+        }
 
-        Result is cached in-process for _RESULT_CACHE_TTL seconds so repeated
-        page loads skip the full NSE + GMP + subscription pipeline.
-        """
-        now = _time.monotonic()
-        cached = _RESULT_CACHE.get("result")
-        if cached and now - cached[0] < _RESULT_CACHE_TTL:
-            logger.debug("ipo calendar: serving from cache")
-            return cached[1]
+    def _ensure_refresh_task(self) -> asyncio.Task:
+        """Return the single shared in-flight refresh task, creating it if
+        none is running. This is the ONE place a refresh task is spawned, so
+        every entry point (scheduler, admin route, stale-triggered request)
+        collapses onto a single run instead of racing — an older run can no
+        longer finish late and clobber a newer run's store writes/snapshot."""
+        global _refresh_task
+        if _refresh_task is None or _refresh_task.done():
+            _refresh_task = asyncio.ensure_future(self._refresh_impl())
+            _refresh_task.add_done_callback(_log_refresh_outcome)
+        return _refresh_task
 
+    def _kick_refresh(self) -> Optional[asyncio.Task]:
+        """Throttled fire-and-forget refresh for the request path: reuse a
+        live run, else honour the min-gap before starting one."""
+        global _last_refresh_attempt
+        if _refresh_task is not None and not _refresh_task.done():
+            return _refresh_task
+        if _time.monotonic() - _last_refresh_attempt < _MIN_REFRESH_GAP:
+            return _refresh_task
+        _last_refresh_attempt = _time.monotonic()
+        return self._ensure_refresh_task()
+
+    # ── write path (network) ────────────────────────────────────────────────
+    async def refresh(self) -> bool:
+        """Single-flight refresh entry point for the scheduler and admin route.
+        Concurrent callers await the SAME in-flight run rather than launching
+        overlapping ones. Returns True when the run contributed fresh data."""
+        try:
+            return bool(await asyncio.shield(self._ensure_refresh_task()))
+        except Exception as exc:
+            logger.warning("ipo refresh failed: %s", str(exc)[:160])
+            return False
+
+    async def _refresh_impl(self) -> bool:
+        """Pull every source, persist into the store, rebuild the snapshot.
+        Never call directly — go through `refresh()` / `_kick_refresh()` so
+        runs stay single-flight. Returns True when a source contributed fresh
+        data (so callers/metadata don't treat a total outage as a fetch)."""
+        global _last_refresh_attempt, _last_refresh_iso
+        _last_refresh_attempt = _time.monotonic()
         from . import ipo_store as _store  # noqa: PLC0415
 
-        # NSE mainboard + ipowatch.in scrape concurrently.
         raw_main, gmp_table = await asyncio.gather(
-            self._nse.fetch_nse(
-                "/api/all-upcoming-issues?category=ipo",
-                "ipo-upcoming-issues",
-                ttl=OPEN_TTL_SEC,
+            asyncio.wait_for(
+                self._nse.fetch_nse(
+                    "/api/all-upcoming-issues?category=ipo",
+                    "ipo-upcoming-issues",
+                    ttl=OPEN_TTL_SEC,
+                ),
+                timeout=_NSE_LIST_TIMEOUT,
             ),
             gmp_service.fetch_gmp_table(),
             return_exceptions=True,
         )
         main_ok = isinstance(raw_main, list)
+        if not main_ok and isinstance(raw_main, Exception):
+            logger.warning("ipo refresh: NSE list failed: %s", str(raw_main)[:120])
         if isinstance(gmp_table, Exception):
-            gmp_table = {"byName": {}, "fetchedAt": None}
+            logger.warning("ipo refresh: GMP fetch failed: %s", str(gmp_table)[:120])
+            gmp_table = {"byName": {}, "fetchedAt": None, "sourceUrl": gmp_service.GMP_URL}
 
-        # ── Step 1: normalise the NSE mainboard list ──────────────────────
+        # ── normalise NSE rows (the spine — richer data) ────────────────────
         seen_names: set[str] = set()
-        items: list[dict] = []
+        nse_items: list[dict] = []
         if main_ok:
             for it in raw_main:
                 if not isinstance(it, dict) or not it.get("symbol"):
                     continue
                 norm = _normalise_issue(it)
-                items.append(norm)
+                nse_items.append(norm)
                 seen_names.add(_norm_name(norm.get("companyName") or ""))
 
-        # ── Step 2: add SME / unknown issues from ipowatch.in ─────────────
+        # ── synth rows for GMP-tracked issues NSE doesn't list (SME) ────────
+        synth_items: list[dict] = []
         gmp_by_name = (gmp_table or {}).get("byName") or {}
         for _key, row in gmp_by_name.items():
             company = (row.get("name") or "").strip()
-            if not company:
-                continue
-            if _norm_name(company) in seen_names:
+            if not company or _norm_name(company) in seen_names:
                 continue
             synth = _synth_issue_from_gmp(row)
             if synth is None:
                 continue
-            items.append(synth)
+            synth_items.append(synth)
             seen_names.add(_norm_name(company))
 
-        # ── Step 3: persist to SQLite store (survives NSE blocks/restarts) ─
+        items = nse_items + synth_items
         if items:
             try:
                 saved = _store.upsert_nse(items)
@@ -343,115 +493,144 @@ class IpoService:
             except Exception as e:
                 logger.warning("ipo_store write failed: %s", e)
 
-        # ── Step 4: fall back to store when NSE returned nothing ───────────
-        if not items:
+        # ── live subscription multiples for OPEN NSE-tracked issues ─────────
+        today = _today_ist()
+        open_syms = [
+            it["symbol"] for it in nse_items
+            if _status_for(it.get("openDate"), it.get("closeDate"),
+                           it.get("rawStatus"), today) == "open"
+        ]
+        if open_syms:
             try:
-                store_items = _store.get_active()
-                if store_items:
-                    logger.info("ipo calendar: NSE unavailable, serving %d items from store",
-                                len(store_items))
-                    items = [
-                        {
-                            "symbol":      r["symbol"],
-                            "companyName": r["companyName"],
-                            "series":      r["series"],
-                            "isSme":       r["isSme"],
-                            "isReit":      r["isReit"],
-                            "openDate":    r["openDate"],
-                            "closeDate":   r["closeDate"],
-                            "priceLow":    r["priceLow"],
-                            "priceHigh":   r["priceHigh"],
-                            "lotSize":     r["lotSize"],
-                            "issueSizeCr": r["issueSizeCr"],
-                            "status":      "open" if (r.get("openDate") or "9") <= datetime.utcnow().date().isoformat() else "upcoming",
-                            "fromGmpOnly": r["fromGmpOnly"],
-                            "fromCache":   True,
-                        }
-                        for r in store_items
-                    ]
-            except Exception as e:
-                logger.warning("ipo_store read failed: %s", e)
-
-        if not items:
-            # Also check for manually added IPOs
-            try:
-                manual = _store.get_active()
-                if manual:
-                    items = manual
-            except Exception:
-                pass
-
-        if not items:
-            return {"available": False, "message": "No IPO data available right now.",
-                    "open": [], "upcoming": [], "listed": []}
-
-        # Enrich OPEN issues with subscription multiples concurrently.
-        open_items = [it for it in items if it["status"] == "open"]
-        upcoming   = [it for it in items if it["status"] == "upcoming"]
-        if open_items and not any(it.get("fromCache") for it in open_items):
-            details = await asyncio.gather(
-                *[self._fetch_detail(it["symbol"]) for it in open_items],
-                return_exceptions=True,
-            )
-            for it, det in zip(open_items, details):
-                if isinstance(det, dict):
-                    it["subscription"] = _summarise_subscription(det)
-                else:
-                    it["subscription"] = {"qib": None, "nii": None, "retail": None, "total": None}
-
-        # Tag every issue (open + upcoming) with live GMP data.
-        # GMP is NOT stored in the DB — it changes hourly and ipowatch
-        # already caches it for 10 min. We always merge it fresh here.
-        for it in items:
-            match = gmp_service.find_gmp(gmp_table, it["companyName"], it["symbol"])
-            if match:
-                it["gmp"] = {
-                    "premium":     match.get("gmp"),
-                    "estListing":  match.get("estListing"),
-                    "estGainPct":  match.get("estGainPct"),
-                    "lastUpdated": match.get("lastUpdated"),
-                    "matchedName": match.get("name"),
+                details = await asyncio.wait_for(
+                    asyncio.gather(
+                        *[self._fetch_detail(s) for s in open_syms],
+                        return_exceptions=True,
+                    ),
+                    timeout=_NSE_DETAIL_TIMEOUT,
+                )
+                subs = {
+                    sym: _summarise_subscription(det)
+                    for sym, det in zip(open_syms, details)
+                    if isinstance(det, dict)
                 }
+                if subs:
+                    _store.set_subscriptions(subs)
+            except asyncio.TimeoutError:
+                logger.warning("ipo refresh: subscription detail fetch timed out")
+            except Exception as e:
+                logger.warning("ipo refresh: subscription fetch failed: %s", e)
+
+        # ── persist matched GMP per stored IPO (last-known-good) ────────────
+        if gmp_by_name:
+            try:
+                gmps: dict[str, dict] = {}
+                for r in _store.get_active() + _store.get_listed(limit=20):
+                    match = gmp_service.find_gmp(gmp_table, r["companyName"], r["symbol"])
+                    if match and match.get("gmp") is not None:
+                        gmps[r["symbol"]] = {
+                            "premium":     match.get("gmp"),
+                            "estListing":  match.get("estListing"),
+                            "estGainPct":  match.get("estGainPct"),
+                            "lastUpdated": match.get("lastUpdated"),
+                            "matchedName": match.get("name"),
+                            "source":      match.get("source"),
+                        }
+                if gmps:
+                    _store.set_gmps(gmps)
+                _GMP_META.update({
+                    "url":       (gmp_table or {}).get("sourceUrl"),
+                    "fetchedAt": (gmp_table or {}).get("fetchedAt"),
+                    "sources":   (gmp_table or {}).get("sources") or [],
+                })
+            except Exception as e:
+                logger.warning("ipo refresh: gmp persist failed: %s", e)
+
+        # ── rebuild the served snapshot from the store ──────────────────────
+        # Only advance the user-facing "fetched at" when we actually pulled
+        # something fresh upstream. If both NSE and every GMP source failed,
+        # we're re-serving persisted rows — stamping them with `now` would lie
+        # about their freshness. `_last_refresh_attempt` (above) still tracks
+        # when we last TRIED, which is what the throttle needs.
+        got_fresh = bool(items) or bool(gmp_by_name)
+        if got_fresh:
+            _last_refresh_iso = datetime.utcnow().isoformat() + "Z"
+        try:
+            data = self._assemble_from_store()
+            _SNAPSHOT.update({"at": _time.monotonic(), "data": data})
+        except Exception as e:
+            logger.warning("ipo snapshot rebuild failed: %s", e)
+        return got_fresh
+
+    # ── assembly (store → response, no network) ─────────────────────────────
+    def _assemble_from_store(self) -> dict:
+        from . import ipo_store as _store  # noqa: PLC0415
+
+        rows   = _store.get_active()
+        listed = _store.get_listed(limit=20)
+
+        # Dedup by normalised company name: an IPO can exist both as a real
+        # NSE row and as an older GMP-synth slug row — prefer the real one.
+        by_name: dict[str, dict] = {}
+        for r in rows:
+            key = _norm_name(r.get("companyName") or "") or r.get("symbol", "")
+            cur = by_name.get(key)
+            if cur is None or (cur.get("fromGmpOnly") and not r.get("fromGmpOnly")):
+                by_name[key] = r
+
+        today = _today_ist()
+        open_items: list[dict] = []
+        upcoming:   list[dict] = []
+        for r in by_name.values():
+            status = _status_for(r.get("openDate"), r.get("closeDate"),
+                                 r.get("rawStatus"), today)
+            if status == "closed":
+                continue  # bid window over, listing pending — neither tab fits
+            it = _issue_from_store_row(r)
+            it["status"] = status
+            if status == "open":
+                if isinstance(r.get("subscription"), dict):
+                    it["subscription"] = r["subscription"]
+                open_items.append(it)
             else:
-                it["gmp"] = None
+                upcoming.append(it)
 
         # Sort: open by closeDate ascending (closing soonest first), upcoming
         # by openDate ascending (next to launch first).
         open_items.sort(key=lambda x: x.get("closeDate") or "9999")
         upcoming.sort(key=lambda x: x.get("openDate") or "9999")
 
-        # ── Step 5: recently listed (from persistent store) ────────────────
-        try:
-            listed = _store.get_listed(limit=20)
-            # Attach GMP for listed too (ipowatch shows closed status briefly)
-            for it in listed:
-                match = gmp_service.find_gmp(gmp_table, it["companyName"], it["symbol"])
-                it["gmp"] = {
-                    "premium":     match.get("gmp"),
-                    "estListing":  match.get("estListing"),
-                    "estGainPct":  match.get("estGainPct"),
-                    "lastUpdated": match.get("lastUpdated"),
-                    "matchedName": match.get("name"),
-                } if match else None
-        except Exception as e:
-            logger.warning("ipo_store listed read failed: %s", e)
-            listed = []
+        listed_out: list[dict] = []
+        for r in listed:
+            it = _issue_from_store_row(r)
+            it["status"] = "listed"
+            it["source"] = r.get("source") or "nse"
+            listed_out.append(it)
 
-        result = {
-            "available": True,
+        gmp_fetched = _GMP_META.get("fetchedAt")
+        if not gmp_fetched:
+            # Cold process: best per-IPO timestamp we persisted before restart.
+            stamps = [r.get("gmpUpdatedAt") for r in rows + listed if r.get("gmpUpdatedAt")]
+            gmp_fetched = max(stamps) if stamps else None
+
+        available = bool(open_items or upcoming or listed_out)
+        return {
+            "available": available,
+            **({} if available else
+               {"message": "No IPO data available right now."}),
             "open":      open_items,
             "upcoming":  upcoming,
-            "listed":    listed,
-            "fetchedAt": datetime.utcnow().isoformat() + "Z",
+            "listed":    listed_out,
+            "fetchedAt": _last_refresh_iso or datetime.utcnow().isoformat() + "Z",
             "gmpSource": {
-                "url":       (gmp_table or {}).get("sourceUrl"),
-                "fetchedAt": (gmp_table or {}).get("fetchedAt"),
-                "note":      "GMP is live from ipowatch.in (refreshed every 10 min). "
-                             "It changes intra-day and drops to zero on listing day.",
+                "url":       _GMP_META.get("url") or gmp_service.GMP_URL,
+                "fetchedAt": gmp_fetched,
+                "note":      "GMP is merged from ipowatch.in, investorgain.com and "
+                             "niftytrader.in (first source that tracks each issue wins) "
+                             "and refreshed every few minutes. It changes intra-day and "
+                             "drops to zero on listing day.",
             },
         }
-        _RESULT_CACHE["result"] = (_time.monotonic(), result)
-        return result
 
     async def _fetch_detail(self, symbol: str) -> Optional[dict]:
         from urllib.parse import quote
@@ -460,3 +639,12 @@ class IpoService:
             f"ipo-detail-{symbol}",
             ttl=OPEN_TTL_SEC,
         )
+
+
+def _log_refresh_outcome(task: asyncio.Task) -> None:
+    try:
+        exc = task.exception()
+    except asyncio.CancelledError:
+        return
+    if exc:
+        logger.warning("ipo background refresh failed: %s", exc)

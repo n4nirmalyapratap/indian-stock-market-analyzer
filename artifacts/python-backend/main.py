@@ -348,6 +348,9 @@ async def lifespan(app: FastAPI):
     rotation_prewarm_task = asyncio.create_task(_rotation_prewarm_task())
     heatmap_prewarm_task  = asyncio.create_task(_heatmap_prewarm_task())
     earnings_task         = asyncio.create_task(_earnings_scanner_loop())
+    # IPO calendar + GMP: background refresh into the local store so
+    # /insights/ipos serves instantly without touching NSE/scrapers inline.
+    ipo_task              = asyncio.create_task(_ipo_refresh_scheduler())
     try:
         yield
     finally:
@@ -356,7 +359,8 @@ async def lifespan(app: FastAPI):
                   backtest_task, digest_sched_task, digest_worker_task,
                   fii_dii_task, dhan_task, pcr_task, synth_class_task,
                   synth_metrics_task, synth_bootstrap_task, registry_task,
-                  rotation_prewarm_task, heatmap_prewarm_task, earnings_task):
+                  rotation_prewarm_task, heatmap_prewarm_task, earnings_task,
+                  ipo_task):
             t.cancel()
             try:
                 await t
@@ -470,6 +474,39 @@ async def _security_registry_scheduler() -> None:
             await asyncio.sleep(24 * 3600)
         except asyncio.CancelledError:
             logger.info("Security registry scheduler stopped.")
+            break
+
+
+async def _ipo_refresh_scheduler() -> None:
+    """Keep the IPO calendar + GMP store fresh so /insights/ipos never does
+    network work on the request path.
+
+    Strategy:
+      * On startup → ~5 s settle delay, then an immediate refresh so a cold
+        instance serves real data within seconds of boot.
+      * Market open  → every 5 min (live subscription multiples move fast).
+      * Market closed → every 30 min (GMP still trades evenings/weekends;
+        the calendar itself barely changes).
+
+    IpoService.refresh() is single-flight and already swallows per-source
+    failures (NSE block, scraper outage) — the store keeps serving the last
+    good data, so one bad tick never blanks the IPO page.
+    """
+    from app.services import registry as svc
+    from app.services import market_cache_service as mcache
+    from app.services.ipo_service import IpoService
+
+    ipo = IpoService(svc.nse)
+    await asyncio.sleep(5)   # let boot logging settle first
+    while True:
+        try:
+            await ipo.refresh()
+        except Exception as exc:
+            logger.warning("IPO refresh tick failed: %s", exc)
+        try:
+            await asyncio.sleep(5 * 60 if mcache.is_market_open() else 30 * 60)
+        except asyncio.CancelledError:
+            logger.info("IPO refresh scheduler stopped.")
             break
 
 
