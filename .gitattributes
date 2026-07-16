@@ -1,6 +1,13 @@
+# Normalize every text file to LF, in the repo AND the working tree. Without
+# this, core.autocrlf drifted CRLF into some commits (App-improvment-v4) while
+# other branches stayed LF, so cross-branch merges conflicted on every single
+# line. `text=auto` still auto-detects binaries and leaves them untouched.
+* text=auto eol=lf
+
+# Binary / Git-LFS — never treat as text or normalize.
 artifacts/python-backend/data/nse_options_cache.sqlite filter=lfs diff=lfs merge=lfs -text
 
-# Force LF line endings for shell scripts on all platforms (prevents CRLF
-# corruption on Windows CI runners which breaks #!/bin/sh shebangs in Docker)
+# Explicit (redundant with the global rule, kept for clarity): shell scripts
+# and Dockerfiles must be LF so #!/bin/sh shebangs survive on Windows CI.
 *.sh        text eol=lf
 Dockerfile* text eol=lf
