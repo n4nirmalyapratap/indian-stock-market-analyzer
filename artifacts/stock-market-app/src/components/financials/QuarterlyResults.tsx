@@ -170,7 +170,7 @@ export default function QuarterlyResults({ symbol }: Props) {
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50">
             <tr>
-              <th className="sticky left-0 z-10 bg-gray-50 text-left px-3 py-2.5 text-xs text-gray-500 font-semibold uppercase">
+              <th className="sticky left-0 z-10 bg-gray-50 border-r border-gray-100 text-left px-3 py-2.5 text-xs text-gray-500 font-semibold uppercase">
                 Line Item
               </th>
               {rows.map(q => (
@@ -183,7 +183,12 @@ export default function QuarterlyResults({ symbol }: Props) {
           <tbody>
             {visibleRows.map(r => (
               <tr key={r.key} className={`border-t border-gray-50 ${r.bold ? "bg-gray-50/40" : ""}`}>
-                <td className={`sticky left-0 z-10 px-3 py-2 whitespace-nowrap ${r.bold ? "bg-gray-50/40 font-semibold text-gray-800" : "bg-white text-gray-600"}`}>
+                {/* Sticky cells MUST be fully opaque — a translucent bg
+                    (bg-gray-50/40) lets the scrolled columns bleed through
+                    the pinned label on phones, which read as garbage values
+                    next to "Total Income". */}
+                <td title={r.label}
+                    className={`sticky left-0 z-10 px-3 py-2 whitespace-nowrap border-r border-gray-100 max-w-[45vw] overflow-hidden text-ellipsis sm:max-w-none ${r.bold ? "bg-gray-50 font-semibold text-gray-800" : "bg-white text-gray-600"}`}>
                   {r.label}
                 </td>
                 {rows.map(q => {

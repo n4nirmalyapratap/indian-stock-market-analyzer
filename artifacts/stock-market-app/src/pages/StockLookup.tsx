@@ -132,20 +132,24 @@ export default function StockLookup() {
         <div className="space-y-4">
           {/* Stock header */}
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
-            <div className="flex items-start justify-between">
-              <div className="flex items-start gap-3">
+            {/* Stacks on phones — the long company name + 2xl price can't share
+                a 375px row (the price used to clip off-screen). ≥sm keeps the
+                original name-left / price-right layout. */}
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+              <div className="flex items-start gap-3 min-w-0">
                 <StockLogo symbol={data.symbol} name={data.companyName} size={44} shape="rounded" className="flex-shrink-0 mt-0.5" />
-                <div>
-                <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <div className="min-w-0">
+                <h2 className="text-lg sm:text-xl font-bold text-gray-900 flex items-center gap-2 flex-wrap">
                   {data.companyName || data.symbol}
                   <ChartButton symbol={data.symbol} />
                 </h2>
                 <p className="text-sm text-gray-500">{data.symbol} • {profile?.sector || data.industry || data.sector || "NSE"}</p>
                 </div>
               </div>
-              <div className="text-right">
-                <p className="text-2xl font-bold text-gray-900">₹{data.lastPrice?.toLocaleString("en-IN", { minimumFractionDigits: 2 }) || "—"}</p>
-                <p className={`text-sm font-medium flex items-center gap-1 justify-end ${(data.pChange || 0) >= 0 ? "text-green-600" : "text-red-500"}`}>
+              {/* Phone: price + change side by side under the name. ≥sm: block, right-aligned. */}
+              <div className="flex items-baseline gap-2 sm:block sm:text-right flex-shrink-0">
+                <p className="text-xl sm:text-2xl font-bold text-gray-900 whitespace-nowrap">₹{data.lastPrice?.toLocaleString("en-IN", { minimumFractionDigits: 2 }) || "—"}</p>
+                <p className={`text-sm font-medium flex items-center gap-1 justify-start sm:justify-end ${(data.pChange || 0) >= 0 ? "text-green-600" : "text-red-500"}`}>
                   {(data.pChange || 0) >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
                   {/* Coerce to Number — some providers return change/pChange as
                       strings, which would crash `.toFixed` ("…toFixed is not a function"). */}
@@ -157,7 +161,7 @@ export default function StockLookup() {
 
             {/* About — what the company does + its canonical sector (centralised
                 classification, resolved & cached server-side). */}
-            {profile && (profile.description || profile.sector) && (
+            {profile && (profile.description || profile.sector || profile.industry) && (
               <div className="mt-3 rounded-lg bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-white/5 p-3">
                 <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
                   <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">About</span>
