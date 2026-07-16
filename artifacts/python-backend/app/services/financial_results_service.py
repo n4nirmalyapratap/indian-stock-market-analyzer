@@ -510,31 +510,157 @@ async def _enrich(symbol: str, url: str) -> Optional[dict]:
     return _parse_results_xbrl(xml)
 
 
+# ── Yahoo Finance fallback ────────────────────────────────────────────────────
+# When NSE is Akamai-blocked we have no XBRL URLs and the primary path
+# returns nothing. yfinance `quarterly_income_stmt` gives a quarterly P&L
+# (Total Revenue, Net Income, Operating Income, EPS, etc.) that covers the
+# most important line items — enough to populate the Financials tab until
+# the NSE feed is reachable again.
+
+_YF_MONEY: dict[str, str] = {
+    "Total Revenue":                    "revenueFromOperations",
+    "Operating Revenue":                "revenueFromOperations",
+    "Net Income":                       "netProfit",
+    "Net Income Common Stockholders":   "netProfit",
+    "Operating Income":                 "profitBeforeExceptionalAndTax",
+    "EBIT":                             "profitBeforeExceptionalAndTax",
+    "Total Expenses":                   "totalExpenses",
+    "Cost Of Revenue":                  "totalExpenses",
+    "Tax Provision":                    "taxExpense",
+    "Interest Expense":                 "financeCosts",
+    "Reconciled Depreciation":          "depreciation",
+    "Gross Profit":                     "grossProfit",
+}
+_YF_ASIS: dict[str, str] = {
+    "Basic EPS":   "basicEps",
+    "Diluted EPS": "dilutedEps",
+}
+
+
+async def _fetch_yahoo_results(symbol: str) -> list[dict]:
+    """Fallback quarterly P&L from yfinance when NSE XBRL is unavailable.
+
+    Values in the yfinance DataFrame are absolute local-currency rupees;
+    money items are converted to ₹ Crores (÷ 1e7) to match the XBRL path.
+    EPS is kept as-is (already per-share).
+    """
+    try:
+        import yfinance as yf                              # noqa: PLC0415
+        from ..lib.symbol_map import to_yahoo_ticker       # noqa: PLC0415
+    except Exception:
+        return []
+
+    ticker_sym = to_yahoo_ticker(symbol)
+
+    def _grab():
+        try:
+            return yf.Ticker(ticker_sym).quarterly_income_stmt
+        except Exception as exc:
+            logger.debug("yfinance quarterly_income_stmt %s: %s",
+                         symbol, str(exc)[:120])
+            return None
+
+    df = await asyncio.to_thread(_grab)
+    if df is None or getattr(df, "empty", True):
+        logger.info("results YAHOO %s: no quarterly_income_stmt", symbol)
+        return []
+
+    out: list[dict] = []
+    for col in df.columns:
+        try:
+            period_end = col.date().isoformat()
+        except Exception:
+            continue
+
+        line_items: dict[str, float] = {}
+
+        for yf_key, our_key in _YF_MONEY.items():
+            if yf_key not in df.index or our_key in line_items:
+                continue
+            try:
+                fval = float(df.loc[yf_key, col])
+                import math                                # noqa: PLC0415
+                if not math.isnan(fval):
+                    line_items[our_key] = round(fval / _CR, 2)
+            except (TypeError, ValueError):
+                pass
+
+        for yf_key, our_key in _YF_ASIS.items():
+            if yf_key not in df.index:
+                continue
+            try:
+                fval = float(df.loc[yf_key, col])
+                import math                                # noqa: PLC0415
+                if not math.isnan(fval):
+                    line_items[our_key] = round(fval, 2)
+            except (TypeError, ValueError):
+                pass
+
+        if not any(k in line_items for k in ("revenueFromOperations", "netProfit")):
+            continue
+
+        out.append({
+            "basis":        "standalone",
+            "periodEnd":    period_end,
+            "periodStart":  None,
+            "audited":      None,
+            "relatingTo":   None,
+            "multiSegment": None,
+            "format":       "standard",
+            "lineItems":    line_items,
+            "segments":     None,
+        })
+
+    logger.info("results YAHOO %s: %d quarters parsed", symbol, len(out))
+    return out
+
+
 async def _refresh(symbol: str) -> None:
-    """Fetch the NSE index, then fan-out parse the most recent filings."""
+    """Fetch the NSE index, then fan-out parse the most recent filings.
+    Falls back to yfinance when NSE is blocked and returns no XBRL URLs."""
+    index: list[dict] = []
     try:
         index = await _fetch_results_index(symbol)
     except Exception as exc:
         logger.warning("results index %s failed: %s", symbol, str(exc)[:160])
-        return
-    if not index:
-        logger.info("results %s: NSE index empty", symbol)
-        return
 
-    candidates = index[:_MAX_FILINGS]
-    parsed = await asyncio.gather(
-        *[_enrich(symbol, c["xbrl"]) for c in candidates],
-        return_exceptions=True,
-    )
-    written = 0
-    for p in parsed:
-        if isinstance(p, dict):
-            try:
-                if _upsert(symbol, p):
-                    written += 1
-            except Exception as exc:
-                logger.debug("results upsert %s failed: %s", symbol, str(exc)[:120])
-    logger.info("results %s: %d filings stored (of %d tried)", symbol, written, len(candidates))
+    if index:
+        candidates = index[:_MAX_FILINGS]
+        parsed = await asyncio.gather(
+            *[_enrich(symbol, c["xbrl"]) for c in candidates],
+            return_exceptions=True,
+        )
+        written = 0
+        for p in parsed:
+            if isinstance(p, dict):
+                try:
+                    if _upsert(symbol, p):
+                        written += 1
+                except Exception as exc:
+                    logger.debug("results upsert %s failed: %s", symbol, str(exc)[:120])
+        logger.info("results %s: %d filings stored (of %d tried)", symbol, written, len(candidates))
+    else:
+        logger.info("results %s: NSE index empty — trying yfinance fallback", symbol)
+
+    # Fallback: if we still have no rows after the XBRL path, use yfinance.
+    # Also triggered if NSE was blocked (index=[]).
+    existing = _read(symbol)
+    if not existing:
+        try:
+            yf_rows = await _fetch_yahoo_results(symbol)
+            yf_written = 0
+            for row in yf_rows:
+                try:
+                    if _upsert(symbol, row):
+                        yf_written += 1
+                except Exception as exc:
+                    logger.debug("results yfinance upsert %s failed: %s", symbol, str(exc)[:120])
+            if yf_written:
+                logger.info("results YAHOO fallback %s: %d quarters stored", symbol, yf_written)
+            else:
+                logger.info("results YAHOO fallback %s: 0 stored (yfinance returned nothing)", symbol)
+        except Exception as exc:
+            logger.warning("results YAHOO fallback %s failed: %s", symbol, str(exc)[:160])
 
 
 # ── Public API ───────────────────────────────────────────────────────────────

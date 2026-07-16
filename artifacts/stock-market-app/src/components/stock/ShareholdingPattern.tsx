@@ -12,6 +12,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type ShareholdingRow, type ShareholdingNamedHolder } from "@/lib/api";
+import { useIsMobile } from "@/hooks/use-mobile";
 import {
   AlertCircle, Users, Loader2, ShieldAlert,
   ChevronLeft, ChevronRight, TrendingUp, TrendingDown, Minus,
@@ -422,6 +423,7 @@ function TopHolders({ rows }: { rows: ShareholdingRow[] }) {
 // ── Main component ────────────────────────────────────────────────────────
 
 export default function ShareholdingPattern({ symbol }: Props) {
+  const isMobile                        = useIsMobile();
   const [view, setView]               = useState<"quarterly" | "yearly">("quarterly");
   const [forceRefresh, setForceRefresh] = useState(false);
   const [mobileQIdx, setMobileQIdx]   = useState(0);
@@ -557,8 +559,8 @@ export default function ShareholdingPattern({ symbol }: Props) {
     <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
       {Header}
 
-      {/* ── MOBILE layout (hidden on md+) ── */}
-      <div className="block md:hidden">
+      {/* ── MOBILE layout ── */}
+      {isMobile && <div>
         <QuarterPicker
           rows={ordered}
           selectedIdx={safeQIdx}
@@ -603,10 +605,10 @@ export default function ShareholdingPattern({ symbol }: Props) {
         )}
 
         <TopHolders rows={ordered} />
-      </div>
+      </div>}
 
-      {/* ── DESKTOP layout (hidden below md) ── */}
-      <div className="hidden md:block">
+      {/* ── DESKTOP layout ── */}
+      {!isMobile && <div>
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="bg-gray-50 dark:bg-gray-900/40">
@@ -681,7 +683,7 @@ export default function ShareholdingPattern({ symbol }: Props) {
 
         {ordered[0] && <StructureStrip row={ordered[0]} />}
         <TopHolders rows={ordered} />
-      </div>
+      </div>}
 
       {Footer}
     </div>
