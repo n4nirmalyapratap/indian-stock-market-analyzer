@@ -24,6 +24,18 @@ Audit 2026-05 (data honesty pass, parallel to Sentiment dashboard):
     `sitemap-stock-market-news.xml` — the documented public discovery
     mechanism. We parse it with `feedparser` (sitemap mode) and only
     keep entries from the last 3 days to avoid stale items.
+
+Audit 2026-07 (sentiment accuracy pass):
+  * Sentiment labels are now produced by the app's LLM stack
+    (`news_sentiment_llm` → ai_client Groq/OpenRouter cascade) in
+    batched, cached calls. VADER — which scored 53% on a battery of
+    typical Indian financial headlines and inverted classics like
+    "investors book profits" (→ bullish) and "upgrades to overweight"
+    (→ bearish) — remains only as the fallback when no AI provider is
+    reachable. Every article carries `sentimentVia: "llm" | "vader" |
+    "none"` so consumers can tell which classifier labelled it.
+  * Tavily top-up articles (previously `sentiment: None`) are classified
+    too, so the tri-factor sentiment leg counts them.
 """
 import asyncio
 import logging
@@ -302,6 +314,7 @@ def _fetch_one_feed(src: dict) -> tuple[list[dict], Optional[str]]:
                 "published":   published,
                 "undated":     undated,
                 "sentiment":   _sentiment(combined),
+                "sentimentVia": "vader",
                 "tickers":     _extract_tickers(combined),
                 "image_url":   _extract_image(entry),
                 "type":        "news",
@@ -402,6 +415,7 @@ def _fetch_scanx_sitemap() -> tuple[list[dict], Optional[str]]:
             "published":   dt.astimezone(timezone.utc).isoformat(),
             "undated":     False,
             "sentiment":   _sentiment(title),
+            "sentimentVia": "vader",
             "tickers":     _extract_tickers(title),
             "image_url":   None,
             "type":        "news",
@@ -483,6 +497,7 @@ def _fetch_one_yf_stock(sym: str, cutoff: "datetime") -> list[dict]:
             "published":   pub_iso,
             "undated":     pub_dt is None,
             "sentiment":   _sentiment(f"{title} {summary}"),
+            "sentimentVia": "vader",
             "tickers":     [sym],
             "image_url":   image,
             "type":        "news",
@@ -618,6 +633,19 @@ async def _fetch_all_feeds() -> dict:
 
     # Sort: dated entries first (newest first), undated entries last.
     articles.sort(key=lambda x: (x.get("undated", False), -1 * _ts(x["published"])))
+
+    # LLM sentiment pass — re-label articles through the app's AI stack
+    # (Groq/OpenRouter via ai_client). VADER mislabels financial headlines
+    # badly ("book profits" → bullish); the LLM labels replace it wherever a
+    # provider is reachable. On failure articles keep their VADER label and
+    # sentimentVia stays "vader". Per-headline labels are cached 24 h, so a
+    # refresh only classifies headlines it hasn't seen before.
+    try:
+        from .news_sentiment_llm import apply_llm_sentiment  # noqa: PLC0415
+        await apply_llm_sentiment(articles)
+    except Exception as exc:
+        logger.warning("LLM sentiment pass skipped: %s", exc)
+
     return {"articles": articles, "sources": sources_health}
 
 
@@ -861,6 +889,15 @@ async def get_news_feed(
                 )
             except Exception:
                 tav_articles = []
+            # Tavily articles arrive with sentiment=None — classify them via
+            # the LLM before caching so they carry real labels downstream
+            # (feed UI, tri-factor, AI Analyst).
+            if tav_articles:
+                try:
+                    from .news_sentiment_llm import apply_llm_sentiment  # noqa: PLC0415
+                    await apply_llm_sentiment(tav_articles)
+                except Exception:
+                    pass
             _cache_set(cache_key, tav_articles)
 
         if tav_articles:
@@ -883,6 +920,7 @@ async def get_news_feed(
                     "category":  "market",
                     "tickers":   [symbol_key],
                     "sentiment": art.get("sentiment"),
+                    "sentimentVia": art.get("sentimentVia"),
                     "image":     None,
                     "via":       "tavily",   # provenance marker for the UI
                 })
@@ -961,6 +999,7 @@ def _yfinance_ticker_news(sym: str) -> list[dict]:
                 "category":    "market",
                 "tickers":     [sym],
                 "sentiment":   _sentiment(f"{title} {summary}"),
+                "sentimentVia": "vader",
                 "image_url":   image,
                 "type":        "news",
                 "via":         "yfinance",
@@ -999,6 +1038,13 @@ async def get_ticker_news(symbol: str, limit: int = 20) -> dict:
         yf_articles = await asyncio.get_event_loop().run_in_executor(
             None, _yfinance_ticker_news, sym
         )
+        # LLM re-label before caching (VADER label kept as fallback).
+        if yf_articles:
+            try:
+                from .news_sentiment_llm import apply_llm_sentiment  # noqa: PLC0415
+                await apply_llm_sentiment(yf_articles)
+            except Exception:
+                pass
         _cache_set(yf_cache_key, yf_articles)
 
     matched: list[dict] = list(yf_articles)
@@ -1037,6 +1083,14 @@ async def get_ticker_news(symbol: str, limit: int = 20) -> dict:
                 )
             except Exception:
                 tav_articles = []
+            # Tavily articles arrive with sentiment=None — classify before
+            # caching so the tri-factor sentiment leg counts them too.
+            if tav_articles:
+                try:
+                    from .news_sentiment_llm import apply_llm_sentiment  # noqa: PLC0415
+                    await apply_llm_sentiment(tav_articles)
+                except Exception:
+                    pass
             _cache_set(tav_cache_key, tav_articles)
 
         if tav_articles:
@@ -1055,6 +1109,7 @@ async def get_ticker_news(symbol: str, limit: int = 20) -> dict:
                     "category":  "market",
                     "tickers":   [sym],
                     "sentiment": art.get("sentiment"),
+                    "sentimentVia": art.get("sentimentVia"),
                     "image":     None,
                     "via":       "tavily",
                 })
@@ -1139,11 +1194,14 @@ async def get_news_stats() -> dict:
 
     sentiments = {"bullish": 0, "bearish": 0, "neutral": 0}
     sources: dict[str, int] = {}
+    sentiment_via = {"llm": 0, "vader": 0, "none": 0}
     for a in cached:
         s = a.get("sentiment", "neutral")
         sentiments[s] = sentiments.get(s, 0) + 1
         src = a.get("sourceShort", "?")
         sources[src] = sources.get(src, 0) + 1
+        v = a.get("sentimentVia") or "vader"
+        sentiment_via[v] = sentiment_via.get(v, 0) + 1
 
     # marketMood requires a meaningful sample (≥5 articles) AND a
     # meaningful margin (≥10% of articles must lean one way more than
@@ -1162,6 +1220,10 @@ async def get_news_stats() -> dict:
         "sources":       sources,
         "sourcesHealth": sources_health,
         "marketMood":    mood,
+        # Provenance of the labels behind `sentiments`: how many articles were
+        # classified by the LLM vs left on the VADER fallback. Lets consumers
+        # (and the UI) tell an AI-labelled mood from a lexicon-labelled one.
+        "sentimentVia":  sentiment_via,
     }
 
 

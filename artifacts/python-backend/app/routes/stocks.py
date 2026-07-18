@@ -1150,7 +1150,9 @@ async def get_tri_factor_score(symbol: str):
     s_s = round(max(-1.0, min(1.0, (pos - neg) / total)), 3) if total > 0 else 0.0
 
     headlines = [
-        {"title": a.get("title", ""), "sentiment": a.get("sentiment", "neutral")}
+        # `or "neutral"` (not a .get default): Tavily articles can carry an
+        # explicit sentiment=None, which .get's default would pass through.
+        {"title": a.get("title", ""), "sentiment": a.get("sentiment") or "neutral"}
         for a in articles[:8]
         if a.get("title")
     ]

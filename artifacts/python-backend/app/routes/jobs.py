@@ -164,8 +164,12 @@ class _NewsRefreshJob(_Job):
     async def _execute(self) -> str:
         from app.services import news_service
         await news_service.invalidate_cache()
-        feeds = await news_service._fetch_all_feeds()
-        n = len(feeds)
+        # get_news_feed() re-fetches AND repopulates the cache (including the
+        # LLM sentiment pass). The previous direct _fetch_all_feeds() call
+        # threw the result away (nothing was cached) and reported the dict's
+        # key count (always 2) as the article count.
+        data = await news_service.get_news_feed(limit=1)
+        n = data.get("total", 0)
         return f"News cache cleared & re-fetched — {n} articles loaded"
 
 
