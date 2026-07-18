@@ -154,7 +154,10 @@ def test_no_tavily_key_silently_skips_topup(monkeypatch):
     out = asyncio.run(ns.get_ticker_news("RELIANCE"))
     assert out["tavilyUsed"] is False
     assert out["total"] == 1
-    assert out["source"] == ns.NEWS_SOURCE_LABEL  # no "+ Tavily" suffix
+    # Stale-value fix: the label gained a "Yahoo Finance" prefix when the
+    # yfinance step was added; the invariant under test is only that no
+    # "+ Tavily" suffix appears without an API key.
+    assert "Tavily" not in out["source"]
 
 
 def test_tavily_exception_does_not_break_endpoint(monkeypatch):

@@ -1194,14 +1194,26 @@ def _parse_screener_html(html: str) -> list[dict]:
                 for th in table.xpath('.//thead//th')]
     # First column is the category label; the rest are quarters.
     quarter_labels = th_texts[1:] if th_texts else []
+    # Quarter-end day by month. Screener labels are the quarter month/year
+    # (Mar, Jun, Sep, Dec) which directly identifies the quarter-end.
+    _QEND_DAY = {3: 31, 6: 30, 9: 30, 12: 31}
     quarter_dates: list[Optional[date]] = []
     for label in quarter_labels:
         try:
             d = datetime.strptime(label.strip(), "%b %Y").date()
-            qe = _last_quarter_end(d.replace(day=28))
-            quarter_dates.append(qe)
         except ValueError:
             quarter_dates.append(None)
+            continue
+        # Compute the quarter-end date directly from the label month.
+        # The previous approach of _last_quarter_end(d.replace(day=28)) was
+        # wrong: day 28 always precedes the actual quarter-end (30 or 31),
+        # so _last_quarter_end snapped every label back to the preceding
+        # quarter — "Mar 2026" → Dec 2025, "Dec 2025" → Sep 2025, etc.
+        qend_day = _QEND_DAY.get(d.month)
+        if qend_day is None:
+            quarter_dates.append(None)
+            continue
+        quarter_dates.append(date(d.year, d.month, qend_day))
     if not any(quarter_dates):
         return []
 
